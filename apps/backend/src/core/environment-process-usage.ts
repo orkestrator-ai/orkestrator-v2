@@ -244,7 +244,12 @@ async function listContainerProcesses(
   return parsePsUsageLines(result.stdout);
 }
 
-async function mapWithConcurrency<T, R>(
+/**
+ * Maps `items` with at most `concurrency` workers in flight, writing each
+ * result at the same index as its input so order is preserved even when
+ * later items finish first.
+ */
+export async function mapWithConcurrency<T, R>(
   items: readonly T[],
   concurrency: number,
   mapper: (item: T) => Promise<R>,

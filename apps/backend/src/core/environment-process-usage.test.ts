@@ -7,6 +7,7 @@ import {
   environmentRootPids,
   MAX_CONCURRENT_CONTAINER_PROBES,
   MAX_PROCESSES_PER_ENVIRONMENT,
+  mapWithConcurrency,
   parsePsUsageLines,
   readEnvironmentProcessUsage,
   sanitizeProcessCommand,
@@ -339,21 +340,30 @@ describe("environment process usage", () => {
       };
     });
 
-    const snapshot = await readEnvironmentProcessUsage(
-      Array.from({ length: 12 }, (_, index) =>
-        environment({
-          id: `ctr-${index}`,
-          name: `box-${index}`,
-          environmentType: "containerized",
-          containerId: `ctr-${index}`,
-        }),
-      ),
-      { platform: "linux", now: () => 0, runCommand: execute },
+    const environments = Array.from({ length: 12 }, (_, index) =>
+      environment({
+        id: `ctr-${index}`,
+        name: `box-${index}`,
+        environmentType: "containerized",
+        containerId: `ctr-${index}`,
+      }),
     );
+    const snapshot = await readEnvironmentProcessUsage(environments, {
+      platform: "linux",
+      now: () => 0,
+      runCommand: execute,
+    });
 
     expect(peak).toBe(MAX_CONCURRENT_CONTAINER_PROBES);
     expect(execute).toHaveBeenCalledTimes(12);
     expect(JSON.stringify(snapshot).length).toBeLessThan(64_000);
+    expect(snapshot.environments).toHaveLength(environments.length);
+    expect(snapshot.environments.map((group) => group.environmentId)).toEqual(
+      environments.map((item) => item.id),
+    );
+    expect(snapshot.environments.map((group) => group.processes[0]?.pid)).toEqual(
+      environments.map((_, index) => index),
+    );
     expect(snapshot.environments.some((group) => group.processes.length > 0)).toBe(true);
     for (const group of snapshot.environments) {
       for (const process of group.processes) {
@@ -385,5 +395,43 @@ describe("environment process usage", () => {
     expect(snapshot.environments).toHaveLength(2);
     expect(snapshot.environments.every((group) => group.processes.length === 0)).toBe(true);
     expect(snapshot.truncated).toBe(false);
+  });
+});
+
+describe("mapWithConcurrency", () => {
+  test("returns an empty array without calling the mapper", async () => {
+    const mapper = mock(async () => {
+      throw new Error("mapper should not run");
+    });
+    await expect(mapWithConcurrency([], 4, mapper)).resolves.toEqual([]);
+    expect(mapper).not.toHaveBeenCalled();
+  });
+
+  test("maps a single item when concurrency exceeds the list", async () => {
+    const mapper = mock(async (item: number) => item * 2);
+    await expect(mapWithConcurrency([7], 8, mapper)).resolves.toEqual([14]);
+    expect(mapper).toHaveBeenCalledTimes(1);
+  });
+
+  test("clamps worker count to items.length and writes every slot in order", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const items = [
+      { id: "slow", delayMs: 15 },
+      { id: "fast", delayMs: 0 },
+      { id: "mid", delayMs: 5 },
+    ] as const;
+    const results = await mapWithConcurrency(items, 16, async (item) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, item.delayMs));
+      inFlight -= 1;
+      return item.id.toUpperCase();
+    });
+
+    expect(peak).toBe(items.length);
+    expect(results).toHaveLength(items.length);
+    expect(results).toEqual(["SLOW", "FAST", "MID"]);
+    expect(results.every((value) => value !== undefined)).toBe(true);
   });
 });

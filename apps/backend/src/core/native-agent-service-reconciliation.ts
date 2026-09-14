@@ -1379,13 +1379,28 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     // arms `launchRetryAt`, leaving the two-second sweep retrying forever with
     // no backoff and nothing for the renderer to surface.
     try {
+      const prompt = environment.initialPrompt?.trim();
+      const initialAttachments = environment.initialPromptAttachments ?? [];
+      const hasInitialWork = Boolean(prompt || initialAttachments.length > 0);
+      const preselectOptions = hasInitialWork
+        ? { lockPlatform: true as const }
+        : {
+            initialAgentPlatform: agent,
+            ...(model ? { initialAgentModel: model } : {}),
+            ...(reasoningEffort ? { initialReasoningEffort: reasoningEffort } : {}),
+            ...(conversationMode ? { initialConversationMode: conversationMode } : {}),
+            ...(typeof fastMode === "boolean" ? { initialFastMode: fastMode } : {}),
+          };
+
       // Publish both startup surfaces as soon as backend intent exists,
       // including while setup is still running. Provider creation remains gated
       // below, but the durable pane can already rehydrate in an inactive
-      // renderer.
+      // renderer. A prompt-less launch stays unassigned so the user can still
+      // change the preselected model before the first send.
       await this.storage.ensureStartupNativeAgentTab({
         environmentId: environment.id,
         agent,
+        ...preselectOptions,
       });
       const startupSession = environment.startupAgentSession;
       if (
@@ -1408,8 +1423,41 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
 
       if (!isEnvironmentReadyForAgents(environment)) return;
 
-      const prompt = environment.initialPrompt?.trim();
-      const initialAttachments = environment.initialPromptAttachments ?? [];
+      if (!hasInitialWork) {
+        // No opening prompt was submitted with the environment. Leave the tab
+        // unlocked, keep the create-dialog model as a one-shot preselect, and
+        // do not mint a provider session the user may never use.
+        const publishedLayout = await this.storage.ensureStartupNativeAgentTab({
+          environmentId: environment.id,
+          agent,
+          activateOnSetupHandoff: true,
+          ...preselectOptions,
+        });
+        await this.storage.updateEnvironment(environment.id, {
+          pendingAgentLaunch: false,
+          initialAgentPlatform: undefined,
+          initialAgentModel: undefined,
+          initialReasoningEffort: undefined,
+          initialFastMode: undefined,
+          initialConversationMode: undefined,
+          initialPromptAttachments: undefined,
+          initialPromptPresentation: undefined,
+          startupAgentSession: publishedLayout
+            ? undefined
+            : {
+                tabId: "startup-agent",
+                agent,
+                style: "native",
+                model,
+                reasoningEffort,
+                status: "running",
+                startedAt: new Date().toISOString(),
+              },
+        });
+        this.launchRetryAt.delete(environment.id);
+        return;
+      }
+
       const files = initialAttachments.filter((attachment) => attachment.type === "file");
       // Images stay as base64 until the provider stages them inside the durable
       // dispatch lock. Files use the same lock through the preparation callback
@@ -1440,36 +1488,25 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           : {}),
       };
       const session =
-        prompt || images.length > 0 || files.length > 0
-          ? files.length > 0
-            ? await this.dispatchPromptInternal(dispatchInput, async () => {
-                const saved = await this.invoke<SavedInitialPromptAttachment[]>(
-                  "write_initial_prompt_attachments",
-                  {
-                    environmentId: environment.id,
-                    attachments: files.map(({ id, name, base64Data }) => ({
-                      id,
-                      name,
-                      base64Data,
-                    })),
-                  },
-                );
-                return {
-                  dispatch: true,
-                  prompt: buildInitialPromptWithAttachmentReferences(prompt ?? "", saved),
-                };
-              })
-            : await this.dispatchPrompt(dispatchInput)
-          : await this.ensureSession({
-              environmentId: environment.id,
-              agent,
-              logicalSessionKey,
-              model,
-              reasoningEffort,
-              ...(conversationMode ? { sessionMode: conversationMode } : {}),
-              ...(typeof fastMode === "boolean" ? { fastMode } : {}),
-              ...(parameterValues ? { parameterValues } : {}),
-            });
+        files.length > 0
+          ? await this.dispatchPromptInternal(dispatchInput, async () => {
+              const saved = await this.invoke<SavedInitialPromptAttachment[]>(
+                "write_initial_prompt_attachments",
+                {
+                  environmentId: environment.id,
+                  attachments: files.map(({ id, name, base64Data }) => ({
+                    id,
+                    name,
+                    base64Data,
+                  })),
+                },
+              );
+              return {
+                dispatch: true,
+                prompt: buildInitialPromptWithAttachmentReferences(prompt ?? "", saved),
+              };
+            })
+          : await this.dispatchPrompt(dispatchInput);
 
       // The provider mapping is not enough to satisfy the launch: the user
       // needs a durable pane projection even if every renderer was inactive
@@ -1479,6 +1516,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         environmentId: environment.id,
         agent,
         providerSessionId: session.providerSessionId,
+        lockPlatform: true,
       });
 
       await this.storage.updateEnvironment(environment.id, {

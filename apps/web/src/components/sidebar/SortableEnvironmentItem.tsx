@@ -2,7 +2,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical } from "lucide-react";
 import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
-import type { Environment } from "@/types";
+import type { Environment, EnvironmentType } from "@/types";
 import { cn } from "@/lib/utils";
 
 interface SortableEnvironmentItemProps {
@@ -13,6 +13,7 @@ interface SortableEnvironmentItemProps {
   onStart: (environmentId: string) => void;
   onStop: (environmentId: string) => void;
   onRestart: (environmentId: string) => void;
+  onFork?: (environmentId: string, environmentType: EnvironmentType) => void;
   onUpdate?: (environment: Environment) => void;
   isMultiSelectMode?: boolean;
   isChecked?: boolean;
@@ -26,6 +27,7 @@ export function SortableEnvironmentItem({
   onStart,
   onStop,
   onRestart,
+  onFork,
   onUpdate,
   isMultiSelectMode = false,
   isChecked = false,
@@ -76,6 +78,7 @@ export function SortableEnvironmentItem({
             onStart={onStart}
             onStop={onStop}
             onRestart={onRestart}
+            onFork={onFork}
             onUpdate={onUpdate}
             isMultiSelectMode={isMultiSelectMode}
             isChecked={isChecked}

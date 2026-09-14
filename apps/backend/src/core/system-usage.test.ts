@@ -8,10 +8,18 @@ import {
   cpuPercent,
   cpuTimes,
   createSystemUsageReader,
+  darwinRamPercentFromVmStat,
+  GPU_AVAILABLE_CACHE_MS,
+  parseDarwinGpuPercent,
+  parseDarwinVmStat,
   parsePercentLines,
+  RAM_UNAVAILABLE_CACHE_MS,
+  readDarwinGpuPercent,
+  readDarwinRamPercent,
   readDiskPercent,
   readGpuPercent,
   readLinuxGpuPercent,
+  readRamPercent,
 } from "./system-usage.js";
 
 function cpu(idle: number, user: number): CpuInfo {
@@ -121,14 +129,109 @@ describe("system usage", () => {
     ).toBeNull();
   });
 
+  test("reads Darwin GPU percentages from IOAccelerator performance statistics", async () => {
+    expect(
+      parseDarwinGpuPercent(
+        `"PerformanceStatistics" = {"Device Utilization %"=0,"Renderer Utilization %"=24,"Tiler Utilization %"=14}`,
+      ),
+    ).toBe(24);
+    expect(
+      parseDarwinGpuPercent(
+        `"PerformanceStatistics" = {"Device Utilization %" = 40}\n"PerformanceStatistics" = {"Renderer Utilization %" = 80}`,
+      ),
+    ).toBe(60);
+    expect(
+      parseDarwinGpuPercent(
+        `"PerformanceStatistics" = {"Device Utilization %"=0,"Tiler Utilization %"=0}`,
+      ),
+    ).toBe(0);
+    expect(
+      parseDarwinGpuPercent(`"PerformanceStatistics" = {"Alloc system memory"=12}`),
+    ).toBeNull();
+
+    const execute = mock(async () => ({
+      stdout: `"PerformanceStatistics" = {"Device Utilization %"=18,"Renderer Utilization %"=12}`,
+    }));
+    expect(
+      await readDarwinGpuPercent({
+        platform: "darwin",
+        sampleCount: 1,
+        runCommand: execute,
+      }),
+    ).toBe(18);
+    expect(execute).toHaveBeenCalledWith(
+      "ioreg",
+      ["-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"],
+      { timeoutMs: 1_500 },
+    );
+    expect(
+      await readDarwinGpuPercent({
+        platform: "linux",
+        runCommand: async () => {
+          throw new Error("must not run");
+        },
+      }),
+    ).toBeNull();
+    expect(
+      await readDarwinGpuPercent({
+        platform: "darwin",
+        sampleCount: 2,
+        delay: async () => {},
+        runCommand: async () => {
+          throw new Error("ioreg missing");
+        },
+      }),
+    ).toBeNull();
+  });
+
+  test("keeps the peak Darwin GPU sample so idle snapshots do not hide activity", async () => {
+    const outputs = [
+      `"PerformanceStatistics" = {"Device Utilization %"=0,"Renderer Utilization %"=0}`,
+      `"PerformanceStatistics" = {"Device Utilization %"=0,"Renderer Utilization %"=26}`,
+      `"PerformanceStatistics" = {"Device Utilization %"=0,"Tiler Utilization %"=0}`,
+    ];
+    const execute = mock(async () => ({ stdout: outputs.shift() ?? outputs[0]! }));
+    const delays: number[] = [];
+    expect(
+      await readDarwinGpuPercent({
+        platform: "darwin",
+        sampleCount: 3,
+        delay: async (milliseconds) => {
+          delays.push(milliseconds);
+        },
+        runCommand: execute,
+      }),
+    ).toBe(26);
+    expect(execute).toHaveBeenCalledTimes(3);
+    expect(delays).toEqual([80, 80]);
+  });
+
+  test("samples Darwin GPU twice by default so title-bar polls stay cheap", async () => {
+    const execute = mock(async () => ({
+      stdout: `"PerformanceStatistics" = {"Device Utilization %"=18}`,
+    }));
+    expect(
+      await readDarwinGpuPercent({
+        platform: "darwin",
+        delay: async () => {},
+        runCommand: execute,
+      }),
+    ).toBe(18);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
   test("uses sysfs before nvidia-smi and parses multi-GPU output", async () => {
     const execute = mock(async () => ({ stdout: "45\n85\n" }));
     expect(await readGpuPercent({ linuxGpuPercent: async () => 31, runCommand: execute })).toBe(31);
     expect(execute).not.toHaveBeenCalled();
 
-    expect(await readGpuPercent({ linuxGpuPercent: async () => null, runCommand: execute })).toBe(
-      65,
-    );
+    expect(
+      await readGpuPercent({
+        linuxGpuPercent: async () => null,
+        darwinGpuPercent: async () => null,
+        runCommand: execute,
+      }),
+    ).toBe(65);
     expect(execute).toHaveBeenCalledWith(
       "nvidia-smi",
       ["--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
@@ -136,16 +239,37 @@ describe("system usage", () => {
     );
   });
 
+  test("uses ioreg after sysfs and treats an idle Darwin reading as authoritative", async () => {
+    const execute = mock(async () => ({ stdout: "45\n85\n" }));
+    expect(
+      await readGpuPercent({
+        linuxGpuPercent: async () => null,
+        darwinGpuPercent: async () => 22,
+        runCommand: execute,
+      }),
+    ).toBe(22);
+    expect(
+      await readGpuPercent({
+        linuxGpuPercent: async () => null,
+        darwinGpuPercent: async () => 0,
+        runCommand: execute,
+      }),
+    ).toBe(0);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   test("returns null when nvidia-smi fails or produces no usable values", async () => {
     expect(
       await readGpuPercent({
         linuxGpuPercent: async () => null,
+        darwinGpuPercent: async () => null,
         runCommand: async () => ({ stdout: "\nN/A\n" }),
       }),
     ).toBeNull();
     expect(
       await readGpuPercent({
         linuxGpuPercent: async () => null,
+        darwinGpuPercent: async () => null,
         runCommand: async () => {
           throw new Error("timed out");
         },
@@ -163,6 +287,7 @@ describe("system usage", () => {
       [cpu(10_020, 10_080)],
     ];
     const read = createSystemUsageReader({
+      platform: "linux",
       cpus: () => snapshots.shift() ?? [cpu(10_020, 10_080)],
       totalMemory: () => 1_000,
       freeMemory: () => 250,
@@ -187,6 +312,7 @@ describe("system usage", () => {
       .mockReturnValueOnce([cpu(100, 100)])
       .mockReturnValue([cpu(120, 180)]);
     const read = createSystemUsageReader({
+      platform: "linux",
       cpus,
       totalMemory: () => 1_000,
       freeMemory: () => 500,
@@ -216,6 +342,7 @@ describe("system usage", () => {
       .mockReturnValueOnce([cpu(120, 180)])
       .mockReturnValue([cpu(120, 180)]);
     const read = createSystemUsageReader({
+      platform: "linux",
       cpus,
       totalMemory: () => 0,
       freeMemory: () => 0,
@@ -238,6 +365,7 @@ describe("system usage", () => {
     const values: Array<number | null> = [44, 45, null, 46];
     const gpuPercent = mock(async () => (values.length > 0 ? values.shift()! : 46));
     const read = createSystemUsageReader({
+      platform: "linux",
       cpus: () => [cpu(clock, clock)],
       totalMemory: () => 1,
       freeMemory: () => 0,
@@ -252,9 +380,9 @@ describe("system usage", () => {
     expect((await read("/data")).gpuPercent).toBe(44);
     clock += 4_999;
     expect((await read("/data")).gpuPercent).toBe(44);
-    clock += 1;
+    clock += GPU_AVAILABLE_CACHE_MS - 4_999;
     expect((await read("/data")).gpuPercent).toBe(45);
-    clock += 5_000;
+    clock += GPU_AVAILABLE_CACHE_MS;
     expect((await read("/data")).gpuPercent).toBeNull();
     for (let index = 0; index < 6; index += 1) {
       clock += 4_999;
@@ -272,6 +400,7 @@ describe("system usage", () => {
     const gpuProbe = deferred<number | null>();
     const gpuPercent = mock(() => gpuProbe.promise);
     const read = createSystemUsageReader({
+      platform: "linux",
       cpus: () => [cpu(clock, clock)],
       totalMemory: () => 1,
       freeMemory: () => 0,
@@ -291,5 +420,241 @@ describe("system usage", () => {
     gpuProbe.resolve(55);
     expect((await first).gpuPercent).toBe(55);
     expect((await second).gpuPercent).toBe(55);
+  });
+
+  test("parses Darwin vm_stat and reports Activity Monitor Memory Used", () => {
+    const output = [
+      "Mach Virtual Memory Statistics: (page size of 16384 bytes)",
+      "Pages free:                               17320.",
+      "Pages wired down:                        624415.",
+      "Pages purgeable:                          67841.",
+      "File-backed pages:                      1667777.",
+      "Anonymous pages:                        4109534.",
+      "Pages occupied by compressor:           1907369.",
+    ].join("\n");
+    expect(parseDarwinVmStat(output)).toEqual({
+      pageSize: 16_384,
+      wired: 624_415,
+      purgeable: 67_841,
+      anonymous: 4_109_534,
+      compressor: 1_907_369,
+    });
+    expect(darwinRamPercentFromVmStat(output, 137_438_953_472)).toBe(78.4);
+    expect(parseDarwinVmStat("Pages wired down: 1.")).toBeNull();
+    expect(darwinRamPercentFromVmStat(output, 0)).toBeNull();
+
+    const quoted = [
+      "Mach Virtual Memory Statistics: (page size of 16384 bytes)",
+      '"Pages wired down":                        624415.',
+      '"Pages purgeable":                          67841.',
+      '"Anonymous pages":                        4109534.',
+      '"Pages occupied by compressor":           1907369.',
+    ].join("\n");
+    expect(parseDarwinVmStat(quoted)).toEqual({
+      pageSize: 16_384,
+      wired: 624_415,
+      purgeable: 67_841,
+      anonymous: 4_109_534,
+      compressor: 1_907_369,
+    });
+    expect(darwinRamPercentFromVmStat(quoted, 137_438_953_472)).toBe(78.4);
+  });
+
+  test("reads Darwin RAM from vm_stat and falls back off-platform or on failure", async () => {
+    const output = [
+      "Mach Virtual Memory Statistics: (page size of 16384 bytes)",
+      "Pages wired down:                              200.",
+      "Pages purgeable:                               100.",
+      "Anonymous pages:                              1000.",
+      "Pages occupied by compressor:                  300.",
+    ].join("\n");
+    const execute = mock(async () => ({ stdout: output }));
+    expect(
+      await readDarwinRamPercent({
+        platform: "darwin",
+        totalMemory: () => 40_960_000,
+        runCommand: execute,
+      }),
+    ).toBe(56);
+    expect(execute).toHaveBeenCalledWith("vm_stat", [], { timeoutMs: 1_500 });
+    expect(
+      await readDarwinRamPercent({
+        platform: "linux",
+        runCommand: async () => {
+          throw new Error("must not run");
+        },
+      }),
+    ).toBeNull();
+    expect(
+      await readDarwinRamPercent({
+        platform: "darwin",
+        runCommand: async () => {
+          throw new Error("vm_stat missing");
+        },
+      }),
+    ).toBeNull();
+  });
+
+  test("uses Darwin RAM on macOS and the free-page formula elsewhere", async () => {
+    expect(
+      await readRamPercent({
+        platform: "linux",
+        totalMemory: () => 1_000,
+        freeMemory: () => 250,
+      }),
+    ).toBe(75);
+    expect(
+      await readRamPercent({
+        platform: "darwin",
+        totalMemory: () => 40_960_000,
+        freeMemory: () => 0,
+        runCommand: async () => ({
+          stdout: [
+            "Mach Virtual Memory Statistics: (page size of 16384 bytes)",
+            "Pages wired down:                              200.",
+            "Pages purgeable:                               100.",
+            "Anonymous pages:                              1000.",
+            "Pages occupied by compressor:                  300.",
+          ].join("\n"),
+        }),
+      }),
+    ).toBe(56);
+
+    let clock = 0;
+    const execute = mock(async () => ({
+      stdout: [
+        "Mach Virtual Memory Statistics: (page size of 16384 bytes)",
+        "Pages wired down:                              200.",
+        "Pages purgeable:                               100.",
+        "Anonymous pages:                              1000.",
+        "Pages occupied by compressor:                  300.",
+      ].join("\n"),
+    }));
+    const read = createSystemUsageReader({
+      platform: "darwin",
+      cpus: () => [cpu(clock, clock)],
+      totalMemory: () => 40_960_000,
+      freeMemory: () => 0,
+      diskPercent: async () => 0,
+      gpuPercent: async () => null,
+      runCommand: execute,
+      now: () => clock,
+      delay: async (milliseconds) => {
+        clock += milliseconds;
+      },
+    });
+    expect((await read("/data")).ramPercent).toBe(56);
+    expect(execute).toHaveBeenCalledWith("vm_stat", [], { timeoutMs: 1_500 });
+  });
+
+  test("falls back to the free-page formula on Darwin when vm_stat is unusable", async () => {
+    expect(
+      await readRamPercent({
+        platform: "darwin",
+        totalMemory: () => 1_000,
+        freeMemory: () => 10,
+        runCommand: async () => {
+          throw new Error("vm_stat missing");
+        },
+      }),
+    ).toBe(99);
+    expect(
+      await readRamPercent({
+        platform: "darwin",
+        totalMemory: () => 2_000,
+        freeMemory: () => 500,
+        runCommand: async () => {
+          throw new Error("vm_stat timed out");
+        },
+      }),
+    ).toBe(75);
+    expect(
+      await readRamPercent({
+        platform: "darwin",
+        totalMemory: () => 1_000,
+        freeMemory: () => 250,
+        runCommand: async () => ({ stdout: "Pages wired down: 1." }),
+      }),
+    ).toBe(75);
+    expect(
+      await readRamPercent({
+        platform: "darwin",
+        totalMemory: () => 4_000,
+        freeMemory: () => 1_000,
+        runCommand: async () => ({
+          stdout: [
+            "Mach Virtual Memory Statistics: (page size of 16384 bytes)",
+            "Pages wired down:                              200.",
+            "Pages purgeable:                               100.",
+          ].join("\n"),
+        }),
+      }),
+    ).toBe(75);
+  });
+
+  test("caches a failed Darwin vm_stat probe across title-bar polls", async () => {
+    let clock = 0;
+    const execute = mock(async () => {
+      throw new Error("vm_stat denied");
+    });
+    const read = createSystemUsageReader({
+      platform: "darwin",
+      cpus: () => [cpu(clock, clock)],
+      totalMemory: () => 1_000,
+      freeMemory: () => 10,
+      diskPercent: async () => 0,
+      gpuPercent: async () => null,
+      runCommand: execute,
+      now: () => clock,
+      delay: async (milliseconds) => {
+        clock += milliseconds;
+      },
+    });
+
+    expect((await read("/data")).ramPercent).toBe(99);
+    for (let index = 0; index < 5; index += 1) {
+      clock += 5_000;
+      expect((await read("/data")).ramPercent).toBe(99);
+    }
+    expect(execute).toHaveBeenCalledTimes(1);
+    clock += RAM_UNAVAILABLE_CACHE_MS - 5_000 * 5 + 1;
+    expect((await read("/data")).ramPercent).toBe(99);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  test("reuses the last Darwin vm_stat reading instead of the free-page fallback", async () => {
+    let clock = 0;
+    let fail = false;
+    const execute = mock(async () => {
+      if (fail) throw new Error("vm_stat timed out");
+      return {
+        stdout: [
+          "Mach Virtual Memory Statistics: (page size of 16384 bytes)",
+          "Pages wired down:                              200.",
+          "Pages purgeable:                               100.",
+          "Anonymous pages:                              1000.",
+          "Pages occupied by compressor:                  300.",
+        ].join("\n"),
+      };
+    });
+    const read = createSystemUsageReader({
+      platform: "darwin",
+      cpus: () => [cpu(clock, clock)],
+      totalMemory: () => 40_960_000,
+      freeMemory: () => 0,
+      diskPercent: async () => 0,
+      gpuPercent: async () => null,
+      runCommand: execute,
+      now: () => clock,
+      delay: async (milliseconds) => {
+        clock += milliseconds;
+      },
+    });
+
+    expect((await read("/data")).ramPercent).toBe(56);
+    fail = true;
+    clock += 15_000;
+    expect((await read("/data")).ramPercent).toBe(56);
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 });

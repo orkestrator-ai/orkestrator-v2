@@ -10,10 +10,12 @@ import * as realSidebar from "./Sidebar";
 import * as realOpenFileDialog from "./OpenFileDialog";
 import * as realMobileAppShellLayout from "./MobileAppShellLayout";
 import * as realAgentInfoButton from "./AgentInfoButton";
+import * as realSystemUsageIndicator from "./SystemUsageIndicator";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { TabInfo } from "@/types/paneLayout";
 
 const realAgentInfoButtonSnapshot = { ...realAgentInfoButton };
+const realSystemUsageIndicatorSnapshot = { ...realSystemUsageIndicator };
 const realResizableSnapshot = { ...realResizable };
 const realFilesPanelComponentsSnapshot = { ...realFilesPanelComponents };
 const realStoresSnapshot = { ...realStores };
@@ -28,6 +30,7 @@ let isMobile = true;
 let selectedProjectId: string | null = "project-1";
 let selectedEnvironmentId: string | null = "environment-1";
 let filesPanelOpen = false;
+let sidebarOpen = true;
 const startDraggingMock = mock(async () => undefined);
 
 function selectState<TState, TResult>(
@@ -90,6 +93,12 @@ mock.module("./AgentInfoButton", () => ({
   ),
 }));
 
+// The real poll is exercised in its own suite; here it only needs to be
+// observable as a slot so the desktop/mobile split can be asserted.
+mock.module("./SystemUsageIndicator", () => ({
+  SystemUsageIndicator: () => <div data-testid="system-usage-indicator" />,
+}));
+
 mock.module("@/hooks", () => ({
   ...realHooksSnapshot,
   useMediaQuery: () => isMobile,
@@ -103,8 +112,9 @@ mock.module("@/stores", () => ({
     selector?: (state: {
       selectedProjectId: string | null;
       selectedEnvironmentId: string | null;
+      sidebarOpen: boolean;
     }) => T,
-  ) => selectState({ selectedProjectId, selectedEnvironmentId }, selector),
+  ) => selectState({ selectedProjectId, selectedEnvironmentId, sidebarOpen }, selector),
   useProjectStore: <T,>(
     selector?: (state: { projects: Array<{ id: string; name: string }> }) => T,
   ) => selectState({ projects: [{ id: "project-1", name: "pgstack1" }] }, selector),
@@ -133,6 +143,7 @@ afterAll(() => {
   mock.module("./OpenFileDialog", () => realOpenFileDialogSnapshot);
   mock.module("./MobileAppShellLayout", () => realMobileAppShellLayoutSnapshot);
   mock.module("./AgentInfoButton", () => realAgentInfoButtonSnapshot);
+  mock.module("./SystemUsageIndicator", () => realSystemUsageIndicatorSnapshot);
 });
 
 function seedPaneLayout(tabs: TabInfo[], activeTabId: string | null, activePaneId = "pane-a") {
@@ -175,6 +186,7 @@ beforeEach(() => {
   selectedProjectId = "project-1";
   selectedEnvironmentId = "environment-1";
   filesPanelOpen = false;
+  sidebarOpen = true;
   startDraggingMock.mockReset();
   document.title = "";
   usePaneLayoutStore.setState({
@@ -217,10 +229,34 @@ describe("AppShell", () => {
     const titleBar = container.querySelector("div[data-backend-drag-region]");
     expect(titleBar).toBeTruthy();
     expect(titleBar?.className).toContain("h-[var(--desktop-title-bar-height)]");
+    // The title sits at the left, clear of the macOS traffic lights, and the
+    // bar carries the same bottom rule as the toolbar below it.
+    expect(titleBar?.className).toContain("justify-start");
+    expect(titleBar?.className).toContain("pl-[var(--desktop-title-bar-inset)]");
+    expect(titleBar?.className).toContain("border-b");
+    expect(titleBar?.className).toContain("border-border/80");
     fireEvent.mouseDown(titleBar!, { button: 2 });
     expect(startDraggingMock).not.toHaveBeenCalled();
     fireEvent.mouseDown(titleBar!, { button: 0 });
     expect(startDraggingMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("hides the left panel once the sidebar is toggled closed", () => {
+    isMobile = false;
+    const { rerender } = render(<AppShell>Workspace</AppShell>);
+    expect(screen.getByText("Sidebar")).toBeTruthy();
+
+    expect(screen.getByTestId("resize-handle")).toBeTruthy();
+
+    sidebarOpen = false;
+    rerender(<AppShell>Workspace</AppShell>);
+    expect(screen.queryByText("Sidebar") === null).toBe(true);
+    expect(screen.queryByTestId("resize-handle") === null).toBe(true);
+
+    sidebarOpen = true;
+    rerender(<AppShell>Workspace</AppShell>);
+    expect(screen.getByText("Sidebar")).toBeTruthy();
+    expect(screen.getByTestId("resize-handle")).toBeTruthy();
   });
 
   test("mounts the agent-info button in the desktop title bar outside the drag region", () => {
@@ -256,6 +292,29 @@ describe("AppShell", () => {
     expect(slot.contains(screen.getByTestId("agent-info-button"))).toBe(true);
     expect(screen.getByTestId("agent-info-button").getAttribute("data-mobile")).toBe("true");
     expect(screen.queryByTestId("desktop-agent-info-slot") === null).toBe(true);
+  });
+
+  test("mounts the system usage meters in the desktop title bar but not in mobile", () => {
+    isMobile = false;
+    render(<AppShell>Workspace</AppShell>);
+    const slot = screen.getByTestId("desktop-agent-info-slot");
+    const meters = screen.getByTestId("system-usage-indicator");
+    const separator = screen.getByTestId("title-bar-usage-separator");
+    expect(slot.contains(meters)).toBe(true);
+    expect(slot.contains(separator)).toBe(true);
+    expect(separator.getAttribute("aria-hidden")).toBe("true");
+    expect(separator.className).toContain("mx-2");
+    expect(separator.className).toContain("bg-border/50");
+    const slotChildren = Array.from(slot.children);
+    expect(slotChildren[0]).toBe(meters);
+    expect(slotChildren[1]).toBe(separator);
+    expect(slotChildren[2]?.contains(screen.getByTestId("agent-info-button"))).toBe(true);
+
+    cleanup();
+    isMobile = true;
+    render(<AppShell>Workspace</AppShell>);
+    expect(screen.queryByTestId("system-usage-indicator") === null).toBe(true);
+    expect(screen.queryByTestId("title-bar-usage-separator") === null).toBe(true);
   });
 
   test("resolves the active tab through the active pane of the selected environment", () => {

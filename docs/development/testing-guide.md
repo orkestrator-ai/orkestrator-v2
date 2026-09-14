@@ -307,7 +307,7 @@ a failed test or claim full validation passed.
 Workspace and bridge package tests run as Turbo tasks, but both are declared
 `"cache": false`. A replayed cache entry would let a group report success having
 executed nothing, and this repository still tracks live flakes in
-`docs/development/flaky-tests.md`, so a green that proves only "the inputs are unchanged" is
+`docs/tests/flaky-tests/0000-index.md`, so a green that proves only "the inputs are unchanged" is
 not worth the seconds it saves. Every aggregate invocation runs every test.
 
 `build` stays cacheable, and it is the expensive dependency. `test:workspace`
@@ -368,12 +368,13 @@ Use this order:
 5. Rerun the affected group or `mise run test:changed`; finish with the full
    suite once the cause is addressed.
 
-Keep [flaky-tests.md](flaky-tests.md) current for credible flakes. Record
-the exact test and file, original command and worker configuration, failure
-message and duration, suite counts, isolated rerun command and result,
+Keep [the flake index](../tests/flaky-tests/0000-index.md) current for
+credible flakes. Search the index first; open only the matching case file.
+Record the exact test and file, original command and worker configuration,
+failure message and duration, suite counts, isolated rerun command and result,
 observation date, and an evidence-backed hypothesis. Do not skip, loosen, or
-delete a test to hide an intermittent failure. When fixed, retain the history
-and mark the entry resolved with stress or parallel verification.
+delete a test to hide an intermittent failure. When fixed, retain the case-file
+history and mark the index row resolved with stress or parallel verification.
 
 Aggregate runs remove ambient bridge debug flags before spawning their groups:
 `ORKESTRATOR_BRIDGE_DEBUG`, `CLAUDE_BRIDGE_DEBUG`, `CODEX_BRIDGE_DEBUG`,

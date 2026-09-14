@@ -22,10 +22,7 @@ export function activateProjectForEnvironmentCleanup(environmentId: string): boo
   // sidebar and bulk-delete can leave the workspace immediately. A backend
   // tombstone that still carries the error stays selected so retry remains
   // reachable.
-  if (
-    environment?.cleanupAfterMergeError &&
-    !envStore.deletingEnvironments.has(environmentId)
-  ) {
+  if (environment?.cleanupAfterMergeError && !envStore.deletingEnvironments.has(environmentId)) {
     return false;
   }
 

@@ -182,6 +182,7 @@ const setProjectBoardTabMock = mock((_tab: string) => {});
 const setProjectBoardNotesOpenMock = mock((_open: boolean) => {});
 let projectBoardActionLog: string[] = [];
 const toggleFilesPanelMock = mock(() => {});
+const toggleSidebarMock = mock(() => {});
 const addCommentMock = mock(async (_taskId: string, _body: string) => {});
 const updateTaskMock = mock(async (_taskId: string, _updates: unknown) => {});
 const viewPRMock = mock(() => {});
@@ -245,6 +246,7 @@ let currentProjectBoardTab: "coordinator" | "kanban" | "github" | "linear" | "fe
 let currentProjectBoardNotesOpen = false;
 let currentChanges: unknown[] = [];
 let currentFilesPanelOpen = false;
+let currentSidebarOpen = true;
 let currentReviewPrompt: string | undefined;
 let currentDefaultAgent: "claude" | "opencode" | "codex" | undefined = "codex";
 let currentEnabledAgentPlatforms:
@@ -670,6 +672,8 @@ mock.module("@/stores", () => ({
         tab: "coordinator" | "kanban" | "linear" | "github" | "features",
       ) => void;
       setProjectBoardNotesOpen: (open: boolean) => void;
+      sidebarOpen: boolean;
+      toggleSidebar: () => void;
     }) => T,
   ) =>
     selectState(
@@ -682,6 +686,8 @@ mock.module("@/stores", () => ({
         projectBoardTab: currentProjectBoardTab,
         setProjectBoardTab: setProjectBoardTabMock,
         setProjectBoardNotesOpen: setProjectBoardNotesOpenMock,
+        sidebarOpen: currentSidebarOpen,
+        toggleSidebar: toggleSidebarMock,
       },
       selector,
     ),
@@ -922,6 +928,7 @@ beforeEach(() => {
     currentProjectBoardNotesOpen = open;
   });
   toggleFilesPanelMock.mockReset();
+  toggleSidebarMock.mockReset();
   addCommentMock.mockReset();
   updateTaskMock.mockReset();
   viewPRMock.mockReset();
@@ -966,6 +973,7 @@ beforeEach(() => {
   currentProjectBoardNotesOpen = false;
   currentChanges = [];
   currentFilesPanelOpen = false;
+  currentSidebarOpen = true;
   currentReviewPrompt = undefined;
   currentDefaultAgent = "codex";
   currentEnabledAgentPlatforms = undefined;
@@ -2305,6 +2313,34 @@ describe("ActionBar toolbar interactions", () => {
     expect(createTabMock).not.toHaveBeenCalledWith("opencode");
     expect(closeActiveTabMock).not.toHaveBeenCalled();
     expect(toggleFilesPanelMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("toggles the left panel from the first toolbar control", () => {
+    render(<ActionBar />);
+
+    const panelToggle = screen.getByRole("button", { name: "Hide left panel" });
+    const globalSettings = screen.getByRole("button", { name: "Global settings" });
+    // "First toolbar item": the toggle precedes the other left-side controls.
+    expect(
+      panelToggle.compareDocumentPosition(globalSettings) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(panelToggle);
+    expect(toggleSidebarMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("reflects the left panel state on the toolbar toggle", () => {
+    currentSidebarOpen = false;
+    render(<ActionBar />);
+
+    const panelToggle = screen.getByRole("button", { name: "Show left panel" });
+    expect(panelToggle.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  test("hides the left panel toggle in grid presentation", () => {
+    render(<ActionBar presentation="grid" />);
+    expect(screen.queryByRole("button", { name: "Hide left panel" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Show left panel" }) === null).toBe(true);
   });
 
   test("leaves Command+N unhandled for the desktop or browser new-window accelerator", () => {

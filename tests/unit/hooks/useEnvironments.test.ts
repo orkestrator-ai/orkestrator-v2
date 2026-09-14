@@ -85,6 +85,20 @@ const mockCreateEnvironment = mock<
 >((projectId) =>
   Promise.resolve(createMockEnvironment({ id: "new-env-id", projectId, name: "test-env" })),
 );
+const mockForkEnvironment = mock<
+  (environmentId: string, environmentType: EnvironmentType) => Promise<Environment>
+>((environmentId, environmentType) =>
+  Promise.resolve(
+    createMockEnvironment({
+      id: "forked-env-id",
+      projectId: "project-1",
+      name: "test-env-fork",
+      environmentType,
+      delegationBaseCommit: "a".repeat(40),
+      delegationBaseBranch: "main",
+    }),
+  ),
+);
 const mockDeleteEnvironment = mock<(environmentId: string) => Promise<void>>(() =>
   Promise.resolve(),
 );
@@ -117,6 +131,7 @@ mock.module("@/lib/backend", () => ({
   getEnvironment: mockGetEnvironment,
   getEnvironmentSetupSession: mockGetEnvironmentSetupSession,
   createEnvironment: mockCreateEnvironment,
+  forkEnvironment: mockForkEnvironment,
   deleteEnvironment: mockDeleteEnvironment,
   startEnvironment: mockStartEnvironment,
   startEnvironmentInBackground: mockStartEnvironmentInBackground,
@@ -181,6 +196,7 @@ describe("useEnvironments", () => {
     mockGetEnvironment.mockClear();
     mockGetEnvironmentSetupSession.mockClear();
     mockCreateEnvironment.mockClear();
+    mockForkEnvironment.mockClear();
     mockDeleteEnvironment.mockClear();
     mockStartEnvironment.mockClear();
     mockStartEnvironmentInBackground.mockClear();
@@ -199,6 +215,18 @@ describe("useEnvironments", () => {
     mockGetEnvironmentSetupSession.mockImplementation(() => Promise.resolve(null));
     mockCreateEnvironment.mockImplementation((projectId) =>
       Promise.resolve(createMockEnvironment({ id: "new-env-id", projectId, name: "test-env" })),
+    );
+    mockForkEnvironment.mockImplementation((_environmentId, environmentType) =>
+      Promise.resolve(
+        createMockEnvironment({
+          id: "forked-env-id",
+          projectId: "project-1",
+          name: "test-env-fork",
+          environmentType,
+          delegationBaseCommit: "a".repeat(40),
+          delegationBaseBranch: "main",
+        }),
+      ),
     );
     mockDeleteEnvironment.mockImplementation(() => Promise.resolve());
     mockStartEnvironment.mockImplementation(() => Promise.resolve({ setupCommands: undefined }));
@@ -433,6 +461,68 @@ describe("useEnvironments", () => {
       "Build task\n\nShip the feature",
       undefined,
     );
+  });
+
+  test("forkEnvironment creates an environment from the source and records its type", async () => {
+    const { result } = renderHook(() => useEnvironments("project-1"));
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    let forked: Environment | undefined;
+    await act(async () => {
+      forked = await result.current.forkEnvironment("env-1", "local");
+    });
+
+    expect(mockForkEnvironment).toHaveBeenCalledWith("env-1", "local");
+    expect(forked?.id).toBe("forked-env-id");
+    expect(forked?.environmentType).toBe("local");
+    expect(
+      result.current.allEnvironments.some((environment) => environment.id === "forked-env-id"),
+    ).toBe(true);
+    expect(useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentType).toBe(
+      "local",
+    );
+  });
+
+  test("forkEnvironment sets error, toasts, and cleans up creation state on failure", async () => {
+    const existing = createMockEnvironment({ id: "env-1", projectId: "project-1" });
+    useEnvironmentStore.setState({
+      environments: [existing],
+      isLoading: false,
+      error: null,
+    });
+    mockForkEnvironment.mockImplementation(() => Promise.reject(new Error("Failed to fork")));
+    mockGetEnvironmentSnapshots.mockImplementation(() => Promise.resolve([]));
+    mockToastError.mockClear();
+
+    const { result } = renderHook(() => useEnvironments(null));
+
+    let thrownError: Error | undefined;
+    try {
+      await act(async () => {
+        await result.current.forkEnvironment("env-1", "local");
+      });
+    } catch (error) {
+      thrownError = error as Error;
+    }
+
+    expect(thrownError?.message).toBe("Failed to fork");
+    expect(result.current.error).toBe("Failed to fork");
+    expect(mockToastError).toHaveBeenCalledWith("Failed to fork environment", expect.any(Object));
+    expect(
+      result.current.allEnvironments.some((environment) => environment.id === "forked-env-id"),
+    ).toBe(false);
+
+    await act(async () => {
+      await result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+    });
+
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toBeUndefined();
   });
 
   test("createEnvironment sets error on failure", async () => {

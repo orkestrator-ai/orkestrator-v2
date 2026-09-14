@@ -312,9 +312,23 @@ const REAPABLE_SERVERS: readonly ReapableServer[] = [
   },
 ];
 
+export type LocalServerPidField = ReapableServer["pidField"];
+
 /** True when every marker of at least one set appears in the command line. */
-function matchesMarkers(markerSets: readonly (readonly string[])[], commandLine: string): boolean {
+export function matchesMarkers(
+  markerSets: readonly (readonly string[])[],
+  commandLine: string,
+): boolean {
   return markerSets.some((markers) => markers.every((marker) => commandLine.includes(marker)));
+}
+
+/** Confirm a recorded PID still looks like the bridge or server it was saved as. */
+export function commandMatchesRecordedServer(
+  pidField: LocalServerPidField,
+  commandLine: string,
+): boolean {
+  const server = REAPABLE_SERVERS.find((entry) => entry.pidField === pidField);
+  return server !== undefined && matchesMarkers(server.markerSets, commandLine);
 }
 
 /**

@@ -50,6 +50,7 @@ import {
   scheduleMergeCleanupRecovery,
   logEnvironmentLifecycleFailure,
 } from "./commands-helpers.js";
+import { forkEnvironmentRecord } from "./commands-environment-fork.js";
 import type { CommandContext } from "./commands-context.js";
 import { cleanupLogStorage, getLogStorageStats } from "./log-storage.js";
 
@@ -265,6 +266,11 @@ export function registerEnvironmentCommands(
       return toClientEnvironment(await storage.addEnvironment(env));
     },
   );
+  register("fork_environment", async ({ environmentId, environmentType }, context) => {
+    const source = await context.storage.getEnvironment(asString(environmentId, "environmentId"));
+    if (!source) throw new Error(`Environment not found: ${environmentId}`);
+    return forkEnvironmentRecord(source, asEnvironmentType(environmentType), context);
+  });
   register("delete_environment", async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
     extensionDiscoveryCache.invalidate(id);

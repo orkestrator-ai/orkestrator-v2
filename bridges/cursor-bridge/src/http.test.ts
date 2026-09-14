@@ -388,6 +388,7 @@ describe("prompt dispatch", () => {
 
   test("accepts a turn, records it, and renders the streamed reply", async () => {
     const state = await createSession();
+    let release = () => undefined as void;
     attachFake(state, {
       updates: [
         { type: "text-delta", text: "Working" },
@@ -399,6 +400,9 @@ describe("prompt dispatch", () => {
         },
       ],
       result: "done",
+      hold: new Promise<void>((resolve) => {
+        release = () => resolve();
+      }),
     });
 
     const response = await call(`/session/${state.id}/prompt`, {
@@ -414,6 +418,18 @@ describe("prompt dispatch", () => {
     // The journal can answer positively the moment the run has started.
     expect(await (await call(`/session/${state.id}/dispatch?requestId=r1`)).json()).toEqual({
       dispatch: "dispatched",
+    });
+
+    release();
+    await waitFor(() => state.status !== "running");
+    expect(state.messages[1]).toMatchObject({
+      role: "assistant",
+      content: "Workingdone",
+      parts: [
+        { type: "text", content: "Working" },
+        { type: "tool-invocation", toolName: "read", toolUseId: "c1" },
+        { type: "text", content: "done" },
+      ],
     });
   });
 

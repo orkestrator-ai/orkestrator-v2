@@ -4,12 +4,14 @@ import {
   readBridgeDebugFlag,
 } from "@orkestrator/protocol/bridge-diagnostics";
 import { isObject, type SessionState } from "./state.js";
+import { CursorSdkDiagnostics } from "./sdk-diagnostics.js";
 
 export function cursorDebugEnabled(value = process.env.CURSOR_BRIDGE_DEBUG): boolean {
   return readBridgeDebugFlag(value);
 }
 
 export class CursorRunDiagnostics extends BridgeRunDiagnostics {
+  private readonly sdk: CursorSdkDiagnostics;
   constructor(
     state: SessionState,
     now?: () => number,
@@ -17,6 +19,24 @@ export class CursorRunDiagnostics extends BridgeRunDiagnostics {
     intervalMs?: number,
   ) {
     super("cursor", state, now, write, intervalMs);
+    this.sdk = new CursorSdkDiagnostics(state.id, now, write);
+    this.sdk.report("send-started");
+  }
+  follow<T>(work: () => T): T {
+    return this.sdk.follow(work);
+  }
+  override sent(runId: string): void {
+    this.sdk.sent(runId);
+    super.sent(runId);
+  }
+  override report(event: Parameters<BridgeRunDiagnostics["report"]>[0]): void {
+    // The base constructor emits before subclass fields are initialized.
+    this.sdk?.report(event);
+    super.report(event);
+  }
+  override close(phase: "send-failed" | "finished" = "finished"): void {
+    super.close(phase);
+    this.sdk.close();
   }
   delta(update: unknown): void {
     let nested = false;

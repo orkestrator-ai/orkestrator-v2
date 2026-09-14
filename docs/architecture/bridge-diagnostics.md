@@ -65,6 +65,53 @@ of its network connection to the provider.
 Turn/process closure stops its diagnostic timer. Metadata logging does not
 change retries, timeout budgets, approval decisions or cancellation semantics.
 
+## Cursor SDK boundary snapshots
+
+Cursor also emits `event=sdk-snapshot` on the same timer and lifecycle
+boundaries, correlated by the same hashed `session` and `run`. It is enabled
+by the existing Save Logs for Debugging setting; install the updated build and
+restart Orkestrator (and existing Docker bridges) to activate it.
+
+`coverage=installed` means the pinned SDK's Bun diagnostic seam was installed.
+`coverage=unavailable` means the extra observations are missing, not that the
+network or executor is idle. The patch targets the Bun export used by desktop
+and Docker bridges; a manually launched Node runtime has only the original
+public SDK diagnostics. Zero observed transports likewise means no transport
+has been observed in this turn, rather than proof of a healthy connection.
+
+The snapshot separates these boundaries:
+
+| Evidence | Interpretation |
+| --- | --- |
+| Increasing `lastInboundAgoMs` and `serverHeartbeatAgoMs` | No incoming SDK transport traffic observed. |
+| Fresh server heartbeats, increasing `lastMeaningfulAgoMs` | The connection is receiving heartbeats without other messages progressing. This clock excludes heartbeats independently of the SDK's own stall clock. |
+| `pendingExecutions[].stage=executing` | Cursor's local execution iterator was entered and is waiting for its next response. The category identifies read, shell, MCP, request-context, etc.; arguments are never logged. |
+| `stage=response-ready` with increasing `stageAgeMs` | The executor yielded a response, but the SDK loop has not advanced past sending it to the client stream. |
+| A recent `completed` execution, no further meaningful incoming messages | The local execution loop completed its writes; further progress is waiting elsewhere. This does not prove the remote service consumed the response. |
+| `handlers[].state=errored` | The named SDK controller failed. Raw vendor errors are deliberately excluded. |
+| `paused=true` | Cursor paused its stall detector, including while awaiting certain human interaction queries. |
+| Public `terminal=resolved`, `stream=pending` | The terminal result arrived, but public stream drainage is still waiting. |
+
+Each transport includes last inbound/outbound frame categories, client/server
+heartbeat ages, frame counts, abort/end/dispose flags, and the SDK's internal
+controller states and durations. A `started` controller normally spans a whole
+stream; its age alone does not mean a tool is stuck. `transportAttempts` and
+per-transport attempt numbers distinguish new attempts within the same run.
+Transport callbacks only update counters; no log writes run per frame.
+
+Tracking is bounded to 16 transports and 128 simultaneous executions per turn.
+Snapshots show four transports, eight pending executions, and the eight most
+recent settled executions. Dropped observation counts and total counts expose
+incomplete coverage. Transport objects are held weakly; argument/response
+payloads are never retained by the diagnostic records. Each line is capped at
+8 KiB, with an explicit overflow record if necessary. Closing a bridge turn
+releases its observations even if the SDK fails to close; renderer unmounts do
+not close the scope.
+
+This identifies the blocked boundary rather than promising visibility into
+Cursor's remote service internals. Match the SDK snapshot to the public turn
+snapshot before attributing a stall to a filesystem operation or network wait.
+
 ## Privacy and bounds
 
 Prompts, model results, tool arguments, commands, outputs, paths, attachments,

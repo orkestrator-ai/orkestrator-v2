@@ -1,0 +1,14 @@
+# `Electron tmux backend command registration` agent MCP config and hook tests (`tests/unit/electron/tmux-backend.test.ts`)
+
+- **ID:** 0107
+- **Status:** resolved
+- **Date observed:** 2026-08-14
+- **Original command:** `set -o pipefail; bun test ./tests --parallel 2>&1 | tee /tmp/ork-fix-root-tests.log` on an 18-worker macOS host, run as validation for the unified agent picker change
+- **Failure:** three tests in this file timed out or failed in one aggregate run — `does not create an agent MCP config when Claude lacks the launch flag` (790.79 ms), `writes an owner-only agent MCP config and includes it in a local Claude launch` (5,002.17 ms), and `generated blocking hooks use an integer timeout and fail closed on expiry` (5,006.26 ms). The two 5,000 ms durations are Bun's default per-test budget.
+- **Suite counts:** root group 3,634 passed, 1 skipped, 4 failed, 3 errors across 143 files in 237.95 s.
+- **Isolated rerun:** `bun test ./tests/unit/electron/tmux-backend.test.ts --parallel` -> 173 passed, 0 failed in 87.91 s. Evidence: `/tmp/ork-fix-tmux-isolated.log`.
+- **Not covered by the no-`tmux` entry below:** `tmux 3.6a` is installed at `/opt/homebrew/bin/tmux` on this host and the root group ran in its normal time (237.95 s, not the ~1,035 s described there), so the documented environmental exclusion does not apply.
+- **Non-determinism across runs:** an immediately preceding aggregate run of the same suite at commit `cb520049` failed a *different* three tests from this same file — `serializes stop behind an in-flight start so no tmux session is orphaned`, `keeps per-environment hook state under the shared runtime root and removes it on stop`, and `environment teardown kills live sessions, restores settings and removes the runtime root`. Which tests fail therefore varies between runs of the same code.
+- **Hypothesis (not confirmed):** the file's per-test budget is exhausted under aggregate scheduling rather than any assertion being wrong; the isolated run needs 87.91 s for 173 tests, so several individual cases already sit close to 5,000 ms before contention. The log also carries `[tmux] --thinking-display probe failed; launching without it warn: spawn claude ENOENT`, so a host without the Claude CLI on `PATH` may be paying an extra spawn-failure cost in these launch paths. Neither has been isolated to a specific test.
+- **Clean rerun of the whole group:** a later `bun test ./tests --parallel` on the same host and the same branch reported 3,638 passed, 1 skipped, 0 failed in 118.36 s, with none of these tests failing. The aggregate group therefore passes and fails non-deterministically on identical code.
+- **Next step:** record whether the failing subset correlates with the worker a file lands on, and time the individual launch-path tests in isolation before deciding between a larger budget and a stubbed launcher.

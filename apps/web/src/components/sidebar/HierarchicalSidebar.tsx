@@ -42,7 +42,11 @@ import { SortableProjectGroup } from "./SortableProjectGroup";
 import { SortableProjectFolder } from "./SortableProjectFolder";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
 import { AddToFolderDialog } from "@/components/projects/AddToFolderDialog";
-import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
+import {
+  CreateEnvironmentFlowDialog,
+  startEnvironmentInBackground,
+} from "@/components/environments/CreateEnvironmentFlowDialog";
+import { toast } from "sonner";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -59,7 +63,7 @@ import { useEnvironmentListSync } from "@/hooks/useEnvironmentListSync";
 import { useUIStore } from "@/stores";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import type { Environment, Project } from "@/types";
+import type { Environment, EnvironmentType, Project } from "@/types";
 import { ProjectSearchBar } from "./ProjectSearchBar";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 import {
@@ -346,6 +350,53 @@ export function createEnvironmentUpdateHandler(
   return (environment) => updateEnvironment(environment.id, environment);
 }
 
+export async function forkSidebarEnvironment(
+  environmentId: string,
+  environmentType: EnvironmentType,
+  options: {
+    allEnvironments: Environment[];
+    dockerAvailable: boolean;
+    projectsById: Map<string, Pick<Project, "localPath">>;
+    forkEnvironment: (
+      environmentId: string,
+      environmentType: EnvironmentType,
+    ) => Promise<Environment>;
+    setProjectCollapsed: (projectId: string, collapsed: boolean) => void;
+    selectProjectAndEnvironment: (projectId: string, environmentId: string) => void;
+    startEnvironment: (
+      environmentId: string,
+      initialPrompt?: string,
+      startOptions?: { background?: boolean; silent?: boolean },
+    ) => Promise<unknown>;
+  },
+): Promise<void> {
+  const source = options.allEnvironments.find((environment) => environment.id === environmentId);
+  if (!source) return;
+  if (environmentType === "containerized" && !options.dockerAvailable) {
+    toast.warning("Docker is not running", {
+      description: "Start Docker before forking a container environment.",
+    });
+    return;
+  }
+  if (environmentType === "local") {
+    const project = options.projectsById.get(source.projectId);
+    if (project && !project.localPath) {
+      toast.warning("Local worktrees are unavailable", {
+        description: "Add a local checkout for this project before forking locally.",
+      });
+      return;
+    }
+  }
+  try {
+    const created = await options.forkEnvironment(environmentId, environmentType);
+    options.setProjectCollapsed(created.projectId, false);
+    options.selectProjectAndEnvironment(created.projectId, created.id);
+    startEnvironmentInBackground(options.startEnvironment, created.id);
+  } catch (error) {
+    console.error("[HierarchicalSidebar] Failed to fork environment:", error);
+  }
+}
+
 export function createProjectUpdateHandler(
   updateProject: (project: Project) => Promise<unknown>,
 ): (project: Project) => Promise<void> {
@@ -404,6 +455,7 @@ export function HierarchicalSidebar() {
     allEnvironments,
     loadEnvironments,
     createEnvironment,
+    forkEnvironment,
     deleteEnvironment,
     startEnvironment,
     stopEnvironment,
@@ -872,6 +924,28 @@ export function HierarchicalSidebar() {
     [updateEnvironment],
   );
 
+  const handleForkEnvironment = useCallback(
+    (environmentId: string, environmentType: EnvironmentType) =>
+      forkSidebarEnvironment(environmentId, environmentType, {
+        allEnvironments,
+        dockerAvailable,
+        projectsById,
+        forkEnvironment,
+        setProjectCollapsed,
+        selectProjectAndEnvironment,
+        startEnvironment,
+      }),
+    [
+      allEnvironments,
+      dockerAvailable,
+      forkEnvironment,
+      projectsById,
+      selectProjectAndEnvironment,
+      setProjectCollapsed,
+      startEnvironment,
+    ],
+  );
+
   const handleOpenSettings = (projectId: string) => {
     setSettingsProjectId(projectId);
     setShowSettingsDialog(true);
@@ -905,6 +979,7 @@ export function HierarchicalSidebar() {
       onStartEnvironment={startEnvironment}
       onStopEnvironment={stopEnvironment}
       onRestartEnvironment={restartEnvironment}
+      onForkEnvironment={handleForkEnvironment}
       onUpdateEnvironment={handleUpdateEnvironment}
       onCreateEnvironment={() => handleOpenCreateEnvDialog(project.id)}
       onAddToFolder={() => setFolderDialogProjectId(project.id)}
@@ -1168,6 +1243,7 @@ export function HierarchicalSidebar() {
                           onStart={startEnvironment}
                           onStop={stopEnvironment}
                           onRestart={restartEnvironment}
+                          onFork={handleForkEnvironment}
                           onUpdate={handleUpdateEnvironment}
                           isMultiSelectMode={isMultiSelectMode}
                           isChecked={selectedEnvironmentIds.includes(environment.id)}

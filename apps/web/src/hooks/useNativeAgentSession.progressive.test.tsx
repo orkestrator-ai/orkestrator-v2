@@ -166,11 +166,7 @@ afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
-function message(
-  id: string,
-  text = `body-${id}`,
-  parts?: TestMessage["parts"],
-): TestMessage {
+function message(id: string, text = `body-${id}`, parts?: TestMessage["parts"]): TestMessage {
   return parts ? { id, text, parts } : { id, text };
 }
 
@@ -937,7 +933,7 @@ describe("useNativeAgentSession progressive view", () => {
         "asst",
       ]),
     );
-    expect((result.current.projection?.messages[2] as TestMessage).parts).toHaveLength(5);
+    expect(result.current.projection?.messages[2]?.parts).toHaveLength(5);
 
     transcriptUpdates = [
       () =>
@@ -962,7 +958,7 @@ describe("useNativeAgentSession progressive view", () => {
       "user",
       "asst",
     ]);
-    expect((result.current.projection?.messages[2] as TestMessage).parts).toHaveLength(5);
+    expect(result.current.projection?.messages[2]?.parts).toHaveLength(5);
     expect(result.current.projection?.messageWindow?.canLoadEarlier).toBeFalsy();
   });
 
@@ -1001,7 +997,7 @@ describe("useNativeAgentSession progressive view", () => {
     });
 
     expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["asst"]);
-    expect((result.current.projection?.messages[0] as TestMessage).parts).toHaveLength(2);
+    expect(result.current.projection?.messages[0]?.parts).toHaveLength(2);
   });
 
   test("drops retained history when the history epoch rotates", async () => {

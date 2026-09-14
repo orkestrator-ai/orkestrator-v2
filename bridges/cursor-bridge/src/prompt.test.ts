@@ -20,6 +20,12 @@ import {
 import { newSessionState } from "./agent-session.js";
 import { publicContextUsage } from "./public.js";
 import { sessionIsWorking, type SessionState } from "./state.js";
+import {
+  ABANDONED_COMPACTION_NOTE,
+  ABANDONED_TOOL_NOTE,
+  DETACHED_SUBAGENT_NOTE,
+  applyInteractionUpdate,
+} from "./translate.js";
 
 beforeEach(() => {
   resetPlanAccountWindowsForTests();
@@ -37,19 +43,24 @@ function runningSession(): SessionState {
   return state;
 }
 
+interface FakeRunResult {
+  status: string;
+  result?: string;
+}
+
 interface FakeRun extends FollowableRun {
   readonly cancels: () => number;
-  readonly finish: (result?: { status: string }) => void;
-  readonly finishTerminal: (result?: { status: string }) => void;
+  readonly finish: (result?: FakeRunResult) => void;
+  readonly finishTerminal: (result?: FakeRunResult) => void;
   readonly closeStream: () => void;
 }
 
 /** A run whose terminal acknowledgement is controlled by the test. */
 function controlledRun(onCancel?: () => void): FakeRun {
   let cancels = 0;
-  let finishRun!: (result: { status: string }) => void;
+  let finishRun!: (result: FakeRunResult) => void;
   let finishStream!: () => void;
-  const terminal = new Promise<{ status: string }>((resolve) => {
+  const terminal = new Promise<FakeRunResult>((resolve) => {
     finishRun = resolve;
   });
   const streamClosed = new Promise<void>((resolve) => {
@@ -216,6 +227,299 @@ describe("a turn that outlives its budget", () => {
     run.finish();
     await completion;
     expect(state.promptJournal.get("r1")?.state).toBe("completed");
+  });
+});
+
+describe("a turn that ends with pending tools", () => {
+  function completeFollow(state: SessionState, run: FakeRun, result: FakeRunResult) {
+    const completion = followRun(
+      state,
+      run,
+      state.promptSequence,
+      { prompt: "x", images: [] },
+      5_000,
+    );
+    run.finish(result);
+    return completion;
+  }
+
+  test("fails leftover pending cards instead of leaving them running", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "mcp-1",
+      modelCallId: "m1",
+      toolCall: {
+        type: "mcp",
+        args: { providerIdentifier: "orkestrator", toolName: "add_ticket_comment" },
+      },
+    });
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "todos-1",
+      modelCallId: "m1",
+      toolCall: {
+        type: "updateTodos",
+        args: { todos: [{ content: "Done", status: "completed" }] },
+        result: { status: "success", value: { todos: [{ content: "Done", status: "completed" }] } },
+      },
+    });
+
+    await completeFollow(state, controlledRun(), { status: "finished" });
+
+    expect(state.status).toBe("idle");
+    const tools = state.messages.flatMap((message) =>
+      message.parts.filter((part) => part.type === "tool-invocation"),
+    );
+    expect(tools).toEqual([
+      expect.objectContaining({
+        toolUseId: "mcp-1",
+        toolState: "failure",
+        toolError: ABANDONED_TOOL_NOTE,
+      }),
+      expect.objectContaining({
+        toolUseId: "todos-1",
+        toolState: "success",
+      }),
+    ]);
+  });
+
+  test("publishes the terminal result when no text-delta arrived", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "mcp-1",
+      modelCallId: "m1",
+      toolCall: {
+        type: "mcp",
+        args: { providerIdentifier: "orkestrator", toolName: "update_ticket" },
+      },
+    });
+
+    await completeFollow(state, controlledRun(), {
+      status: "finished",
+      result: "The ticket is done.",
+    });
+
+    expect(state.status).toBe("idle");
+    const assistant = state.messages.find((message) => message.role === "assistant");
+    expect(assistant?.content).toBe("The ticket is done.");
+    expect(assistant?.parts.some((part) => part.type === "text")).toBe(true);
+  });
+
+  test("does not duplicate assistant text the stream already delivered", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, { type: "text-delta", text: "Already streamed." });
+
+    await completeFollow(state, controlledRun(), {
+      status: "finished",
+      result: "Already streamed.",
+    });
+
+    expect(state.messages.find((message) => message.role === "assistant")?.content).toBe(
+      "Already streamed.",
+    );
+  });
+
+  test("keeps streamed prose and a different terminal result", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, { type: "text-delta", text: "I'll update the ticket." });
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "mcp-1",
+      modelCallId: "m1",
+      toolCall: {
+        type: "mcp",
+        args: { providerIdentifier: "orkestrator", toolName: "update_ticket" },
+      },
+    });
+
+    await completeFollow(state, controlledRun(), {
+      status: "finished",
+      result: "Done - ticket 123 is now closed.",
+    });
+
+    const text = state.messages.find((message) => message.role === "assistant")?.content ?? "";
+    expect(text).toContain("I'll update the ticket.");
+    expect(text).toContain("Done - ticket 123 is now closed.");
+    expect(text.split("I'll update the ticket.")).toHaveLength(2);
+    expect(text.split("Done - ticket 123 is now closed.")).toHaveLength(2);
+  });
+
+  test("completes a streamed prefix of the terminal result", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, { type: "text-delta", text: "Hello" });
+
+    await completeFollow(state, controlledRun(), {
+      status: "finished",
+      result: "Hello world",
+    });
+
+    expect(state.messages.find((message) => message.role === "assistant")?.content).toBe(
+      "Hello world",
+    );
+  });
+
+  test("detaches a still-pending sub-agent before failing leftover cards", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "task-1",
+      modelCallId: "m1",
+      toolCall: {
+        type: "task",
+        args: { description: "Background", prompt: "keep going" },
+      },
+    });
+
+    await completeFollow(state, controlledRun(), { status: "finished" });
+
+    const tool = state.messages[0]!.parts.find((part) => part.type === "tool-invocation");
+    expect(tool).toMatchObject({
+      toolUseId: "task-1",
+      toolState: "success",
+      agentState: "finished",
+      toolOutput: DETACHED_SUBAGENT_NOTE,
+    });
+    expect(tool).not.toMatchObject({ toolError: ABANDONED_TOOL_NOTE });
+  });
+
+  test("fails a compaction left pending when the run ends", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, { type: "summary-started" });
+
+    await completeFollow(state, controlledRun(), { status: "finished" });
+
+    const compaction = state.messages[0]!.parts.find((part) => part.type === "compaction");
+    expect(compaction).toMatchObject({
+      toolState: "failure",
+      content: ABANDONED_COMPACTION_NOTE,
+    });
+  });
+
+  test("fails leftover pending cards when the run itself errors", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "mcp-1",
+      modelCallId: "m1",
+      toolCall: {
+        type: "mcp",
+        args: { providerIdentifier: "orkestrator", toolName: "update_ticket" },
+      },
+    });
+
+    await completeFollow(state, controlledRun(), { status: "error" });
+
+    expect(state.status).toBe("error");
+    const tool = state.messages[0]!.parts.find((part) => part.type === "tool-invocation");
+    expect(tool).toMatchObject({
+      toolUseId: "mcp-1",
+      toolState: "failure",
+      toolError: ABANDONED_TOOL_NOTE,
+    });
+  });
+});
+
+describe("structured output after terminal backfill", () => {
+  function schemaSession(): SessionState {
+    const state = runningSession();
+    state.currentTurnOutput = "";
+    return state;
+  }
+
+  function completeStructured(
+    state: SessionState,
+    run: FakeRun,
+    result: FakeRunResult,
+  ): Promise<void> {
+    const completion = followRun(
+      state,
+      run,
+      state.promptSequence,
+      {
+        prompt: "x",
+        images: [],
+        requestId: "r1",
+        schema: { type: "object" },
+      },
+      5_000,
+    );
+    run.finish(result);
+    return completion;
+  }
+
+  test("recovers JSON that arrived only as the terminal result after prose", async () => {
+    const state = schemaSession();
+    applyInteractionUpdate(state, { type: "text-delta", text: "Working on it." });
+
+    await completeStructured(state, controlledRun(), {
+      status: "finished",
+      result: '{"answer":1}',
+    });
+
+    expect(state.structured.get("r1")).toMatchObject({
+      ok: true,
+      requestId: "r1",
+      value: { answer: 1 },
+    });
+    const text = state.messages.find((message) => message.role === "assistant")?.content ?? "";
+    expect(text).toContain("Working on it.");
+    expect(text).toContain('{"answer":1}');
+  });
+
+  test("does not concatenate a terminal result that already streamed", async () => {
+    const state = schemaSession();
+    applyInteractionUpdate(state, { type: "text-delta", text: '{"answer":1}' });
+
+    await completeStructured(state, controlledRun(), {
+      status: "finished",
+      result: '{"answer":1}',
+    });
+
+    expect(state.messages.find((message) => message.role === "assistant")?.content).toBe(
+      '{"answer":1}',
+    );
+    expect(state.structured.get("r1")).toMatchObject({
+      ok: true,
+      value: { answer: 1 },
+    });
+  });
+
+  test("completes a truncated JSON prefix from the terminal result", async () => {
+    const state = schemaSession();
+    applyInteractionUpdate(state, { type: "text-delta", text: '{"answer":' });
+
+    await completeStructured(state, controlledRun(), {
+      status: "finished",
+      result: '{"answer":1}',
+    });
+
+    expect(state.messages.find((message) => message.role === "assistant")?.content).toBe(
+      '{"answer":1}',
+    );
+    expect(state.structured.get("r1")).toMatchObject({
+      ok: true,
+      value: { answer: 1 },
+    });
+  });
+
+  test("uses the terminal result when the stream only produced thinking", async () => {
+    const state = schemaSession();
+    applyInteractionUpdate(state, { type: "thinking-delta", text: "weighing options" });
+
+    await completeStructured(state, controlledRun(), {
+      status: "finished",
+      result: '{"answer":1}',
+    });
+
+    const assistant = state.messages.find((message) => message.role === "assistant");
+    expect(assistant?.content).toBe('{"answer":1}');
+    expect(assistant?.parts.map((part) => part.type)).toEqual(["thinking", "text"]);
+    expect(state.structured.get("r1")).toMatchObject({
+      ok: true,
+      value: { answer: 1 },
+    });
   });
 });
 

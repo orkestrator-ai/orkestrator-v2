@@ -1,4 +1,5 @@
 import type { TabType } from "@/contexts";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   isNativeAgentTabData,
   type NativeAgentTabData as ProtocolNativeAgentTabData,
@@ -151,6 +152,14 @@ export interface TabInfo {
   isReviewTab?: boolean;
   /** Presentation-only: structured result datasets are not transcript commentary. */
   hideStructuredOutput?: boolean;
+  /**
+   * One-shot provider preselect for an unlocked native tab.
+   *
+   * Distinct from `nativeAgentData.platform`, which is reserved for a
+   * committed assignment. The unassigned composer seeds its draft from this
+   * field and still lets the user switch providers before the first send.
+   */
+  initialAgentPlatform?: AgentPlatform;
   /** One-shot model selected when the agent tab was created. */
   initialAgentModel?: string;
   /** One-shot reasoning effort or provider variant selected at creation. */

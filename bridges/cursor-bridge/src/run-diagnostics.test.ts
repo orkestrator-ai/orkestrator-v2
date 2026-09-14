@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import type { SDKAgent } from "@cursor/sdk";
 import { newSessionState } from "./agent-session.js";
 import {
@@ -6,7 +6,12 @@ import {
   cursorDebugEnabled,
   CursorRunDiagnostics,
 } from "./run-diagnostics.js";
+import { resetSdkDiagnosticsForTests } from "./sdk-diagnostics.js";
 import { dispatchPrompt, followRun, type FollowableRun } from "./prompt.js";
+
+afterAll(() => {
+  resetSdkDiagnosticsForTests();
+});
 
 function harness() {
   let now = 1000;
@@ -26,11 +31,39 @@ function harness() {
     advance: (ms: number) => {
       now += ms;
     },
-    last: () => JSON.parse(lines.at(-1)!.slice("[bridge-diagnostics] ".length)),
+    last: () =>
+      JSON.parse(
+        lines
+          .findLast((line) => !line.includes('"event":"sdk-'))!
+          .slice("[bridge-diagnostics] ".length),
+      ),
   };
 }
 
 describe("Cursor stall diagnostics", () => {
+  test("the base constructor can emit before the SDK field exists", () => {
+    const lines: string[] = [];
+    const diagnostics = new CursorRunDiagnostics(
+      newSessionState(),
+      Date.now,
+      (line) => lines.push(line),
+    );
+    try {
+      const records = lines.map((line) =>
+        JSON.parse(line.slice("[bridge-diagnostics] ".length)),
+      );
+      expect(records[0]).toMatchObject({ event: "send-started" });
+      expect(records[0]).not.toHaveProperty("coverage");
+      expect(records.some((record) => record.event === "sdk-snapshot")).toBe(true);
+      expect(records.find((record) => record.event === "sdk-snapshot")).toMatchObject({
+        event: "sdk-snapshot",
+        boundary: "send-started",
+      });
+    } finally {
+      diagnostics.close();
+    }
+  });
+
   test("disabled by default and when the launcher passes off", () => {
     for (const flag of ["", "0", "false", "off", "true", "secret"])
       expect(cursorDebugEnabled(flag)).toBe(false);
@@ -72,7 +105,7 @@ describe("Cursor stall diagnostics", () => {
       const before = h.lines.length;
       h.advance(90_000);
       h.diagnostics.report("heartbeat");
-      expect(h.lines.length).toBe(before + 1);
+      expect(h.lines.length).toBe(before + 2);
       expect(h.last()).toMatchObject({
         phase: "following",
         lastDeltaAgoMs: 90_000,
@@ -129,7 +162,10 @@ describe("Cursor stall diagnostics", () => {
       });
       expect(h.last().pendingTools).toHaveLength(8);
       expect(h.lines.join("\n")).not.toContain(secret);
-      expect(h.lines.at(-1)!.length).toBeLessThan(2500);
+      expect(h.last()).not.toHaveProperty("event", "sdk-snapshot");
+      expect(
+        h.lines.findLast((line) => !line.includes('"event":"sdk-'))!.length,
+      ).toBeLessThan(2500);
     } finally {
       h.diagnostics.close();
     }
@@ -276,7 +312,7 @@ describe("Cursor stall diagnostics", () => {
       const handle = await dispatchPrompt(state, agent, { prompt: "PRIVATE PROMPT", images: [] });
       await handle.completion;
       expect(lines.some((line) => line.includes('"stage":"partial"'))).toBe(true);
-      expect(lines.at(-1)).toContain('"event":"closed"');
+      expect(lines.findLast((line) => !line.includes('"event":"sdk-'))).toContain('"event":"closed"');
       const failing = {
         send: async () => {
           throw new Error("PRIVATE ERROR");
@@ -285,7 +321,9 @@ describe("Cursor stall diagnostics", () => {
       await expect(dispatchPrompt(state, failing, { prompt: "x", images: [] })).rejects.toThrow(
         "PRIVATE ERROR",
       );
-      expect(lines.at(-1)).toContain('"phase":"send-failed"');
+      expect(lines.findLast((line) => !line.includes('"event":"sdk-'))).toContain(
+        '"phase":"send-failed"',
+      );
       expect(lines.join("\n")).not.toContain("PRIVATE");
       expect(lines.join("\n")).not.toContain("private-id");
       process.env.ORKESTRATOR_BRIDGE_DEBUG = "0";

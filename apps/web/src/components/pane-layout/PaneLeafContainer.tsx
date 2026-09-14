@@ -316,6 +316,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                       initialPrompt={tab.initialPrompt}
                       isReviewTab={tab.isReviewTab}
                       hideStructuredOutput={tab.hideStructuredOutput}
+                      initialAgentPlatform={tab.initialAgentPlatform}
                       initialAgentModel={tab.initialAgentModel}
                       initialReasoningEffort={tab.initialReasoningEffort}
                       initialConversationMode={tab.initialConversationMode}

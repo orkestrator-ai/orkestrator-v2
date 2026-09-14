@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   createNativeAgentDisplayTail,
+  displayTailChecksum,
   isNativeAgentDisplayTail,
+  NATIVE_DISPLAY_TAIL_LEGACY_SCHEMA,
+  NATIVE_DISPLAY_TAIL_LEGACY_VERSION,
   stripDisplayTailPayload,
 } from "./native-agent-display-tails.js";
 import { normalizeOpenCodeInteractiveMessage } from "./opencode-messages.js";
@@ -93,5 +96,49 @@ describe("native agent display tails", () => {
       updatedAt: "2026-09-09T00:00:00.000Z",
     });
     expect(huge).toBeNull();
+  });
+
+  test("persists history completeness and rejects a tampered recovery flag", () => {
+    const incomplete = createNativeAgentDisplayTail({
+      environmentId: "env-1",
+      agent: "codex",
+      logicalSessionKey: "tab-1",
+      providerSessionId: "provider-1",
+      historyEpoch: "epoch-1",
+      messages: [{ id: "m1", role: "assistant", content: "hi", parts: [] }],
+      historyComplete: false,
+      messageWindow: {
+        limit: 100,
+        truncated: true,
+        canLoadEarlier: true,
+        truncationReason: "count",
+      },
+      updatedAt: "2026-09-09T00:00:00.000Z",
+    });
+    expect(incomplete).not.toBeNull();
+    expect(incomplete?.historyComplete).toBe(false);
+    expect(incomplete?.messageWindow).toMatchObject({
+      truncated: true,
+      canLoadEarlier: true,
+    });
+    expect(isNativeAgentDisplayTail(incomplete)).toBe(true);
+    expect(isNativeAgentDisplayTail({ ...incomplete, historyComplete: true })).toBe(false);
+  });
+
+  test("still accepts a legacy v1 tail without remainder metadata", () => {
+    const record = {
+      version: NATIVE_DISPLAY_TAIL_LEGACY_VERSION,
+      schema: NATIVE_DISPLAY_TAIL_LEGACY_SCHEMA,
+      environmentId: "env-1",
+      agent: "codex",
+      logicalSessionKey: "tab-1",
+      providerSessionId: "provider-1",
+      historyEpoch: "epoch-1",
+      messages: [{ id: "m1", role: "assistant", content: "hi", parts: [] }],
+      updatedAt: "2026-09-09T00:00:00.000Z",
+    };
+    const tail = { ...record, checksum: displayTailChecksum(record) };
+    expect(isNativeAgentDisplayTail(tail)).toBe(true);
+    expect(tail.historyComplete).toBeUndefined();
   });
 });

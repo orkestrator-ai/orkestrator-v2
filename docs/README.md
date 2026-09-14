@@ -4,7 +4,7 @@
 `docs/` only — status, location, and which document to open. Do not copy
 invariants from `AGENTS.md` here.
 
-Refreshed 2026-09-12 against the current tree.
+Refreshed 2026-09-14 against the current tree.
 
 ## Status legend
 
@@ -27,7 +27,7 @@ Refreshed 2026-09-12 against the current tree.
 | [review-preparation.md](architecture/review-preparation.md) | Living | Multi-review pipeline; queue wait is 30 minutes. |
 | [bridge-diagnostics.md](architecture/bridge-diagnostics.md) | Living | Shared bridge debug logging. |
 | [cursor-usage.md](architecture/cursor-usage.md) | Living | Cursor usage mapping. |
-| [cursor-diagnostics.md](architecture/cursor-diagnostics.md) | Historical | 2026-09-09 stall incident. Current logging is in `bridge-diagnostics.md`. |
+| [cursor-diagnostics.md](architecture/cursor-diagnostics.md) | Historical | September 9 and 14 stall investigations. Current logging is in `bridge-diagnostics.md`. |
 | [platform-inconsistencies.md](architecture/platform-inconsistencies.md) | Historical | 2026-08-16 inventory plus a 2026-09-11 current-state note. Not a backlog. |
 
 ## Development
@@ -37,9 +37,14 @@ Refreshed 2026-09-12 against the current tree.
 | [testing-guide.md](development/testing-guide.md) | Living | How to choose and run tests. Commands live here. |
 | [agent-testing.md](development/agent-testing.md) | Living | Isolated profiles and real-stack QA. |
 | [upgrade-agents.md](development/upgrade-agents.md) | Living | SDK/CLI bump runbook. Pins are test-enforced. |
-| [flaky-tests.md](development/flaky-tests.md) | Living | Only flake registry. Do not start a second one. |
 | [credentials-and-models.md](development/credentials-and-models.md) | Living | Credential and catalogue inventory. |
 | [test-logs.md](development/test-logs.md) | Living | Diagnostic-bounds rationale. Operator commands stay in `testing-guide.md`. |
+
+## Tests
+
+| Document | Status | Notes |
+| --- | --- | --- |
+| [0000-index.md](tests/flaky-tests/0000-index.md) | Living | Only flake registry index. Search it; open a case file only when the row matches. |
 
 Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/), not under `docs/`.
 

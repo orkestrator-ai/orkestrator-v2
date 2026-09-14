@@ -767,6 +767,24 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(lockfileResolvedVersion("bun.lock", "@opencode-ai/sdk")).toBe(webVersion);
   });
 
+  test("Cursor: the diagnostic seam patch matches the SDK pin and lockfile", () => {
+    const version = expectExactVersion("bridges/cursor-bridge/package.json", "@cursor/sdk");
+    const key = `@cursor/sdk@${version}`;
+    const path = `patches/@cursor%2Fsdk@${version}.patch`;
+    for (const file of ["package.json", "bun.lock"]) {
+      const manifest = JSON.parse(read(file).replace(/,(\s*[}\]])/g, "$1"));
+      expect(
+        Object.keys(manifest.patchedDependencies).filter((name) => name.startsWith("@cursor/sdk@")),
+      ).toEqual([key]);
+      expect(manifest.patchedDependencies[key]).toBe(path);
+    }
+    expect(read(path)).toContain("__orkestratorDiagnosticsV1");
+    expect(
+      readdirSync(join(repoRoot, "patches")).filter((name) => name.startsWith("@cursor%2Fsdk@")),
+    ).toEqual([path.slice("patches/".length)]);
+    expect(lockfileResolvedVersion("bun.lock", "@cursor/sdk")).toBe(version);
+  });
+
   test("Claude: every managed artifact URL is the pinned npm tarball for its platform", () => {
     // Claude is fetched from the registry rather than a release page, so the
     // URL encodes the platform package name twice and the version once. All

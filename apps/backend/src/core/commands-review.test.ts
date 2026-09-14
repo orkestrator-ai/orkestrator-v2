@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import { REVIEW_PACKAGE_FORMAT, type ReviewPackage } from "@orkestrator/protocol/review-workflow";
 import {
   generateLoopedReviewPackage,
+  parseGitPorcelainPaths,
   parseReviewArtifactStatOutput,
   REVIEW_ARTIFACT_STAT_SCRIPT,
   type ReviewArtifactSizes,
@@ -130,26 +131,31 @@ function validationEntry(overrides: Record<string, unknown> = {}) {
 }
 
 describe("generateLoopedReviewPackage", () => {
-  test("fails closed when tracked or untracked changes remain outside the package", async () => {
+  test("records remaining worktree changes instead of failing the package", async () => {
     const { worktree, storage } = await reviewEnvironment();
     await fs.writeFile(path.join(worktree, "tracked.txt"), "modified\n");
     await fs.writeFile(path.join(worktree, "untracked.txt"), "new\n");
 
-    await expect(
-      generateLoopedReviewPackage(
-        "env-1",
-        "package-1",
-        1,
-        "main",
-        [],
-        [
-          { path: "tracked.txt", reason: "Left behind." },
-          { path: "untracked.txt", reason: "Left behind." },
-        ],
-        ["The worktree is not clean."],
-        { storage } as never,
-      ),
-    ).rejects.toThrow("requires a clean worktree");
+    const reference = await generateLoopedReviewPackage(
+      "env-1",
+      "package-1",
+      1,
+      "main",
+      [],
+      [
+        { path: "tracked.txt", reason: "Left behind." },
+        { path: "untracked.txt", reason: "Left behind." },
+      ],
+      ["The worktree is not clean."],
+      { storage } as never,
+    );
+    const written = JSON.parse(
+      await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
+    ) as ReviewPackage;
+    expect(written.uncommittedFiles).toEqual([
+      { path: "tracked.txt", reason: "Left behind." },
+      { path: "untracked.txt", reason: "Left behind." },
+    ]);
   });
 
   test("pins the range and points at validation artifacts without reading file bytes", async () => {
@@ -279,6 +285,81 @@ describe("generateLoopedReviewPackage", () => {
     ).rejects.toThrow("escapes the environment worktree");
   });
 
+  test("keeps validation drift that is no longer dirty when the package is sealed", async () => {
+    const { worktree, storage } = await reviewEnvironment();
+
+    const reference = await generateLoopedReviewPackage(
+      "env-1",
+      "package-1",
+      1,
+      "main",
+      [],
+      [{ path: "source.txt", reason: "Changed since the review snapshot" }],
+      [],
+      { storage } as never,
+    );
+    const written = JSON.parse(
+      await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
+    ) as ReviewPackage;
+    expect(written.uncommittedFiles).toEqual([
+      { path: "source.txt", reason: "Changed during validation and no longer present" },
+    ]);
+  });
+
+  test("records both paths of an uncommitted rename", async () => {
+    const { worktree, storage } = await reviewEnvironment();
+    await git(worktree, "mv", "tracked.txt", "renamed.txt");
+
+    const reference = await generateLoopedReviewPackage(
+      "env-1",
+      "package-1",
+      1,
+      "main",
+      [],
+      [],
+      [],
+      { storage } as never,
+    );
+    const written = JSON.parse(
+      await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
+    ) as ReviewPackage;
+    expect(written.uncommittedFiles.map((note) => note.path)).toEqual([
+      "renamed.txt",
+      "tracked.txt",
+    ]);
+  });
+
+  test("records a limitation when sealed uncommitted files exceed the evidence bound", async () => {
+    const { worktree, storage } = await reviewEnvironment();
+    const notes = Array.from({ length: 1025 }, (_, index) => ({
+      path: `drift-${String(index).padStart(4, "0")}.txt`,
+      reason: "Changed since the review snapshot",
+    }));
+
+    const reference = await generateLoopedReviewPackage(
+      "env-1",
+      "package-1",
+      1,
+      "main",
+      [],
+      notes,
+      [],
+      { storage } as never,
+    );
+    const written = JSON.parse(
+      await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
+    ) as ReviewPackage;
+    expect(written.uncommittedFiles).toHaveLength(1024);
+    expect(written.uncommittedFiles[0]).toEqual({
+      path: "drift-0000.txt",
+      reason: "Changed during validation and no longer present",
+    });
+    expect(written.uncommittedFiles.at(-1)?.path).toBe("drift-1023.txt");
+    expect(written.limitations).toEqual([
+      "Uncommitted file list was truncated; 1 additional paths observed during validation were omitted",
+    ]);
+  });
+
   test("refuses a command that ran but names no verified artifacts", async () => {
     const { worktree, storage } = await reviewEnvironment();
     await fs.writeFile(path.join(worktree, "tracked.txt"), "modified\n");
@@ -306,6 +387,20 @@ describe("generateLoopedReviewPackage", () => {
         ),
       ).rejects.toThrow("Review package failed runtime validation");
     }
+  });
+});
+
+describe("parseGitPorcelainPaths", () => {
+  test("records rename and copy destinations from NUL porcelain pairs", () => {
+    expect(parseGitPorcelainPaths("R  old.txt\0new.txt\0")).toEqual(["old.txt", "new.txt"]);
+    expect(parseGitPorcelainPaths("C  src.txt\0copy.txt\0")).toEqual(["src.txt", "copy.txt"]);
+    expect(parseGitPorcelainPaths(" M file.txt\0")).toEqual(["file.txt"]);
+  });
+
+  test("rejects a rename pair that is missing its destination", () => {
+    expect(() => parseGitPorcelainPaths("R  old.txt\0")).toThrow(
+      "Git returned malformed renamed worktree status",
+    );
   });
 });
 

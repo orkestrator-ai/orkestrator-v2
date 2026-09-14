@@ -4271,6 +4271,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       build: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
       review: { agent: "claude", model: "opus[1m]", reasoningEffort: "high" },
       address: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
+      verify: { agent: "claude", model: "sonnet" },
       pr: { agent: "codex", model: "gpt-5.4", reasoningEffort: "low" },
       "resolve-conflicts": { agent: "claude", model: "haiku" },
     });
@@ -4494,10 +4495,9 @@ describe("CreateEnvironmentDialog feature builds", () => {
       screen.getByLabelText("Review preparation & consolidation agent, model and reasoning"),
     ).toBeTruthy();
     expect(screen.getByLabelText("Address issues agent, model and reasoning")).toBeTruthy();
+    expect(screen.getByLabelText("Verify agent, model and reasoning")).toBeTruthy();
     expect(screen.getByLabelText("Pull request agent, model and reasoning")).toBeTruthy();
     expect(screen.getByLabelText("Resolve conflicts agent, model and reasoning")).toBeTruthy();
-    // Verify is deliberately absent: it runs on the address model.
-    expect(screen.queryByLabelText(/^Verify agent/) === null).toBe(true);
     expect(screen.getByLabelText("Review 1 agent, model and reasoning")).toBeTruthy();
     expect(screen.getByLabelText("Review 2 agent, model and reasoning")).toBeTruthy();
     const modelCustomization = screen.getByRole("group", {
@@ -4513,6 +4513,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       "Review 1 agent, model and reasoning",
       "Review 2 agent, model and reasoning",
       "Address issues agent, model and reasoning",
+      "Verify agent, model and reasoning",
       "Pull request agent, model and reasoning",
       "Resolve conflicts agent, model and reasoning",
     ]);
@@ -4521,7 +4522,10 @@ describe("CreateEnvironmentDialog feature builds", () => {
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalled());
     const request = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
     expect((request.reviewers as unknown[]).length).toBe(2);
-    expect((request.steps as Record<string, unknown>).verify).toBeUndefined();
+    expect((request.steps as Record<string, unknown>).verify).toEqual({
+      agent: "claude",
+      model: "sonnet",
+    });
   });
 
   test("turning customization off discards reviewer edits and uses configured defaults", async () => {
@@ -4580,6 +4584,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       build: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
       review: { agent: "claude", model: "opus[1m]", reasoningEffort: "high" },
       address: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
+      verify: { agent: "claude", model: "sonnet" },
       pr: { agent: "codex", model: "gpt-5.4", reasoningEffort: "low" },
       "resolve-conflicts": { agent: "claude", model: "haiku" },
     });

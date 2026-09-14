@@ -223,6 +223,49 @@ describe("BuildLaunchDialog", () => {
     });
   });
 
+  test("submits the shared Multi Review fan-out and dedicated verify default", () => {
+    const { onConfirm } = renderDialog({
+      pipelineDefaults: {
+        steps: {
+          review: { agent: "claude", model: "claude-b", reasoningEffort: "xhigh" },
+          address: { agent: "codex", model: "codex-a" },
+          verify: { agent: "codex", model: "codex-a", reasoningEffort: "high" },
+          pr: { agent: "claude", model: "claude-a" },
+          "resolve-conflicts": { agent: "claude", model: "claude-b" },
+        },
+        reviewers: [
+          { agent: "claude", model: "claude-b", reasoningEffort: "xhigh" },
+          { agent: "codex", model: "codex-a", reasoningEffort: "medium" },
+        ],
+        reviewPreparation: { agent: "codex", model: "codex-a", reasoningEffort: "high" },
+      },
+    });
+
+    submit();
+
+    const selection = onConfirm.mock.calls[0]![0];
+    expect(selection.steps.verify).toEqual({
+      agent: "codex",
+      model: "codex-a",
+      reasoningEffort: "high",
+      fastMode: undefined,
+    });
+    expect(selection.reviewers).toEqual([
+      {
+        agent: "claude",
+        model: "claude-b",
+        reasoningEffort: "xhigh",
+        fastMode: undefined,
+      },
+      { agent: "codex", model: "codex-a", reasoningEffort: "medium" },
+    ]);
+    expect(selection.reviewPreparation).toEqual({
+      agent: "codex",
+      model: "codex-a",
+      reasoningEffort: "high",
+    });
+  });
+
   test("keeps each step's speed independent and carries it to the launch", () => {
     const { onConfirm } = renderDialog({ catalog: speedCatalog });
 

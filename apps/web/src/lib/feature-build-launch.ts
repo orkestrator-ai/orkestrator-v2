@@ -41,19 +41,14 @@ export interface FeatureBuildReviewerRow extends FeatureBuildStepSelection {
 }
 
 /**
- * The five decisions "Customize models" exposes.
- *
- * Verify is deliberately absent. It re-checks the branch against the ticket
- * immediately after the address stage has changed it, so running it on a
- * different model than the one that just did the work adds a picker without
- * adding a choice worth making — {@link featureBuildStepConfigs} sends the
- * address selection for it.
+ * The pipeline decisions "Customize models" exposes.
  */
 export interface FeatureBuildModelState {
   build: FeatureBuildStepSelection;
   reviewers: FeatureBuildReviewerRow[];
   reviewPreparation: FeatureBuildStepSelection;
   address: FeatureBuildStepSelection;
+  verify: FeatureBuildStepSelection;
   pr: FeatureBuildStepSelection;
   resolve: FeatureBuildStepSelection;
 }
@@ -135,33 +130,34 @@ export function featureBuildReviewerRow(
 /**
  * The panel's opening state.
  *
- * Two reviewers, because a second opinion is the point of a multi-model review
- * and one reviewer would silently take the classic single-review path. Both
- * come from Settings' own `review` and `review2` entries, so the panel opens on
- * exactly what the standalone Multi Review launcher would.
+ * Reviewers come from the shared Multi Review settings. The legacy `review`
+ * and `review2` pair remains as a fallback for older callers that do not yet
+ * supply the resolved reviewer list.
  */
 export function defaultFeatureBuildModels(options: {
   catalog: AgentModelCatalog;
   build: ConfiguredStepDefault;
   review: ConfiguredStepDefault;
   review2: ConfiguredStepDefault;
+  reviewers?: ConfiguredStepDefault[];
   reviewPreparation?: ConfiguredStepDefault;
   address: ConfiguredStepDefault;
+  verify?: ConfiguredStepDefault;
   pr: ConfiguredStepDefault;
   resolve: ConfiguredStepDefault;
 }): FeatureBuildModelState {
   const { catalog } = options;
   return {
     build: resolveFeatureBuildStep(options.build, catalog),
-    reviewers: [
-      featureBuildReviewerRow(options.review, catalog),
-      featureBuildReviewerRow(options.review2, catalog),
-    ],
+    reviewers: (options.reviewers ?? [options.review, options.review2]).map((reviewer) =>
+      featureBuildReviewerRow(reviewer, catalog),
+    ),
     reviewPreparation: resolveFeatureBuildStep(
       options.reviewPreparation ?? options.address,
       catalog,
     ),
     address: resolveFeatureBuildStep(options.address, catalog),
+    verify: resolveFeatureBuildStep(options.verify ?? options.address, catalog),
     pr: resolveFeatureBuildStep(options.pr, catalog),
     resolve: resolveFeatureBuildStep(options.resolve, catalog),
   };
@@ -203,6 +199,7 @@ export function featureBuildStepConfigs(models: FeatureBuildModelState): {
       build: stepConfig(models.build),
       review: reviewers[0],
       address: stepConfig(models.address),
+      verify: stepConfig(models.verify),
       pr: stepConfig(models.pr),
       "resolve-conflicts": stepConfig(models.resolve),
     },

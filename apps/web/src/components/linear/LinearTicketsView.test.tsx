@@ -743,7 +743,7 @@ describe("LinearTicketsView", () => {
         issueDetail,
         "project-1",
         "local",
-        {
+        expect.objectContaining({
           includeComments: false,
           steps: expect.objectContaining({
             build: expect.objectContaining({
@@ -755,7 +755,11 @@ describe("LinearTicketsView", () => {
               model: expect.any(String),
             }),
           }),
-        },
+          reviewers: expect.arrayContaining([
+            expect.objectContaining({ agent: expect.any(String) }),
+          ]),
+          reviewPreparation: expect.objectContaining({ agent: expect.any(String) }),
+        }),
       );
     });
   });
@@ -1006,7 +1010,12 @@ describe("LinearTicketsView", () => {
         issue2Detail,
         "project-1",
         "containerized",
-        { includeComments: true, steps: expect.any(Object) },
+        expect.objectContaining({
+          includeComments: true,
+          steps: expect.any(Object),
+          reviewers: expect.any(Array),
+          reviewPreparation: expect.any(Object),
+        }),
       );
     });
   });

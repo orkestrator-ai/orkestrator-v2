@@ -19,6 +19,7 @@ import {
   GitPullRequest,
   RotateCcw,
   ScanSearch,
+  ShieldCheck,
   Upload,
   Wrench,
 } from "lucide-react";
@@ -92,6 +93,11 @@ const ACTION_DEFINITIONS: Record<
     label: "Fix review issues",
     description: "Addresses the consolidated findings after Multi Review.",
     icon: <Wrench className="h-4 w-4" />,
+  },
+  verify: {
+    label: "Verify",
+    description: "Verifies every build pipeline after review findings have been addressed.",
+    icon: <ShieldCheck className="h-4 w-4" />,
   },
   pr: {
     label: "PR",

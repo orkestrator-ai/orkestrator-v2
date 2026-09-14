@@ -421,7 +421,11 @@ describe("useBuildPipeline", () => {
     });
 
     expect(startInput().agentType).toBe("opencode");
-    expect(startInput().steps).toBeUndefined();
+    expect(startInput().steps).toMatchObject({
+      review: { agent: "claude" },
+      verify: { agent: "claude" },
+    });
+    expect(startInput().reviewers).toHaveLength(2);
   });
 
   test("an agent override wins when the step map pins no build harness", async () => {
@@ -437,7 +441,50 @@ describe("useBuildPipeline", () => {
     });
 
     expect(startInput().agentType).toBe("opencode");
-    expect(startInput().steps).toEqual({ review: { agent: "codex" } });
+    expect(startInput().steps).toMatchObject({ review: { agent: "codex" } });
+    expect((startInput().reviewers as Array<{ agent: string }>)[0]).toEqual({ agent: "codex" });
+  });
+
+  test("applies the configured Multi Review fan-out and verify model by default", async () => {
+    const baseConfig = useConfigStore.getState().config;
+    useConfigStore.setState({
+      config: {
+        ...baseConfig,
+        global: {
+          ...baseConfig.global,
+          agentSettings: {
+            ...baseConfig.global.agentSettings,
+            platforms: {},
+            actionDefaults: {
+              review: { platform: "claude", model: "opus" },
+              review2: { platform: "codex", model: "gpt-5.6" },
+              reviewPreparation: { platform: "codex", model: "gpt-5.6" },
+              verify: { platform: "opencode", model: "provider/verifier" },
+            },
+            multiReview: {
+              reviewerCount: 3,
+              additionalReviewers: [{ platform: "claude", model: "haiku" }],
+            },
+          },
+        },
+      },
+    });
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuild(task, "local");
+    });
+
+    expect(startInput().reviewers).toEqual([
+      { agent: "claude", model: "opus" },
+      { agent: "codex", model: "gpt-5.6" },
+      { agent: "claude", model: "haiku" },
+    ]);
+    expect(startInput().reviewPreparation).toEqual({ agent: "codex", model: "gpt-5.6" });
+    expect((startInput().steps as BuildStepConfigs).verify).toEqual({
+      agent: "opencode",
+      model: "provider/verifier",
+    });
   });
 
   test("falls back to the repository's configured agent when neither is given", async () => {

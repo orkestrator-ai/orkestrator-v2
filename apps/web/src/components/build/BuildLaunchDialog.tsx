@@ -1,5 +1,5 @@
 import { type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { BuildStepKey } from "@orkestrator/protocol/build-pipeline";
+import type { BuildStepConfig, BuildStepKey } from "@orkestrator/protocol/build-pipeline";
 import type { AgentModel, AgentModelRef } from "@orkestrator/protocol/native-agent";
 import {
   Container,
@@ -43,6 +43,7 @@ import {
 } from "@/lib/agent-launch";
 import { cn } from "@/lib/utils";
 import type { EnvironmentType } from "@/types";
+import type { BuildPipelineConfiguredDefaults } from "@/lib/build-launch-options";
 
 export interface BuildLaunchStepSelection {
   agent: LaunchAgent;
@@ -55,6 +56,10 @@ export interface BuildLaunchSelection {
   /** Environment type is a property of the workspace, so it is chosen once. */
   environmentType: EnvironmentType;
   steps: Record<BuildStepKey, BuildLaunchStepSelection>;
+  /** Multi-review fan-out chosen for this launch. */
+  reviewers?: BuildLaunchStepSelection[];
+  /** Shared review preparation and consolidation model. */
+  reviewPreparation?: BuildLaunchStepSelection;
   /** Present when the launcher offers source comments as optional context. */
   includeComments?: boolean;
 }
@@ -146,6 +151,8 @@ interface BuildLaunchDialogProps {
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
   preferredFastModes?: Partial<Record<LaunchAgent, boolean>>;
+  /** Action and Multi Review defaults shared by every ticket build path. */
+  pipelineDefaults?: BuildPipelineConfiguredDefaults;
   /** Offers source-ticket comments as optional build context. */
   commentContext?: BuildLaunchCommentContextOption;
   /** Disables the submit button while a start request is in flight. */
@@ -177,13 +184,29 @@ function initialStepState(
   preferredModels: BuildLaunchDialogProps["preferredModels"],
   preferredReasoningEfforts: BuildLaunchDialogProps["preferredReasoningEfforts"],
   preferredFastModes: BuildLaunchDialogProps["preferredFastModes"],
+  configured?: BuildStepConfig,
 ): StepState {
-  const model = firstModelFor(agent, catalog, preferredModels);
+  const selectedAgent = configured?.agent ?? agent;
+  const model = firstModelFor(
+    selectedAgent,
+    catalog,
+    configured?.model ? { ...preferredModels, [selectedAgent]: configured.model } : preferredModels,
+  );
   return {
-    agent,
+    agent: selectedAgent,
     model,
-    reasoningEffort: defaultEffortFor(agent, model, catalog, preferredReasoningEfforts),
-    fastMode: defaultFastModeFor(agent, model, catalog, preferredFastModes),
+    reasoningEffort: defaultEffortFor(
+      selectedAgent,
+      model,
+      catalog,
+      configured?.reasoningEffort
+        ? { ...preferredReasoningEfforts, [selectedAgent]: configured.reasoningEffort }
+        : preferredReasoningEfforts,
+    ),
+    fastMode: defaultFastModeFor(selectedAgent, model, catalog, {
+      ...preferredFastModes,
+      ...(configured?.fastMode !== undefined ? { [selectedAgent]: configured.fastMode } : {}),
+    }),
   };
 }
 
@@ -193,18 +216,38 @@ function initialSteps(
   preferredModels: BuildLaunchDialogProps["preferredModels"],
   preferredReasoningEfforts: BuildLaunchDialogProps["preferredReasoningEfforts"],
   preferredFastModes: BuildLaunchDialogProps["preferredFastModes"],
+  pipelineDefaults?: BuildPipelineConfiguredDefaults,
 ): Record<BuildStepKey, StepState> {
-  const initial = initialStepState(
-    agent,
-    catalog,
-    preferredModels,
-    preferredReasoningEfforts,
-    preferredFastModes,
-  );
-  return Object.fromEntries(BUILD_STEPS.map(({ key }) => [key, { ...initial }])) as Record<
-    BuildStepKey,
-    StepState
-  >;
+  return Object.fromEntries(
+    BUILD_STEPS.map(({ key }) => [
+      key,
+      initialStepState(
+        agent,
+        catalog,
+        preferredModels,
+        preferredReasoningEfforts,
+        preferredFastModes,
+        pipelineDefaults?.steps[key],
+      ),
+    ]),
+  ) as Record<BuildStepKey, StepState>;
+}
+
+function cleanStep(state: StepState, catalog: AgentModelCatalog): BuildLaunchStepSelection {
+  const model = modelsForAgent(catalog, state.agent).find((option) => option.id === state.model);
+  const efforts = model?.reasoningEfforts ?? [];
+  const reasoningEffort =
+    efforts.length > 0 && efforts.includes(state.reasoningEffort)
+      ? state.reasoningEffort
+      : undefined;
+  return {
+    agent: state.agent,
+    model: model?.id ?? state.model,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(model?.supportsSpeed === true && state.fastMode !== undefined
+      ? { fastMode: state.fastMode }
+      : {}),
+  };
 }
 
 function flatCatalog(catalog: AgentModelCatalog, enabledPlatforms: LaunchAgent[]): AgentModel[] {
@@ -369,6 +412,7 @@ export function BuildLaunchDialog({
   preferredModels,
   preferredReasoningEfforts,
   preferredFastModes,
+  pipelineDefaults,
   commentContext,
   busy = false,
   localEnvironmentAvailable = true,
@@ -402,6 +446,7 @@ export function BuildLaunchDialog({
       preferredModels,
       preferredReasoningEfforts,
       preferredFastModes,
+      pipelineDefaults,
     ),
   );
   const [includeComments, setIncludeComments] = useState(commentContext?.defaultIncluded ?? true);
@@ -432,6 +477,7 @@ export function BuildLaunchDialog({
         preferredModels,
         preferredReasoningEfforts,
         preferredFastModes,
+        pipelineDefaults,
       ),
     );
   }, [
@@ -445,6 +491,7 @@ export function BuildLaunchDialog({
     preferredModels,
     preferredReasoningEfforts,
     preferredFastModes,
+    pipelineDefaults,
   ]);
 
   useEffect(() => {
@@ -511,21 +558,52 @@ export function BuildLaunchDialog({
             if (busy) return;
             if (environmentType === "containerized" && !dockerAvailable) return;
             if (environmentType === "local" && !localEnvironmentAvailable) return;
+            const selectedSteps = Object.fromEntries(
+              BUILD_STEPS.map(({ key }) => [
+                key,
+                {
+                  agent: steps[key].agent,
+                  model: resolved[key].model?.id ?? steps[key].model,
+                  reasoningEffort:
+                    resolved[key].effort === "default" ? undefined : resolved[key].effort,
+                  fastMode: resolved[key].fastMode,
+                },
+              ]),
+            ) as Record<BuildStepKey, BuildLaunchStepSelection>;
+            const reviewers = pipelineDefaults?.reviewers.map((reviewer, index) =>
+              index === 0
+                ? selectedSteps.review
+                : cleanStep(
+                    initialStepState(
+                      defaultAgent,
+                      catalog,
+                      preferredModels,
+                      preferredReasoningEfforts,
+                      preferredFastModes,
+                      reviewer,
+                    ),
+                    catalog,
+                  ),
+            );
+            const reviewPreparation = pipelineDefaults
+              ? cleanStep(
+                  initialStepState(
+                    defaultAgent,
+                    catalog,
+                    preferredModels,
+                    preferredReasoningEfforts,
+                    preferredFastModes,
+                    pipelineDefaults.reviewPreparation,
+                  ),
+                  catalog,
+                )
+              : undefined;
             onConfirm({
               environmentType,
               ...(commentContext ? { includeComments } : {}),
-              steps: Object.fromEntries(
-                BUILD_STEPS.map(({ key }) => [
-                  key,
-                  {
-                    agent: steps[key].agent,
-                    model: resolved[key].model?.id ?? steps[key].model,
-                    reasoningEffort:
-                      resolved[key].effort === "default" ? undefined : resolved[key].effort,
-                    fastMode: resolved[key].fastMode,
-                  },
-                ]),
-              ) as Record<BuildStepKey, BuildLaunchStepSelection>,
+              steps: selectedSteps,
+              ...(reviewers ? { reviewers } : {}),
+              ...(reviewPreparation ? { reviewPreparation } : {}),
             });
           }}
         >

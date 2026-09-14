@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildLaunchDefaults } from "./build-launch-options";
+import { buildLaunchDefaults, buildPipelineConfiguredDefaults } from "./build-launch-options";
 import type { AppConfig, GlobalConfig, RepositoryConfig } from "@/types";
 
 function makeConfig(
@@ -261,5 +261,49 @@ describe("buildLaunchDefaults", () => {
     expect(buildLaunchDefaults(makeConfig(), "unknown-project", false).defaultEnvironmentType).toBe(
       "containerized",
     );
+  });
+});
+
+describe("buildPipelineConfiguredDefaults", () => {
+  test("uses Multi Review and the dedicated verification action for every ticket build", () => {
+    const config = makeConfig(undefined, {
+      agentSettings: {
+        defaultAgent: "claude",
+        platforms: {
+          claude: { model: "claude-sonnet-5" },
+          codex: { model: "gpt-5.4", reasoningEffort: "medium" },
+        },
+        actionDefaults: {
+          review: { platform: "claude", model: "claude-opus" },
+          review2: { platform: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+          reviewPreparation: { platform: "codex", model: "gpt-5.6" },
+          fixReviewIssues: { platform: "claude", model: "claude-sonnet-5" },
+          verify: { platform: "codex", model: "gpt-5.6", reasoningEffort: "xhigh" },
+        },
+        multiReview: {
+          reviewerCount: 3,
+          additionalReviewers: [{ platform: "claude", model: "claude-haiku" }],
+        },
+      },
+    });
+
+    const defaults = buildPipelineConfiguredDefaults(config, "project-1");
+
+    expect(defaults.reviewers).toEqual([
+      { agent: "claude", model: "claude-opus" },
+      { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+      { agent: "claude", model: "claude-haiku" },
+    ]);
+    expect(defaults.reviewPreparation).toEqual({
+      agent: "codex",
+      model: "gpt-5.6",
+      reasoningEffort: "medium",
+    });
+    expect(defaults.steps.address).toEqual({ agent: "claude", model: "claude-sonnet-5" });
+    expect(defaults.steps.verify).toEqual({
+      agent: "codex",
+      model: "gpt-5.6",
+      reasoningEffort: "xhigh",
+    });
   });
 });

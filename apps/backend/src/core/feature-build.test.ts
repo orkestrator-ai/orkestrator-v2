@@ -99,7 +99,7 @@ describe("createFeatureBuild", () => {
     });
   });
 
-  test("runs verification on the model that addressed the review", async () => {
+  test("does not infer verification from the address model", async () => {
     await withStorage(async (storage) => {
       const supervisor = fakeSupervisor();
       await createFeatureBuild(
@@ -113,11 +113,7 @@ describe("createFeatureBuild", () => {
         { storage, buildPipelines: supervisor.service },
       );
       const started = supervisor.started[0]!;
-      expect(started.steps?.verify).toEqual({
-        agent: "codex",
-        model: "gpt-5.6",
-        reasoningEffort: "high",
-      });
+      expect(started.steps?.verify).toBeUndefined();
       // The pipeline's own agent is the build step's harness.
       expect(started.agentType).toBe("claude");
     });

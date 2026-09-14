@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { buildLaunchDefaults } from "@/lib/build-launch-options";
+import { buildLaunchDefaults, buildPipelineConfiguredDefaults } from "@/lib/build-launch-options";
 import {
   buildReviewModelCatalog,
   includeMissingOpenCodeModels,
@@ -181,7 +181,10 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
     projects.find((project) => project.id === projectId)?.localPath,
   );
   const defaults = useMemo(
-    () => buildLaunchDefaults(config, projectId, projectHasLocalPath),
+    () => ({
+      ...buildLaunchDefaults(config, projectId, projectHasLocalPath),
+      pipelineDefaults: buildPipelineConfiguredDefaults(config, projectId),
+    }),
     [config, projectHasLocalPath, projectId],
   );
   const catalog = useProjectModelCatalog(projectId, enabled);

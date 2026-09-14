@@ -92,6 +92,7 @@ import {
   type BuildIntent,
   type FeatureBuildModelState,
 } from "@/lib/feature-build-launch";
+import { buildPipelineConfiguredDefaults } from "@/lib/build-launch-options";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import {
   getCachedOpenCodeModelCatalog,
@@ -577,16 +578,6 @@ export function CreateEnvironmentDialog({
   const [model, setModel] = useState(initialAgentDefaults.model);
   const [reasoningEffort, setReasoningEffort] = useState(initialAgentDefaults.reasoningEffort);
   const [fastMode, setFastMode] = useState(initialAgentDefaults.fastMode);
-  const featureActionDefault = useCallback(
-    (key: Parameters<typeof resolvedActionDefault>[1]) => {
-      const action = resolvedActionDefault(agentTiers, key, enabledAgentPlatforms);
-      return {
-        ...action,
-        fastMode: resolvedFastModesByPlatform[action.agent],
-      };
-    },
-    [agentTiers, enabledAgentPlatforms, resolvedFastModesByPlatform],
-  );
   /**
    * The models "Customize models" opens on.
    *
@@ -595,25 +586,32 @@ export function CreateEnvironmentDialog({
    * Default Agent picker, including model and reasoning, because that is the
    * decision the user has already made a few controls above.
    */
-  const defaultFeatureModels = useMemo(
-    () =>
-      defaultFeatureBuildModels({
-        catalog: modelCatalog,
-        build: {
-          agent: agentType,
-          model,
-          reasoningEffort,
-          fastMode,
-        },
-        review: featureActionDefault("review"),
-        review2: featureActionDefault("review2"),
-        reviewPreparation: featureActionDefault("reviewPreparation"),
-        address: featureActionDefault("fixReviewIssues"),
-        pr: featureActionDefault("pr"),
-        resolve: featureActionDefault("resolve"),
-      }),
-    [agentType, fastMode, featureActionDefault, model, modelCatalog, reasoningEffort],
-  );
+  const defaultFeatureModels = useMemo(() => {
+    const configured = buildPipelineConfiguredDefaults(config, projectId ?? "");
+    const review = configured.reviewers[0] ?? {
+      agent: agentType,
+      model,
+      reasoningEffort,
+      fastMode,
+    };
+    return defaultFeatureBuildModels({
+      catalog: modelCatalog,
+      build: {
+        agent: agentType,
+        model,
+        reasoningEffort,
+        fastMode,
+      },
+      review,
+      review2: configured.reviewers[1] ?? review,
+      reviewers: configured.reviewers,
+      reviewPreparation: configured.reviewPreparation,
+      address: configured.steps.address ?? review,
+      verify: configured.steps.verify ?? review,
+      pr: configured.steps.pr ?? review,
+      resolve: configured.steps["resolve-conflicts"] ?? review,
+    });
+  }, [agentType, config, fastMode, model, modelCatalog, projectId, reasoningEffort]);
   const [buildIntent, setBuildIntent] = useState<BuildIntent>("prompt");
   const [featureName, setFeatureName] = useState("");
   const [featureDescription, setFeatureDescription] = useState("");

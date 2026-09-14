@@ -63,6 +63,11 @@ export interface MultiReviewAgentSettings {
   additionalReviewers?: Array<AgentActionDefault | null>;
 }
 
+export interface ResolvedMultiReviewAgentSettings {
+  reviewerCount: number;
+  additionalReviewers: Array<AgentActionDefault | null>;
+}
+
 /**
  * One tier's whole agent configuration.
  *
@@ -220,6 +225,29 @@ export function resolveActionDefaults(tiers: AgentSettingsTiers): ActionDefaults
     if (entry) resolved[key] = entry;
   }
   return resolved;
+}
+
+/** Multi Review defaults resolved through the same environment → repository → app cascade. */
+export function resolveMultiReviewSettings(
+  tiers: AgentSettingsTiers,
+): ResolvedMultiReviewAgentSettings {
+  const reviewerCount =
+    tiers.environment?.multiReview?.reviewerCount ??
+    tiers.repository?.multiReview?.reviewerCount ??
+    tiers.global?.multiReview?.reviewerCount ??
+    DEFAULT_MULTI_REVIEW_REVIEWER_COUNT;
+  const additionalReviewers =
+    tiers.environment?.multiReview?.additionalReviewers ??
+    tiers.repository?.multiReview?.additionalReviewers ??
+    tiers.global?.multiReview?.additionalReviewers ??
+    [];
+  return {
+    reviewerCount,
+    additionalReviewers: additionalReviewers.slice(
+      0,
+      Math.max(0, reviewerCount - DEFAULT_MULTI_REVIEW_REVIEWER_COUNT),
+    ),
+  };
 }
 
 function normalizePlatformSettings(

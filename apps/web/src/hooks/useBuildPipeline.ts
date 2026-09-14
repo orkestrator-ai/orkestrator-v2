@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { toast } from "sonner";
 import type {
   BuildPipelineSource,
+  BuildStepConfig,
   BuildStepConfigs,
   StartBuildPipelineInput,
   TaskSnapshot,
@@ -12,6 +13,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
 import * as backend from "@/lib/backend";
 import { resolveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
+import { buildPipelineConfiguredDefaults } from "@/lib/build-launch-options";
 import type { DefaultAgent, EnvironmentType } from "@/types";
 import type { KanbanTask } from "@/lib/backend";
 import type { PaneNode } from "@/types/paneLayout";
@@ -31,6 +33,10 @@ type StartBuildOptions = {
   featurePlanId?: string;
   /** Per-step harness, model and reasoning chosen in the build launcher. */
   steps?: BuildStepConfigs;
+  /** Explicit per-launch fan-out. Missing uses the configured Multi Review defaults. */
+  reviewers?: BuildStepConfig[];
+  /** Explicit preparation/consolidation model. Missing uses its action default. */
+  reviewPreparation?: BuildStepConfig;
   /** Whether source-ticket comments should be copied into the task snapshot. */
   includeComments?: boolean;
 };
@@ -167,6 +173,13 @@ export function useBuildPipeline() {
       options: StartBuildOptions = {},
     ) => {
       try {
+        const configured = buildPipelineConfiguredDefaults(config, ticket.projectId);
+        const steps: BuildStepConfigs = { ...configured.steps, ...options.steps };
+        const reviewers = options.reviewers
+          ? options.reviewers
+          : configured.reviewers.map((reviewer, index) =>
+              index === 0 && steps.review ? steps.review : reviewer,
+            );
         const input: StartBuildPipelineInput = {
           taskId: ticket.id,
           projectId: ticket.projectId,
@@ -174,10 +187,12 @@ export function useBuildPipeline() {
           // The build step's harness is the pipeline agent when one was chosen;
           // the backend resolves it the same way, so both agree on the snapshot.
           agentType:
-            options.steps?.build?.agent ??
+            steps.build?.agent ??
             agentOverride ??
             resolveBuildPipelineAgent(config, ticket.projectId),
-          steps: options.steps,
+          steps,
+          reviewers,
+          reviewPreparation: options.reviewPreparation ?? configured.reviewPreparation,
           taskTitle: ticket.title,
           taskSnapshot: ticket.taskSnapshot,
           source: ticket.source,

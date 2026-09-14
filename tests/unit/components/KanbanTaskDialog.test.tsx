@@ -1159,9 +1159,16 @@ describe("KanbanTaskDialog", () => {
       expect(toastErrorMock).toHaveBeenCalledWith(
         "Task created but acceptance criteria could not be saved",
       );
-      expect(startBuildMock).toHaveBeenCalledWith(createdTask, "local", "claude", {
-        steps: defaultSteps(),
-      });
+      expect(startBuildMock).toHaveBeenCalledWith(
+        createdTask,
+        "local",
+        "claude",
+        expect.objectContaining({
+          steps: defaultSteps(),
+          reviewers: expect.any(Array),
+          reviewPreparation: expect.any(Object),
+        }),
+      );
     });
   });
 
@@ -1193,9 +1200,16 @@ describe("KanbanTaskDialog", () => {
     });
     launchBuild("Local");
     await waitFor(() =>
-      expect(startBuildMock).toHaveBeenCalledWith(createdTask, "local", "claude", {
-        steps: defaultSteps(),
-      }),
+      expect(startBuildMock).toHaveBeenCalledWith(
+        createdTask,
+        "local",
+        "claude",
+        expect.objectContaining({
+          steps: defaultSteps(),
+          reviewers: expect.any(Array),
+          reviewPreparation: expect.any(Object),
+        }),
+      ),
     );
   });
 
@@ -1222,9 +1236,16 @@ describe("KanbanTaskDialog", () => {
 
     await waitFor(() => {
       expect(toastErrorMock).toHaveBeenCalledWith("Failed to save 1 image");
-      expect(startBuildMock).toHaveBeenCalledWith(createdTask, "containerized", "claude", {
-        steps: defaultSteps(),
-      });
+      expect(startBuildMock).toHaveBeenCalledWith(
+        createdTask,
+        "containerized",
+        "claude",
+        expect.objectContaining({
+          steps: defaultSteps(),
+          reviewers: expect.any(Array),
+          reviewPreparation: expect.any(Object),
+        }),
+      );
     });
   });
 
@@ -1475,9 +1496,16 @@ describe("KanbanTaskDialog", () => {
     launchBuild("Container");
 
     await waitFor(() => {
-      expect(startBuildMock).toHaveBeenCalledWith(task, "containerized", "claude", {
-        steps: defaultSteps(),
-      });
+      expect(startBuildMock).toHaveBeenCalledWith(
+        task,
+        "containerized",
+        "claude",
+        expect.objectContaining({
+          steps: defaultSteps(),
+          reviewers: expect.any(Array),
+          reviewPreparation: expect.any(Object),
+        }),
+      );
       expect(onOpenChange).toHaveBeenCalledWith(false);
     });
   });
@@ -1509,9 +1537,16 @@ describe("KanbanTaskDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start Build" }));
 
     await waitFor(() => {
-      expect(startBuildMock).toHaveBeenCalledWith(task, "containerized", "claude", {
-        steps: defaultSteps(),
-      });
+      expect(startBuildMock).toHaveBeenCalledWith(
+        task,
+        "containerized",
+        "claude",
+        expect.objectContaining({
+          steps: defaultSteps(),
+          reviewers: expect.any(Array),
+          reviewPreparation: expect.any(Object),
+        }),
+      );
     });
 
     startBuildMock.mockClear();
@@ -1519,9 +1554,16 @@ describe("KanbanTaskDialog", () => {
     expect(startBuildMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Start Build" }));
     await waitFor(() => {
-      expect(startBuildMock).toHaveBeenCalledWith(task, "local", "claude", {
-        steps: defaultSteps(),
-      });
+      expect(startBuildMock).toHaveBeenCalledWith(
+        task,
+        "local",
+        "claude",
+        expect.objectContaining({
+          steps: defaultSteps(),
+          reviewers: expect.any(Array),
+          reviewPreparation: expect.any(Object),
+        }),
+      );
     });
   });
 

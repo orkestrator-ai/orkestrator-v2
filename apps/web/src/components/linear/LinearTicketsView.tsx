@@ -525,6 +525,8 @@ export function LinearTicketsViewContent({
     try {
       await startBuildFromLinearIssue(detail, projectId, selection.environmentType, {
         steps: selection.steps,
+        reviewers: selection.reviewers,
+        reviewPreparation: selection.reviewPreparation,
         includeComments: selection.includeComments ?? true,
       });
     } finally {

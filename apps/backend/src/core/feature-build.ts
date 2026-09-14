@@ -20,7 +20,6 @@ import {
   type CreateFeatureBuildResult,
 } from "@orkestrator/protocol/feature-build";
 import { createHash } from "node:crypto";
-import type { BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { StorageService } from "./storage.js";
 import { resizeKanbanImage, type KanbanTask } from "./storage-shared.js";
@@ -94,7 +93,7 @@ export async function createFeatureBuild(
     environmentType: input.environmentType,
     ...(input.environmentOptions ? { environmentOptions: input.environmentOptions } : {}),
     agentType: input.agentType,
-    ...(input.steps ? { steps: withVerifyFromAddress(input.steps) } : {}),
+    ...(input.steps ? { steps: input.steps } : {}),
     ...(input.reviewers ? { reviewers: input.reviewers } : {}),
     ...(input.reviewPreparation ? { reviewPreparation: input.reviewPreparation } : {}),
     taskTitle: task.title,
@@ -105,7 +104,7 @@ export async function createFeatureBuild(
       title: task.title,
       description: task.description,
       acceptanceCriteria: task.acceptanceCriteria,
-      comments: [],
+      comments: task.comments.map((comment) => ({ text: comment.text })),
       images: snapshotImages,
     },
     // Linking the source is what makes the pipeline move this ticket through
@@ -136,20 +135,6 @@ async function normalizeFeatureImages(
     }
   }
   return normalized;
-}
-
-/**
- * Verification runs on whichever model addressed the review.
- *
- * The verify stage re-checks the committed branch against the ticket directly
- * after the address stage changed it. Splitting those across two models adds a
- * decision without adding a choice worth making, so the feature launcher does
- * not offer a verify picker and this fills it in. An explicit `verify` still
- * wins: this only supplies what the caller left unset.
- */
-function withVerifyFromAddress(steps: BuildStepConfigs): BuildStepConfigs {
-  if (steps.verify || !steps.address) return steps;
-  return { ...steps, verify: steps.address };
 }
 
 /**

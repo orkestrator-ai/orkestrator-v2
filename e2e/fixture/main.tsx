@@ -352,6 +352,63 @@ function MultiReviewOverviewFixture() {
   );
 }
 
+const multiReviewRunningTileWorkflow: MultiReviewWorkflow = {
+  version: 1,
+  controller: "backend",
+  id: "multi-review-running-tile-fixture",
+  environmentId: "fixture-environment",
+  projectId: "fixture-project",
+  targetBranch: "main",
+  phase: "reviewing",
+  reviewers: [
+    {
+      id: "tool-mode-preparing-reviewer",
+      agent: "claude",
+      model: "opus",
+      status: "running",
+      providerSessionId: "tool-mode-preparing-session",
+      resultTransport: "tool-v1",
+      resultSubmission: "preparing",
+      startedAt: "2026-09-07T00:00:00.000Z",
+    },
+    {
+      id: "tool-mode-correcting-reviewer",
+      agent: "codex",
+      model: "gpt-5.6",
+      status: "running",
+      providerSessionId: "tool-mode-correcting-session",
+      resultTransport: "tool-v1",
+      resultSubmission: "correcting",
+      startedAt: "2026-09-07T00:00:00.000Z",
+    },
+  ],
+  fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+  createdAt: "2026-09-07T00:00:00.000Z",
+  updatedAt: "2026-09-07T00:00:00.000Z",
+  backendRevision: 1,
+};
+
+function MultiReviewRunningTileFixture() {
+  useEffect(() => {
+    useMultiReviewStore.getState().replaceWorkflow(multiReviewRunningTileWorkflow);
+    return () => useMultiReviewStore.getState().removeWorkflow(multiReviewRunningTileWorkflow.id);
+  }, []);
+
+  return (
+    <main className="h-screen bg-background text-foreground">
+      <MultiReviewTab
+        data={{
+          environmentId: multiReviewRunningTileWorkflow.environmentId,
+          workflowId: multiReviewRunningTileWorkflow.id,
+          isLocal: true,
+        }}
+        isActive
+        hydrateWorkflow={async () => multiReviewRunningTileWorkflow}
+      />
+    </main>
+  );
+}
+
 function GlobalStylesFixture() {
   const twelveLineDraft = Array.from({ length: 12 }, (_, index) => `Line ${index + 1}`).join("\n");
   const thirteenLineDraft = `${twelveLineDraft}\nLine 13`;
@@ -944,6 +1001,9 @@ function fixtureForPath() {
   }
   if (window.location.pathname === "/multi-review-overview") {
     return <MultiReviewOverviewFixture />;
+  }
+  if (window.location.pathname === "/multi-review-running-tile") {
+    return <MultiReviewRunningTileFixture />;
   }
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;
   if (window.location.pathname === "/review-validation-output") {

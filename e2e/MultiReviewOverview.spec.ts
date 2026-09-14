@@ -42,3 +42,24 @@ test("long reviewer failures stay contained and fully accessible", async ({ page
   await workflowError.scrollIntoViewIfNeeded();
   await expect(workflowError).toBeInViewport();
 });
+
+test("a running tool-mode tile keeps a single status spinner", async ({ page }) => {
+  await page.goto("/multi-review-running-tile");
+
+  const preparingTile = page.getByRole("button", { name: /^Open Reviewer 1 transcript/ });
+  const correctingTile = page.getByRole("button", { name: /^Open Reviewer 2 transcript/ });
+
+  await expect(preparingTile).toBeVisible();
+  await expect(preparingTile.getByText("Preparing report")).toHaveCount(0);
+  await expect(preparingTile.getByTestId("workflow-result-status")).toHaveCount(0);
+  await expect(preparingTile.locator(":scope > svg.animate-spin")).toHaveCount(1);
+  await expect(preparingTile.locator("svg.animate-spin")).toHaveCount(1);
+
+  await expect(correctingTile.getByText("Correcting report format")).toBeVisible();
+  await expect(correctingTile.getByTestId("workflow-result-status")).toHaveAttribute(
+    "data-state",
+    "correcting",
+  );
+  await expect(correctingTile.locator(":scope > svg.animate-spin")).toHaveCount(1);
+  await expect(correctingTile.locator("svg.animate-spin")).toHaveCount(2);
+});

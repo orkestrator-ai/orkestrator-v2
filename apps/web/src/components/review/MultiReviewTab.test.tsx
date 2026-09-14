@@ -332,6 +332,98 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(screen.queryByRole("button", { name: /coverage gaps? found/ }) === null).toBe(true);
   });
 
+  test("does not stack a preparing-report spinner on a running reviewer tile", () => {
+    const reviewing = reviewingWorkflow();
+    reviewing.reviewers[0]!.resultTransport = "tool-v1";
+    reviewing.reviewers[0]!.resultSubmission = "preparing";
+    reviewing.reviewers[1]!.resultTransport = "tool-v1";
+    reviewing.reviewers[1]!.resultSubmission = "correcting";
+    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => reviewing)}
+      />,
+    );
+
+    const preparingTile = screen.getByRole("button", { name: /^Open Reviewer 1 transcript/ });
+    const correctingTile = screen.getByRole("button", { name: /^Open Reviewer 2 transcript/ });
+
+    expect(screen.queryByText("Preparing report") === null).toBe(true);
+    expect(within(preparingTile).queryByTestId("workflow-result-status") === null).toBe(true);
+    expect(preparingTile.querySelectorAll(":scope > svg.animate-spin")).toHaveLength(1);
+    expect(preparingTile.querySelectorAll("svg.animate-spin")).toHaveLength(1);
+
+    expect(screen.getByText("Correcting report format")).toBeTruthy();
+    expect(screen.getAllByTestId("workflow-result-status")).toHaveLength(1);
+    expect(correctingTile.querySelectorAll(":scope > svg.animate-spin")).toHaveLength(1);
+    expect(correctingTile.querySelectorAll("svg.animate-spin")).toHaveLength(2);
+  });
+
+  test("keeps received and needs-attention report status on reviewer tiles", () => {
+    const reviewing = reviewingWorkflow();
+    reviewing.reviewers[0]!.resultTransport = "tool-v1";
+    reviewing.reviewers[0]!.resultSubmission = "received";
+    reviewing.reviewers[1]!.resultTransport = "tool-v1";
+    reviewing.reviewers[1]!.resultSubmission = "needs-attention";
+    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => reviewing)}
+      />,
+    );
+
+    const received = within(
+      screen.getByRole("button", { name: /^Open Reviewer 1 transcript/ }),
+    ).getByTestId("workflow-result-status");
+    const needsAttention = within(
+      screen.getByRole("button", { name: /^Open Reviewer 2 transcript/ }),
+    ).getByTestId("workflow-result-status");
+
+    expect(received.dataset.state).toBe("received");
+    expect(received.textContent).toBe("Report received; finishing checks");
+    expect(needsAttention.dataset.state).toBe("needs-attention");
+    expect(needsAttention.textContent).toBe("Report needs attention");
+    expect(screen.getAllByTestId("workflow-result-status")).toHaveLength(2);
+  });
+
+  test("hides a stale preparing-report status on failed and cancelled reviewer tiles", () => {
+    const settled = readyWorkflow();
+    settled.phase = "failed";
+    settled.reviewers = [
+      {
+        ...settled.reviewers[0]!,
+        status: "failed",
+        resultTransport: "tool-v1",
+        resultSubmission: "preparing",
+        error: "Reviewer failed after the slot was prepared",
+      },
+      {
+        ...settled.reviewers[1]!,
+        status: "cancelled",
+        resultTransport: "tool-v1",
+        resultSubmission: "preparing",
+      },
+    ];
+    useMultiReviewStore.getState().replaceWorkflow(settled);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: settled.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => settled)}
+      />,
+    );
+
+    expect(screen.queryByText("Preparing report") === null).toBe(true);
+    expect(screen.queryByTestId("workflow-result-status") === null).toBe(true);
+  });
+
   test("keeps partial-report counts visible for failed and cancelled reviewers", () => {
     const settled = readyWorkflow();
     settled.phase = "failed";

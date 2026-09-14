@@ -173,14 +173,15 @@ export interface TabInfo {
   /**
    * Durable provider-to-provider conversation handoff rendered ahead of this
    * tab's native transcript. The pane layout stores only this small reference;
-   * the sensitive transcript lives in backend handoff storage.
+   * the sensitive transcript lives in backend handoff storage. Kept after the
+   * first destination prompt so transferred history stays visible.
    */
   agentHandoffId?: string;
   /**
-   * A handoff this tab dispatched whose snapshot has been deleted, retained so
-   * the bootstrap prompt stays hidden. Resuming another session detaches (and
-   * deletes) the imported transcript, but that prompt remains the destination
-   * session's first message; without the id it would render as a raw JSON blob.
+   * A handoff this tab has already dispatched. Set on the first destination
+   * prompt so a remount cannot prepend the bootstrap a second time, and kept
+   * after the snapshot is detached (resume of another session) so that prompt
+   * stays hidden rather than rendering as a raw JSON blob.
    */
   consumedAgentHandoffId?: string;
   /** Whether this tab runs setup scripts (used to track completion) */

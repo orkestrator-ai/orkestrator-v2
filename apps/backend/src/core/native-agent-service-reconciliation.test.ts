@@ -169,6 +169,31 @@ function createProviderStub(
   };
 }
 
+type StartupNativeTab = {
+  id?: string;
+  type?: string;
+  initialAgentPlatform?: string;
+  initialAgentModel?: string;
+  initialReasoningEffort?: string;
+  initialFastMode?: boolean;
+  nativeAgentData?: {
+    platform?: string;
+    sessionId?: string;
+    environmentId?: string;
+  };
+};
+
+function startupNativeTabFromLayout(layout: { root?: unknown } | null): StartupNativeTab {
+  if (!layout || !layout.root || typeof layout.root !== "object") {
+    throw new Error("expected a pane layout with a root");
+  }
+  const tab = (layout.root as { tabs?: StartupNativeTab[] }).tabs?.find(
+    (candidate) => candidate.id === "startup-agent",
+  );
+  if (!tab) throw new Error("expected a startup-agent tab");
+  return tab;
+}
+
 /** Reach the timer-driven scans and backoff bookkeeping the service keeps private. */
 function internals(service: NativeAgentService) {
   return service as unknown as {
@@ -2514,7 +2539,6 @@ describe("NativeAgentService", () => {
                 id: "startup-agent",
                 type: "agent-native",
                 nativeAgentData: {
-                  platform: "cursor",
                   environmentId: "env-1",
                 },
               },
@@ -2563,7 +2587,7 @@ describe("NativeAgentService", () => {
           });
           await service.reconcileInitialLaunch("env-1");
 
-          expect(createSession).toHaveBeenCalled();
+          expect(createSession).not.toHaveBeenCalled();
           expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
             activeTabId: "startup-agent",
           });
@@ -2588,29 +2612,20 @@ describe("NativeAgentService", () => {
 
           const converged = await storage.getEnvironment("env-1");
           expect(converged).toMatchObject({ pendingAgentLaunch: false });
-          const launchOptions = (
-            createSession.mock.calls[0] as unknown as
-              | [unknown, unknown, { fastMode?: boolean }]
-              | undefined
-          )?.[2];
-          expect(launchOptions?.fastMode).toBeUndefined();
+          expect(createSession).not.toHaveBeenCalled();
           // Both halves of the launch are durable now, so the transient snapshot
           // is cleared rather than left running for the life of the environment.
           expect(converged?.startupAgentSession).toBeUndefined();
-          expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
-            activeTabId: "startup-agent",
-            tabs: [
-              { id: "default", type: "plain", isSetupTab: true },
-              {
-                id: "startup-agent",
-                type: "agent-native",
-                nativeAgentData: {
-                  platform: "cursor",
-                  sessionId: "provider-session",
-                },
-              },
-            ],
+          const startupTab = startupNativeTabFromLayout(await storage.getPaneLayout("env-1"));
+          expect(startupTab).toMatchObject({
+            type: "agent-native",
+            initialAgentPlatform: "cursor",
+            nativeAgentData: {
+              environmentId: "env-1",
+            },
           });
+          expect(startupTab.nativeAgentData?.platform).toBeUndefined();
+          expect(startupTab.nativeAgentData?.sessionId).toBeUndefined();
         },
       );
     });
@@ -2929,6 +2944,255 @@ describe("NativeAgentService", () => {
       );
     });
 
+    test("keeps a prompt-less restart agent on the unlocked startup tab", async () => {
+      const { provider, createSession, send } = createProviderStub("codex");
+      await withService(
+        {
+          prefix: "orkestrator-native-promptless-restart-agent-",
+          environment: {
+            pendingAgentLaunch: true,
+            initialAgentPlatform: "codex",
+            initialAgentModel: "gpt-5.4",
+            defaultAgent: "claude",
+            claudeMode: "native",
+            codexMode: "native",
+          },
+          provider: async () => provider,
+        },
+        async ({ storage, service }) => {
+          await service.reconcileInitialLaunch("env-1");
+
+          const converged = await storage.getEnvironment("env-1");
+          expect(converged).toMatchObject({ pendingAgentLaunch: false });
+          expect(converged?.initialAgentPlatform).toBeUndefined();
+          expect(converged?.initialAgentModel).toBeUndefined();
+          expect(createSession).not.toHaveBeenCalled();
+
+          const startupTab = startupNativeTabFromLayout(await storage.getPaneLayout("env-1"));
+          expect(startupTab).toMatchObject({
+            type: "agent-native",
+            initialAgentPlatform: "codex",
+            initialAgentModel: "gpt-5.4",
+            nativeAgentData: { environmentId: "env-1" },
+          });
+          expect(startupTab.nativeAgentData?.platform).toBeUndefined();
+          expect(startupTab.nativeAgentData?.sessionId).toBeUndefined();
+
+          const session = await service.dispatchPrompt({
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey: "env-env-1:startup-agent",
+            model: "gpt-5.4",
+            prompt: "Ship the selected provider",
+            requestId: "user-first-send",
+          });
+          expect(session.agent).toBe("codex");
+          expect(createSession).toHaveBeenCalled();
+          expect(send).toHaveBeenCalledWith(
+            session.providerSessionId,
+            "Ship the selected provider",
+            expect.objectContaining({ model: "gpt-5.4" }),
+          );
+        },
+      );
+    });
+
+    test("unlocks a stale platform-without-session startup tab on prompt-less restart", async () => {
+      const { provider, createSession } = createProviderStub("codex");
+      await withService(
+        {
+          prefix: "orkestrator-native-stale-startup-lock-",
+          environment: {
+            pendingAgentLaunch: true,
+            initialAgentPlatform: "codex",
+            initialAgentModel: "gpt-5.4",
+            defaultAgent: "claude",
+            claudeMode: "native",
+            codexMode: "native",
+          },
+          provider: async () => provider,
+        },
+        async ({ storage, service }) => {
+          await storage.savePaneLayout(
+            "env-1",
+            {
+              version: 3,
+              containerId: null,
+              activePaneId: "default",
+              root: {
+                kind: "leaf",
+                id: "default",
+                tabs: [
+                  { id: "default", type: "plain", isSetupTab: true },
+                  {
+                    id: "startup-agent",
+                    type: "agent-native",
+                    displayTitle: "Kept title",
+                    nativeAgentData: {
+                      platform: "cursor",
+                      environmentId: "env-1",
+                      isLocal: true,
+                    },
+                  },
+                ],
+                activeTabId: "default",
+              },
+            },
+            0,
+          );
+
+          await service.reconcileInitialLaunch("env-1");
+
+          expect(createSession).not.toHaveBeenCalled();
+          const startupTab = startupNativeTabFromLayout(await storage.getPaneLayout("env-1"));
+          expect(startupTab).toMatchObject({
+            type: "agent-native",
+            displayTitle: "Kept title",
+            initialAgentPlatform: "codex",
+            initialAgentModel: "gpt-5.4",
+          });
+          expect(startupTab.nativeAgentData?.platform).toBeUndefined();
+          expect(startupTab.nativeAgentData?.sessionId).toBeUndefined();
+        },
+      );
+    });
+
+    test("does not re-steal focus when a prompt-less consume fails and retries", async () => {
+      const { provider, createSession } = createProviderStub("cursor");
+      await withService(
+        {
+          prefix: "orkestrator-native-promptless-consume-retry-",
+          environment: {
+            pendingAgentLaunch: true,
+            defaultAgent: "cursor",
+            opencodeMode: "native",
+          },
+          provider: async () => provider,
+        },
+        async ({ storage, service }) => {
+          const updateEnvironment = storage.updateEnvironment.bind(storage);
+          let consumeFailures = 0;
+          storage.updateEnvironment = async (environmentId, updates) => {
+            if (updates.pendingAgentLaunch === false && consumeFailures === 0) {
+              consumeFailures += 1;
+              throw new Error("environment file is unwritable");
+            }
+            return updateEnvironment(environmentId, updates);
+          };
+
+          await expect(service.reconcileInitialLaunch("env-1")).rejects.toThrow(
+            "environment file is unwritable",
+          );
+          expect(createSession).not.toHaveBeenCalled();
+          expect(await storage.getEnvironment("env-1")).toMatchObject({
+            pendingAgentLaunch: true,
+            startupAgentSession: {
+              agent: "cursor",
+              status: "error",
+            },
+          });
+          expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+            activeTabId: "startup-agent",
+          });
+
+          const duringRetry = await storage.getPaneLayout("env-1");
+          if (!duringRetry || !duringRetry.root || typeof duringRetry.root !== "object") {
+            throw new Error("expected a pane layout");
+          }
+          await storage.savePaneLayout(
+            "env-1",
+            {
+              version: duringRetry.version,
+              containerId: duringRetry.containerId,
+              activePaneId: duringRetry.activePaneId,
+              root: {
+                ...(duringRetry.root as Record<string, unknown>),
+                tabs: [
+                  { id: "default", type: "plain", isSetupTab: true },
+                  { id: "notes", type: "file" },
+                  ...(
+                    (duringRetry.root as { tabs?: Array<Record<string, unknown>> }).tabs ?? []
+                  ).filter((tab) => tab.id === "startup-agent"),
+                ],
+                activeTabId: "notes",
+              },
+            },
+            duringRetry.revision,
+          );
+
+          internals(service).launchRetryAt.delete("env-1");
+          await service.reconcileInitialLaunch("env-1");
+
+          expect(createSession).not.toHaveBeenCalled();
+          expect(await storage.getEnvironment("env-1")).toMatchObject({
+            pendingAgentLaunch: false,
+          });
+          expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+            activeTabId: "notes",
+          });
+        },
+      );
+    });
+
+    test("applies Claude SDK defaults when the first prompt leaves an unlocked startup tab", async () => {
+      const { provider, send } = createProviderStub("claude");
+      await withService(
+        {
+          prefix: "orkestrator-native-promptless-claude-first-send-",
+          environment: {
+            pendingAgentLaunch: true,
+            agentSettings: {
+              defaultAgent: "claude",
+              platforms: {
+                claude: {
+                  mode: "native",
+                  claudeThinkingMode: "budget-16384",
+                  claudeContext1m: true,
+                },
+              },
+            },
+          },
+          provider: async () => provider,
+        },
+        async ({ storage, service }) => {
+          await service.reconcileInitialLaunch("env-1");
+          expect(send).not.toHaveBeenCalled();
+          expect(
+            await storage.getNativeAgentSession(
+              nativeAgentSessionStorageKey("env-1", "claude", "env-env-1:startup-agent"),
+            ),
+          ).toBeNull();
+
+          await service.dispatchPrompt({
+            environmentId: "env-1",
+            agent: "claude",
+            logicalSessionKey: "env-env-1:startup-agent",
+            prompt: "Use the inherited Claude controls",
+            requestId: "user-first-send",
+            parameterValues: { thinking: "budget-16384", context1m: true },
+          });
+
+          expect(send).toHaveBeenCalledWith(
+            "provider-session",
+            "Use the inherited Claude controls",
+            expect.objectContaining({
+              parameterValues: { thinking: "budget-16384", context1m: true },
+            }),
+          );
+          expect(
+            (
+              await storage.getNativeAgentSession(
+                nativeAgentSessionStorageKey("env-1", "claude", "env-env-1:startup-agent"),
+              )
+            )?.controls?.parameterValues,
+          ).toEqual({
+            thinking: "budget-16384",
+            context1m: true,
+          });
+        },
+      );
+    });
+
     test("falls back to the repository agent, model and effort", async () => {
       const { provider, createSession } = createProviderStub("codex");
       await withService(
@@ -2949,27 +3213,27 @@ describe("NativeAgentService", () => {
 
           await service.reconcileInitialLaunch("env-1");
 
-          // The resolved selection is observed where it is actually consumed —
-          // the provider call and the durable pane — because the transient
-          // startup snapshot is cleared once the launch converges.
-          expect(createSession).toHaveBeenCalledWith(
-            "build",
-            "Agent Session",
-            expect.objectContaining({
-              model: "repo-model",
-              effort: "repo-effort",
-            }),
-          );
+          // A prompt-less launch does not mint a provider session. The resolved
+          // model and effort live on the unlocked tab so the composer can
+          // preselect them, and the user can still change them before send.
+          expect(createSession).not.toHaveBeenCalled();
           expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
             tabs: [
               { id: "default" },
               {
                 id: "startup-agent",
                 type: "agent-native",
-                nativeAgentData: { platform: "codex", sessionId: "provider-session" },
+                initialAgentPlatform: "codex",
+                initialAgentModel: "repo-model",
+                initialReasoningEffort: "repo-effort",
+                nativeAgentData: { environmentId: "env-1" },
               },
             ],
           });
+          expect(
+            startupNativeTabFromLayout(await storage.getPaneLayout("env-1")).nativeAgentData
+              ?.platform,
+          ).toBeUndefined();
         },
       );
     });
@@ -2996,15 +3260,16 @@ describe("NativeAgentService", () => {
 
           await service.reconcileInitialLaunch("env-1");
 
-          expect(createSession).toHaveBeenCalledWith(
-            "build",
-            "Agent Session",
-            expect.objectContaining({ model: "global-codex", effort: "xhigh" }),
-          );
+          expect(createSession).not.toHaveBeenCalled();
           expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
             tabs: [
               { id: "default" },
-              { id: "startup-agent", nativeAgentData: { platform: "codex" } },
+              {
+                id: "startup-agent",
+                initialAgentModel: "global-codex",
+                initialReasoningEffort: "xhigh",
+                nativeAgentData: { environmentId: "env-1" },
+              },
             ],
           });
         },
@@ -3032,18 +3297,21 @@ describe("NativeAgentService", () => {
           await service.reconcileInitialLaunch("env-1");
 
           // Only codex has a global effort tier; inventing one for claude would
-          // send an unsupported field to its bridge.
-          expect(createSession).toHaveBeenCalledWith(
-            "build",
-            "Agent Session",
-            expect.objectContaining({ model: "global-claude", effort: undefined }),
-          );
+          // pin an unsupported field on the unlocked composer.
+          expect(createSession).not.toHaveBeenCalled();
           expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
             tabs: [
               { id: "default" },
-              { id: "startup-agent", nativeAgentData: { platform: "claude" } },
+              {
+                id: "startup-agent",
+                initialAgentModel: "global-claude",
+                nativeAgentData: { environmentId: "env-1" },
+              },
             ],
           });
+          expect(
+            startupNativeTabFromLayout(await storage.getPaneLayout("env-1")).initialReasoningEffort,
+          ).toBeUndefined();
         },
       );
     });
@@ -3080,11 +3348,11 @@ describe("NativeAgentService", () => {
             const stored = await storage.getNativeAgentSession(
               nativeAgentSessionStorageKey("env-1", "claude", "env-env-1:startup-agent"),
             );
-            expect(stored?.controls?.parameterValues).toEqual({
-              thinking: "budget-16384",
-              context1m: true,
-            });
             if (initialPrompt) {
+              expect(stored?.controls?.parameterValues).toEqual({
+                thinking: "budget-16384",
+                context1m: true,
+              });
               expect(send).toHaveBeenCalledWith(
                 "provider-session",
                 initialPrompt,
@@ -3093,7 +3361,17 @@ describe("NativeAgentService", () => {
                 }),
               );
             } else {
+              expect(stored).toBeNull();
               expect(send).not.toHaveBeenCalled();
+              expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+                tabs: [
+                  { id: "default" },
+                  {
+                    id: "startup-agent",
+                    nativeAgentData: { environmentId: "env-1" },
+                  },
+                ],
+              });
             }
           },
         );
@@ -3128,19 +3406,17 @@ describe("NativeAgentService", () => {
 
           await service.reconcileInitialLaunch("env-1");
 
-          expect(createSession).toHaveBeenCalledWith(
-            "build",
-            "Agent Session",
-            expect.objectContaining({
-              model: "env-model",
-              effort: "env-effort",
-              fastMode: true,
-            }),
-          );
+          expect(createSession).not.toHaveBeenCalled();
           expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
             tabs: [
               { id: "default" },
-              { id: "startup-agent", nativeAgentData: { platform: "codex" } },
+              {
+                id: "startup-agent",
+                initialAgentModel: "env-model",
+                initialReasoningEffort: "env-effort",
+                initialFastMode: true,
+                nativeAgentData: { environmentId: "env-1" },
+              },
             ],
           });
         },
@@ -3167,11 +3443,10 @@ describe("NativeAgentService", () => {
         async ({ storage, service }) => {
           await service.reconcileInitialLaunch("env-1");
 
-          expect(createSession).toHaveBeenCalledWith(
-            "build",
-            "Agent Session",
-            expect.objectContaining({ fastMode: false }),
-          );
+          expect(createSession).not.toHaveBeenCalled();
+          expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+            tabs: [{ id: "default" }, { id: "startup-agent", initialFastMode: false }],
+          });
           // One-shot means one shot: the next launch falls back to the tier.
           expect((await storage.getEnvironment("env-1"))?.initialFastMode).toBeUndefined();
         },
@@ -3192,14 +3467,13 @@ describe("NativeAgentService", () => {
           },
           provider: async () => provider,
         },
-        async ({ service }) => {
+        async ({ storage, service }) => {
           await service.reconcileInitialLaunch("env-1");
 
-          expect(createSession).toHaveBeenCalledWith(
-            "build",
-            "Agent Session",
-            expect.objectContaining({ fastMode: true }),
-          );
+          expect(createSession).not.toHaveBeenCalled();
+          expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+            tabs: [{ id: "default" }, { id: "startup-agent", initialFastMode: true }],
+          });
         },
       );
     });
@@ -3533,6 +3807,7 @@ describe("NativeAgentService", () => {
             pendingAgentLaunch: true,
             defaultAgent: "codex",
             codexMode: "native",
+            initialPrompt: "Start",
           },
           provider: async () => provider,
         },
@@ -3578,6 +3853,7 @@ describe("NativeAgentService", () => {
         pendingAgentLaunch: true,
         defaultAgent: "codex",
         codexMode: "native",
+        initialPrompt: "Start",
       });
       const service = new NativeAgentService(storage, refusingInvoke, {
         provider: async () => provider,

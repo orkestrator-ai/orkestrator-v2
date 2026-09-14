@@ -1011,6 +1011,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
         tab.id === tabId
           ? {
               ...tab,
+              initialAgentPlatform: undefined,
               initialAgentModel: undefined,
               initialReasoningEffort: undefined,
               initialConversationMode: undefined,

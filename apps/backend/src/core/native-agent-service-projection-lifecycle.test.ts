@@ -389,6 +389,7 @@ describe("NativeAgentService projection lifecycle", () => {
       pendingAgentLaunch: true,
       initialAgentModel: "gpt-startup",
       initialReasoningEffort: "high",
+      initialPrompt: "Start",
     });
     let signalCreateEntered: (() => void) | undefined;
     const createEntered = new Promise<void>((resolve) => {

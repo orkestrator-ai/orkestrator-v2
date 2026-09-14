@@ -447,11 +447,32 @@ export function createAgentNativeTab({
  * provider-specific launcher still has to seed the neutral composer with the
  * provider the user clicked. Otherwise the composer falls back to the global
  * default and a Grok/Cursor/Codex/OpenCode button can silently launch Claude.
+ *
+ * One-shot create-dialog model, effort, mode and speed ride along as draft
+ * preselects. They must not lock the tab: the user can still change them
+ * before the first prompt is sent.
  */
 export function seedDeferredNativePlatform(tab: TabInfo, platform: AgentPlatform): void {
   const data = tab.nativeAgentData;
   if (tab.type !== "agent-native" || !data || data.platform) return;
-  useNativeComposeStore
-    .getState()
-    .updateDraft(createNativeSessionKey(data.environmentId, tab.id), { platform });
+  const sessionKey = createNativeSessionKey(data.environmentId, tab.id);
+  const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+  useNativeComposeStore.getState().updateDraft(sessionKey, {
+    ...(current?.platform ? {} : { platform }),
+    ...(tab.initialAgentModel && current?.modelId === undefined
+      ? { modelId: tab.initialAgentModel }
+      : {}),
+    ...(tab.initialReasoningEffort && current?.reasoningId === undefined
+      ? { reasoningId: tab.initialReasoningEffort }
+      : {}),
+    ...(tab.initialConversationMode && current === undefined
+      ? { mode: tab.initialConversationMode }
+      : {}),
+    ...(typeof tab.initialFastMode === "boolean" && current === undefined
+      ? { fastMode: tab.initialFastMode }
+      : {}),
+    ...(tab.initialExecutionProfileId && current?.executionProfileId === undefined
+      ? { executionProfileId: tab.initialExecutionProfileId }
+      : {}),
+  });
 }

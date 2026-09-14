@@ -13,6 +13,7 @@ export interface AgentNativeTabProps {
   initialPrompt?: string;
   isReviewTab?: boolean;
   hideStructuredOutput?: boolean;
+  initialAgentPlatform?: AgentPlatform;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
   initialConversationMode?: "build" | "plan";

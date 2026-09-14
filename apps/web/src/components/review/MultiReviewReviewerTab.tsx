@@ -21,13 +21,15 @@ import {
   MessageRenderBoundary,
   messageRenderResetKey,
 } from "@/components/chat/MessageRenderBoundary";
+import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useVirtuosoScrollState } from "@/hooks";
+import { useElapsedTimer, useVirtuosoScrollState } from "@/hooks";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
+import { formatElapsed } from "@/lib/format-elapsed";
 import { multiReviewReviewerScrollKey } from "@/lib/multi-review-keys";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
@@ -317,6 +319,15 @@ export function MultiReviewReviewerTab({
   });
 
   const running = snapshot?.status === "running";
+  const stalled = Boolean(snapshot?.stalledSince && running);
+  const turnStartedAtMs = snapshot?.startedAt ? Date.parse(snapshot.startedAt) : Number.NaN;
+  // Hidden tabs stay mounted. Tick only while visible so a stale running
+  // snapshot cannot keep the virtualized transcript rerendering every second.
+  const { elapsedSeconds } = useElapsedTimer(
+    running && isActive,
+    data.reviewerId,
+    Number.isFinite(turnStartedAtMs) ? turnStartedAtMs : undefined,
+  );
   // A refused action stays visible until the user acts again, so an ordinary
   // transcript failure must not displace it. A gone workflow or reviewer is the
   // exception: it makes the action failure moot and is terminal for this view,
@@ -340,19 +351,56 @@ export function MultiReviewReviewerTab({
   const statusLine = snapshot
     ? snapshot.status === "cancelled"
       ? "Stopped · excluded from the consolidated report"
-      : snapshot.stalledSince && running
+      : stalled
         ? "No activity for a while · stop it to continue without this reviewer"
         : `${snapshot.model}${snapshot.reasoningEffort ? ` · ${snapshot.reasoningEffort}` : ""} · Read only`
     : "Loading read-only transcript…";
+  // Same transcript-footer status native tabs use. This view has no composer
+  // and no live turn projection, so "running" is the only busy signal. A stall
+  // is still running, but the header already warns there is no activity — keep
+  // the elapsed clock and drop the thinking shimmer so the two rows agree.
+  const thinkingStatus = running ? (
+    <div className="px-2 py-2 @sm:px-4">
+      <div className="chat-status-row mx-auto max-w-3xl min-w-0">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          {stalled ? (
+            <span role="status" className="text-xs text-amber-500">
+              No activity for a while
+            </span>
+          ) : (
+            <AgentThinkingIndicator agentName={label} />
+          )}
+          {elapsedSeconds !== null && elapsedSeconds > 0 && (
+            <span className="text-xs text-muted-foreground/50">
+              {formatElapsed(elapsedSeconds)}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  ) : null;
+  const reportOrError = snapshot?.report ? (
+    <div className="px-3 py-3 @sm:px-6">
+      <StructuredReviewReportView
+        className="mx-auto max-w-3xl"
+        report={snapshot.report}
+        heading="Reviewer report"
+        collapsibleSections
+        showRawJson={false}
+      />
+    </div>
+  ) : error && messages.length > 0 ? (
+    <div className="mx-3 mb-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive @sm:mx-6">
+      {error}
+    </div>
+  ) : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <header className="@container flex shrink-0 items-center justify-between gap-3 border-b border-border/60 px-4 py-3 sm:px-5">
         <div className="min-w-0">
           <h1 className="truncate text-sm font-semibold">{label} review</h1>
-          <p
-            className={`truncate text-xs ${snapshot?.stalledSince && running ? "text-amber-500" : "text-muted-foreground"}`}
-          >
+          <p className={`truncate text-xs ${stalled ? "text-amber-500" : "text-muted-foreground"}`}>
             {statusLine}
           </p>
         </div>
@@ -463,20 +511,11 @@ export function MultiReviewReviewerTab({
                 </div>
               }
               footer={
-                snapshot?.report ? (
-                  <div className="px-3 py-3 @sm:px-6">
-                    <StructuredReviewReportView
-                      className="mx-auto max-w-3xl"
-                      report={snapshot.report}
-                      heading="Reviewer report"
-                      collapsibleSections
-                      showRawJson={false}
-                    />
-                  </div>
-                ) : error && messages.length > 0 ? (
-                  <div className="mx-3 mb-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive @sm:mx-6">
-                    {error}
-                  </div>
+                thinkingStatus || reportOrError ? (
+                  <>
+                    {thinkingStatus}
+                    {reportOrError}
+                  </>
                 ) : undefined
               }
               scrollProps={scrollProps}

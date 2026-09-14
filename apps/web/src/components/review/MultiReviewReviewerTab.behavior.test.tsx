@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   type MultiReviewReviewerTranscript,
@@ -107,6 +107,89 @@ afterEach(cleanup);
 async function openTranscriptRefreshMenu() {
   fireEvent.contextMenu(screen.getByTestId("multi-review-reviewer-transcript-body"));
   return screen.findByRole("menuitem", { name: "Refresh transcript" });
+}
+
+const ELAPSED_TIMER_MS = 1_000;
+
+function reviewerTabData() {
+  return {
+    environmentId: "env-1",
+    workflowId: "multi-1",
+    reviewerId: "reviewer-1",
+    isLocal: true,
+  };
+}
+
+function runningClaudeTranscript(
+  overrides: Partial<MultiReviewReviewerTranscript> = {},
+): MultiReviewReviewerTranscript {
+  const startedAt = "2026-09-14T22:00:00.000Z";
+  return {
+    workflowId: "multi-1",
+    reviewerId: "reviewer-1",
+    workflowPhase: "reviewing",
+    agent: "claude",
+    model: "opus",
+    status: "running",
+    startedAt,
+    messages: [
+      {
+        id: "progress",
+        role: "assistant",
+        content: "Inspecting the changed files",
+        createdAt: startedAt,
+        parts: [{ type: "text", content: "Inspecting the changed files" }],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+/** Capture the one-second elapsed clock without letting real intervals fire. */
+function interceptIntervals() {
+  const originalSetInterval = window.setInterval;
+  const originalClearInterval = window.clearInterval;
+  const timers = new Map<number, { delay: number; callback: () => void }>();
+  const createdElapsedIds: number[] = [];
+  const cleared = new Set<number>();
+  let nextId = 10_000;
+  let elapsedTick: (() => void) | undefined;
+
+  window.setInterval = ((callback: TimerHandler, delay?: number) => {
+    const id = nextId++;
+    const run = typeof callback === "function" ? () => callback() : () => undefined;
+    timers.set(id, { delay: delay ?? 0, callback: run });
+    if (delay === ELAPSED_TIMER_MS) {
+      createdElapsedIds.push(id);
+      elapsedTick = run;
+    }
+    return id;
+  }) as typeof window.setInterval;
+  window.clearInterval = ((id?: number) => {
+    if (typeof id !== "number") return;
+    cleared.add(id);
+    timers.delete(id);
+    if (![...timers.values()].some((timer) => timer.delay === ELAPSED_TIMER_MS)) {
+      elapsedTick = undefined;
+    }
+  }) as typeof window.clearInterval;
+
+  return {
+    get elapsedTick() {
+      return elapsedTick;
+    },
+    createdElapsedIds,
+    activePollIds() {
+      return [...timers.entries()]
+        .filter(([, timer]) => timer.delay === REFRESH_INTERVAL_MS)
+        .map(([id]) => id);
+    },
+    cleared,
+    restore() {
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+    },
+  };
 }
 
 describe("MultiReviewReviewerTab", () => {
@@ -654,6 +737,297 @@ describe("MultiReviewReviewerTab", () => {
     }
     expect(delays).toContain(REFRESH_INTERVAL_MS);
   });
+
+  test("shows elapsed thinking status only while the reviewer is running", async () => {
+    const startedAt = "2026-09-14T22:00:00.000Z";
+    const dateNowSpy = spyOn(Date, "now").mockReturnValue(Date.parse(startedAt) + 65_000);
+    const running: MultiReviewReviewerTranscript = {
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+      workflowPhase: "reviewing",
+      agent: "claude",
+      model: "opus",
+      status: "running",
+      startedAt,
+      messages: [
+        {
+          id: "progress",
+          role: "assistant",
+          content: "Inspecting the changed files",
+          createdAt: startedAt,
+          parts: [{ type: "text", content: "Inspecting the changed files" }],
+        },
+      ],
+    };
+    const loadTranscript = mock(async () => running);
+
+    try {
+      render(
+        <MultiReviewReviewerTab
+          data={{
+            environmentId: "env-1",
+            workflowId: "multi-1",
+            reviewerId: "reviewer-1",
+            isLocal: true,
+          }}
+          isActive
+          loadTranscript={loadTranscript}
+        />,
+      );
+
+      const indicator = await screen.findByRole("status");
+      expect(indicator.textContent).toBe("Claude is thinking...");
+      expect(screen.getByText("1m 5s")).toBeTruthy();
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  test.each([undefined, "not-a-date"] as const)(
+    "omits elapsed time when a running reviewer startedAt is %s",
+    async (startedAt) => {
+      const loadTranscript = mock(async () => runningClaudeTranscript({ startedAt }));
+
+      render(
+        <MultiReviewReviewerTab
+          data={reviewerTabData()}
+          isActive
+          loadTranscript={loadTranscript}
+        />,
+      );
+
+      const indicator = await screen.findByRole("status");
+      expect(indicator.textContent).toBe("Claude is thinking...");
+      expect(document.body.textContent).not.toContain("NaN");
+      expect(screen.queryByText(/^\d+m \d+s$/) === null).toBe(true);
+      expect(screen.queryByText(/^\d+s$/) === null).toBe(true);
+    },
+  );
+
+  test("advances elapsed time while the reviewer keeps running", async () => {
+    const startedAt = "2026-09-14T22:00:00.000Z";
+    const startedAtMs = Date.parse(startedAt);
+    let now = startedAtMs + 65_000;
+    const dateNowSpy = spyOn(Date, "now").mockImplementation(() => now);
+    const intervals = interceptIntervals();
+    const loadTranscript = mock(async () => runningClaudeTranscript({ startedAt }));
+
+    try {
+      render(
+        <MultiReviewReviewerTab
+          data={reviewerTabData()}
+          isActive
+          loadTranscript={loadTranscript}
+        />,
+      );
+
+      expect(await screen.findByText("1m 5s")).toBeTruthy();
+      await waitFor(() => expect(intervals.elapsedTick).toBeDefined());
+      now = startedAtMs + 66_000;
+      act(() => intervals.elapsedTick?.());
+      expect(screen.getByText("1m 6s")).toBeTruthy();
+    } finally {
+      dateNowSpy.mockRestore();
+      intervals.restore();
+    }
+  });
+
+  test("releases the elapsed timer when a running tab becomes inactive", async () => {
+    const startedAt = "2026-09-14T22:00:00.000Z";
+    const dateNowSpy = spyOn(Date, "now").mockReturnValue(Date.parse(startedAt) + 65_000);
+    const intervals = interceptIntervals();
+    const loadTranscript = mock(async () => runningClaudeTranscript({ startedAt }));
+    const data = reviewerTabData();
+
+    try {
+      const view = render(
+        <MultiReviewReviewerTab data={data} isActive loadTranscript={loadTranscript} />,
+      );
+
+      expect(await screen.findByText("1m 5s")).toBeTruthy();
+      await waitFor(() => expect(intervals.createdElapsedIds.length).toBeGreaterThan(0));
+      const callsWhileActive = loadTranscript.mock.calls.length;
+
+      view.rerender(
+        <MultiReviewReviewerTab data={data} isActive={false} loadTranscript={loadTranscript} />,
+      );
+
+      expect(intervals.createdElapsedIds.every((id) => intervals.cleared.has(id))).toBe(true);
+      expect(intervals.elapsedTick).toBeUndefined();
+      expect(intervals.activePollIds()).toEqual([]);
+      expect(loadTranscript).toHaveBeenCalledTimes(callsWhileActive);
+    } finally {
+      dateNowSpy.mockRestore();
+      intervals.restore();
+    }
+  });
+
+  test("relabels the footer when a running reviewer is stalled", async () => {
+    const startedAt = "2026-09-14T22:00:00.000Z";
+    const dateNowSpy = spyOn(Date, "now").mockReturnValue(Date.parse(startedAt) + 65_000);
+    const loadTranscript = mock(async () =>
+      runningClaudeTranscript({
+        startedAt,
+        stalledSince: "2026-09-14T22:20:00.000Z",
+      }),
+    );
+
+    try {
+      render(
+        <MultiReviewReviewerTab
+          data={reviewerTabData()}
+          isActive
+          loadTranscript={loadTranscript}
+          stopReviewer={mock(async () => ({}) as never)}
+        />,
+      );
+
+      expect(
+        await screen.findByText(
+          /No activity for a while · stop it to continue without this reviewer/,
+        ),
+      ).toBeTruthy();
+      const footer = screen.getByRole("status");
+      expect(footer.textContent).toBe("No activity for a while");
+      expect(footer.className).toContain("text-amber-500");
+      expect(screen.getByText("1m 5s")).toBeTruthy();
+      expect(screen.queryByText(/is thinking/) === null).toBe(true);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  test("keeps the running footer when a later transcript poll fails", async () => {
+    const startedAt = "2026-09-14T22:00:00.000Z";
+    const dateNowSpy = spyOn(Date, "now").mockReturnValue(Date.parse(startedAt) + 65_000);
+    let failNext = false;
+    const loadTranscript = mock(async () => {
+      if (failNext) throw new Error("Temporary transcript sync failure");
+      return runningClaudeTranscript({ startedAt });
+    });
+
+    try {
+      render(
+        <MultiReviewReviewerTab
+          data={reviewerTabData()}
+          isActive
+          loadTranscript={loadTranscript}
+        />,
+      );
+
+      expect(await screen.findByText("1m 5s")).toBeTruthy();
+      failNext = true;
+      fireEvent.click(await openTranscriptRefreshMenu());
+      expect(await screen.findByText(/Temporary transcript sync failure/)).toBeTruthy();
+      expect(screen.getByRole("status").textContent).toBe("Claude is thinking...");
+      expect(screen.getByText("1m 5s")).toBeTruthy();
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  test("keeps elapsed time on the original startedAt after a later dispatch", async () => {
+    const startedAt = "2026-09-14T22:00:00.000Z";
+    const dateNowSpy = spyOn(Date, "now").mockReturnValue(Date.parse(startedAt) + 65_000);
+    let current = runningClaudeTranscript({
+      startedAt,
+      dispatchState: "sent",
+    });
+    const loadTranscript = mock(async () => current);
+    const unstickReviewer = mock(async () => {
+      current = {
+        ...current,
+        model: "opus-continued",
+        // startedAt is intentionally unchanged: unstick dispatches again
+        // without resetting the reviewer session clock.
+      };
+      return reviewingWorkflow();
+    });
+
+    try {
+      render(
+        <MultiReviewReviewerTab
+          data={reviewerTabData()}
+          isActive
+          loadTranscript={loadTranscript}
+          unstickReviewer={unstickReviewer}
+        />,
+      );
+
+      expect(await screen.findByText("1m 5s")).toBeTruthy();
+      fireEvent.click(await screen.findByRole("button", { name: "Unstick reviewer" }));
+      expect(await screen.findByText(/opus-continued · Read only/)).toBeTruthy();
+      expect(screen.getByText("1m 5s")).toBeTruthy();
+      expect(screen.getByRole("status").textContent).toBe("Claude is thinking...");
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  test.each(["pending", "failed", "cancelled"] as const)(
+    "hides the thinking footer for a %s reviewer",
+    async (status) => {
+      const loadTranscript = mock(async () =>
+        runningClaudeTranscript({
+          status,
+          workflowPhase: status === "pending" ? "reviewing" : "failed",
+          startedAt: status === "pending" ? undefined : "2026-09-14T22:00:00.000Z",
+        }),
+      );
+
+      render(
+        <MultiReviewReviewerTab
+          data={reviewerTabData()}
+          isActive
+          loadTranscript={loadTranscript}
+        />,
+      );
+
+      await waitFor(() => expect(loadTranscript).toHaveBeenCalled());
+      expect(screen.queryByText(/is thinking/) === null).toBe(true);
+      expect(screen.queryByRole("status") === null).toBe(true);
+    },
+  );
+
+  test("hides the thinking status once the reviewer completes", async () => {
+    const loadTranscript = mock(async () => ({
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+      workflowPhase: "ready" as const,
+      agent: "claude" as const,
+      model: "opus",
+      status: "completed" as const,
+      startedAt: "2026-09-14T22:00:00.000Z",
+      completedAt: "2026-09-14T22:01:05.000Z",
+      report,
+      messages: [
+        {
+          id: "progress",
+          role: "assistant",
+          content: "Inspecting the changed files",
+          createdAt: "2026-09-14T22:00:10.000Z",
+          parts: [{ type: "text", content: "Inspecting the changed files" }],
+        },
+      ],
+    }));
+
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+      />,
+    );
+
+    expect(await screen.findByRole("article", { name: "Reviewer report" })).toBeTruthy();
+    expect(screen.queryByText("Claude is thinking...") === null).toBe(true);
+    expect(screen.queryByRole("status") === null).toBe(true);
+  });
 });
 
 describe("MultiReviewReviewerTab stop control", () => {
@@ -889,7 +1263,13 @@ describe("MultiReviewReviewerTab stop control", () => {
       />,
     );
 
-    expect(await screen.findByText(/No activity for a while/)).toBeTruthy();
+    expect(
+      await screen.findByText(
+        /No activity for a while · stop it to continue without this reviewer/,
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("No activity for a while");
+    expect(screen.queryByText(/is thinking/) === null).toBe(true);
     expect(screen.getByRole("button", { name: "Stop this reviewer" })).toBeTruthy();
   });
 

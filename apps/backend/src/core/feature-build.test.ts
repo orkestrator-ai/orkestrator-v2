@@ -38,7 +38,9 @@ async function withStorage(
   run: (storage: StorageService) => Promise<void>,
   project?: Partial<Project>,
 ): Promise<void> {
-  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-feature-build-"));
+  const dataDir = await fs.mkdtemp(
+    path.join(tmpdir(), "orkestrator-feature-build-"),
+  );
   const storage = new StorageService(dataDir);
   await storage.init();
   await storage.addProject({
@@ -94,12 +96,14 @@ describe("createFeatureBuild", () => {
       // Linking the source is what lets the pipeline move this ticket and
       // attach its environment to it.
       expect(started.source).toEqual({ type: "kanban", taskId: task.id });
-      expect(started.taskSnapshot.acceptanceCriteria).toBe("The preference survives a reload.");
+      expect(started.taskSnapshot.acceptanceCriteria).toBe(
+        "The preference survives a reload.",
+      );
       expect(started.namingPrompt).toContain("Dark mode toggle");
     });
   });
 
-  test("does not infer verification from the address model", async () => {
+  test("falls back verify to the address selection when callers omit it", async () => {
     await withStorage(async (storage) => {
       const supervisor = fakeSupervisor();
       await createFeatureBuild(
@@ -107,13 +111,21 @@ describe("createFeatureBuild", () => {
           ...input,
           steps: {
             build: { agent: "claude", model: "opus" },
-            address: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+            address: {
+              agent: "codex",
+              model: "gpt-5.6",
+              reasoningEffort: "high",
+            },
           },
         },
         { storage, buildPipelines: supervisor.service },
       );
       const started = supervisor.started[0]!;
-      expect(started.steps?.verify).toBeUndefined();
+      expect(started.steps?.verify).toEqual({
+        agent: "codex",
+        model: "gpt-5.6",
+        reasoningEffort: "high",
+      });
       // The pipeline's own agent is the build step's harness.
       expect(started.agentType).toBe("claude");
     });
@@ -132,7 +144,51 @@ describe("createFeatureBuild", () => {
         },
         { storage, buildPipelines: supervisor.service },
       );
-      expect(supervisor.started[0]!.steps?.verify).toEqual({ agent: "claude", model: "opus" });
+      expect(supervisor.started[0]!.steps?.verify).toEqual({
+        agent: "claude",
+        model: "opus",
+      });
+    });
+  });
+
+  test("copies ticket comments into the snapshot and forwards review preparation", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      const first = await createFeatureBuild(
+        {
+          ...input,
+          requestId: "request-comments",
+          reviewPreparation: { agent: "codex", model: "gpt-5.6" },
+        },
+        { storage, buildPipelines: supervisor.service },
+      );
+      expect(supervisor.started[0]!.reviewPreparation).toEqual({
+        agent: "codex",
+        model: "gpt-5.6",
+      });
+      expect(supervisor.started[0]!.taskSnapshot.comments).toEqual([]);
+
+      await storage.addKanbanComment(
+        first.taskId,
+        "Keep the header toggle labelled.",
+      );
+      const second = await createFeatureBuild(
+        {
+          ...input,
+          requestId: "request-comments",
+          reviewPreparation: { agent: "codex", model: "gpt-5.6" },
+        },
+        { storage, buildPipelines: supervisor.service },
+      );
+
+      expect(second.taskId).toBe(first.taskId);
+      expect(supervisor.started[1]!.taskSnapshot.comments).toEqual([
+        { text: "Keep the header toggle labelled." },
+      ]);
+      expect(supervisor.started[1]!.reviewPreparation).toEqual({
+        agent: "codex",
+        model: "gpt-5.6",
+      });
     });
   });
 
@@ -149,7 +205,9 @@ describe("createFeatureBuild", () => {
           environmentOptions: {
             name: "feature-dark-mode",
             networkAccessMode: "restricted",
-            portMappings: [{ containerPort: 5173, hostPort: 5173, protocol: "tcp" }],
+            portMappings: [
+              { containerPort: 5173, hostPort: 5173, protocol: "tcp" },
+            ],
           },
         },
         { storage, buildPipelines: supervisor.service },
@@ -215,11 +273,13 @@ describe("createFeatureBuild", () => {
   test("a retry completes only the missing writes after partial image persistence", async () => {
     await withStorage(async (storage) => {
       const supervisor = fakeSupervisor();
-      const persistImage = storage.addNormalizedKanbanImageForRequest.bind(storage);
+      const persistImage =
+        storage.addNormalizedKanbanImageForRequest.bind(storage);
       let attempts = 0;
       storage.addNormalizedKanbanImageForRequest = async (...args) => {
         attempts += 1;
-        if (attempts === 2) throw new Error("injected second image write failure");
+        if (attempts === 2)
+          throw new Error("injected second image write failure");
         return persistImage(...args);
       };
       const request = {
@@ -232,21 +292,33 @@ describe("createFeatureBuild", () => {
       };
 
       await expect(
-        createFeatureBuild(request, { storage, buildPipelines: supervisor.service }),
+        createFeatureBuild(request, {
+          storage,
+          buildPipelines: supervisor.service,
+        }),
       ).rejects.toThrow("injected second image write failure");
       expect(
-        (await storage.getKanbanTasks("project-1"))[0]!.images.map(({ filename }) => filename),
+        (await storage.getKanbanTasks("project-1"))[0]!.images.map(
+          ({ filename }) => filename,
+        ),
       ).toEqual(["first.png"]);
       expect(supervisor.started).toHaveLength(0);
 
-      await createFeatureBuild(request, { storage, buildPipelines: supervisor.service });
+      await createFeatureBuild(request, {
+        storage,
+        buildPipelines: supervisor.service,
+      });
       const task = (await storage.getKanbanTasks("project-1"))[0]!;
-      expect(task.images.map(({ filename }) => filename)).toEqual(["first.png", "second.png"]);
-      expect(new Set(task.images.map(({ id }) => id)).size).toBe(2);
-      expect(supervisor.started[0]!.taskSnapshot.images.map(({ filename }) => filename)).toEqual([
+      expect(task.images.map(({ filename }) => filename)).toEqual([
         "first.png",
         "second.png",
       ]);
+      expect(new Set(task.images.map(({ id }) => id)).size).toBe(2);
+      expect(
+        supervisor.started[0]!.taskSnapshot.images.map(
+          ({ filename }) => filename,
+        ),
+      ).toEqual(["first.png", "second.png"]);
     });
   });
 
@@ -278,7 +350,10 @@ describe("createFeatureBuild", () => {
       const supervisor = fakeSupervisor();
       await expect(
         createFeatureBuild(
-          { ...input, images: [{ filename: "reference.png", data: "not base64" }] },
+          {
+            ...input,
+            images: [{ filename: "reference.png", data: "not base64" }],
+          },
           { storage, buildPipelines: supervisor.service },
         ),
       ).rejects.toThrow("valid base64");
@@ -323,7 +398,10 @@ describe("createFeatureBuild", () => {
             requestId: "request-conflict",
             title: "A different feature",
             acceptanceCriteria: "Different acceptance criteria",
-            environmentOptions: { name: "different-environment", networkAccessMode: "full" },
+            environmentOptions: {
+              name: "different-environment",
+              networkAccessMode: "full",
+            },
             steps: { address: { agent: "codex", model: "gpt-5.6" } },
             reviewers: [
               { agent: "claude", model: "opus" },
@@ -360,7 +438,9 @@ describe("createFeatureBuild", () => {
           { storage, buildPipelines: supervisor.service },
         ),
       ).rejects.toThrow("requestId was already used with different arguments");
-      expect((await storage.getKanbanTasks("project-1"))[0]!.images).toHaveLength(1);
+      expect(
+        (await storage.getKanbanTasks("project-1"))[0]!.images,
+      ).toHaveLength(1);
       expect(supervisor.started).toHaveLength(1);
     });
   });

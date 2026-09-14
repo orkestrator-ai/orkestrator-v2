@@ -1,5 +1,13 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
 import {
   mockToastError as toastErrorMock,
@@ -21,12 +29,16 @@ const connectLinearMock = mock(async (): Promise<LinearConnectionStatus> => ({
   hasToken: true,
   viewer: { id: "viewer-1", name: "Ada" },
 }));
-const getLinearConnectionMock = mock(async (): Promise<LinearConnectionStatus> => ({
-  connected: true,
-  hasToken: true,
-  viewer: { id: "viewer-1", name: "Ada" },
-}));
-const getLinearIssuesMock = mock(async (): Promise<LinearIssueListItem[]> => []);
+const getLinearConnectionMock = mock(
+  async (): Promise<LinearConnectionStatus> => ({
+    connected: true,
+    hasToken: true,
+    viewer: { id: "viewer-1", name: "Ada" },
+  }),
+);
+const getLinearIssuesMock = mock(
+  async (): Promise<LinearIssueListItem[]> => [],
+);
 const getLinearIssueMock = mock(
   async (_issueId: string): Promise<LinearIssueDetail> => issueDetail,
 );
@@ -38,7 +50,8 @@ const postLinearIssueCommentMock = mock(async () => ({
 }));
 const openInBrowserMock = mock(async () => undefined);
 const getComposeDraftMock = mock(
-  async (_draftKey: string) => null as Awaited<ReturnType<typeof realBackend.getComposeDraft>>,
+  async (_draftKey: string) =>
+    null as Awaited<ReturnType<typeof realBackend.getComposeDraft>>,
 );
 const saveComposeDraftMock = mock(
   async (
@@ -141,11 +154,15 @@ const issue2Detail: LinearIssueDetail = {
 };
 
 const statusHeadings = () =>
-  screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent);
+  screen
+    .getAllByRole("heading", { level: 3 })
+    .map((heading) => heading.textContent);
 
 // Each status filter chip wraps a checkbox in a label rendering "<status><count>".
 const statusChips = () =>
-  screen.getAllByRole("checkbox").map((checkbox) => checkbox.closest("label")?.textContent ?? "");
+  screen
+    .getAllByRole("checkbox")
+    .map((checkbox) => checkbox.closest("label")?.textContent ?? "");
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -186,14 +203,16 @@ describe("LinearTicketsView", () => {
     getComposeDraftMock.mockReset();
     getComposeDraftMock.mockResolvedValue(null);
     saveComposeDraftMock.mockReset();
-    saveComposeDraftMock.mockImplementation(async (draftKey, ownerType, ownerId, value) => ({
-      draftKey,
-      ownerType,
-      ownerId,
-      value,
-      revision: 1,
-      updatedAt: "2026-07-28T00:00:00.000Z",
-    }));
+    saveComposeDraftMock.mockImplementation(
+      async (draftKey, ownerType, ownerId, value) => ({
+        draftKey,
+        ownerType,
+        ownerId,
+        value,
+        revision: 1,
+        updatedAt: "2026-07-28T00:00:00.000Z",
+      }),
+    );
     deleteComposeDraftMock.mockReset();
     deleteComposeDraftMock.mockResolvedValue(undefined);
     getCachedOpenCodeModelCatalogMock.mockReset();
@@ -235,7 +254,9 @@ describe("LinearTicketsView", () => {
     fireEvent.change(screen.getByPlaceholderText("lin_api_..."), {
       target: { value: "lin_api_secret" },
     });
-    fireEvent.click(screen.getAllByRole("button", { name: /^connect$/i }).at(-1)!);
+    fireEvent.click(
+      screen.getAllByRole("button", { name: /^connect$/i }).at(-1)!,
+    );
 
     await waitFor(() => {
       expect(connectLinearMock).toHaveBeenCalledWith("lin_api_secret");
@@ -299,7 +320,9 @@ describe("LinearTicketsView", () => {
     renderLinearTicketsView();
 
     await screen.findByText("Gamma ticket");
-    const titles = screen.getAllByText(/ ticket$/).map((element) => element.textContent);
+    const titles = screen
+      .getAllByText(/ ticket$/)
+      .map((element) => element.textContent);
     expect(titles).toEqual(["Gamma ticket", "Alpha ticket", "Beta ticket"]);
   });
 
@@ -354,7 +377,9 @@ describe("LinearTicketsView", () => {
     renderLinearTicketsView();
 
     await screen.findByText("Urgent ticket");
-    fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Order Linear tickets by" }),
+    );
     fireEvent.click(await screen.findByRole("option", { name: "Priority" }));
     await waitFor(() => {
       expect(visibleTitles()).toEqual([
@@ -365,8 +390,12 @@ describe("LinearTicketsView", () => {
       ]);
     });
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
-    fireEvent.click(await screen.findByRole("option", { name: "Created date" }));
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Order Linear tickets by" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("option", { name: "Created date" }),
+    );
     await waitFor(() => {
       expect(visibleTitles()).toEqual([
         "High ticket",
@@ -376,8 +405,12 @@ describe("LinearTicketsView", () => {
       ]);
     });
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
-    fireEvent.click(await screen.findByRole("option", { name: "Updated date" }));
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Order Linear tickets by" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("option", { name: "Updated date" }),
+    );
     await waitFor(() => {
       expect(visibleTitles()).toEqual([
         "Unprioritized ticket",
@@ -424,15 +457,26 @@ describe("LinearTicketsView", () => {
     renderLinearTicketsView();
 
     await screen.findByText("Alpha ticket");
-    expect(screen.getByRole("combobox", { name: "Order Linear tickets by" }).textContent).toContain(
-      "Linear board",
-    );
-    expect(visibleTitles()).toEqual(["Alpha ticket", "Beta ticket", "Gamma ticket"]);
+    expect(
+      screen.getByRole("combobox", { name: "Order Linear tickets by" })
+        .textContent,
+    ).toContain("Linear board");
+    expect(visibleTitles()).toEqual([
+      "Alpha ticket",
+      "Beta ticket",
+      "Gamma ticket",
+    ]);
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Order Linear tickets by" }),
+    );
     fireEvent.click(await screen.findByRole("option", { name: "Priority" }));
     await waitFor(() => {
-      expect(visibleTitles()).toEqual(["Beta ticket", "Gamma ticket", "Alpha ticket"]);
+      expect(visibleTitles()).toEqual([
+        "Beta ticket",
+        "Gamma ticket",
+        "Alpha ticket",
+      ]);
     });
   });
 
@@ -488,7 +532,13 @@ describe("LinearTicketsView", () => {
     renderLinearTicketsView();
 
     await screen.findByText("Backlog issue");
-    expect(statusHeadings()).toEqual(["Backlog", "Todo", "In Progress", "Review", "Done"]);
+    expect(statusHeadings()).toEqual([
+      "Backlog",
+      "Todo",
+      "In Progress",
+      "Review",
+      "Done",
+    ]);
   });
 
   test("derives status order from every issue so the ticket order cannot reorder sections", async () => {
@@ -540,12 +590,22 @@ describe("LinearTicketsView", () => {
     expect(statusHeadings()).toEqual(["Todo", "Ready"]);
     // The filter chips must agree with the section order.
     expect(statusChips()).toEqual(["Todo2", "Ready1"]);
-    expect(visibleTitles()).toEqual(["Todo low ticket", "Todo urgent ticket", "Ready ticket"]);
+    expect(visibleTitles()).toEqual([
+      "Todo low ticket",
+      "Todo urgent ticket",
+      "Ready ticket",
+    ]);
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Order Linear tickets by" }),
+    );
     fireEvent.click(await screen.findByRole("option", { name: "Priority" }));
     await waitFor(() => {
-      expect(visibleTitles()).toEqual(["Todo urgent ticket", "Todo low ticket", "Ready ticket"]);
+      expect(visibleTitles()).toEqual([
+        "Todo urgent ticket",
+        "Todo low ticket",
+        "Ready ticket",
+      ]);
     });
     expect(statusHeadings()).toEqual(["Todo", "Ready"]);
     expect(statusChips()).toEqual(["Todo2", "Ready1"]);
@@ -690,12 +750,20 @@ describe("LinearTicketsView", () => {
     renderLinearTicketsView();
 
     await screen.findByText("Without order ticket");
-    expect(visibleTitles()).toEqual(["Without order ticket", "With order ticket"]);
+    expect(visibleTitles()).toEqual([
+      "Without order ticket",
+      "With order ticket",
+    ]);
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Order Linear tickets by" }),
+    );
     fireEvent.click(await screen.findByRole("option", { name: "Priority" }));
     await waitFor(() => {
-      expect(visibleTitles()).toEqual(["With order ticket", "Without order ticket"]);
+      expect(visibleTitles()).toEqual([
+        "With order ticket",
+        "Without order ticket",
+      ]);
     });
   });
 
@@ -723,13 +791,31 @@ describe("LinearTicketsView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^build/i }));
 
-    expect(await screen.findByRole("heading", { name: "Configure build" })).toBeTruthy();
-    expect(screen.getByRole("radiogroup", { name: "Build environment" })).toBeTruthy();
     expect(
-      within(screen.getByRole("list", { name: "Build steps" })).getAllByRole("listitem"),
-    ).toHaveLength(6);
-    expect(screen.getByRole("combobox", { name: "Build step model" })).toBeTruthy();
-    expect(screen.getByRole("combobox", { name: "Review step model" })).toBeTruthy();
+      await screen.findByRole("heading", { name: "Configure build" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("radiogroup", { name: "Build environment" }),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole("list", { name: "Build steps" })).getAllByRole(
+        "listitem",
+      ),
+    ).toHaveLength(8);
+    expect(
+      screen.getByRole("combobox", { name: "Build step model" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("combobox", { name: "Reviewer 1 step model" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("combobox", { name: "Reviewer 2 step model" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("combobox", {
+        name: "Review preparation & consolidation step model",
+      }),
+    ).toBeTruthy();
     const includeComments = screen.getByRole("checkbox", {
       name: "Include 1 comment in build context",
     }) as HTMLButtonElement;
@@ -758,7 +844,9 @@ describe("LinearTicketsView", () => {
           reviewers: expect.arrayContaining([
             expect.objectContaining({ agent: expect.any(String) }),
           ]),
-          reviewPreparation: expect.objectContaining({ agent: expect.any(String) }),
+          reviewPreparation: expect.objectContaining({
+            agent: expect.any(String),
+          }),
         }),
       );
     });
@@ -793,9 +881,10 @@ describe("LinearTicketsView", () => {
     });
 
     await waitFor(() => expect(startButton.disabled).toBe(false));
-    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
-      false,
-    );
+    expect(
+      (screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
     expect(form?.getAttribute("aria-busy")).toBe("false");
 
     // A programmatic submit bypasses the disabled button and exercises the
@@ -833,8 +922,11 @@ describe("LinearTicketsView", () => {
   });
 
   test("does not clear a newly selected ticket draft when an older comment finishes", async () => {
-    const pendingComment = deferred<Awaited<ReturnType<typeof postLinearIssueCommentMock>>>();
-    postLinearIssueCommentMock.mockImplementationOnce(() => pendingComment.promise);
+    const pendingComment =
+      deferred<Awaited<ReturnType<typeof postLinearIssueCommentMock>>>();
+    postLinearIssueCommentMock.mockImplementationOnce(
+      () => pendingComment.promise,
+    );
     getLinearIssueMock.mockImplementation(async (issueId) =>
       issueId === "issue-2" ? issue2Detail : issueDetail,
     );
@@ -846,9 +938,13 @@ describe("LinearTicketsView", () => {
       target: { value: "Comment for the first ticket" },
     });
     fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
-    await waitFor(() => expect(postLinearIssueCommentMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(postLinearIssueCommentMock).toHaveBeenCalledTimes(1),
+    );
 
-    fireEvent.click(screen.getByRole("button", { name: "Back to Linear tickets" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to Linear tickets" }),
+    );
     fireEvent.click(await screen.findByText("Polish dashboard"));
     await screen.findByText("Polish dashboard details");
     fireEvent.change(screen.getByLabelText("Add Linear comment"), {
@@ -868,15 +964,21 @@ describe("LinearTicketsView", () => {
         expect.any(Number),
       ),
     );
-    expect((screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement).value).toBe(
-      "Keep this second-ticket draft",
+    expect(
+      (screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement)
+        .value,
+    ).toBe("Keep this second-ticket draft");
+    expect(screen.queryByText("Comment for the first ticket") === null).toBe(
+      true,
     );
-    expect(screen.queryByText("Comment for the first ticket") === null).toBe(true);
   });
 
   test("does not clear a newer draft after returning to the submitted ticket", async () => {
-    const pendingComment = deferred<Awaited<ReturnType<typeof postLinearIssueCommentMock>>>();
-    postLinearIssueCommentMock.mockImplementationOnce(() => pendingComment.promise);
+    const pendingComment =
+      deferred<Awaited<ReturnType<typeof postLinearIssueCommentMock>>>();
+    postLinearIssueCommentMock.mockImplementationOnce(
+      () => pendingComment.promise,
+    );
     renderLinearTicketsView();
 
     fireEvent.click(await screen.findByText("Add Linear integration"));
@@ -885,17 +987,22 @@ describe("LinearTicketsView", () => {
       target: { value: "First submitted comment" },
     });
     fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
-    await waitFor(() => expect(postLinearIssueCommentMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(postLinearIssueCommentMock).toHaveBeenCalledTimes(1),
+    );
 
-    fireEvent.click(screen.getByRole("button", { name: "Back to Linear tickets" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to Linear tickets" }),
+    );
     fireEvent.click(await screen.findByText("Add Linear integration"));
     await screen.findByText("Initial Linear comment");
     fireEvent.change(screen.getByLabelText("Add Linear comment"), {
       target: { value: "New draft for the same ticket" },
     });
-    const submittedDraftDeletesBeforeResolution = deleteComposeDraftMock.mock.calls.filter(
-      ([draftKey]) => draftKey === "linear-comment:project-1:issue-1",
-    ).length;
+    const submittedDraftDeletesBeforeResolution =
+      deleteComposeDraftMock.mock.calls.filter(
+        ([draftKey]) => draftKey === "linear-comment:project-1:issue-1",
+      ).length;
 
     pendingComment.resolve({
       id: "comment-late-same-ticket",
@@ -904,10 +1011,13 @@ describe("LinearTicketsView", () => {
       authorName: "Ada",
     });
 
-    await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith("Linear comment added"));
-    expect((screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement).value).toBe(
-      "New draft for the same ticket",
+    await waitFor(() =>
+      expect(toastSuccessMock).toHaveBeenCalledWith("Linear comment added"),
     );
+    expect(
+      (screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement)
+        .value,
+    ).toBe("New draft for the same ticket");
     expect(
       deleteComposeDraftMock.mock.calls.filter(
         ([draftKey]) => draftKey === "linear-comment:project-1:issue-1",
@@ -933,14 +1043,17 @@ describe("LinearTicketsView", () => {
     fireEvent.click(await screen.findByText("Add Linear integration"));
 
     await waitFor(() =>
-      expect((screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement).value).toBe(
-        "Recovered Linear comment",
-      ),
+      expect(
+        (screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement)
+          .value,
+      ).toBe("Recovered Linear comment"),
     );
   });
 
   test("surfaces an error and keeps the draft when posting a comment fails", async () => {
-    postLinearIssueCommentMock.mockRejectedValueOnce(new Error("Linear rejected the comment"));
+    postLinearIssueCommentMock.mockRejectedValueOnce(
+      new Error("Linear rejected the comment"),
+    );
     const view = renderLinearTicketsView();
 
     fireEvent.click(await screen.findByText("Add Linear integration"));
@@ -955,9 +1068,10 @@ describe("LinearTicketsView", () => {
       expect(screen.getByText("Linear rejected the comment")).toBeTruthy();
     });
     expect(toastSuccessMock).not.toHaveBeenCalledWith("Linear comment added");
-    expect((screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement).value).toBe(
-      "Draft that should survive",
-    );
+    expect(
+      (screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement)
+        .value,
+    ).toBe("Draft that should survive");
     view.unmount();
     await waitFor(() =>
       expect(saveComposeDraftMock).toHaveBeenCalledWith(
@@ -990,7 +1104,9 @@ describe("LinearTicketsView", () => {
     renderLinearTicketsView();
 
     fireEvent.click(await screen.findByText("Add Linear integration"));
-    fireEvent.click(screen.getByRole("button", { name: /back to linear tickets/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /back to linear tickets/i }),
+    );
     fireEvent.click(await screen.findByText("Polish dashboard"));
 
     secondDetail.resolve(issue2Detail);
@@ -1022,7 +1138,9 @@ describe("LinearTicketsView", () => {
 
   test("keeps connected tickets visible when an older connection check resolves later", async () => {
     const staleConnection = deferred<LinearConnectionStatus>();
-    getLinearConnectionMock.mockImplementationOnce(() => staleConnection.promise);
+    getLinearConnectionMock.mockImplementationOnce(
+      () => staleConnection.promise,
+    );
     getLinearConnectionMock.mockResolvedValue({
       connected: true,
       hasToken: true,
@@ -1036,11 +1154,15 @@ describe("LinearTicketsView", () => {
 
     renderLinearTicketsView();
 
-    fireEvent.click(await screen.findByRole("button", { name: /connect linear/i }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /connect linear/i }),
+    );
     fireEvent.change(screen.getByPlaceholderText("lin_api_..."), {
       target: { value: "lin_api_secret" },
     });
-    fireEvent.click(screen.getAllByRole("button", { name: /^connect$/i }).at(-1)!);
+    fireEvent.click(
+      screen.getAllByRole("button", { name: /^connect$/i }).at(-1)!,
+    );
 
     expect(await screen.findByText("Add Linear integration")).toBeTruthy();
 
@@ -1054,9 +1176,11 @@ describe("LinearTicketsView", () => {
     });
 
     expect(screen.getByText("Add Linear integration")).toBeTruthy();
-    expect(screen.queryByText("Connect a Linear workspace before loading tickets.") === null).toBe(
-      true,
-    );
+    expect(
+      screen.queryByText(
+        "Connect a Linear workspace before loading tickets.",
+      ) === null,
+    ).toBe(true);
   });
 
   test("uses the active Linear pipeline when the same issue has older completed runs", async () => {
@@ -1170,13 +1294,16 @@ describe("LinearTicketsView", () => {
     renderLinearTicketsView();
 
     fireEvent.click(await screen.findByText("Add Linear integration"));
-    expect(await screen.findByText("Linear comment failed: Linear unavailable")).toBeTruthy();
+    expect(
+      await screen.findByText("Linear comment failed: Linear unavailable"),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /retry comment/i }));
 
     await waitFor(() => {
       expect(
-        useBuildPipelineStore.getState().pipelines.get(pipelineId)?.completionCommentStatus,
+        useBuildPipelineStore.getState().pipelines.get(pipelineId)
+          ?.completionCommentStatus,
       ).toBeUndefined();
     });
   });
@@ -1198,7 +1325,8 @@ describe("LinearTicketsView", () => {
         completionCommentError: "Linear unavailable",
       }),
     );
-    const pending = deferred<Awaited<ReturnType<typeof retryCompletionCommentMock>>>();
+    const pending =
+      deferred<Awaited<ReturnType<typeof retryCompletionCommentMock>>>();
     retryCompletionCommentMock.mockImplementationOnce(() => pending.promise);
     renderLinearTicketsView();
     fireEvent.click(await screen.findByText("Add Linear integration"));
@@ -1213,11 +1341,16 @@ describe("LinearTicketsView", () => {
 
     pending.reject(new Error("still offline"));
     await waitFor(() => expect(button.disabled).toBe(false));
-    expect(toastErrorMock).toHaveBeenCalledWith("Failed to retry Linear completion comment", {
-      description: "still offline",
-    });
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Failed to retry Linear completion comment",
+      {
+        description: "still offline",
+      },
+    );
 
     fireEvent.click(button);
-    await waitFor(() => expect(retryCompletionCommentMock).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(retryCompletionCommentMock).toHaveBeenCalledTimes(2),
+    );
   });
 });

@@ -19,6 +19,7 @@ import {
   type CreateFeatureBuildInput,
   type CreateFeatureBuildResult,
 } from "@orkestrator/protocol/feature-build";
+import type { BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
 import { createHash } from "node:crypto";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { StorageService } from "./storage.js";
@@ -38,19 +39,24 @@ export async function createFeatureBuild(
     throw new Error("Invalid feature build request");
   }
   const { buildPipelines, storage } = context;
-  if (!buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+  if (!buildPipelines)
+    throw new Error("Build pipeline supervisor is unavailable");
 
   const projectId = input.projectId.trim();
   const project = await storage.getProject(projectId);
   if (!project) throw new Error(`Project not found: ${projectId}`);
   if (input.environmentType === "local" && !project.localPath) {
-    throw new Error("Project has no local path - cannot create a local worktree");
+    throw new Error(
+      "Project has no local path - cannot create a local worktree",
+    );
   }
 
   const title = input.title.trim();
   const description = input.description?.trim() ?? "";
   const acceptanceCriteria = input.acceptanceCriteria?.trim() ?? "";
-  const images = await normalizeFeatureImages(assertValidPromptImages(input.images ?? []));
+  const images = await normalizeFeatureImages(
+    assertValidPromptImages(input.images ?? []),
+  );
   const requestId = input.requestId?.trim();
   const requestHash = requestId
     ? featureBuildRequestHash({
@@ -91,11 +97,15 @@ export async function createFeatureBuild(
     taskId: task.id,
     projectId,
     environmentType: input.environmentType,
-    ...(input.environmentOptions ? { environmentOptions: input.environmentOptions } : {}),
+    ...(input.environmentOptions
+      ? { environmentOptions: input.environmentOptions }
+      : {}),
     agentType: input.agentType,
-    ...(input.steps ? { steps: input.steps } : {}),
+    ...(input.steps ? { steps: withVerifyFromAddress(input.steps) } : {}),
     ...(input.reviewers ? { reviewers: input.reviewers } : {}),
-    ...(input.reviewPreparation ? { reviewPreparation: input.reviewPreparation } : {}),
+    ...(input.reviewPreparation
+      ? { reviewPreparation: input.reviewPreparation }
+      : {}),
     taskTitle: task.title,
     // The snapshot is what every stage prompt quotes. It is taken here rather
     // than read back later so the build works from the ticket as submitted,
@@ -116,8 +126,21 @@ export async function createFeatureBuild(
   return {
     taskId: task.id,
     pipelineId: pipeline.id,
-    ...(pipeline.environmentId ? { environmentId: pipeline.environmentId } : {}),
+    ...(pipeline.environmentId
+      ? { environmentId: pipeline.environmentId }
+      : {}),
   };
+}
+
+/**
+ * Callers that pin address but omit verify used to inherit the address model
+ * for the verification stage. Keep that inference so older or external clients
+ * do not silently move verify onto the pipeline agent after the dedicated
+ * verify action was introduced.
+ */
+function withVerifyFromAddress(steps: BuildStepConfigs): BuildStepConfigs {
+  if (steps.verify || !steps.address) return steps;
+  return { ...steps, verify: { ...steps.address } };
 }
 
 async function normalizeFeatureImages(
@@ -127,11 +150,17 @@ async function normalizeFeatureImages(
   for (const image of images) {
     try {
       const webp = await resizeKanbanImage(Buffer.from(image.data, "base64"));
-      normalized.push({ filename: image.filename, data: webp.toString("base64") });
-    } catch (error) {
-      throw new Error(`Feature image is not a supported image: ${image.filename}`, {
-        cause: error,
+      normalized.push({
+        filename: image.filename,
+        data: webp.toString("base64"),
       });
+    } catch (error) {
+      throw new Error(
+        `Feature image is not a supported image: ${image.filename}`,
+        {
+          cause: error,
+        },
+      );
     }
   }
   return normalized;
@@ -158,22 +187,36 @@ async function resolveTask(
   },
 ): Promise<KanbanTask> {
   if (fields.requestId) {
-    const existing = await storage.findKanbanTaskByRequestId(fields.projectId, fields.requestId);
+    const existing = await storage.findKanbanTaskByRequestId(
+      fields.projectId,
+      fields.requestId,
+    );
     if (existing) {
       if (existing.featureBuildRequestHash !== fields.requestHash) {
-        throw new Error("Feature build requestId was already used with different arguments");
+        throw new Error(
+          "Feature build requestId was already used with different arguments",
+        );
       }
       return existing;
     }
   }
-  return storage.addKanbanTask(fields.projectId, fields.title, fields.description, {
-    ...(fields.acceptanceCriteria ? { acceptanceCriteria: fields.acceptanceCriteria } : {}),
-    // The build starts immediately, so the column reflects what is happening.
-    // The pipeline's own lifecycle updates then move it on from here.
-    status: "in-progress",
-    ...(fields.requestId ? { requestId: fields.requestId } : {}),
-    ...(fields.requestHash ? { featureBuildRequestHash: fields.requestHash } : {}),
-  });
+  return storage.addKanbanTask(
+    fields.projectId,
+    fields.title,
+    fields.description,
+    {
+      ...(fields.acceptanceCriteria
+        ? { acceptanceCriteria: fields.acceptanceCriteria }
+        : {}),
+      // The build starts immediately, so the column reflects what is happening.
+      // The pipeline's own lifecycle updates then move it on from here.
+      status: "in-progress",
+      ...(fields.requestId ? { requestId: fields.requestId } : {}),
+      ...(fields.requestHash
+        ? { featureBuildRequestHash: fields.requestHash }
+        : {}),
+    },
+  );
 }
 
 /** Stable JSON used to bind an idempotency key to the request it first owned. */

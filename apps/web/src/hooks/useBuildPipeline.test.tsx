@@ -23,7 +23,9 @@ const startBuildPipelineMock = mock(async (_input: unknown) =>
   }),
 );
 const getKanbanImageDataMock = mock(async (imageId: string) =>
-  imageId === "image-bad" ? Promise.reject(new Error("missing image")) : `data:${imageId}`,
+  imageId === "image-bad"
+    ? Promise.reject(new Error("missing image"))
+    : `data:${imageId}`,
 );
 
 mock.module("@/lib/backend", () => ({
@@ -129,7 +131,10 @@ describe("useBuildPipeline", () => {
 
     expect(pipelineId).toBe("pipeline-new");
     expect(startBuildPipelineMock).toHaveBeenCalledTimes(1);
-    const input = startBuildPipelineMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    const input = startBuildPipelineMock.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
     expect(input.agentType).toBe("codex");
     expect(input.taskSnapshot).toEqual({
       title: "Ship feature",
@@ -170,7 +175,10 @@ describe("useBuildPipeline", () => {
         "containerized",
       );
     });
-    const linear = startBuildPipelineMock.mock.calls[0]?.[0] as Record<string, any>;
+    const linear = startBuildPipelineMock.mock.calls[0]?.[0] as Record<
+      string,
+      any
+    >;
     expect(linear.taskId).toBe("linear-id");
     expect(linear.source).toEqual(
       expect.objectContaining({
@@ -178,7 +186,9 @@ describe("useBuildPipeline", () => {
         issueIdentifier: "ENG-42",
       }),
     );
-    expect(linear.taskSnapshot.comments).toContainEqual({ text: "Ada: A comment" });
+    expect(linear.taskSnapshot.comments).toContainEqual({
+      text: "Ada: A comment",
+    });
 
     startBuildPipelineMock.mockClear();
     await act(async () => {
@@ -203,11 +213,16 @@ describe("useBuildPipeline", () => {
         },
       );
     });
-    const github = startBuildPipelineMock.mock.calls[0]?.[0] as Record<string, any>;
+    const github = startBuildPipelineMock.mock.calls[0]?.[0] as Record<
+      string,
+      any
+    >;
     expect(github.taskId).toBe("github:acme/widget#7");
     expect(github.existingEnvironmentId).toBe("env-existing");
     expect(github.featurePlanId).toBe("feature-1");
-    expect(github.taskSnapshot.comments).toEqual([{ text: "@grace: Please fix" }]);
+    expect(github.taskSnapshot.comments).toEqual([
+      { text: "@grace: Please fix" },
+    ]);
   });
 
   test("preserves supported Linear metadata and both comment attribution forms", async () => {
@@ -288,7 +303,10 @@ describe("useBuildPipeline", () => {
       );
     });
 
-    expect((startInput().taskSnapshot as { comments: Array<{ text: string }> }).comments).toEqual([
+    expect(
+      (startInput().taskSnapshot as { comments: Array<{ text: string }> })
+        .comments,
+    ).toEqual([
       { text: "Linear issue: ENG-42" },
       { text: "URL: https://linear.example/ENG-42" },
       { text: "Status: In Progress" },
@@ -315,7 +333,9 @@ describe("useBuildPipeline", () => {
 
     const input = startInput() as Record<string, any>;
     expect(input.namingPrompt).toBe("ENG-42\n\nLinear title");
-    expect(input.taskSnapshot.comments).toEqual([{ text: "Linear issue: ENG-42" }]);
+    expect(input.taskSnapshot.comments).toEqual([
+      { text: "Linear issue: ENG-42" },
+    ]);
     expect(input.source).toEqual(
       expect.objectContaining({
         issueUrl: undefined,
@@ -378,7 +398,9 @@ describe("useBuildPipeline", () => {
   });
 
   test("returns undefined without creating renderer state when the backend rejects start", async () => {
-    startBuildPipelineMock.mockRejectedValueOnce(new Error("backend unavailable"));
+    startBuildPipelineMock.mockRejectedValueOnce(
+      new Error("backend unavailable"),
+    );
     const { result } = renderHook(() => useBuildPipeline());
 
     let pipelineId: string | undefined;
@@ -442,7 +464,9 @@ describe("useBuildPipeline", () => {
 
     expect(startInput().agentType).toBe("opencode");
     expect(startInput().steps).toMatchObject({ review: { agent: "codex" } });
-    expect((startInput().reviewers as Array<{ agent: string }>)[0]).toEqual({ agent: "codex" });
+    expect((startInput().reviewers as Array<{ agent: string }>)[0]).toEqual({
+      agent: "codex",
+    });
   });
 
   test("applies the configured Multi Review fan-out and verify model by default", async () => {
@@ -480,7 +504,10 @@ describe("useBuildPipeline", () => {
       { agent: "codex", model: "gpt-5.6" },
       { agent: "claude", model: "haiku" },
     ]);
-    expect(startInput().reviewPreparation).toEqual({ agent: "codex", model: "gpt-5.6" });
+    expect(startInput().reviewPreparation).toEqual({
+      agent: "codex",
+      model: "gpt-5.6",
+    });
     expect((startInput().steps as BuildStepConfigs).verify).toEqual({
       agent: "opencode",
       model: "provider/verifier",
@@ -518,13 +545,132 @@ describe("useBuildPipeline", () => {
     }
   });
 
+  test("a single configured reviewer omits fan-out and review preparation", async () => {
+    const baseConfig = useConfigStore.getState().config;
+    useConfigStore.setState({
+      config: {
+        ...baseConfig,
+        global: {
+          ...baseConfig.global,
+          agentSettings: {
+            ...baseConfig.global.agentSettings,
+            platforms: {},
+            actionDefaults: {
+              review: { platform: "claude", model: "opus" },
+              reviewPreparation: { platform: "codex", model: "gpt-5.6" },
+              verify: { platform: "claude", model: "sonnet" },
+            },
+            multiReview: { reviewerCount: 1 },
+          },
+        },
+      },
+    });
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuild(task, "local");
+    });
+
+    expect(startInput().reviewers).toEqual([
+      { agent: "claude", model: "opus" },
+    ]);
+    expect(startInput().reviewPreparation).toBeUndefined();
+    expect((startInput().steps as BuildStepConfigs).verify).toEqual({
+      agent: "claude",
+      model: "sonnet",
+    });
+  });
+
+  test("an explicit review step replaces only the first configured reviewer", async () => {
+    const baseConfig = useConfigStore.getState().config;
+    useConfigStore.setState({
+      config: {
+        ...baseConfig,
+        global: {
+          ...baseConfig.global,
+          agentSettings: {
+            ...baseConfig.global.agentSettings,
+            platforms: {},
+            actionDefaults: {
+              review: { platform: "claude", model: "opus" },
+              review2: { platform: "codex", model: "gpt-5.6" },
+            },
+            multiReview: { reviewerCount: 2 },
+          },
+        },
+      },
+    });
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuild(task, "local", undefined, {
+        steps: { review: { agent: "opencode", model: "provider/overridden" } },
+      });
+    });
+
+    expect(startInput().reviewers).toEqual([
+      { agent: "opencode", model: "provider/overridden" },
+      { agent: "codex", model: "gpt-5.6" },
+    ]);
+  });
+
+  test("a GitHub issue build without options sends the configured Multi Review defaults", async () => {
+    const baseConfig = useConfigStore.getState().config;
+    useConfigStore.setState({
+      config: {
+        ...baseConfig,
+        global: {
+          ...baseConfig.global,
+          agentSettings: {
+            ...baseConfig.global.agentSettings,
+            platforms: {},
+            actionDefaults: {
+              review: { platform: "claude", model: "opus" },
+              review2: { platform: "codex", model: "gpt-5.6" },
+              reviewPreparation: { platform: "codex", model: "gpt-5.6" },
+              verify: { platform: "opencode", model: "provider/verifier" },
+            },
+          },
+        },
+      },
+    });
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuildFromGitHubIssue(
+        githubIssue,
+        "project-1",
+        "local",
+      );
+    });
+
+    expect(startInput().reviewers).toEqual([
+      { agent: "claude", model: "opus" },
+      { agent: "codex", model: "gpt-5.6" },
+    ]);
+    expect(startInput().reviewPreparation).toEqual({
+      agent: "codex",
+      model: "gpt-5.6",
+    });
+    expect((startInput().steps as BuildStepConfigs).verify).toEqual({
+      agent: "opencode",
+      model: "provider/verifier",
+    });
+  });
+
   test("a GitHub issue build carries the same per-step configuration", async () => {
     const { result } = renderHook(() => useBuildPipeline());
 
     await act(async () => {
-      await result.current.startBuildFromGitHubIssue(githubIssue, "project-1", "local", "claude", {
-        steps,
-      });
+      await result.current.startBuildFromGitHubIssue(
+        githubIssue,
+        "project-1",
+        "local",
+        "claude",
+        {
+          steps,
+        },
+      );
     });
 
     expect(startInput().steps).toEqual(steps);
@@ -538,7 +684,12 @@ describe("useBuildPipeline", () => {
     // shape while allowing the Linear launcher to configure every stage.
     expect(result.current.startBuildFromLinearIssue.length).toBe(3);
     await act(async () => {
-      await result.current.startBuildFromLinearIssue(linearIssue, "project-1", "local", { steps });
+      await result.current.startBuildFromLinearIssue(
+        linearIssue,
+        "project-1",
+        "local",
+        { steps },
+      );
     });
 
     expect(startInput().steps).toEqual(steps);
@@ -554,13 +705,18 @@ describe("useBuildPipeline", () => {
     expect(toastSuccessMock).toHaveBeenCalledWith("Build pipeline started");
     expect(toastErrorMock).not.toHaveBeenCalled();
 
-    startBuildPipelineMock.mockRejectedValueOnce(new Error("backend unavailable"));
+    startBuildPipelineMock.mockRejectedValueOnce(
+      new Error("backend unavailable"),
+    );
     await act(async () => {
       await result.current.startBuild(task, "local");
     });
-    expect(toastErrorMock).toHaveBeenCalledWith("Failed to start build pipeline", {
-      description: "backend unavailable",
-    });
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Failed to start build pipeline",
+      {
+        description: "backend unavailable",
+      },
+    );
 
     toastErrorMock.mockClear();
     // A non-Error rejection still has to say something to the user.
@@ -568,9 +724,12 @@ describe("useBuildPipeline", () => {
     await act(async () => {
       await result.current.startBuild(task, "local");
     });
-    expect(toastErrorMock).toHaveBeenCalledWith("Failed to start build pipeline", {
-      description: "Unknown error",
-    });
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Failed to start build pipeline",
+      {
+        description: "Unknown error",
+      },
+    );
   });
 
   test("navigation does not synthesize a build tab before backend layout hydration", async () => {
@@ -664,12 +823,17 @@ describe("useBuildPipeline", () => {
       });
     });
 
-    const environment = usePaneLayoutStore.getState().environments.get("env-split");
-    expect(buildTabs("env-split").filter((tab) => tab.type === "claude-build")).toHaveLength(1);
+    const environment = usePaneLayoutStore
+      .getState()
+      .environments.get("env-split");
+    expect(
+      buildTabs("env-split").filter((tab) => tab.type === "claude-build"),
+    ).toHaveLength(1);
     expect(environment?.activePaneId).toBe("pane-build");
     expect(
       environment &&
-        getAllLeaves(environment.root).find((leaf) => leaf.id === "pane-build")?.activeTabId,
+        getAllLeaves(environment.root).find((leaf) => leaf.id === "pane-build")
+          ?.activeTabId,
     ).toBe("existing-build-tab");
   });
 
@@ -707,10 +871,16 @@ describe("useBuildPipeline", () => {
       await navigation;
     });
 
-    expect(buildTabs("env-hydrated").map((tab) => tab.id)).toEqual(["restored-terminal"]);
-    const environment = usePaneLayoutStore.getState().environments.get("env-hydrated");
+    expect(buildTabs("env-hydrated").map((tab) => tab.id)).toEqual([
+      "restored-terminal",
+    ]);
+    const environment = usePaneLayoutStore
+      .getState()
+      .environments.get("env-hydrated");
     expect(environment?.activePaneId).toBe("restored");
-    expect(environment && getAllLeaves(environment.root)[0]?.activeTabId).toBe("restored-terminal");
+    expect(environment && getAllLeaves(environment.root)[0]?.activeTabId).toBe(
+      "restored-terminal",
+    );
   });
 });
 

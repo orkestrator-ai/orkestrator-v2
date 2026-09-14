@@ -5,8 +5,14 @@ import {
   resolveAgentPlatformSettings,
   resolveMultiReviewSettings,
 } from "@orkestrator/protocol/agent-settings";
-import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { AgentActionDefault, ActionDefaultKey } from "@orkestrator/protocol/action-defaults";
+import {
+  AGENT_PLATFORMS,
+  type AgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
+import type {
+  AgentActionDefault,
+  ActionDefaultKey,
+} from "@orkestrator/protocol/action-defaults";
 import {
   MAX_BUILD_PIPELINE_REVIEWERS,
   type BuildStepConfig,
@@ -27,7 +33,21 @@ export interface BuildLaunchDefaults {
 export interface BuildPipelineConfiguredDefaults {
   steps: BuildStepConfigs;
   reviewers: BuildStepConfig[];
-  reviewPreparation: BuildStepConfig;
+  /**
+   * Present only when the pipeline actually fans out. A single reviewer keeps
+   * the classic inline review-package path; synthesising a preparation model
+   * here would start an extra Package Preparation Session on the backend.
+   */
+  reviewPreparation?: BuildStepConfig;
+}
+
+/**
+ * `"default"` is a UI placeholder no provider knows. Pinning it would send the
+ * backend a model or effort it cannot resolve, so it is dropped instead.
+ */
+function pinOrOmit(value: string | undefined): string | undefined {
+  if (!value || value === "default") return undefined;
+  return value;
 }
 
 function actionSelection(
@@ -37,8 +57,10 @@ function actionSelection(
 ): BuildStepConfig {
   const action = resolvedActionDefault(tiers, key, enabledAgents);
   const platform = resolveAgentPlatformSettings(tiers, action.agent);
-  const model = action.model ?? platform.model;
-  const reasoningEffort = action.reasoningEffort ?? platform.reasoningEffort;
+  const model = pinOrOmit(action.model ?? platform.model);
+  const reasoningEffort = pinOrOmit(
+    action.reasoningEffort ?? platform.reasoningEffort,
+  );
   const fastMode = action.fastMode ?? platform.fastMode;
   return {
     agent: action.agent,
@@ -54,10 +76,13 @@ function configuredReviewer(
   tiers: ReturnType<typeof agentSettingsTiers>,
   enabledAgents: readonly AgentPlatform[],
 ): BuildStepConfig {
-  if (!entry?.platform || !enabledAgents.includes(entry.platform)) return { ...fallback };
+  if (!entry?.platform || !enabledAgents.includes(entry.platform))
+    return { ...fallback };
   const platform = resolveAgentPlatformSettings(tiers, entry.platform);
-  const model = entry.model ?? platform.model;
-  const reasoningEffort = entry.reasoningEffort ?? platform.reasoningEffort;
+  const model = pinOrOmit(entry.model ?? platform.model);
+  const reasoningEffort = pinOrOmit(
+    entry.reasoningEffort ?? platform.reasoningEffort,
+  );
   const fastMode = entry.fastMode ?? platform.fastMode;
   return {
     agent: entry.platform,
@@ -65,6 +90,32 @@ function configuredReviewer(
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(fastMode !== undefined ? { fastMode } : {}),
   };
+}
+
+function actionHasUsablePlatform(
+  entry: AgentActionDefault | undefined,
+  enabledAgents: readonly AgentPlatform[],
+): boolean {
+  return Boolean(entry?.platform && enabledAgents.includes(entry.platform));
+}
+
+/** OpenCode ids a launcher must keep visible while the project catalogue loads. */
+export function configuredOpenCodeModelIds(
+  defaults: BuildPipelineConfiguredDefaults,
+): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const consider = (step?: BuildStepConfig) => {
+    if (step?.agent !== "opencode") return;
+    const model = pinOrOmit(step.model);
+    if (!model || seen.has(model)) return;
+    seen.add(model);
+    ids.push(model);
+  };
+  for (const step of Object.values(defaults.steps)) consider(step);
+  for (const reviewer of defaults.reviewers) consider(reviewer);
+  consider(defaults.reviewPreparation);
+  return ids;
 }
 
 /**
@@ -104,21 +155,31 @@ export function buildPipelineConfiguredDefaults(
     );
   });
   const reviewPreparation =
-    configuredActions.reviewPreparation?.platform &&
-    enabledAgents.includes(configuredActions.reviewPreparation.platform)
-      ? actionSelection(tiers, "reviewPreparation", enabledAgents)
-      : { ...review };
+    reviewerCount > 1
+      ? actionHasUsablePlatform(
+          configuredActions.reviewPreparation,
+          enabledAgents,
+        )
+        ? actionSelection(tiers, "reviewPreparation", enabledAgents)
+        : { ...review }
+      : undefined;
+  const verify = actionHasUsablePlatform(
+    configuredActions.verify,
+    enabledAgents,
+  )
+    ? actionSelection(tiers, "verify", enabledAgents)
+    : actionSelection(tiers, "fixReviewIssues", enabledAgents);
 
   return {
     steps: {
       review: reviewers[0],
       address: actionSelection(tiers, "fixReviewIssues", enabledAgents),
-      verify: actionSelection(tiers, "verify", enabledAgents),
+      verify,
       pr: actionSelection(tiers, "pr", enabledAgents),
       "resolve-conflicts": actionSelection(tiers, "resolve", enabledAgents),
     },
     reviewers,
-    reviewPreparation,
+    ...(reviewPreparation ? { reviewPreparation } : {}),
   };
 }
 
@@ -147,16 +208,19 @@ export function buildLaunchDefaults(
     const resolved = resolveAgentPlatformSettings(tiers, platform);
     // `"default"` is a placeholder no provider knows, so it is dropped rather
     // than offered as a selection.
-    if (resolved.model && resolved.model !== "default") preferredModels[platform] = resolved.model;
+    if (resolved.model && resolved.model !== "default")
+      preferredModels[platform] = resolved.model;
     if (resolved.reasoningEffort && resolved.reasoningEffort !== "default") {
       preferredReasoningEfforts[platform] = resolved.reasoningEffort;
     }
-    if (typeof resolved.fastMode === "boolean") preferredFastModes[platform] = resolved.fastMode;
+    if (typeof resolved.fastMode === "boolean")
+      preferredFastModes[platform] = resolved.fastMode;
   }
   return {
     defaultAgent,
     defaultEnvironmentType:
-      repository?.lastEnvironmentType ?? (projectHasLocalPath ? "local" : "containerized"),
+      repository?.lastEnvironmentType ??
+      (projectHasLocalPath ? "local" : "containerized"),
     preferredModels,
     preferredReasoningEfforts,
     preferredFastModes,

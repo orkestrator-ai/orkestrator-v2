@@ -1,6 +1,20 @@
-import { type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { BuildStepConfig, BuildStepKey } from "@orkestrator/protocol/build-pipeline";
-import type { AgentModel, AgentModelRef } from "@orkestrator/protocol/native-agent";
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type {
+  BuildStepConfig,
+  BuildStepKey,
+} from "@orkestrator/protocol/build-pipeline";
+import type {
+  AgentModel,
+  AgentModelRef,
+} from "@orkestrator/protocol/native-agent";
 import {
   Container,
   FolderGit2,
@@ -67,6 +81,77 @@ export interface BuildLaunchSelection {
 export interface BuildLaunchCommentContextOption {
   count: number;
   defaultIncluded?: boolean;
+}
+
+const REVIEW_PREPARATION_CARD = {
+  title: "Review preparation & consolidation",
+  description:
+    "Prepares the shared review package, then consolidates reviewer findings.",
+  icon: <ScanSearch className="size-4" />,
+};
+
+type VisibleBuildCard =
+  | {
+      kind: "step";
+      key: Exclude<BuildStepKey, "review">;
+      title: string;
+      description: string;
+      icon: React.ReactNode;
+    }
+  | {
+      kind: "reviewer";
+      index: number;
+      title: string;
+      description: string;
+      icon: React.ReactNode;
+    }
+  | {
+      kind: "reviewPreparation";
+      title: string;
+      description: string;
+      icon: React.ReactNode;
+    };
+
+function visibleBuildCards(
+  reviewerCount: number,
+  hasPreparation: boolean,
+): VisibleBuildCard[] {
+  const count = Math.max(1, reviewerCount);
+  const cards: VisibleBuildCard[] = [
+    {
+      kind: "step",
+      key: "build",
+      title: "Build",
+      description: "Implements the ticket and runs the fix stage.",
+      icon: <Hammer className="size-4" />,
+    },
+  ];
+  if (hasPreparation && count > 1) {
+    cards.push({ kind: "reviewPreparation", ...REVIEW_PREPARATION_CARD });
+  }
+  for (let index = 0; index < count; index += 1) {
+    cards.push({
+      kind: "reviewer",
+      index,
+      title: count > 1 ? `Reviewer ${index + 1}` : "Review",
+      description:
+        count > 1
+          ? "Reads the shared package independently."
+          : "Reviews the diff for issues and coverage gaps.",
+      icon: <ScanSearch className="size-4" />,
+    });
+  }
+  for (const step of BUILD_STEPS) {
+    if (step.key === "build" || step.key === "review") continue;
+    cards.push({
+      kind: "step",
+      key: step.key,
+      title: step.title,
+      description: step.description,
+      icon: step.icon,
+    });
+  }
+  return cards;
 }
 
 const BUILD_STEPS: Array<{
@@ -178,6 +263,17 @@ interface ResolvedStep {
   fastMode?: boolean;
 }
 
+function catalogHasModel(
+  agent: LaunchAgent,
+  catalog: AgentModelCatalog,
+  modelId: string | undefined,
+): boolean {
+  if (!modelId) return false;
+  return modelsForAgent(catalog, agent).some(
+    (option) => option.id === modelId || option.resolvedModel === modelId,
+  );
+}
+
 function initialStepState(
   agent: LaunchAgent,
   catalog: AgentModelCatalog,
@@ -187,25 +283,51 @@ function initialStepState(
   configured?: BuildStepConfig,
 ): StepState {
   const selectedAgent = configured?.agent ?? agent;
-  const model = firstModelFor(
+  const configuredModel = configured?.model;
+  const catalogKnowsModel = catalogHasModel(
     selectedAgent,
     catalog,
-    configured?.model ? { ...preferredModels, [selectedAgent]: configured.model } : preferredModels,
+    configuredModel,
   );
+  // Keep the raw configured id until the catalogue can resolve it. Falling
+  // through `firstModelFor` while OpenCode is still the placeholder would
+  // silently replace a real preference with "default" or the first entry.
+  const model =
+    configuredModel && !catalogKnowsModel
+      ? configuredModel
+      : firstModelFor(
+          selectedAgent,
+          catalog,
+          configuredModel
+            ? { ...preferredModels, [selectedAgent]: configuredModel }
+            : preferredModels,
+        );
+  const configuredEffort =
+    configured?.reasoningEffort && configured.reasoningEffort !== "default"
+      ? configured.reasoningEffort
+      : undefined;
   return {
     agent: selectedAgent,
     model,
-    reasoningEffort: defaultEffortFor(
-      selectedAgent,
-      model,
-      catalog,
-      configured?.reasoningEffort
-        ? { ...preferredReasoningEfforts, [selectedAgent]: configured.reasoningEffort }
-        : preferredReasoningEfforts,
-    ),
+    reasoningEffort:
+      configuredModel && !catalogKnowsModel && configuredEffort
+        ? configuredEffort
+        : defaultEffortFor(
+            selectedAgent,
+            model,
+            catalog,
+            configuredEffort
+              ? {
+                  ...preferredReasoningEfforts,
+                  [selectedAgent]: configuredEffort,
+                }
+              : preferredReasoningEfforts,
+          ),
     fastMode: defaultFastModeFor(selectedAgent, model, catalog, {
       ...preferredFastModes,
-      ...(configured?.fastMode !== undefined ? { [selectedAgent]: configured.fastMode } : {}),
+      ...(configured?.fastMode !== undefined
+        ? { [selectedAgent]: configured.fastMode }
+        : {}),
     }),
   };
 }
@@ -233,11 +355,82 @@ function initialSteps(
   ) as Record<BuildStepKey, StepState>;
 }
 
-function cleanStep(state: StepState, catalog: AgentModelCatalog): BuildLaunchStepSelection {
-  const model = modelsForAgent(catalog, state.agent).find((option) => option.id === state.model);
+function initialReviewers(
+  agent: LaunchAgent,
+  catalog: AgentModelCatalog,
+  preferredModels: BuildLaunchDialogProps["preferredModels"],
+  preferredReasoningEfforts: BuildLaunchDialogProps["preferredReasoningEfforts"],
+  preferredFastModes: BuildLaunchDialogProps["preferredFastModes"],
+  pipelineDefaults?: BuildPipelineConfiguredDefaults,
+): StepState[] {
+  const configured = pipelineDefaults?.reviewers;
+  if (!configured || configured.length === 0) {
+    return [
+      initialStepState(
+        agent,
+        catalog,
+        preferredModels,
+        preferredReasoningEfforts,
+        preferredFastModes,
+        pipelineDefaults?.steps.review,
+      ),
+    ];
+  }
+  return configured.map((reviewer) =>
+    initialStepState(
+      agent,
+      catalog,
+      preferredModels,
+      preferredReasoningEfforts,
+      preferredFastModes,
+      reviewer,
+    ),
+  );
+}
+
+function initialReviewPreparation(
+  agent: LaunchAgent,
+  catalog: AgentModelCatalog,
+  preferredModels: BuildLaunchDialogProps["preferredModels"],
+  preferredReasoningEfforts: BuildLaunchDialogProps["preferredReasoningEfforts"],
+  preferredFastModes: BuildLaunchDialogProps["preferredFastModes"],
+  pipelineDefaults?: BuildPipelineConfiguredDefaults,
+): StepState | undefined {
+  if (!pipelineDefaults?.reviewPreparation) return undefined;
+  if ((pipelineDefaults.reviewers?.length ?? 0) <= 1) return undefined;
+  return initialStepState(
+    agent,
+    catalog,
+    preferredModels,
+    preferredReasoningEfforts,
+    preferredFastModes,
+    pipelineDefaults.reviewPreparation,
+  );
+}
+
+function matchCatalogModel(
+  catalog: AgentModelCatalog,
+  agent: LaunchAgent,
+  modelId: string,
+): AgentModelOption | undefined {
+  const options = modelsForAgent(catalog, agent);
+  return (
+    options.find((option) => option.id === modelId) ??
+    options.find((option) => option.resolvedModel === modelId)
+  );
+}
+
+function cleanStep(
+  state: StepState,
+  catalog: AgentModelCatalog,
+): BuildLaunchStepSelection {
+  const model = matchCatalogModel(catalog, state.agent, state.model);
   const efforts = model?.reasoningEfforts ?? [];
   const reasoningEffort =
-    efforts.length > 0 && efforts.includes(state.reasoningEffort)
+    state.reasoningEffort !== "default" &&
+    (model
+      ? efforts.includes(state.reasoningEffort)
+      : Boolean(state.reasoningEffort))
       ? state.reasoningEffort
       : undefined;
   return {
@@ -250,7 +443,39 @@ function cleanStep(state: StepState, catalog: AgentModelCatalog): BuildLaunchSte
   };
 }
 
-function flatCatalog(catalog: AgentModelCatalog, enabledPlatforms: LaunchAgent[]): AgentModel[] {
+function resolveStepState(
+  state: StepState,
+  catalog: AgentModelCatalog,
+): ResolvedStep {
+  const matched = matchCatalogModel(catalog, state.agent, state.model);
+  // An explicit configured id that the catalogue has not listed yet must not
+  // collapse onto the first (often placeholder) entry.
+  const model =
+    matched ??
+    (state.model && state.model !== "default"
+      ? undefined
+      : modelsForAgent(catalog, state.agent)[0]);
+  const efforts = model?.reasoningEfforts ?? [];
+  const effort =
+    !model && state.reasoningEffort && state.reasoningEffort !== "default"
+      ? state.reasoningEffort
+      : efforts.length > 0 &&
+          (state.reasoningEffort === "default" ||
+            efforts.includes(state.reasoningEffort))
+        ? state.reasoningEffort
+        : "default";
+  return {
+    model,
+    efforts,
+    effort,
+    fastMode: model?.supportsSpeed === true ? state.fastMode : undefined,
+  };
+}
+
+function flatCatalog(
+  catalog: AgentModelCatalog,
+  enabledPlatforms: LaunchAgent[],
+): AgentModel[] {
   return enabledPlatforms.flatMap((agent) =>
     (catalog[agent] ?? []).map((model) => toPickerModel(agent, model)),
   );
@@ -259,6 +484,7 @@ function flatCatalog(catalog: AgentModelCatalog, enabledPlatforms: LaunchAgent[]
 function BuildStepCard({
   number,
   stepKey,
+  pickerId,
   title,
   description,
   icon,
@@ -277,6 +503,7 @@ function BuildStepCard({
 }: {
   number: number;
   stepKey: BuildStepKey;
+  pickerId?: string;
   title: string;
   description: string;
   icon: React.ReactNode;
@@ -290,7 +517,9 @@ function BuildStepCard({
   preferredFastModes: BuildLaunchDialogProps["preferredFastModes"];
   favorites: ReturnType<typeof useAgentModelFavorites>["favorites"];
   onToggleFavorite: ReturnType<typeof useAgentModelFavorites>["toggleFavorite"];
-  onReorderFavorites: ReturnType<typeof useAgentModelFavorites>["reorderFavorites"];
+  onReorderFavorites: ReturnType<
+    typeof useAgentModelFavorites
+  >["reorderFavorites"];
   onChange: (next: StepState) => void;
 }) {
   const selectModel = (agent: LaunchAgent, model: string) => {
@@ -298,10 +527,17 @@ function BuildStepCard({
     onChange({
       agent,
       model,
-      reasoningEffort: defaultEffortFor(agent, model, catalog, preferredReasoningEfforts),
+      reasoningEffort: defaultEffortFor(
+        agent,
+        model,
+        catalog,
+        preferredReasoningEfforts,
+      ),
       fastMode: defaultFastModeFor(agent, model, catalog, {
         ...preferredFastModes,
-        ...(typeof previousFastMode === "boolean" ? { [agent]: previousFastMode } : {}),
+        ...(typeof previousFastMode === "boolean"
+          ? { [agent]: previousFastMode }
+          : {}),
       }),
     });
   };
@@ -310,11 +546,16 @@ function BuildStepCard({
       ? []
       : [
           { id: "default", label: "Default" },
-          ...resolved.efforts.map((effort) => ({ id: effort, label: effortLabel(effort) })),
+          ...resolved.efforts.map((effort) => ({
+            id: effort,
+            label: effortLabel(effort),
+          })),
         ];
   const modelLabel =
-    resolved.model?.name ?? (state.model === "default" ? "Choose a model" : state.model);
+    resolved.model?.name ??
+    (state.model === "default" ? "Choose a model" : state.model);
   const pickerLabel = `${title} step model`;
+  const controlId = pickerId ?? `build-${stepKey}-model`;
   const speedCapable = platformOwnsSpeed(state.agent);
   const speedAvailable = speedCapable && resolved.model?.supportsSpeed === true;
 
@@ -335,17 +576,19 @@ function BuildStepCard({
         </span>
         <div className="min-w-0 flex-1">
           <Label
-            htmlFor={`build-${stepKey}-model`}
+            htmlFor={controlId}
             className="block text-sm font-semibold text-zinc-200"
           >
             {pickerLabel}
           </Label>
-          <p className="mt-0.5 text-xs leading-snug text-zinc-500">{description}</p>
+          <p className="mt-0.5 text-xs leading-snug text-zinc-500">
+            {description}
+          </p>
         </div>
       </div>
 
       <AgentModelPicker
-        id={`build-${stepKey}-model`}
+        id={controlId}
         ariaLabel={pickerLabel}
         models={models}
         enabledPlatforms={enabledPlatforms}
@@ -370,12 +613,16 @@ function BuildStepCard({
               : effortLabel(resolved.effort)
             : undefined
         }
-        onReasoningChange={(reasoningEffort) => onChange({ ...state, reasoningEffort })}
+        onReasoningChange={(reasoningEffort) =>
+          onChange({ ...state, reasoningEffort })
+        }
         speedCapable={speedCapable}
         fastModeAvailable={speedAvailable}
         fastModeEnabled={speedAvailable ? (state.fastMode ?? false) : false}
         onFastModeChange={
-          speedAvailable ? (fastMode) => onChange({ ...state, fastMode }) : undefined
+          speedAvailable
+            ? (fastMode) => onChange({ ...state, fastMode })
+            : undefined
         }
         title={pickerLabel}
         className="min-h-11 w-full border border-zinc-700/80 bg-zinc-900 py-2.5 md:max-w-none"
@@ -388,7 +635,10 @@ function BuildStepCard({
       )}
 
       {(stepKey === "review" || stepKey === "verify") && (
-        <p className="mt-2 text-[11px] leading-snug text-amber-400/80" role="note">
+        <p
+          className="mt-2 text-[11px] leading-snug text-amber-400/80"
+          role="note"
+        >
           {VALIDATION_WORKSPACE_NOTICE}
         </p>
       )}
@@ -422,9 +672,15 @@ export function BuildLaunchDialog({
   const { favorites, enabledPlatforms, toggleFavorite, reorderFavorites } =
     useAgentModelFavorites();
   const dockerAvailable = useDockerAvailability();
-  const models = useMemo(() => flatCatalog(catalog, enabledPlatforms), [catalog, enabledPlatforms]);
+  const models = useMemo(
+    () => flatCatalog(catalog, enabledPlatforms),
+    [catalog, enabledPlatforms],
+  );
   const pickerFavorites = useMemo(
-    () => favorites.filter((favorite) => enabledPlatforms.includes(favorite.platform)),
+    () =>
+      favorites.filter((favorite) =>
+        enabledPlatforms.includes(favorite.platform),
+      ),
     [enabledPlatforms, favorites],
   );
   const reorderPickerFavorites = useCallback(
@@ -438,7 +694,9 @@ export function BuildLaunchDialog({
     },
     [favorites, pickerFavorites, reorderFavorites],
   );
-  const [environmentType, setEnvironmentType] = useState(defaultEnvironmentType);
+  const [environmentType, setEnvironmentType] = useState(
+    defaultEnvironmentType,
+  );
   const [steps, setSteps] = useState(() =>
     initialSteps(
       defaultAgent,
@@ -449,27 +707,35 @@ export function BuildLaunchDialog({
       pipelineDefaults,
     ),
   );
-  const [includeComments, setIncludeComments] = useState(commentContext?.defaultIncluded ?? true);
+  const [reviewers, setReviewers] = useState(() =>
+    initialReviewers(
+      defaultAgent,
+      catalog,
+      preferredModels,
+      preferredReasoningEfforts,
+      preferredFastModes,
+      pipelineDefaults,
+    ),
+  );
+  const [reviewPreparation, setReviewPreparation] = useState(() =>
+    initialReviewPreparation(
+      defaultAgent,
+      catalog,
+      preferredModels,
+      preferredReasoningEfforts,
+      preferredFastModes,
+      pipelineDefaults,
+    ),
+  );
+  const [includeComments, setIncludeComments] = useState(
+    commentContext?.defaultIncluded ?? true,
+  );
   const wasOpenRef = useRef(false);
+  const touchedRef = useRef(new Set<string>());
   const environmentGroupId = useId();
   const commentContextId = useId();
 
-  // Reset on the closed→open transition only, so a catalog that arrives while
-  // the dialog is open cannot discard a selection the user has already made.
-  useEffect(() => {
-    const justOpened = open && !wasOpenRef.current;
-    wasOpenRef.current = open;
-    if (!justOpened) return;
-    setEnvironmentType(() => {
-      if (defaultEnvironmentType === "containerized" && !dockerAvailable) {
-        return localEnvironmentAvailable ? "local" : "containerized";
-      }
-      if (defaultEnvironmentType === "local" && !localEnvironmentAvailable) {
-        return dockerAvailable ? "containerized" : "local";
-      }
-      return defaultEnvironmentType;
-    });
-    setIncludeComments(commentContext?.defaultIncluded ?? true);
+  const resetLaunchState = () => {
     setSteps(
       initialSteps(
         defaultAgent,
@@ -479,6 +745,94 @@ export function BuildLaunchDialog({
         preferredFastModes,
         pipelineDefaults,
       ),
+    );
+    setReviewers(
+      initialReviewers(
+        defaultAgent,
+        catalog,
+        preferredModels,
+        preferredReasoningEfforts,
+        preferredFastModes,
+        pipelineDefaults,
+      ),
+    );
+    setReviewPreparation(
+      initialReviewPreparation(
+        defaultAgent,
+        catalog,
+        preferredModels,
+        preferredReasoningEfforts,
+        preferredFastModes,
+        pipelineDefaults,
+      ),
+    );
+  };
+
+  // Reset on the closed→open transition. A catalogue that arrives while the
+  // dialog is already open may only restore selections the user has not edited.
+  useEffect(() => {
+    const justOpened = open && !wasOpenRef.current;
+    wasOpenRef.current = open;
+    if (justOpened) {
+      touchedRef.current.clear();
+      setEnvironmentType(() => {
+        if (defaultEnvironmentType === "containerized" && !dockerAvailable) {
+          return localEnvironmentAvailable ? "local" : "containerized";
+        }
+        if (defaultEnvironmentType === "local" && !localEnvironmentAvailable) {
+          return dockerAvailable ? "containerized" : "local";
+        }
+        return defaultEnvironmentType;
+      });
+      setIncludeComments(commentContext?.defaultIncluded ?? true);
+      resetLaunchState();
+      return;
+    }
+    if (!open) return;
+    const nextSteps = initialSteps(
+      defaultAgent,
+      catalog,
+      preferredModels,
+      preferredReasoningEfforts,
+      preferredFastModes,
+      pipelineDefaults,
+    );
+    const nextReviewers = initialReviewers(
+      defaultAgent,
+      catalog,
+      preferredModels,
+      preferredReasoningEfforts,
+      preferredFastModes,
+      pipelineDefaults,
+    );
+    const nextPreparation = initialReviewPreparation(
+      defaultAgent,
+      catalog,
+      preferredModels,
+      preferredReasoningEfforts,
+      preferredFastModes,
+      pipelineDefaults,
+    );
+    setSteps((current) => {
+      const merged = { ...current };
+      for (const { key } of BUILD_STEPS) {
+        if (!touchedRef.current.has(key)) merged[key] = nextSteps[key];
+      }
+      return merged;
+    });
+    setReviewers((current) => {
+      const reviewerTouched = [...touchedRef.current].some((key) =>
+        key.startsWith("reviewer:"),
+      );
+      if (!reviewerTouched) return nextReviewers;
+      return current.map((row, index) =>
+        touchedRef.current.has(`reviewer:${index}`)
+          ? row
+          : (nextReviewers[index] ?? row),
+      );
+    });
+    setReviewPreparation((current) =>
+      touchedRef.current.has("reviewPreparation") ? current : nextPreparation,
     );
   }, [
     catalog,
@@ -495,32 +849,60 @@ export function BuildLaunchDialog({
   ]);
 
   useEffect(() => {
-    if (!dockerAvailable && localEnvironmentAvailable && environmentType === "containerized") {
+    if (
+      !dockerAvailable &&
+      localEnvironmentAvailable &&
+      environmentType === "containerized"
+    ) {
       setEnvironmentType("local");
-    } else if (!localEnvironmentAvailable && dockerAvailable && environmentType === "local") {
+    } else if (
+      !localEnvironmentAvailable &&
+      dockerAvailable &&
+      environmentType === "local"
+    ) {
       setEnvironmentType("containerized");
     }
   }, [dockerAvailable, environmentType, localEnvironmentAvailable]);
 
   const resolved = useMemo(() => {
     const entries = BUILD_STEPS.map(({ key }) => {
-      const step = steps[key];
-      const agentModels = modelsForAgent(catalog, step.agent);
-      const model = agentModels.find((option) => option.id === step.model) ?? agentModels[0];
-      const efforts = model?.reasoningEfforts ?? [];
-      const effort =
-        efforts.length > 0 &&
-        (step.reasoningEffort === "default" || efforts.includes(step.reasoningEffort))
-          ? step.reasoningEffort
-          : "default";
-      const fastMode = model?.supportsSpeed === true ? step.fastMode : undefined;
-      return [key, { model, efforts, effort, fastMode }] as const;
+      const step = key === "review" ? (reviewers[0] ?? steps[key]) : steps[key];
+      return [key, resolveStepState(step, catalog)] as const;
     });
     return Object.fromEntries(entries) as Record<BuildStepKey, ResolvedStep>;
-  }, [catalog, steps]);
+  }, [catalog, reviewers, steps]);
+  const resolvedReviewers = useMemo(
+    () => reviewers.map((reviewer) => resolveStepState(reviewer, catalog)),
+    [catalog, reviewers],
+  );
+  const resolvedReviewPreparation = useMemo(
+    () =>
+      reviewPreparation
+        ? resolveStepState(reviewPreparation, catalog)
+        : undefined,
+    [catalog, reviewPreparation],
+  );
 
   const updateStep = (key: BuildStepKey, next: StepState) => {
+    touchedRef.current.add(key);
+    if (key === "review") {
+      touchedRef.current.add("reviewer:0");
+      setReviewers((current) =>
+        current.map((row, index) => (index === 0 ? next : row)),
+      );
+    }
     setSteps((current) => ({ ...current, [key]: next }));
+  };
+
+  const updateReviewer = (index: number, next: StepState) => {
+    touchedRef.current.add(`reviewer:${index}`);
+    if (index === 0) {
+      touchedRef.current.add("review");
+      setSteps((current) => ({ ...current, review: next }));
+    }
+    setReviewers((current) =>
+      current.map((row, i) => (i === index ? next : row)),
+    );
   };
 
   const commentContextLabel = commentContext
@@ -546,7 +928,8 @@ export function BuildLaunchDialog({
             Configure build
           </DialogTitle>
           <DialogDescription>
-            Choose the workspace, then assign a model to every stage of the pipeline.
+            Choose the workspace, then assign a model to every stage of the
+            pipeline.
           </DialogDescription>
         </DialogHeader>
 
@@ -557,53 +940,47 @@ export function BuildLaunchDialog({
             event.preventDefault();
             if (busy) return;
             if (environmentType === "containerized" && !dockerAvailable) return;
-            if (environmentType === "local" && !localEnvironmentAvailable) return;
+            if (environmentType === "local" && !localEnvironmentAvailable)
+              return;
             const selectedSteps = Object.fromEntries(
-              BUILD_STEPS.map(({ key }) => [
-                key,
-                {
-                  agent: steps[key].agent,
-                  model: resolved[key].model?.id ?? steps[key].model,
-                  reasoningEffort:
-                    resolved[key].effort === "default" ? undefined : resolved[key].effort,
-                  fastMode: resolved[key].fastMode,
-                },
-              ]),
+              BUILD_STEPS.map(({ key }) => {
+                const state =
+                  key === "review" ? (reviewers[0] ?? steps[key]) : steps[key];
+                const resolvedStep = resolved[key];
+                return [
+                  key,
+                  {
+                    agent: state.agent,
+                    model: resolvedStep.model?.id ?? state.model,
+                    reasoningEffort:
+                      resolvedStep.effort === "default"
+                        ? undefined
+                        : resolvedStep.effort,
+                    fastMode: resolvedStep.fastMode,
+                  },
+                ];
+              }),
             ) as Record<BuildStepKey, BuildLaunchStepSelection>;
-            const reviewers = pipelineDefaults?.reviewers.map((reviewer, index) =>
-              index === 0
-                ? selectedSteps.review
-                : cleanStep(
-                    initialStepState(
-                      defaultAgent,
-                      catalog,
-                      preferredModels,
-                      preferredReasoningEfforts,
-                      preferredFastModes,
-                      reviewer,
-                    ),
-                    catalog,
-                  ),
-            );
-            const reviewPreparation = pipelineDefaults
-              ? cleanStep(
-                  initialStepState(
-                    defaultAgent,
-                    catalog,
-                    preferredModels,
-                    preferredReasoningEfforts,
-                    preferredFastModes,
-                    pipelineDefaults.reviewPreparation,
-                  ),
-                  catalog,
-                )
-              : undefined;
+            const submittedReviewers =
+              reviewers.length > 1
+                ? reviewers.map((reviewer, index) =>
+                    index === 0
+                      ? selectedSteps.review
+                      : cleanStep(reviewer, catalog),
+                  )
+                : undefined;
+            const submittedPreparation =
+              reviewers.length > 1 && reviewPreparation
+                ? cleanStep(reviewPreparation, catalog)
+                : undefined;
             onConfirm({
               environmentType,
               ...(commentContext ? { includeComments } : {}),
               steps: selectedSteps,
-              ...(reviewers ? { reviewers } : {}),
-              ...(reviewPreparation ? { reviewPreparation } : {}),
+              ...(submittedReviewers ? { reviewers: submittedReviewers } : {}),
+              ...(submittedPreparation
+                ? { reviewPreparation: submittedPreparation }
+                : {}),
             });
           }}
         >
@@ -612,10 +989,17 @@ export function BuildLaunchDialog({
             aria-label="Build configuration"
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
           >
-            <fieldset disabled={busy} className="min-w-0 border-0 px-5 py-5 sm:px-6">
+            <fieldset
+              disabled={busy}
+              className="min-w-0 border-0 px-5 py-5 sm:px-6"
+            >
               <div className="mb-3">
-                <h3 className="text-sm font-semibold text-zinc-200">Environment</h3>
-                <p className="text-xs text-zinc-500">Every stage runs in this workspace.</p>
+                <h3 className="text-sm font-semibold text-zinc-200">
+                  Environment
+                </h3>
+                <p className="text-xs text-zinc-500">
+                  Every stage runs in this workspace.
+                </p>
               </div>
               <div
                 className="grid gap-2 sm:grid-cols-2"
@@ -673,7 +1057,9 @@ export function BuildLaunchDialog({
                     <Checkbox
                       id={commentContextId}
                       checked={includeComments}
-                      onCheckedChange={(checked) => setIncludeComments(checked === true)}
+                      onCheckedChange={(checked) =>
+                        setIncludeComments(checked === true)
+                      }
                       aria-label={commentContextLabel}
                       className="mt-0.5"
                     />
@@ -687,7 +1073,8 @@ export function BuildLaunchDialog({
                           {commentContextLabel}
                         </span>
                         <span className="mt-0.5 block text-[11px] font-normal leading-snug text-zinc-500">
-                          Give the pipeline the discussion attached to this ticket.
+                          Give the pipeline the discussion attached to this
+                          ticket.
                         </span>
                       </span>
                     </Label>
@@ -695,41 +1082,112 @@ export function BuildLaunchDialog({
                 </div>
               )}
 
-              <div className="my-5 flex items-center gap-3 text-zinc-500" aria-hidden="true">
+              <div
+                className="my-5 flex items-center gap-3 text-zinc-500"
+                aria-hidden="true"
+              >
                 <span className="h-px flex-1 bg-zinc-800" />
                 <Hammer className="size-3.5" />
                 <span className="h-px flex-1 bg-zinc-800" />
               </div>
 
               <div className="mb-3">
-                <h3 className="text-sm font-semibold text-zinc-200">Build steps</h3>
+                <h3 className="text-sm font-semibold text-zinc-200">
+                  Build steps
+                </h3>
                 <p className="text-xs text-zinc-500">
-                  The pipeline runs top to bottom. Pick the model best suited to each stage.
+                  The pipeline runs top to bottom. Pick the model best suited to
+                  each stage.
                 </p>
               </div>
               <ol className="space-y-2.5" aria-label="Build steps">
-                {BUILD_STEPS.map(({ key, title, description, icon }, index) => (
-                  <BuildStepCard
-                    key={key}
-                    number={index + 1}
-                    stepKey={key}
-                    title={title}
-                    description={description}
-                    icon={icon}
-                    state={steps[key]}
-                    resolved={resolved[key]}
-                    models={models}
-                    enabledPlatforms={enabledPlatforms}
-                    catalog={catalog}
-                    preferredModels={preferredModels}
-                    preferredReasoningEfforts={preferredReasoningEfforts}
-                    preferredFastModes={preferredFastModes}
-                    favorites={pickerFavorites}
-                    onToggleFavorite={toggleFavorite}
-                    onReorderFavorites={reorderPickerFavorites}
-                    onChange={(next) => updateStep(key, next)}
-                  />
-                ))}
+                {visibleBuildCards(
+                  reviewers.length,
+                  Boolean(reviewPreparation),
+                ).map((card, index) => {
+                  if (
+                    card.kind === "reviewPreparation" &&
+                    reviewPreparation &&
+                    resolvedReviewPreparation
+                  ) {
+                    return (
+                      <BuildStepCard
+                        key="reviewPreparation"
+                        number={index + 1}
+                        stepKey="review"
+                        pickerId="build-reviewPreparation-model"
+                        title={card.title}
+                        description={card.description}
+                        icon={card.icon}
+                        state={reviewPreparation}
+                        resolved={resolvedReviewPreparation}
+                        models={models}
+                        enabledPlatforms={enabledPlatforms}
+                        catalog={catalog}
+                        preferredModels={preferredModels}
+                        preferredReasoningEfforts={preferredReasoningEfforts}
+                        preferredFastModes={preferredFastModes}
+                        favorites={pickerFavorites}
+                        onToggleFavorite={toggleFavorite}
+                        onReorderFavorites={reorderPickerFavorites}
+                        onChange={(next) => {
+                          touchedRef.current.add("reviewPreparation");
+                          setReviewPreparation(next);
+                        }}
+                      />
+                    );
+                  }
+                  if (card.kind === "reviewer") {
+                    const state = reviewers[card.index] ?? steps.review;
+                    return (
+                      <BuildStepCard
+                        key={`reviewer-${card.index}`}
+                        number={index + 1}
+                        stepKey="review"
+                        pickerId={`build-reviewer-${card.index}-model`}
+                        title={card.title}
+                        description={card.description}
+                        icon={card.icon}
+                        state={state}
+                        resolved={
+                          resolvedReviewers[card.index] ?? resolved.review
+                        }
+                        models={models}
+                        enabledPlatforms={enabledPlatforms}
+                        catalog={catalog}
+                        preferredModels={preferredModels}
+                        preferredReasoningEfforts={preferredReasoningEfforts}
+                        preferredFastModes={preferredFastModes}
+                        favorites={pickerFavorites}
+                        onToggleFavorite={toggleFavorite}
+                        onReorderFavorites={reorderPickerFavorites}
+                        onChange={(next) => updateReviewer(card.index, next)}
+                      />
+                    );
+                  }
+                  return (
+                    <BuildStepCard
+                      key={card.key}
+                      number={index + 1}
+                      stepKey={card.key}
+                      title={card.title}
+                      description={card.description}
+                      icon={card.icon}
+                      state={steps[card.key]}
+                      resolved={resolved[card.key]}
+                      models={models}
+                      enabledPlatforms={enabledPlatforms}
+                      catalog={catalog}
+                      preferredModels={preferredModels}
+                      preferredReasoningEfforts={preferredReasoningEfforts}
+                      preferredFastModes={preferredFastModes}
+                      favorites={pickerFavorites}
+                      onToggleFavorite={toggleFavorite}
+                      onReorderFavorites={reorderPickerFavorites}
+                      onChange={(next) => updateStep(card.key, next)}
+                    />
+                  );
+                })}
               </ol>
             </fieldset>
           </div>

@@ -18,7 +18,10 @@ import {
   firstEnabledAgentPlatform,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
-import { actionDefaultEntry, type AgentActionDefault } from "@orkestrator/protocol/action-defaults";
+import {
+  actionDefaultEntry,
+  type AgentActionDefault,
+} from "@orkestrator/protocol/action-defaults";
 import {
   DEFAULT_MULTI_REVIEW_REVIEWER_COUNT,
   resolveAgentPlatformSettings,
@@ -30,7 +33,10 @@ import {
   MULTI_REVIEW_MAX_REVIEWERS,
   MULTI_REVIEW_MIN_REVIEWERS,
 } from "@orkestrator/protocol/multi-review";
-import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
+import type {
+  AgentModel,
+  AgentReasoningOption,
+} from "@orkestrator/protocol/native-agent";
 import { INHERIT } from "./InheritedValue";
 
 interface MultiReviewDefaultsEditorProps {
@@ -43,12 +49,16 @@ interface MultiReviewDefaultsEditorProps {
   disabled?: boolean;
 }
 
-function reviewerEntry(tier: AgentSettingsTier, index: number): AgentActionDefault | undefined {
+function reviewerEntry(
+  tier: AgentSettingsTier,
+  index: number,
+): AgentActionDefault | undefined {
   if (index === 0) return tier.actionDefaults?.review;
   if (index === 1) return tier.actionDefaults?.review2;
   return (
-    tier.multiReview?.additionalReviewers?.[index - DEFAULT_MULTI_REVIEW_REVIEWER_COUNT] ??
-    undefined
+    tier.multiReview?.additionalReviewers?.[
+      index - DEFAULT_MULTI_REVIEW_REVIEWER_COUNT
+    ] ?? undefined
   );
 }
 
@@ -65,9 +75,12 @@ function withReviewerEntry(
     return { ...tier, actionDefaults };
   }
 
-  const additionalReviewers = [...(tier.multiReview?.additionalReviewers ?? [])];
+  const additionalReviewers = [
+    ...(tier.multiReview?.additionalReviewers ?? []),
+  ];
   const additionalIndex = index - DEFAULT_MULTI_REVIEW_REVIEWER_COUNT;
-  while (additionalReviewers.length <= additionalIndex) additionalReviewers.push(null);
+  while (additionalReviewers.length <= additionalIndex)
+    additionalReviewers.push(null);
   additionalReviewers[additionalIndex] = entry ?? null;
   while (additionalReviewers.at(-1) === null) additionalReviewers.pop();
   return {
@@ -81,19 +94,28 @@ function withReviewerEntry(
   };
 }
 
-function withReviewerCount(tier: AgentSettingsTier, reviewerCount: number): AgentSettingsTier {
-  const additionalCount = Math.max(0, reviewerCount - DEFAULT_MULTI_REVIEW_REVIEWER_COUNT);
-  const additionalReviewers = (tier.multiReview?.additionalReviewers ?? []).slice(
+function withReviewerCount(
+  tier: AgentSettingsTier,
+  reviewerCount: number,
+): AgentSettingsTier {
+  const additionalCount = Math.max(
     0,
-    additionalCount,
+    reviewerCount - DEFAULT_MULTI_REVIEW_REVIEWER_COUNT,
   );
+  const additionalReviewers = (
+    tier.multiReview?.additionalReviewers ?? []
+  ).slice(0, additionalCount);
   const multiReview = {
-    ...(reviewerCount !== DEFAULT_MULTI_REVIEW_REVIEWER_COUNT ? { reviewerCount } : {}),
+    ...(reviewerCount !== DEFAULT_MULTI_REVIEW_REVIEWER_COUNT
+      ? { reviewerCount }
+      : {}),
     ...(additionalReviewers.length > 0 ? { additionalReviewers } : {}),
   };
   return {
     ...tier,
-    ...(Object.keys(multiReview).length > 0 ? { multiReview } : { multiReview: undefined }),
+    ...(Object.keys(multiReview).length > 0
+      ? { multiReview }
+      : { multiReview: undefined }),
   };
 }
 
@@ -134,14 +156,17 @@ function ReviewerDefaultPicker({
   const models = modelsForAgent(catalog, platform);
   const inheritsFallbackFields =
     !entry ||
-    (inheritFallbackFieldsWhenConfigured === true && entry.platform === fallbackEntry.platform);
+    (inheritFallbackFieldsWhenConfigured === true &&
+      entry.platform === fallbackEntry.platform);
   const effectiveModelId =
     entry?.model ??
     (inheritsFallbackFields ? fallbackEntry.model : undefined) ??
     platformDefault.model;
   const selectedModel = effectiveModelId
     ? models.find(
-        (model) => model.id === effectiveModelId || model.resolvedModel === effectiveModelId,
+        (model) =>
+          model.id === effectiveModelId ||
+          model.resolvedModel === effectiveModelId,
       )
     : undefined;
   const reasoningModel = selectedModel ?? models[0];
@@ -159,22 +184,38 @@ function ReviewerDefaultPicker({
       ? []
       : [
           { id: INHERIT, label: "Model default" },
-          ...effortIds.map((effort) => ({ id: effort, label: effortLabel(effort) })),
+          ...effortIds.map((effort) => ({
+            id: effort,
+            label: effortLabel(effort),
+          })),
         ];
-  const modelLabel = selectedModel?.name ?? effectiveModelId ?? "Provider default";
+  const modelLabel =
+    selectedModel?.name ?? effectiveModelId ?? "Provider default";
   const label = `Reviewer ${index + 1}`;
   const speedCapable = platformOwnsSpeed(platform);
-  const speedAvailable = modelSupportsSpeed(platform, catalog, effectiveModelId);
-  const platformFastMode = resolveAgentPlatformSettings(tiers, platform).fastMode;
+  const speedAvailable = modelSupportsSpeed(
+    platform,
+    catalog,
+    effectiveModelId,
+  );
+  const platformFastMode = resolveAgentPlatformSettings(
+    tiers,
+    platform,
+  ).fastMode;
   const storedFastMode = entry?.fastMode;
-  const inheritedFastMode = inheritsFallbackFields ? fallbackEntry.fastMode : undefined;
-  const effectiveFastMode = storedFastMode ?? inheritedFastMode ?? platformFastMode ?? null;
+  const inheritedFastMode = inheritsFallbackFields
+    ? fallbackEntry.fastMode
+    : undefined;
+  const effectiveFastMode =
+    storedFastMode ?? inheritedFastMode ?? platformFastMode ?? null;
   // Writing this row's entry replaces whatever it was following, whole. Carry
   // the inherited model and reasoning level across so choosing a speed cannot
   // quietly move the reviewer onto a different model.
   const persistSpeed = (fastMode: boolean | undefined) => {
     if (fastMode === undefined && entry == null) return;
-    const model = entry?.model ?? (inheritsFallbackFields ? fallbackEntry.model : undefined);
+    const model =
+      entry?.model ??
+      (inheritsFallbackFields ? fallbackEntry.model : undefined);
     const reasoningEffort =
       entry?.reasoningEffort ??
       (inheritsFallbackFields ? fallbackEntry.reasoningEffort : undefined);
@@ -225,19 +266,24 @@ function ReviewerDefaultPicker({
         selectedModelId={selectedModel?.id}
         selectedModelLabel={`${entry?.platform ? "" : `${fallbackLabel} — `}${AGENT_PLATFORM_LABELS[platform]} · ${modelLabel}`}
         onModelChange={(model) => onChange({ platform, model })}
-        onModelSelect={(model) => onChange({ platform: model.platform, model: model.id })}
+        onModelSelect={(model) =>
+          onChange({ platform: model.platform, model: model.id })
+        }
         reasoningOptions={reasoningOptions}
         selectedReasoningId={effectiveReasoningEffort ?? INHERIT}
         selectedReasoningLabel={
-          reasoningOptions.find((option) => option.id === (effectiveReasoningEffort ?? INHERIT))
-            ?.label
+          reasoningOptions.find(
+            (option) => option.id === (effectiveReasoningEffort ?? INHERIT),
+          )?.label
         }
         onReasoningChange={(reasoningEffort) =>
           onChange(
             actionDefaultEntry(platform, {
               ...(entry?.model ? { model: entry.model } : {}),
               ...(reasoningEffort === INHERIT ? {} : { reasoningEffort }),
-              ...(entry?.fastMode !== undefined ? { fastMode: entry.fastMode } : {}),
+              ...(entry?.fastMode !== undefined
+                ? { fastMode: entry.fastMode }
+                : {}),
             }),
           )
         }
@@ -253,12 +299,15 @@ function ReviewerDefaultPicker({
             : undefined
         }
         onFastModeChange={speedCapable ? persistSpeed : undefined}
-        onFastModeInherit={speedCapable ? () => persistSpeed(undefined) : undefined}
+        onFastModeInherit={
+          speedCapable ? () => persistSpeed(undefined) : undefined
+        }
         className="min-h-11 w-full max-w-none justify-start border border-zinc-700/80 bg-zinc-900 py-2.5 text-sm text-zinc-100 md:max-w-none md:flex-1"
       />
       {entry?.model && !selectedModel && (
         <p className="mt-2 text-xs text-amber-300">
-          {entry.model} is not in the current catalog. Pick another model to replace it.
+          {entry.model} is not in the current catalog. Pick another model to
+          replace it.
         </p>
       )}
     </div>
@@ -275,35 +324,57 @@ export function MultiReviewDefaultsEditor({
   disabled,
 }: MultiReviewDefaultsEditorProps) {
   const favorites = useAgentModelFavorites();
-  const reviewerCount = tier.multiReview?.reviewerCount ?? DEFAULT_MULTI_REVIEW_REVIEWER_COUNT;
-  const fallbackAgent = firstEnabledAgentPlatform(enabledPlatforms, resolveDefaultAgent(tiers));
-  const reviewFallback = resolvedActionDefault(tiers, "review", enabledPlatforms);
-  const reviewFallbackEntry: AgentActionDefault & { platform: AgentPlatform } = {
-    platform: reviewFallback.agent,
-    ...(reviewFallback.model ? { model: reviewFallback.model } : {}),
-    ...(reviewFallback.reasoningEffort ? { reasoningEffort: reviewFallback.reasoningEffort } : {}),
-    ...(reviewFallback.fastMode !== undefined ? { fastMode: reviewFallback.fastMode } : {}),
-  };
+  const reviewerCount =
+    tier.multiReview?.reviewerCount ?? DEFAULT_MULTI_REVIEW_REVIEWER_COUNT;
+  const fallbackAgent = firstEnabledAgentPlatform(
+    enabledPlatforms,
+    resolveDefaultAgent(tiers),
+  );
+  const reviewFallback = resolvedActionDefault(
+    tiers,
+    "review",
+    enabledPlatforms,
+  );
+  const reviewFallbackEntry: AgentActionDefault & { platform: AgentPlatform } =
+    {
+      platform: reviewFallback.agent,
+      ...(reviewFallback.model ? { model: reviewFallback.model } : {}),
+      ...(reviewFallback.reasoningEffort
+        ? { reasoningEffort: reviewFallback.reasoningEffort }
+        : {}),
+      ...(reviewFallback.fastMode !== undefined
+        ? { fastMode: reviewFallback.fastMode }
+        : {}),
+    };
   const pickerModels = useMemo<AgentModel[]>(
     () =>
       enabledPlatforms.flatMap((platform) =>
         modelsForAgent(catalog, platform)
-          .filter((option) => !(platform === "opencode" && option.id === "default"))
+          .filter(
+            (option) => !(platform === "opencode" && option.id === "default"),
+          )
           .map((option) => toPickerModel(platform, option)),
       ),
     [catalog, enabledPlatforms],
   );
 
   return (
-    <section className="space-y-4" aria-labelledby="multi-review-defaults-heading">
+    <section
+      className="space-y-4"
+      aria-labelledby="multi-review-defaults-heading"
+    >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h3 id="multi-review-defaults-heading" className="text-sm font-medium text-foreground">
+          <h3
+            id="multi-review-defaults-heading"
+            className="text-sm font-medium text-foreground"
+          >
             Multi Review defaults
           </h3>
           <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            Choose how many independent reviewers a plain Multi Review starts and the model each one
-            uses. Reviewer 1 and Reviewer 2 are shared with the Defaults page.
+            Choose how many independent reviewers a Multi Review click, feature
+            build, or ticket build starts and the model each one uses. Reviewer
+            1 and Reviewer 2 are shared with the Defaults page.
           </p>
         </div>
         <div
@@ -352,9 +423,13 @@ export function MultiReviewDefaultsEditor({
             key={index}
             index={index}
             entry={reviewerEntry(tier, index)}
-            fallbackEntry={index === 0 ? { platform: fallbackAgent } : reviewFallbackEntry}
+            fallbackEntry={
+              index === 0 ? { platform: fallbackAgent } : reviewFallbackEntry
+            }
             fallbackLabel={index === 0 ? "App default" : "Follows Review"}
-            inheritFallbackFieldsWhenConfigured={index >= DEFAULT_MULTI_REVIEW_REVIEWER_COUNT}
+            inheritFallbackFieldsWhenConfigured={
+              index >= DEFAULT_MULTI_REVIEW_REVIEWER_COUNT
+            }
             canInherit={canInherit}
             tiers={tiers}
             enabledPlatforms={enabledPlatforms}
@@ -362,7 +437,9 @@ export function MultiReviewDefaultsEditor({
             pickerModels={pickerModels}
             favorites={favorites}
             disabled={disabled}
-            onChange={(entry) => onChange(withReviewerEntry(tier, index, entry))}
+            onChange={(entry) =>
+              onChange(withReviewerEntry(tier, index, entry))
+            }
           />
         ))}
       </div>

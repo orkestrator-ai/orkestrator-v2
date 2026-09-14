@@ -27,7 +27,10 @@ import {
 const HEAD = "1".repeat(40);
 const FINGERPRINT = "a".repeat(64);
 
-function reportFor(summary: string, issueTitle?: string): StructuredReviewReport {
+function reportFor(
+  summary: string,
+  issueTitle?: string,
+): StructuredReviewReport {
   return {
     reviewScope: {
       targetBranch: "main",
@@ -44,7 +47,9 @@ function reportFor(summary: string, issueTitle?: string): StructuredReviewReport
       overview: "Implemented the task.",
       before: "Missing.",
       after: "Present.",
-      keyCodeChanges: [{ file: "src/app.ts", line: 1, description: "Adds the feature." }],
+      keyCodeChanges: [
+        { file: "src/app.ts", line: 1, description: "Adds the feature." },
+      ],
       userImpact: "The feature is available.",
     },
     riskProfile: {
@@ -137,7 +142,11 @@ class FanoutProvider implements BuildPipelineProvider {
     return id;
   }
 
-  async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
+  async send(
+    sessionId: string,
+    prompt: string,
+    options: ProviderSendOptions,
+  ): Promise<void> {
     this.sent.push({
       sessionId,
       prompt,
@@ -146,7 +155,11 @@ class FanoutProvider implements BuildPipelineProvider {
       fastMode: options.fastMode,
     });
     const model = this.sessionModels.get(sessionId);
-    if (model && this.ambiguousModels.has(model) && !this.ambiguityRaised.has(model)) {
+    if (
+      model &&
+      this.ambiguousModels.has(model) &&
+      !this.ambiguityRaised.has(model)
+    ) {
       this.ambiguityRaised.add(model);
       throw new AmbiguousPromptDispatchError("dispatch outcome unknown");
     }
@@ -154,11 +167,14 @@ class FanoutProvider implements BuildPipelineProvider {
 
   async status(sessionId: string): Promise<ProviderStatus> {
     this.statusReads.push(sessionId);
-    if (sessionId.includes("consolidation") && this.runningConsolidation) return "running";
+    if (sessionId.includes("consolidation") && this.runningConsolidation)
+      return "running";
     const model = this.sessionModels.get(sessionId);
     if (model !== undefined && this.runningModels.has(model)) return "running";
     if (model !== undefined && this.blockedModels.has(model)) return "blocked";
-    return model !== undefined && this.failingModels.has(model) ? "error" : "idle";
+    return model !== undefined && this.failingModels.has(model)
+      ? "error"
+      : "idle";
   }
 
   async messages(sessionId: string): Promise<unknown[]> {
@@ -172,7 +188,10 @@ class FanoutProvider implements BuildPipelineProvider {
     ];
   }
 
-  async structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T>> {
+  async structured<T>(
+    sessionId: string,
+    requestId: string,
+  ): Promise<StructuredOutputResult<T>> {
     const base = { ok: true as const, provider: "claude" as const, requestId };
     if (sessionId.includes("consolidation")) {
       this.consolidationResultCalls += 1;
@@ -182,7 +201,8 @@ class FanoutProvider implements BuildPipelineProvider {
       const merged = reportFor("Merged review.", "Consolidated finding");
       const sourceId =
         this.consolidationResultCalls <=
-        this.invalidConsolidationResults + this.unknownSourceConsolidationResults
+        this.invalidConsolidationResults +
+          this.unknownSourceConsolidationResults
           ? "reviewer-999/issue-1"
           : "reviewer-1/issue-1";
       return {
@@ -198,7 +218,10 @@ class FanoutProvider implements BuildPipelineProvider {
       };
     }
     if (sessionId.includes("review")) {
-      return { ...base, value: reportFor(`Report from ${sessionId}`, "Reviewer finding") as T };
+      return {
+        ...base,
+        value: reportFor(`Report from ${sessionId}`, "Reviewer finding") as T,
+      };
     }
     const phase = this.sessionPhases.get(sessionId);
     if (phase === "build" || phase === "fix") {
@@ -258,11 +281,18 @@ async function withPipeline(
   const worktree = { head: HEAD, fingerprint: FINGERPRINT, fail: false };
   const packageGeneration = { count: 0, verificationCount: 0 };
   const commands: string[] = [];
-  const invoke = async <T>(command: string, _args: Record<string, unknown> = {}): Promise<T> => {
+  const invoke = async <T>(
+    command: string,
+    _args: Record<string, unknown> = {},
+  ): Promise<T> => {
     commands.push(command);
     if (command === "get_environment_uncommitted_paths") {
       if (worktree.fail) throw new Error("probe failed");
-      return { head: worktree.head, paths: [], fingerprint: worktree.fingerprint } as T;
+      return {
+        head: worktree.head,
+        paths: [],
+        fingerprint: worktree.fingerprint,
+      } as T;
     }
     if (command === "generate_looped_review_package") {
       packageGeneration.count += 1;
@@ -275,7 +305,10 @@ async function withPipeline(
       packageGeneration.verificationCount += 1;
       return { valid: true } as T;
     }
-    if (command === "start_environment" || command === "run_environment_setup") {
+    if (
+      command === "start_environment" ||
+      command === "run_environment_setup"
+    ) {
       return (await storage.getEnvironment("env-1")) as T;
     }
     if (command === "update_environment_agent_settings") {
@@ -284,7 +317,8 @@ async function withPipeline(
     if (command === "get_kanban_tasks") return [] as T;
     if (command === "update_kanban_task") return {} as T;
     if (command === "add_kanban_comment") return undefined as T;
-    if (command === "detect_pr_local" || command === "detect_pr") return null as T;
+    if (command === "detect_pr_local" || command === "detect_pr")
+      return null as T;
     if (command === "pr_monitor_watch") return undefined as T;
     return undefined as T;
   };
@@ -315,7 +349,9 @@ async function withPipeline(
   }
 }
 
-function startInput(reviewers?: Array<{ agent: BuildPipelineAgent; model?: string }>) {
+function startInput(
+  reviewers?: Array<{ agent: BuildPipelineAgent; model?: string }>,
+) {
   return {
     taskId: "task-1",
     projectId: "project-1",
@@ -343,7 +379,11 @@ async function advanceUntil(
   budget = 25,
 ): Promise<BuildPipeline> {
   let current = await read(id);
-  for (let attempt = 0; attempt < budget && current.phase !== phase; attempt += 1) {
+  for (
+    let attempt = 0;
+    attempt < budget && current.phase !== phase;
+    attempt += 1
+  ) {
     await service.advanceNow(id);
     current = await read(id);
   }
@@ -373,7 +413,9 @@ describe("build pipeline multi-model review", () => {
   test("reads the shared model catalogue once for the whole reviewer panel", async () => {
     await withPipeline(async ({ service, storage, read, commands }) => {
       const config = await storage.loadConfig();
-      config.global.agentSettings = { platforms: { claude: { fastMode: true } } };
+      config.global.agentSettings = {
+        platforms: { claude: { fastMode: true } },
+      };
       await storage.saveConfig(config);
       const started = await service.start(
         startInput([
@@ -382,64 +424,94 @@ describe("build pipeline multi-model review", () => {
         ]),
       );
 
-      const reviewing = await advanceUntil(service, read, started.id, "reviewing");
-      expect(reviewing.reviewFanout?.reviewers.map((reviewer) => reviewer.fastMode)).toEqual([
-        true,
-        true,
-      ]);
+      const reviewing = await advanceUntil(
+        service,
+        read,
+        started.id,
+        "reviewing",
+      );
+      expect(
+        reviewing.reviewFanout?.reviewers.map((reviewer) => reviewer.fastMode),
+      ).toEqual([true, true]);
 
       // Every reviewer resolves against the same environment, and the command
       // behind this can wait on live bridge catalogue fetches. One read for the
       // panel, not one per reviewer.
-      expect(commands.filter((command) => command === "get_native_agent_model_catalog")).toEqual([
-        "get_native_agent_model_catalog",
-      ]);
+      expect(
+        commands.filter(
+          (command) => command === "get_native_agent_model_catalog",
+        ),
+      ).toEqual(["get_native_agent_model_catalog"]);
     });
   });
 
   test("applies each reviewer's Fast or Normal platform default", async () => {
-    await withPipeline(async ({ service, storage, read, provider, providers }) => {
-      const config = await storage.loadConfig();
-      config.global.agentSettings = {
-        platforms: {
-          claude: { fastMode: true },
-          codex: { fastMode: false },
-        },
-      };
-      await storage.saveConfig(config);
-      const started = await service.start(
-        startInput([
-          { agent: "claude", model: "opus" },
-          { agent: "codex", model: "gpt-5.4" },
-        ]),
-      );
+    await withPipeline(
+      async ({ service, storage, read, provider, providers }) => {
+        const config = await storage.loadConfig();
+        config.global.agentSettings = {
+          platforms: {
+            claude: { fastMode: true },
+            codex: { fastMode: false },
+          },
+        };
+        await storage.saveConfig(config);
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "codex", model: "gpt-5.4" },
+          ]),
+        );
 
-      const reviewing = await advanceUntil(service, read, started.id, "reviewing");
-      expect(reviewing.reviewFanout?.reviewers.map((reviewer) => reviewer.fastMode)).toEqual([
-        true,
-        false,
-      ]);
-      await service.advanceNow(started.id);
+        const reviewing = await advanceUntil(
+          service,
+          read,
+          started.id,
+          "reviewing",
+        );
+        expect(
+          reviewing.reviewFanout?.reviewers.map(
+            (reviewer) => reviewer.fastMode,
+          ),
+        ).toEqual([true, false]);
+        await service.advanceNow(started.id);
 
-      expect(provider.created.find((entry) => entry.label === "Review 1")?.options?.fastMode).toBe(
-        true,
-      );
-      expect(providers.get("codex")?.created[0]?.options?.fastMode).toBe(false);
-      expect(provider.sent.find((entry) => entry.sessionId.includes("review-1"))?.fastMode).toBe(
-        true,
-      );
-      expect(providers.get("codex")?.sent[0]?.fastMode).toBe(false);
-    });
+        expect(
+          provider.created.find((entry) => entry.label === "Review 1")?.options
+            ?.fastMode,
+        ).toBe(true);
+        expect(providers.get("codex")?.created[0]?.options?.fastMode).toBe(
+          false,
+        );
+        expect(
+          provider.sent.find((entry) => entry.sessionId.includes("review-1"))
+            ?.fastMode,
+        ).toBe(true);
+        expect(providers.get("codex")?.sent[0]?.fastMode).toBe(false);
+      },
+    );
   });
 
   test("a single reviewer keeps the classic one-session review stage", async () => {
-    await withPipeline(async ({ service, read }) => {
-      const started = await service.start(startInput([{ agent: "claude", model: "opus" }]));
+    await withPipeline(async ({ service, read, providers }) => {
+      const started = await service.start(
+        startInput([{ agent: "claude", model: "opus" }]),
+      );
       const stored = await read(started.id);
       // Normalised away on the way in: a one-entry panel is the stage the
       // pipeline has always run, and storing it would open a consolidation turn
       // that merges one report into itself.
       expect(stored.reviewers).toBeUndefined();
+      expect(stored.reviewPreparation).toBeUndefined();
+
+      await advanceUntil(service, read, started.id, "reviewing");
+      expect(
+        [...providers.values()].flatMap((provider) =>
+          provider.created.filter(
+            (entry) => entry.label === "Package Preparation Session",
+          ),
+        ),
+      ).toEqual([]);
     });
   });
 
@@ -454,7 +526,12 @@ describe("build pipeline multi-model review", () => {
         },
       });
 
-      const reviewing = await advanceUntil(service, read, started.id, "reviewing");
+      const reviewing = await advanceUntil(
+        service,
+        read,
+        started.id,
+        "reviewing",
+      );
 
       expect(reviewing.phase).toBe("reviewing");
       expect(reviewing.reviewers).toBeUndefined();
@@ -475,79 +552,116 @@ describe("build pipeline multi-model review", () => {
   });
 
   test("fans out to every reviewer, consolidates, then addresses the merged report", async () => {
-    await withPipeline(async ({ service, read, provider, packageGeneration }) => {
-      const started = await service.start(
-        startInput([
-          { agent: "claude", model: "opus" },
-          { agent: "claude", model: "sonnet" },
-        ]),
-      );
-      const reviewing = await advanceUntil(service, read, started.id, "reviewing");
-      expect(reviewing.phase).toBe("reviewing");
-      expect(reviewing.reviewFanout?.reviewers).toHaveLength(2);
-      expect(reviewing.reviewFanout?.snapshot).toBeUndefined();
-      expect(reviewing.reviewPackage?.headRef).toBe(HEAD);
+    await withPipeline(
+      async ({ service, read, provider, packageGeneration }) => {
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+          ]),
+        );
+        const reviewing = await advanceUntil(
+          service,
+          read,
+          started.id,
+          "reviewing",
+        );
+        expect(reviewing.phase).toBe("reviewing");
+        expect(reviewing.reviewFanout?.reviewers).toHaveLength(2);
+        expect(reviewing.reviewFanout?.snapshot).toBeUndefined();
+        expect(reviewing.reviewPackage?.headRef).toBe(HEAD);
 
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
-      expect(addressing.error ?? addressing.phase).toBe("addressing");
-      // Both reviewers ran, and each is visible as its own pipeline session so
-      // a user watching the build can read them.
-      const reviewLabels = provider.created
-        .filter((entry) => entry.phase === "review")
-        .map((entry) => entry.label);
-      expect(reviewLabels).toContain("Review 1");
-      expect(reviewLabels).toContain("Review 2");
-      expect(reviewLabels).toContain("Review · Consolidation");
-      const reviewCreates = provider.created.filter((entry) => entry.phase === "review");
-      expect(reviewCreates).not.toHaveLength(0);
-      for (const created of reviewCreates) {
-        expect(created.options?.policy).toMatchObject({
-          id: "pipeline",
-          sandbox: "none",
-          networkAccess: "full",
-        });
-      }
-      expect(
-        reviewCreates.find((entry) => entry.label === "Review · Consolidation")?.options?.policy,
-      ).toMatchObject({ id: "pipeline" });
-      const reviewerPrompts = provider.sent.filter(
-        (entry) =>
-          entry.sessionId.includes("review-") && !entry.sessionId.includes("consolidation"),
-      );
-      expect(reviewerPrompts).toHaveLength(2);
-      expect(reviewerPrompts.every((entry) => entry.prompt.includes("review-package-"))).toBe(true);
-      expect(packageGeneration.verificationCount).toBeGreaterThanOrEqual(2);
-      expect(
-        reviewerPrompts.every((entry) =>
-          entry.prompt.includes("Do not modify, create, or delete files"),
-        ),
-      ).toBe(true);
-      expect(
-        addressing.sessions.filter((session) => session.label.startsWith("Review")).length,
-      ).toBeGreaterThanOrEqual(2);
-      // Settled reviewers must not still read as running in the build tab.
-      const reviewSessions = addressing.sessions.filter((session) =>
-        /^Review \d+$/.test(session.label),
-      );
-      expect(reviewSessions).toHaveLength(2);
-      expect(reviewSessions.every((session) => session.status === "idle")).toBe(true);
-      expect(reviewSessions.every((session) => session.reviewReport !== undefined)).toBe(true);
-      expect(reviewSessions.every((session) => session.structuredResultStatus === "accepted")).toBe(
-        true,
-      );
-      const consolidationSession = addressing.sessions.find(
-        (session) => session.label === "Consolidation",
-      );
-      expect(consolidationSession?.reviewReport?.reviewSummary).toBe("Merged review.");
-      expect(consolidationSession?.structuredResultStatus).toBe("accepted");
-      expect(addressing.structuredReviewRequestId).toBe(consolidationSession?.structuredRequestId);
-      // Everything downstream reads one report, and the fan-out record is gone.
-      expect(addressing.structuredReview?.reviewSummary).toBe("Merged review.");
-      expect(addressing.reviewFanout).toBeUndefined();
-      // Provenance is derived by the backend from the cited source IDs, never
-      // taken from what the consolidation model claimed.
-      expect(addressing.structuredReview?.issues[0]?.reviewModels).toEqual(["claude/opus"]);
-    });
+        const addressing = await advanceUntil(
+          service,
+          read,
+          started.id,
+          "addressing",
+        );
+        expect(addressing.error ?? addressing.phase).toBe("addressing");
+        // Both reviewers ran, and each is visible as its own pipeline session so
+        // a user watching the build can read them.
+        const reviewLabels = provider.created
+          .filter((entry) => entry.phase === "review")
+          .map((entry) => entry.label);
+        expect(reviewLabels).toContain("Review 1");
+        expect(reviewLabels).toContain("Review 2");
+        expect(reviewLabels).toContain("Review · Consolidation");
+        const reviewCreates = provider.created.filter(
+          (entry) => entry.phase === "review",
+        );
+        expect(reviewCreates).not.toHaveLength(0);
+        for (const created of reviewCreates) {
+          expect(created.options?.policy).toMatchObject({
+            id: "pipeline",
+            sandbox: "none",
+            networkAccess: "full",
+          });
+        }
+        expect(
+          reviewCreates.find(
+            (entry) => entry.label === "Review · Consolidation",
+          )?.options?.policy,
+        ).toMatchObject({ id: "pipeline" });
+        const reviewerPrompts = provider.sent.filter(
+          (entry) =>
+            entry.sessionId.includes("review-") &&
+            !entry.sessionId.includes("consolidation"),
+        );
+        expect(reviewerPrompts).toHaveLength(2);
+        expect(
+          reviewerPrompts.every((entry) =>
+            entry.prompt.includes("review-package-"),
+          ),
+        ).toBe(true);
+        expect(packageGeneration.verificationCount).toBeGreaterThanOrEqual(2);
+        expect(
+          reviewerPrompts.every((entry) =>
+            entry.prompt.includes("Do not modify, create, or delete files"),
+          ),
+        ).toBe(true);
+        expect(
+          addressing.sessions.filter((session) =>
+            session.label.startsWith("Review"),
+          ).length,
+        ).toBeGreaterThanOrEqual(2);
+        // Settled reviewers must not still read as running in the build tab.
+        const reviewSessions = addressing.sessions.filter((session) =>
+          /^Review \d+$/.test(session.label),
+        );
+        expect(reviewSessions).toHaveLength(2);
+        expect(
+          reviewSessions.every((session) => session.status === "idle"),
+        ).toBe(true);
+        expect(
+          reviewSessions.every((session) => session.reviewReport !== undefined),
+        ).toBe(true);
+        expect(
+          reviewSessions.every(
+            (session) => session.structuredResultStatus === "accepted",
+          ),
+        ).toBe(true);
+        const consolidationSession = addressing.sessions.find(
+          (session) => session.label === "Consolidation",
+        );
+        expect(consolidationSession?.reviewReport?.reviewSummary).toBe(
+          "Merged review.",
+        );
+        expect(consolidationSession?.structuredResultStatus).toBe("accepted");
+        expect(addressing.structuredReviewRequestId).toBe(
+          consolidationSession?.structuredRequestId,
+        );
+        // Everything downstream reads one report, and the fan-out record is gone.
+        expect(addressing.structuredReview?.reviewSummary).toBe(
+          "Merged review.",
+        );
+        expect(addressing.reviewFanout).toBeUndefined();
+        // Provenance is derived by the backend from the cited source IDs, never
+        // taken from what the consolidation model claimed.
+        expect(addressing.structuredReview?.issues[0]?.reviewModels).toEqual([
+          "claude/opus",
+        ]);
+      },
+    );
   });
 
   test("uses the review preparation model for package creation and consolidation, not fixing", async () => {
@@ -563,11 +677,20 @@ describe("build pipeline multi-model review", () => {
           reasoningEffort: "medium",
         },
         steps: {
-          address: { agent: "opencode", model: "fixer", reasoningEffort: "high" },
+          address: {
+            agent: "opencode",
+            model: "fixer",
+            reasoningEffort: "high",
+          },
         },
       });
 
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
+      const addressing = await advanceUntil(
+        service,
+        read,
+        started.id,
+        "addressing",
+      );
       expect(addressing.error ?? addressing.phase).toBe("addressing");
       for (
         let attempt = 0;
@@ -583,12 +706,18 @@ describe("build pipeline multi-model review", () => {
           expect.objectContaining({
             phase: "fix",
             label: "Package Preparation Session",
-            options: expect.objectContaining({ model: "review-coordinator", effort: "medium" }),
+            options: expect.objectContaining({
+              model: "review-coordinator",
+              effort: "medium",
+            }),
           }),
           expect.objectContaining({
             phase: "review",
             label: "Review · Consolidation",
-            options: expect.objectContaining({ model: "review-coordinator", effort: "medium" }),
+            options: expect.objectContaining({
+              model: "review-coordinator",
+              effort: "medium",
+            }),
           }),
         ]),
       );
@@ -607,12 +736,19 @@ describe("build pipeline multi-model review", () => {
         expect.arrayContaining([
           expect.objectContaining({
             phase: "address",
-            options: expect.objectContaining({ model: "fixer", effort: "high" }),
+            options: expect.objectContaining({
+              model: "fixer",
+              effort: "high",
+            }),
           }),
         ]),
       );
-      expect(fixer.created.some((entry) => entry.label.includes("Preparation"))).toBe(false);
-      expect(fixer.created.some((entry) => entry.label.includes("Consolidation"))).toBe(false);
+      expect(
+        fixer.created.some((entry) => entry.label.includes("Preparation")),
+      ).toBe(false);
+      expect(
+        fixer.created.some((entry) => entry.label.includes("Consolidation")),
+      ).toBe(false);
     });
   });
 
@@ -627,7 +763,12 @@ describe("build pipeline multi-model review", () => {
           { agent: "claude", model: "sonnet" },
         ]),
       );
-      const addressing = await advanceUntil(service, read, started.id, "addressing");
+      const addressing = await advanceUntil(
+        service,
+        read,
+        started.id,
+        "addressing",
+      );
       expect(addressing.error ?? addressing.phase).toBe("addressing");
       // The surviving reviewer's report is what got consolidated.
       expect(addressing.structuredReview?.reviewSummary).toBe("Merged review.");
@@ -657,10 +798,14 @@ describe("build pipeline multi-model review", () => {
         missingSessionKey = missing.sessionKey;
         retainedSessionKey = retained.sessionKey;
         missing.status = "completed";
-        missing.report = reportFor("The missing mirror still contributed evidence.");
+        missing.report = reportFor(
+          "The missing mirror still contributed evidence.",
+        );
         missing.completedAt = new Date().toISOString();
         retained.status = "completed";
-        retained.report = reportFor("A later settlement result that must not replace the session.");
+        retained.report = reportFor(
+          "A later settlement result that must not replace the session.",
+        );
         retained.completedAt = new Date().toISOString();
         pipeline.sessions = pipeline.sessions.filter(
           (session) => session.sessionKey !== missingSessionKey,
@@ -668,20 +813,26 @@ describe("build pipeline multi-model review", () => {
         const retainedSession = pipeline.sessions.find(
           (session) => session.sessionKey === retainedSessionKey,
         );
-        if (!retainedSession) throw new Error("Retained reviewer mirror disappeared");
-        retainedSession.reviewReport = reportFor("Already accepted on the session.");
+        if (!retainedSession)
+          throw new Error("Retained reviewer mirror disappeared");
+        retainedSession.reviewReport = reportFor(
+          "Already accepted on the session.",
+        );
         retainedSession.structuredResultStatus = "accepted";
       });
 
       await service.advanceNow(started.id);
       const settled = await read(started.id);
 
-      expect(settled.sessions.some((session) => session.sessionKey === missingSessionKey)).toBe(
-        false,
-      );
       expect(
-        settled.sessions.find((session) => session.sessionKey === retainedSessionKey)?.reviewReport
-          ?.reviewSummary,
+        settled.sessions.some(
+          (session) => session.sessionKey === missingSessionKey,
+        ),
+      ).toBe(false);
+      expect(
+        settled.sessions.find(
+          (session) => session.sessionKey === retainedSessionKey,
+        )?.reviewReport?.reviewSummary,
       ).toBe("Already accepted on the session.");
     });
   });
@@ -721,9 +872,13 @@ describe("build pipeline multi-model review", () => {
       const cancelled = await service.cancel(started.id);
 
       expect(provider.aborted).toEqual(expect.arrayContaining(liveIds));
-      expect(cancelled.sessions.every((session) => session.status !== "running")).toBe(true);
       expect(
-        cancelled.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "cancelled"),
+        cancelled.sessions.every((session) => session.status !== "running"),
+      ).toBe(true);
+      expect(
+        cancelled.reviewFanout?.reviewers.every(
+          (reviewer) => reviewer.status === "cancelled",
+        ),
       ).toBe(true);
     });
   });
@@ -747,7 +902,9 @@ describe("build pipeline multi-model review", () => {
       const paused = await service.pause(started.id);
       expect(paused.phase).toBe("paused");
       expect(
-        paused.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "cancelled"),
+        paused.reviewFanout?.reviewers.every(
+          (reviewer) => reviewer.status === "cancelled",
+        ),
       ).toBe(true);
       expect(provider.aborted).toEqual(expect.arrayContaining(firstPanel));
 
@@ -757,101 +914,120 @@ describe("build pipeline multi-model review", () => {
       expect(resumed.phase).toBe("reviewing");
       expect(resumed.pendingPromptAttempt).toBeUndefined();
       expect(
-        resumed.reviewFanout?.reviewers.map((reviewer) => reviewer.providerSessionId),
+        resumed.reviewFanout?.reviewers.map(
+          (reviewer) => reviewer.providerSessionId,
+        ),
       ).not.toEqual(firstPanel);
     });
   });
 
   test("resume rebuilds a missing package before reopening fan-out", async () => {
-    await withPipeline(async ({ service, storage, read, packageGeneration }) => {
-      const started = await service.start(
-        startInput([
-          { agent: "claude", model: "opus" },
-          { agent: "claude", model: "sonnet" },
-        ]),
-      );
-      await advanceUntil(service, read, started.id, "reviewing");
-      await service.pause(started.id);
-      await rewritePipeline(storage, started.id, (pipeline) => {
-        delete pipeline.reviewPackage;
-      });
+    await withPipeline(
+      async ({ service, storage, read, packageGeneration }) => {
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+          ]),
+        );
+        await advanceUntil(service, read, started.id, "reviewing");
+        await service.pause(started.id);
+        await rewritePipeline(storage, started.id, (pipeline) => {
+          delete pipeline.reviewPackage;
+        });
 
-      await service.resume(started.id);
-      for (let pass = 0; pass < 4 && packageGeneration.count < 2; pass += 1) {
-        await service.advanceNow(started.id);
-      }
+        await service.resume(started.id);
+        for (let pass = 0; pass < 4 && packageGeneration.count < 2; pass += 1) {
+          await service.advanceNow(started.id);
+        }
 
-      const resumed = await read(started.id);
-      expect({
-        count: packageGeneration.count,
-        phase: resumed.phase,
-        error: resumed.error,
-      }).toEqual({ count: 2, phase: "reviewing", error: undefined });
-      expect(resumed.reviewPackage?.headRef).toBe("2".repeat(40));
-      expect(resumed.reviewFanout).toBeDefined();
-    });
+        const resumed = await read(started.id);
+        expect({
+          count: packageGeneration.count,
+          phase: resumed.phase,
+          error: resumed.error,
+        }).toEqual({ count: 2, phase: "reviewing", error: undefined });
+        expect(resumed.reviewPackage?.headRef).toBe("2".repeat(40));
+        expect(resumed.reviewFanout).toBeDefined();
+      },
+    );
   });
 
   test("review retry abandons the old panel before opening a new one", async () => {
-    await withPipeline(async ({ service, storage, read, provider, packageGeneration }) => {
-      provider.runningModels.add("opus");
-      provider.runningModels.add("sonnet");
-      const started = await service.start(
-        startInput([
-          { agent: "claude", model: "opus" },
-          { agent: "claude", model: "sonnet" },
-        ]),
-      );
-      await advanceUntil(service, read, started.id, "reviewing");
-      await service.advanceNow(started.id);
-      const firstPanel = (await read(started.id)).reviewFanout!.reviewers.map(
-        (reviewer) => reviewer.providerSessionId!,
-      );
-      let retainedSnapshotBytes = 0;
-      await rewritePipeline(storage, started.id, (pipeline) => {
-        pipeline.structuredReview = reportFor("Previous review");
-        pipeline.structuredReviewRequestId = "previous-review-request";
-        pipeline.verificationResult = "fail";
-        pipeline.verificationFeedback = "Previous verification";
-        const largeReport = reportFor("x".repeat(16 * 1024));
-        for (let iteration = 0; iteration < 2; iteration += 1) {
-          for (let reviewer = 0; reviewer < MAX_BUILD_PIPELINE_REVIEWERS; reviewer += 1) {
-            pipeline.sessions.push({
-              phase: "review",
-              iteration,
-              sessionKey: `historical-review-${iteration}-${reviewer}`,
-              sdkSessionId: `historical-session-${iteration}-${reviewer}`,
-              status: "idle",
-              startedAt: new Date().toISOString(),
-              label: `Historical Review ${iteration + 1}.${reviewer + 1}`,
-              reviewReport: largeReport,
-            });
+    await withPipeline(
+      async ({ service, storage, read, provider, packageGeneration }) => {
+        provider.runningModels.add("opus");
+        provider.runningModels.add("sonnet");
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+          ]),
+        );
+        await advanceUntil(service, read, started.id, "reviewing");
+        await service.advanceNow(started.id);
+        const firstPanel = (await read(started.id)).reviewFanout!.reviewers.map(
+          (reviewer) => reviewer.providerSessionId!,
+        );
+        let retainedSnapshotBytes = 0;
+        await rewritePipeline(storage, started.id, (pipeline) => {
+          pipeline.structuredReview = reportFor("Previous review");
+          pipeline.structuredReviewRequestId = "previous-review-request";
+          pipeline.verificationResult = "fail";
+          pipeline.verificationFeedback = "Previous verification";
+          const largeReport = reportFor("x".repeat(16 * 1024));
+          for (let iteration = 0; iteration < 2; iteration += 1) {
+            for (
+              let reviewer = 0;
+              reviewer < MAX_BUILD_PIPELINE_REVIEWERS;
+              reviewer += 1
+            ) {
+              pipeline.sessions.push({
+                phase: "review",
+                iteration,
+                sessionKey: `historical-review-${iteration}-${reviewer}`,
+                sdkSessionId: `historical-session-${iteration}-${reviewer}`,
+                status: "idle",
+                startedAt: new Date().toISOString(),
+                label: `Historical Review ${iteration + 1}.${reviewer + 1}`,
+                reviewReport: largeReport,
+              });
+            }
           }
-        }
-        retainedSnapshotBytes = Buffer.byteLength(JSON.stringify(pipeline), "utf8");
-      });
+          retainedSnapshotBytes = Buffer.byteLength(
+            JSON.stringify(pipeline),
+            "utf8",
+          );
+        });
 
-      await service.retryReview(started.id);
-      await service.advanceNow(started.id);
-      const retried = await read(started.id);
+        await service.retryReview(started.id);
+        await service.advanceNow(started.id);
+        const retried = await read(started.id);
 
-      expect(provider.aborted).toEqual(expect.arrayContaining(firstPanel));
-      expect(retried.reviewRetryRequested).toBeUndefined();
-      expect(retried.structuredReview).toBeUndefined();
-      expect(retried.structuredReviewRequestId).toBeUndefined();
-      expect(retried.sessions.filter((session) => session.reviewReport).length).toBe(0);
-      expect(Buffer.byteLength(JSON.stringify(retried), "utf8")).toBeLessThan(
-        retainedSnapshotBytes,
-      );
-      expect(Buffer.byteLength(JSON.stringify(retried), "utf8")).toBeLessThan(32 * 1024 * 1024);
-      expect(retried.verificationResult).toBeUndefined();
-      expect(retried.verificationFeedback).toBeUndefined();
-      expect(packageGeneration.count).toBe(2);
-      expect(retried.reviewPackage?.headRef).toBe("2".repeat(40));
-      expect(
-        retried.reviewFanout?.reviewers.map((reviewer) => reviewer.providerSessionId),
-      ).not.toEqual(firstPanel);
-    });
+        expect(provider.aborted).toEqual(expect.arrayContaining(firstPanel));
+        expect(retried.reviewRetryRequested).toBeUndefined();
+        expect(retried.structuredReview).toBeUndefined();
+        expect(retried.structuredReviewRequestId).toBeUndefined();
+        expect(
+          retried.sessions.filter((session) => session.reviewReport).length,
+        ).toBe(0);
+        expect(Buffer.byteLength(JSON.stringify(retried), "utf8")).toBeLessThan(
+          retainedSnapshotBytes,
+        );
+        expect(Buffer.byteLength(JSON.stringify(retried), "utf8")).toBeLessThan(
+          32 * 1024 * 1024,
+        );
+        expect(retried.verificationResult).toBeUndefined();
+        expect(retried.verificationFeedback).toBeUndefined();
+        expect(packageGeneration.count).toBe(2);
+        expect(retried.reviewPackage?.headRef).toBe("2".repeat(40));
+        expect(
+          retried.reviewFanout?.reviewers.map(
+            (reviewer) => reviewer.providerSessionId,
+          ),
+        ).not.toEqual(firstPanel);
+      },
+    );
   });
 
   test("rejects user messages while fan-out owns the review phase", async () => {
@@ -866,16 +1042,16 @@ describe("build pipeline multi-model review", () => {
       );
       await advanceUntil(service, read, started.id, "reviewing");
 
-      await expect(service.sendMessage(started.id, "send this later")).rejects.toThrow(
-        "multi-model review",
-      );
+      await expect(
+        service.sendMessage(started.id, "send this later"),
+      ).rejects.toThrow("multi-model review");
       expect((await read(started.id)).pendingUserMessages).toBeUndefined();
 
       await service.advanceNow(started.id);
       await service.pause(started.id);
-      await expect(service.sendMessage(started.id, "send this after resume")).rejects.toThrow(
-        "multi-model review",
-      );
+      await expect(
+        service.sendMessage(started.id, "send this after resume"),
+      ).rejects.toThrow("multi-model review");
       expect((await read(started.id)).pendingUserMessages).toBeUndefined();
     });
   });
@@ -892,14 +1068,17 @@ describe("build pipeline multi-model review", () => {
       await service.advanceNow(started.id);
 
       const codex = providers.get("codex")!;
-      expect(provider.created.find((entry) => entry.label === "Review 1")?.options?.model).toBe(
-        "default",
-      );
-      expect(provider.sent.find((entry) => entry.sessionId.includes("review-1"))?.model).toBe(
-        "default",
-      );
       expect(
-        codex.created.find((entry) => entry.label === "Review 2")?.options?.model,
+        provider.created.find((entry) => entry.label === "Review 1")?.options
+          ?.model,
+      ).toBe("default");
+      expect(
+        provider.sent.find((entry) => entry.sessionId.includes("review-1"))
+          ?.model,
+      ).toBe("default");
+      expect(
+        codex.created.find((entry) => entry.label === "Review 2")?.options
+          ?.model,
       ).toBeUndefined();
       expect(codex.sent[0]?.model).toBeUndefined();
     });
@@ -907,28 +1086,40 @@ describe("build pipeline multi-model review", () => {
 
   test("a reviewer that pinned no model dispatches without one, on every harness", async () => {
     await withPipeline(async ({ service, read, provider, providers }) => {
-      const started = await service.start(startInput([{ agent: "claude" }, { agent: "codex" }]));
+      const started = await service.start(
+        startInput([{ agent: "claude" }, { agent: "codex" }]),
+      );
       const stored = await read(started.id);
       // The placeholder is a label, not a selection. Claude's `"default"` is a
       // real catalog id, so the record has to say which of the two it is.
-      expect(stored.reviewers).toEqual([{ agent: "claude" }, { agent: "codex" }]);
-
-      const reviewing = await advanceUntil(service, read, started.id, "reviewing");
-      expect(reviewing.reviewFanout?.reviewers.map((entry) => entry.modelUnpinned)).toEqual([
-        true,
-        true,
+      expect(stored.reviewers).toEqual([
+        { agent: "claude" },
+        { agent: "codex" },
       ]);
+
+      const reviewing = await advanceUntil(
+        service,
+        read,
+        started.id,
+        "reviewing",
+      );
+      expect(
+        reviewing.reviewFanout?.reviewers.map((entry) => entry.modelUnpinned),
+      ).toEqual([true, true]);
       await service.advanceNow(started.id);
 
       const codex = providers.get("codex")!;
       expect(
-        provider.created.find((entry) => entry.label === "Review 1")?.options?.model,
+        provider.created.find((entry) => entry.label === "Review 1")?.options
+          ?.model,
       ).toBeUndefined();
       expect(
-        provider.sent.find((entry) => entry.sessionId.includes("review-1"))?.model,
+        provider.sent.find((entry) => entry.sessionId.includes("review-1"))
+          ?.model,
       ).toBeUndefined();
       expect(
-        codex.created.find((entry) => entry.label === "Review 2")?.options?.model,
+        codex.created.find((entry) => entry.label === "Review 2")?.options
+          ?.model,
       ).toBeUndefined();
       expect(codex.sent[0]?.model).toBeUndefined();
     });
@@ -987,30 +1178,37 @@ describe("build pipeline multi-model review", () => {
   });
 
   test("keeps consolidation on the provider that created its durable session", async () => {
-    await withPipeline(async ({ service, storage, read, provider, providers }) => {
-      provider.runningConsolidation = true;
-      const started = await service.start(
-        startInput([
-          { agent: "claude", model: "opus" },
-          { agent: "claude", model: "sonnet" },
-        ]),
-      );
-      await advanceUntil(service, read, started.id, "reviewing");
-      for (let attempt = 0; attempt < 10; attempt += 1) {
+    await withPipeline(
+      async ({ service, storage, read, provider, providers }) => {
+        provider.runningConsolidation = true;
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+          ]),
+        );
+        await advanceUntil(service, read, started.id, "reviewing");
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          await service.advanceNow(started.id);
+          if ((await read(started.id)).reviewFanout?.consolidation) break;
+        }
+        const consolidation = (await read(started.id)).reviewFanout!
+          .consolidation!;
+        const readsBefore = provider.statusReads.length;
+        await rewritePipeline(storage, started.id, (pipeline) => {
+          pipeline.agentType = "codex";
+        });
+
         await service.advanceNow(started.id);
-        if ((await read(started.id)).reviewFanout?.consolidation) break;
-      }
-      const consolidation = (await read(started.id)).reviewFanout!.consolidation!;
-      const readsBefore = provider.statusReads.length;
-      await rewritePipeline(storage, started.id, (pipeline) => {
-        pipeline.agentType = "codex";
-      });
 
-      await service.advanceNow(started.id);
-
-      expect(provider.statusReads.slice(readsBefore)).toContain(consolidation.providerSessionId);
-      expect(providers.get("codex")!.statusReads).not.toContain(consolidation.providerSessionId);
-    });
+        expect(provider.statusReads.slice(readsBefore)).toContain(
+          consolidation.providerSessionId,
+        );
+        expect(providers.get("codex")!.statusReads).not.toContain(
+          consolidation.providerSessionId,
+        );
+      },
+    );
   });
 
   test("repairs invalid consolidation output and unknown provenance", async () => {
@@ -1024,11 +1222,19 @@ describe("build pipeline multi-model review", () => {
         ]),
       );
 
-      const addressed = await advanceUntil(service, read, started.id, "addressing", 40);
+      const addressed = await advanceUntil(
+        service,
+        read,
+        started.id,
+        "addressing",
+        40,
+      );
 
       expect(addressed.phase).toBe("addressing");
       expect(
-        provider.sent.filter((entry) => entry.sessionId.includes("consolidation")),
+        provider.sent.filter((entry) =>
+          entry.sessionId.includes("consolidation"),
+        ),
       ).toHaveLength(3);
     });
   });
@@ -1043,7 +1249,13 @@ describe("build pipeline multi-model review", () => {
         ]),
       );
 
-      const failed = await advanceUntil(service, read, started.id, "failed", 50);
+      const failed = await advanceUntil(
+        service,
+        read,
+        started.id,
+        "failed",
+        50,
+      );
 
       expect(failed.error).toContain("3 repair attempts");
     });
@@ -1102,7 +1314,13 @@ describe("build pipeline multi-model review", () => {
           { agent: "claude", model: "sonnet" },
         ]),
       );
-      const failed = await advanceUntil(service, read, started.id, "failed", 20);
+      const failed = await advanceUntil(
+        service,
+        read,
+        started.id,
+        "failed",
+        20,
+      );
 
       expect(failed.error).toContain("stayed blocked");
       expect(provider.aborted).toHaveLength(2);
@@ -1142,7 +1360,13 @@ describe("build pipeline multi-model review", () => {
         }
       });
 
-      const failed = await advanceUntil(service, read, started.id, "failed", 10);
+      const failed = await advanceUntil(
+        service,
+        read,
+        started.id,
+        "failed",
+        10,
+      );
 
       expect(failed.error).toContain("produced no activity");
       expect(provider.aborted).toHaveLength(2);
@@ -1163,13 +1387,15 @@ describe("build pipeline multi-model review", () => {
         await service.advanceNow(started.id);
         if ((await read(started.id)).reviewFanout?.consolidation) break;
       }
-      const consolidationId = (await read(started.id)).reviewFanout!.consolidation!
-        .providerSessionId;
+      const consolidationId = (await read(started.id)).reviewFanout!
+        .consolidation!.providerSessionId;
 
       const cancelled = await service.cancel(started.id);
 
       expect(provider.aborted).toContain(consolidationId);
-      expect(cancelled.sessions.every((session) => session.status !== "running")).toBe(true);
+      expect(
+        cancelled.sessions.every((session) => session.status !== "running"),
+      ).toBe(true);
     });
   });
 

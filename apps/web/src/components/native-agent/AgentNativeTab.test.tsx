@@ -507,6 +507,7 @@ function PaneBackedAgentNativeTab({ tabId = "tab-resume" }: { tabId?: string }) 
       data={data}
       isActive
       initialPrompt={tab?.initialPrompt}
+      initialAgentPlatform={tab?.initialAgentPlatform}
       initialAgentModel={tab?.initialAgentModel}
       initialReasoningEffort={tab?.initialReasoningEffort}
       initialConversationMode={tab?.initialConversationMode}
@@ -1352,12 +1353,268 @@ describe("AgentNativeTab", () => {
     );
 
     await expectUnassignedPicker("codex", "GPT-5.4");
-    expect(screen.getByText("High")).toBeTruthy();
-    expect(screen.getByTestId("unassigned-native-compose-bar")).toBeTruthy();
+    const reasoning = screen.getByText("High");
+    const composeBar = screen.getByTestId("unassigned-native-compose-bar");
+    expect(reasoning).toBeTruthy();
+    expect(composeBar).toBeTruthy();
     fireEvent.pointerDown(screen.getByTitle(/Choose model/));
     expect(screen.getByRole("menuitemradio", { name: /^Fast/ }).getAttribute("aria-checked")).toBe(
       "true",
     );
+  });
+
+  test("unassigned composer preselects an explicit create-dialog provider over the environment default", async () => {
+    seedUnassignedDefaultCatalog();
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      agentSettings: {
+        defaultAgent: "claude",
+        platforms: {
+          claude: { model: "claude-sonnet-5" },
+          codex: { model: "o3" },
+        },
+      },
+    });
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Native agent test",
+          order: 0,
+          setupPhase: "ready",
+          agentSettings: { defaultAgent: "claude" },
+        } as never,
+      ],
+    });
+
+    render(
+      <AgentNativeTab
+        tabId="tab-create-dialog-provider"
+        data={{ environmentId: "env-1" }}
+        isActive
+        initialAgentPlatform="codex"
+        initialAgentModel="gpt-5.4"
+        initialReasoningEffort="high"
+      />,
+    );
+
+    await expectUnassignedPicker("codex", "GPT-5.4");
+    const composeBar = screen.getByTestId("unassigned-native-compose-bar");
+    expect(composeBar).toBeTruthy();
+    expect(document.querySelector("[data-native-model-platform='claude']") === null).toBe(true);
+  });
+
+  test("keeps a user provider switch after create-dialog preselect and dispatches through it", async () => {
+    seedUnassignedDefaultCatalog();
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      favoriteModels: [{ platform: "claude", modelId: "claude-sonnet-5" }],
+      agentSettings: {
+        defaultAgent: "claude",
+        platforms: {
+          claude: { model: "claude-sonnet-5", fastMode: false },
+          codex: { model: "o3", reasoningEffort: "medium", fastMode: true },
+        },
+      },
+    } as never);
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Native agent test",
+          order: 0,
+          setupPhase: "ready",
+          agentSettings: { defaultAgent: "claude" },
+        } as never,
+      ],
+    });
+    const tabId = "tab-preselect-then-switch";
+    const sessionKey = createSessionKey("env-1", tabId);
+    seedUnassignedPane(tabId);
+    usePaneLayoutStore.setState((state) => {
+      const environment = state.environments.get("env-1");
+      if (!environment || environment.root.kind !== "leaf") return state;
+      return {
+        ...state,
+        environments: new Map(state.environments).set("env-1", {
+          ...environment,
+          root: {
+            ...environment.root,
+            tabs: environment.root.tabs.map((tab) =>
+              tab.id === tabId
+                ? {
+                    ...tab,
+                    initialAgentPlatform: "codex",
+                    initialAgentModel: "gpt-5.4",
+                    initialReasoningEffort: "high",
+                    initialFastMode: true,
+                  }
+                : tab,
+            ),
+          },
+        }),
+      };
+    });
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    await expectUnassignedPicker("codex", "GPT-5.4");
+
+    fireEvent.pointerDown(await screen.findByTitle(/^Choose /));
+    fireEvent.click(await screen.findByRole("button", { name: "Favorite models" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Claude Sonnet/ }));
+
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.platform).toBe("claude"),
+    );
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.modelId).toBe(
+      "claude-sonnet-5",
+    );
+    const root = usePaneLayoutStore.getState().environments.get("env-1")?.root;
+    expect(root?.kind).toBe("leaf");
+    if (!root || root.kind !== "leaf") throw new Error("Expected leaf pane");
+    expect(
+      getNativeAgentData(root.tabs.find((tab) => tab.id === tabId)!)?.platform,
+    ).toBeUndefined();
+
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Use Claude instead" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
+
+    await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));
+    const lockedRoot = usePaneLayoutStore.getState().environments.get("env-1")?.root;
+    expect(lockedRoot?.kind).toBe("leaf");
+    if (!lockedRoot || lockedRoot.kind !== "leaf") throw new Error("Expected leaf pane");
+    expect(getNativeAgentData(lockedRoot.tabs.find((tab) => tab.id === tabId)!)?.platform).toBe(
+      "claude",
+    );
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
+      agent: "claude",
+      prompt: "Use Claude instead",
+    });
+  });
+
+  test("does not re-seed create-dialog values after a deliberate platform switch", async () => {
+    seedUnassignedDefaultCatalog();
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      favoriteModels: [{ platform: "claude", modelId: "claude-sonnet-5" }],
+      agentSettings: {
+        defaultAgent: "codex",
+        platforms: {
+          claude: { model: "claude-sonnet-5", fastMode: false },
+          codex: { model: "gpt-5.4", reasoningEffort: "high", fastMode: true },
+        },
+      },
+    } as never);
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Native agent test",
+          order: 0,
+          setupPhase: "ready",
+        } as never,
+      ],
+    });
+    const tabId = "tab-one-shot-preselect";
+    const sessionKey = createSessionKey("env-1", tabId);
+
+    const view = render(
+      <AgentNativeTab
+        tabId={tabId}
+        data={{ environmentId: "env-1" }}
+        isActive
+        initialAgentPlatform="codex"
+        initialAgentModel="gpt-5.4"
+        initialReasoningEffort="high"
+        initialExecutionProfileId="plan"
+        initialFastMode
+      />,
+    );
+
+    await expectUnassignedPicker("codex", "GPT-5.4");
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toMatchObject({
+      platform: "codex",
+      modelId: "gpt-5.4",
+      reasoningId: "high",
+      executionProfileId: "plan",
+    });
+
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      platform: "claude",
+      modelId: undefined,
+      reasoningId: undefined,
+      executionProfileId: undefined,
+      fastMode: false,
+    });
+    view.rerender(
+      <AgentNativeTab
+        tabId={tabId}
+        data={{ environmentId: "env-1" }}
+        isActive
+        initialAgentPlatform="codex"
+        initialAgentModel="gpt-5.4"
+        initialReasoningEffort="high"
+        initialExecutionProfileId="plan"
+        initialFastMode
+      />,
+    );
+
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.platform).toBe("claude"),
+    );
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.modelId).toBeUndefined();
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.reasoningId).toBeUndefined();
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId).toBe(
+      undefined,
+    );
+  });
+
+  test("does not overwrite a user pick when create-dialog fields arrive later", async () => {
+    seedUnassignedDefaultCatalog();
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      agentSettings: {
+        defaultAgent: "claude",
+        platforms: { claude: { model: "claude-sonnet-5" } },
+      },
+    });
+    const tabId = "tab-user-pick-before-republish";
+    const sessionKey = createSessionKey("env-1", tabId);
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      platform: "codex",
+      modelId: "gpt-5.4",
+      reasoningId: "medium",
+    });
+
+    const view = render(
+      <AgentNativeTab tabId={tabId} data={{ environmentId: "env-1" }} isActive />,
+    );
+    await expectUnassignedPicker("codex", "GPT-5.4");
+
+    view.rerender(
+      <AgentNativeTab
+        tabId={tabId}
+        data={{ environmentId: "env-1" }}
+        isActive
+        initialAgentPlatform="claude"
+        initialAgentModel="claude-sonnet-5"
+        initialReasoningEffort="high"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toMatchObject({
+        platform: "codex",
+        modelId: "gpt-5.4",
+        reasoningId: "medium",
+      }),
+    );
+    expect(document.querySelector("[data-native-model-platform='claude']") === null).toBe(true);
   });
 
   test("unassigned composer adopts the repository default when the environment inherits", async () => {
@@ -3308,6 +3565,34 @@ describe("AgentNativeTab", () => {
     expect(ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
       agent: "cursor",
       fastMode: true,
+    });
+  });
+
+  test("applies configured Claude SDK parameters after locking an unassigned tab", async () => {
+    seedUnassignedDefaultCatalog();
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex"],
+      agentSettings: {
+        defaultAgent: "claude",
+        platforms: {
+          claude: { claudeThinkingMode: "budget-16384", claudeContext1m: true },
+        },
+      },
+    });
+    const tabId = "tab-claude-first-send-params";
+    seedUnassignedPane(tabId);
+    useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), {
+      text: "Use inherited Claude controls",
+      platform: "claude",
+    });
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
+
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+    expect(ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      agent: "claude",
+      parameterValues: { thinking: "budget-16384", context1m: true },
     });
   });
 

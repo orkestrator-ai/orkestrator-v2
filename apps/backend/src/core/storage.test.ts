@@ -1779,6 +1779,7 @@ describe("backend-owned setup and build surfaces", () => {
       const published = await storage.ensureStartupNativeAgentTab({
         environmentId: environment.id,
         agent: "cursor",
+        initialAgentPlatform: "cursor",
         initialAgentModel: "composer-1.5",
         initialReasoningEffort: "high",
         initialFastMode: true,
@@ -1791,6 +1792,7 @@ describe("backend-owned setup and build surfaces", () => {
       expect(startupTab).toMatchObject({
         id: "startup-agent",
         type: "agent-native",
+        initialAgentPlatform: "cursor",
         initialAgentModel: "composer-1.5",
         initialReasoningEffort: "high",
         initialFastMode: true,
@@ -1829,6 +1831,168 @@ describe("backend-owned setup and build surfaces", () => {
           }
         ).tabs[1]?.nativeAgentData?.platform,
       ).toBeUndefined();
+    });
+  });
+
+  test("clears a stale platform lock when republishing an unlocked startup tab", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-startup-stale-lock";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      environment.setupPhase = "ready";
+      environment.setupScriptsComplete = true;
+      await storage.addEnvironment(environment);
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              {
+                id: "startup-agent",
+                type: "agent-native",
+                displayTitle: "Reviewer",
+                nativeAgentData: {
+                  platform: "cursor",
+                  environmentId: environment.id,
+                  isLocal: true,
+                  hostPort: 4321,
+                },
+              },
+            ],
+            activeTabId: "startup-agent",
+          },
+        },
+        0,
+      );
+
+      const published = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+        initialAgentPlatform: "codex",
+        initialAgentModel: "gpt-5.4",
+      });
+      const startupTab = (
+        published!.root as {
+          tabs: Array<Record<string, unknown>>;
+        }
+      ).tabs[1]!;
+      expect(startupTab).toMatchObject({
+        id: "startup-agent",
+        type: "agent-native",
+        displayTitle: "Reviewer",
+        initialAgentPlatform: "codex",
+        initialAgentModel: "gpt-5.4",
+        nativeAgentData: {
+          environmentId: environment.id,
+          isLocal: true,
+          hostPort: 4321,
+        },
+      });
+      expect((startupTab.nativeAgentData as { platform?: string }).platform).toBeUndefined();
+      expect((startupTab.nativeAgentData as { sessionId?: string }).sessionId).toBeUndefined();
+    });
+  });
+
+  test("preserves a committed platform when republishing without lockPlatform", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-startup-keep-locked";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      await storage.addEnvironment(environment);
+      await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+        lockPlatform: true,
+      });
+      const locked = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+        providerSessionId: "codex-session-1",
+      });
+      expect(
+        (
+          locked!.root as {
+            tabs: Array<{ nativeAgentData?: { platform?: string; sessionId?: string } }>;
+          }
+        ).tabs[1]?.nativeAgentData,
+      ).toMatchObject({
+        platform: "codex",
+        sessionId: "codex-session-1",
+      });
+
+      const republished = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+      });
+      expect(
+        (
+          republished!.root as {
+            tabs: Array<{ nativeAgentData?: { platform?: string; sessionId?: string } }>;
+          }
+        ).tabs[1]?.nativeAgentData,
+      ).toMatchObject({
+        platform: "codex",
+        sessionId: "codex-session-1",
+      });
+    });
+  });
+
+  test("does not re-steal focus on a repeated prompt-less setup handoff", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-startup-handoff-once";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      environment.setupPhase = "ready";
+      environment.setupScriptsComplete = true;
+      await storage.addEnvironment(environment);
+
+      const handedOff = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+        activateOnSetupHandoff: true,
+        initialAgentPlatform: "codex",
+      });
+      expect(handedOff?.root).toMatchObject({ activeTabId: "startup-agent" });
+
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            ...(handedOff!.root as Record<string, unknown>),
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              { id: "notes", type: "file" },
+              (
+                handedOff!.root as {
+                  tabs: Array<Record<string, unknown>>;
+                }
+              ).tabs.find((tab) => tab.id === "startup-agent"),
+            ],
+            activeTabId: "notes",
+          },
+        },
+        handedOff!.revision,
+      );
+
+      const republished = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+        activateOnSetupHandoff: true,
+        initialAgentPlatform: "codex",
+      });
+      expect(republished?.root).toMatchObject({ activeTabId: "notes" });
     });
   });
 

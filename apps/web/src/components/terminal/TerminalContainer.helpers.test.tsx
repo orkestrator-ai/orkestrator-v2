@@ -1261,8 +1261,80 @@ describe("TerminalContainer", () => {
             isReviewTab: true,
             hideStructuredOutput: true,
             nativeAgentData: expect.objectContaining({
+              platform: "codex",
               sessionId: "provider-thread-1",
               requireExistingResumeSession: true,
+            }),
+          }),
+        ),
+      );
+    });
+
+    test("locks a native tab when only a resume session is supplied", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="claude"
+            options={{
+              tabId: "resume-only-native",
+              agentLaunchMode: "native",
+              resumeSessionId: "provider-claude-resume",
+              requireExistingResumeSession: true,
+            }}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() =>
+        expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+          expect.objectContaining({
+            id: "resume-only-native",
+            type: "agent-native",
+            nativeAgentData: expect.objectContaining({
+              platform: "claude",
+              sessionId: "provider-claude-resume",
+              requireExistingResumeSession: true,
+            }),
+          }),
+        ),
+      );
+    });
+
+    test("locks a native review tab even without an opening prompt", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="opencode"
+            options={{
+              tabId: "review-only-native",
+              agentLaunchMode: "native",
+              isReviewTab: true,
+              displayTitle: "Review",
+            }}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() =>
+        expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+          expect.objectContaining({
+            id: "review-only-native",
+            type: "agent-native",
+            isReviewTab: true,
+            nativeAgentData: expect.objectContaining({
+              platform: "opencode",
             }),
           }),
         ),

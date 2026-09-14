@@ -190,6 +190,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
             environmentId={props.data.environmentId}
             containerId={props.data.containerId}
             disabled={awaitingDurability}
+            initialAgentPlatform={props.initialAgentPlatform}
             initialAgentModel={props.initialAgentModel}
             initialReasoningEffort={props.initialReasoningEffort}
             initialConversationMode={props.initialConversationMode}

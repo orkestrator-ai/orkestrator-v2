@@ -646,6 +646,7 @@ export abstract class StorageSessions extends StorageConfig {
       }
       delete tab.initialPrompt;
       delete tab.initialCommands;
+      delete tab.initialAgentPlatform;
       delete tab.initialAgentModel;
       delete tab.initialReasoningEffort;
       delete tab.initialConversationMode;
@@ -795,6 +796,7 @@ export abstract class StorageSessions extends StorageConfig {
      * still need to move off the setup terminal once setup is ready.
      */
     activateOnSetupHandoff?: boolean;
+    initialAgentPlatform?: BuildPipelineAgent;
     initialAgentModel?: string;
     initialReasoningEffort?: string;
     initialConversationMode?: "build" | "plan";
@@ -859,11 +861,19 @@ export abstract class StorageSessions extends StorageConfig {
         ...previousNativeAgentData,
         environmentId: input.environmentId,
       };
+      const previousProviderSessionId =
+        typeof previousNativeAgentData?.sessionId === "string"
+          ? previousNativeAgentData.sessionId
+          : undefined;
       // A provider session, or an already-committed opening prompt, is what
       // locks the tab. Until then the create-dialog agent is only a preselect
-      // on the unassigned composer.
+      // on the unassigned composer. A stale platform left by an older build or
+      // a partial launch must not keep the tab locked after a prompt-less
+      // republish.
       if (input.providerSessionId || input.lockPlatform) {
         nativeAgentData.platform = input.agent;
+      } else if (previousProviderSessionId === undefined) {
+        delete nativeAgentData.platform;
       }
       if (environment.environmentType === "local") {
         nativeAgentData.isLocal = true;
@@ -883,6 +893,9 @@ export abstract class StorageSessions extends StorageConfig {
         type: "agent-native",
         nativeAgentData,
       };
+      if (input.initialAgentPlatform !== undefined) {
+        tab.initialAgentPlatform = input.initialAgentPlatform;
+      }
       if (input.initialAgentModel !== undefined) tab.initialAgentModel = input.initialAgentModel;
       if (input.initialReasoningEffort !== undefined) {
         tab.initialReasoningEffort = input.initialReasoningEffort;
@@ -916,14 +929,11 @@ export abstract class StorageSessions extends StorageConfig {
       // the one-shot `activateOnSetupHandoff` publish that consumes a
       // prompt-less launch. Both happen once, and the launch intent is consumed
       // immediately afterwards.
-      const previousProviderSessionId =
-        typeof previousNativeAgentData?.sessionId === "string"
-          ? previousNativeAgentData.sessionId
-          : undefined;
       const bindsNewProviderSession =
         input.providerSessionId !== undefined &&
         previousProviderSessionId !== input.providerSessionId;
-      const shouldHandoffAfterSetup = bindsNewProviderSession || input.activateOnSetupHandoff === true;
+      const shouldHandoffAfterSetup =
+        bindsNewProviderSession || input.activateOnSetupHandoff === true;
       // Resolved from the same leaf list as `target` so both reads see one
       // parse of one tree, and a hit can be compared by reference.
       const focusedLeaf = previous

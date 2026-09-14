@@ -1385,6 +1385,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       const preselectOptions = hasInitialWork
         ? { lockPlatform: true as const }
         : {
+            initialAgentPlatform: agent,
             ...(model ? { initialAgentModel: model } : {}),
             ...(reasoningEffort ? { initialReasoningEffort: reasoningEffort } : {}),
             ...(conversationMode ? { initialConversationMode: conversationMode } : {}),

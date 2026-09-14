@@ -573,7 +573,13 @@ export function AgentDefaultsPane({
                   onFastModeInherit={
                     actionSpeedCapable ? () => persistActionSpeed(undefined) : undefined
                   }
-                  className="mt-auto"
+                  // The picker defaults to `flex-1` until `md`, and a flex
+                  // item's grow factor consumes free space before an auto
+                  // margin can. Without `flex-none` the picker stretches down
+                  // the card instead of sitting at its foot, in the band where
+                  // the grid is already two columns but the viewport has not
+                  // reached `md` yet.
+                  className="mt-auto flex-none"
                 />
                 {actionModelMissing && (
                   <p className="text-xs text-amber-300">

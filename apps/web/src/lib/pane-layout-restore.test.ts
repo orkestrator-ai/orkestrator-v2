@@ -322,6 +322,7 @@ describe("reconcilePersistedLayout", () => {
       ...tab,
       backendManagedTerminal: tab.id.endsWith("-terminal"),
       backendTerminalSessionId: tab.id.endsWith("-terminal") ? `${tab.id}-session` : undefined,
+      initialAgentPlatform: "codex",
       initialAgentModel: `${tab.id}-model`,
       initialReasoningEffort: "xhigh",
       initialExecutionProfileId: "plan",
@@ -341,6 +342,7 @@ describe("reconcilePersistedLayout", () => {
     const tabs = (restored!.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs;
     expect(tabs).toHaveLength(agentTabs.length);
     for (const tab of tabs) {
+      expect(tab.initialAgentPlatform).toBe("codex");
       expect(tab.initialAgentModel).toBe(`${tab.id}-model`);
       expect(tab.initialReasoningEffort).toBe("xhigh");
       expect(tab.initialExecutionProfileId).toBe("plan");
@@ -477,6 +479,7 @@ describe("reconcilePersistedLayout", () => {
               id: "native",
               type: "claude-native",
               claudeNativeData: { environmentId: "env-1" },
+              initialAgentPlatform: "not-a-platform",
               initialAgentModel: 42,
               initialReasoningEffort: { nested: true },
               initialExecutionProfileId: agentHandoffId,
@@ -490,6 +493,7 @@ describe("reconcilePersistedLayout", () => {
       );
 
       const tab = (restored!.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs[0]!;
+      expect(tab.initialAgentPlatform).toBeUndefined();
       expect(tab.initialAgentModel).toBeUndefined();
       expect(tab.initialReasoningEffort).toBeUndefined();
       expect(tab.initialExecutionProfileId).toBeUndefined();

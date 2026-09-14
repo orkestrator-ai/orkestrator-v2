@@ -91,13 +91,14 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
   const type = nonEmptyString(value.type);
   if (!id || !type) return null;
 
-  // `initialAgentModel`/`initialReasoningEffort` are one-shot launch options that
-  // `sanitizeTab` in pane-layout-persistence deliberately keeps on disk. Reading
-  // them back is what makes the tab itself the durable carrier of the user's
-  // create-dialog choice: a renderer reload before the agent surface applied the
-  // model rehydrates the tab with it instead of silently falling back to the
-  // configured default. The consumer clears them via `clearTabInitialAgentOptions`
-  // once applied, so a restored value is by definition still unconsumed.
+  // `initialAgentPlatform`/`initialAgentModel`/`initialReasoningEffort` are
+  // one-shot launch options that `sanitizeTab` in pane-layout-persistence
+  // deliberately keeps on disk. Reading them back is what makes the tab itself
+  // the durable carrier of the user's create-dialog choice: a renderer reload
+  // before the agent surface applied the provider and model rehydrates the tab
+  // with them instead of silently falling back to the configured default. The
+  // consumer clears them via `clearTabInitialAgentOptions` once applied, so a
+  // restored value is by definition still unconsumed.
   const initialConversationMode: "plan" | "build" | undefined =
     value.initialConversationMode === "plan" || value.initialConversationMode === "build"
       ? value.initialConversationMode
@@ -109,6 +110,9 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     ...(typeof value.hideStructuredOutput === "boolean"
       ? { hideStructuredOutput: value.hideStructuredOutput }
       : {}),
+    initialAgentPlatform: isAgentPlatform(value.initialAgentPlatform)
+      ? value.initialAgentPlatform
+      : undefined,
     initialAgentModel: optionalString(value.initialAgentModel),
     initialReasoningEffort: optionalString(value.initialReasoningEffort),
     initialConversationMode,

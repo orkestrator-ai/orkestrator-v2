@@ -298,12 +298,23 @@ describe("AppShell", () => {
     isMobile = false;
     render(<AppShell>Workspace</AppShell>);
     const slot = screen.getByTestId("desktop-agent-info-slot");
-    expect(slot.contains(screen.getByTestId("system-usage-indicator"))).toBe(true);
+    const meters = screen.getByTestId("system-usage-indicator");
+    const separator = screen.getByTestId("title-bar-usage-separator");
+    expect(slot.contains(meters)).toBe(true);
+    expect(slot.contains(separator)).toBe(true);
+    expect(separator.getAttribute("aria-hidden")).toBe("true");
+    expect(separator.className).toContain("mx-2");
+    expect(separator.className).toContain("bg-border/50");
+    const slotChildren = Array.from(slot.children);
+    expect(slotChildren[0]).toBe(meters);
+    expect(slotChildren[1]).toBe(separator);
+    expect(slotChildren[2]?.contains(screen.getByTestId("agent-info-button"))).toBe(true);
 
     cleanup();
     isMobile = true;
     render(<AppShell>Workspace</AppShell>);
     expect(screen.queryByTestId("system-usage-indicator") === null).toBe(true);
+    expect(screen.queryByTestId("title-bar-usage-separator") === null).toBe(true);
   });
 
   test("resolves the active tab through the active pane of the selected environment", () => {

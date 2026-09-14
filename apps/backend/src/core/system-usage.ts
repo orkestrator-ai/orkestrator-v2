@@ -17,13 +17,38 @@ interface CpuTimeSnapshot {
 }
 
 interface SystemUsageDependencies {
+  platform: NodeJS.Platform;
   cpus: () => CpuInfo[];
   totalMemory: () => number;
   freeMemory: () => number;
+  ramPercent: () => Promise<number>;
   diskPercent: (path: string) => Promise<number | null>;
   gpuPercent: () => Promise<number | null>;
   now: () => number;
   delay: (milliseconds: number) => Promise<void>;
+  runCommand: (
+    command: string,
+    args: string[],
+    options: { timeoutMs: number },
+  ) => Promise<{ stdout: string }>;
+}
+
+interface DarwinRamDependencies {
+  platform: NodeJS.Platform;
+  totalMemory: () => number;
+  runCommand: (
+    command: string,
+    args: string[],
+    options: { timeoutMs: number },
+  ) => Promise<{ stdout: string }>;
+}
+
+export interface DarwinVmStatPages {
+  pageSize: number;
+  wired: number;
+  purgeable: number;
+  anonymous: number;
+  compressor: number;
 }
 
 interface LinuxGpuDependencies {
@@ -62,6 +87,8 @@ const DARWIN_GPU_UTILIZATION_KEYS = [
 /** Keep this above the title-bar meter interval so each poll reuses the last probe. */
 export const GPU_AVAILABLE_CACHE_MS = 15_000;
 const GPU_UNAVAILABLE_CACHE_MS = 30_000;
+export const RAM_AVAILABLE_CACHE_MS = GPU_AVAILABLE_CACHE_MS;
+export const RAM_UNAVAILABLE_CACHE_MS = 30_000;
 export const DARWIN_GPU_SAMPLE_COUNT = 2;
 const DARWIN_GPU_SAMPLE_GAP_MS = 80;
 const CPU_BASELINE_MAX_AGE_MS = 5_000;
@@ -106,6 +133,85 @@ function averagePercent(values: number[]): number | null {
   const valid = values.filter((value) => Number.isFinite(value));
   if (valid.length === 0) return null;
   return clampPercent(valid.reduce((sum, value) => sum + value, 0) / valid.length);
+}
+
+const VM_STAT_PAGE_SIZE = /page size of (\d+) bytes/i;
+const VM_STAT_LINE = /^(?:"([^"]+)"|([^:]+)):\s+(\d+)\.?/;
+const VM_STAT_KEYS = {
+  "Pages wired down": "wired",
+  "Pages purgeable": "purgeable",
+  "Anonymous pages": "anonymous",
+  "Pages occupied by compressor": "compressor",
+} as const;
+
+/**
+ * Activity Monitor "Memory Used" is App + Wired + Compressed. App memory is
+ * anonymous pages minus purgeable pages. `os.freemem()` on Darwin is only
+ * unused pages, so cached files look like 100% used.
+ */
+export function parseDarwinVmStat(output: string): DarwinVmStatPages | null {
+  const pageSizeMatch = output.match(VM_STAT_PAGE_SIZE);
+  const pageSize = Number(pageSizeMatch?.[1]);
+  if (!Number.isFinite(pageSize) || pageSize <= 0) return null;
+  const pages: Partial<Record<(typeof VM_STAT_KEYS)[keyof typeof VM_STAT_KEYS], number>> = {};
+  for (const line of output.split("\n")) {
+    const match = line.trim().match(VM_STAT_LINE);
+    if (!match) continue;
+    const key = (match[1] ?? match[2] ?? "") as keyof typeof VM_STAT_KEYS;
+    const mapped = VM_STAT_KEYS[key];
+    if (!mapped) continue;
+    const count = Number(match[3]);
+    if (!Number.isFinite(count) || count < 0) continue;
+    pages[mapped] = count;
+  }
+  if (
+    pages.wired === undefined ||
+    pages.purgeable === undefined ||
+    pages.anonymous === undefined ||
+    pages.compressor === undefined
+  ) {
+    return null;
+  }
+  return {
+    pageSize,
+    wired: pages.wired,
+    purgeable: pages.purgeable,
+    anonymous: pages.anonymous,
+    compressor: pages.compressor,
+  };
+}
+
+export function darwinRamPercentFromVmStat(output: string, totalBytes: number): number | null {
+  const stats = parseDarwinVmStat(output);
+  if (!stats || totalBytes <= 0) return null;
+  const app = Math.max(0, stats.anonymous - stats.purgeable);
+  const used = (app + stats.wired + stats.compressor) * stats.pageSize;
+  return clampPercent((used / totalBytes) * 100);
+}
+
+export async function readDarwinRamPercent(
+  dependencies: Partial<DarwinRamDependencies> = {},
+): Promise<number | null> {
+  const platform = dependencies.platform ?? process.platform;
+  if (platform !== "darwin") return null;
+  const execute = dependencies.runCommand ?? runCommand;
+  const totalMemory = dependencies.totalMemory ?? os.totalmem;
+  try {
+    const result = await execute("vm_stat", [], { timeoutMs: 1_500 });
+    return darwinRamPercentFromVmStat(result.stdout, totalMemory());
+  } catch {
+    return null;
+  }
+}
+
+export async function readRamPercent(
+  dependencies: Partial<DarwinRamDependencies & Pick<SystemUsageDependencies, "freeMemory">> = {},
+): Promise<number> {
+  const darwin = await readDarwinRamPercent(dependencies);
+  if (darwin !== null) return darwin;
+  const total = (dependencies.totalMemory ?? os.totalmem)();
+  const free = (dependencies.freeMemory ?? os.freemem)();
+  return total > 0 ? clampPercent(((total - free) / total) * 100) : 0;
 }
 
 export function parsePercentLines(output: string): number[] {
@@ -237,6 +343,8 @@ export function createSystemUsageReader(
   const freeMemory = dependencies.freeMemory ?? os.freemem;
   const diskPercent = dependencies.diskPercent ?? readDiskPercent;
   const gpuPercent = dependencies.gpuPercent ?? readGpuPercent;
+  const platform = dependencies.platform ?? process.platform;
+  const execute = dependencies.runCommand ?? runCommand;
   const now = dependencies.now ?? Date.now;
   const delay =
     dependencies.delay ??
@@ -247,7 +355,37 @@ export function createSystemUsageReader(
   let pendingCpu: Promise<number> | null = null;
   let cachedGpu: { value: number | null; expiresAt: number } | null = null;
   let pendingGpu: Promise<number | null> | null = null;
+  let cachedRam: { value: number; expiresAt: number } | null = null;
+  let pendingRam: Promise<number> | null = null;
+  let lastDarwinRam: number | null = null;
   const pendingReads = new Map<string, Promise<SystemUsageSnapshot>>();
+
+  const fallbackRamPercent = (): number => {
+    const total = totalMemory();
+    const free = freeMemory();
+    return total > 0 ? clampPercent(((total - free) / total) * 100) : 0;
+  };
+
+  const probeRam = async (): Promise<{ value: number; darwinFailed: boolean }> => {
+    if (platform !== "darwin") {
+      return {
+        value: await readRamPercent({ platform, totalMemory, freeMemory, runCommand: execute }),
+        darwinFailed: false,
+      };
+    }
+    const darwin = await readDarwinRamPercent({
+      platform,
+      totalMemory,
+      runCommand: execute,
+    });
+    if (darwin !== null) {
+      lastDarwinRam = darwin;
+      return { value: darwin, darwinFailed: false };
+    }
+    // vm_stat failed or parsed empty. Reuse the last good Darwin reading
+    // rather than os.freemem(), which treats cached files as used.
+    return { value: lastDarwinRam ?? fallbackRamPercent(), darwinFailed: true };
+  };
 
   const calculateCpu = async (): Promise<number> => {
     const sampleStartedAt = now();
@@ -303,6 +441,26 @@ export function createSystemUsageReader(
     return pendingGpu;
   };
 
+  const sampleRam = (sampledAt: number): Promise<number> => {
+    if (dependencies.ramPercent) return dependencies.ramPercent();
+    if (cachedRam && cachedRam.expiresAt > sampledAt) return Promise.resolve(cachedRam.value);
+    if (pendingRam) return pendingRam;
+
+    pendingRam = (async () => {
+      try {
+        const { value, darwinFailed } = await probeRam();
+        cachedRam = {
+          value,
+          expiresAt: now() + (darwinFailed ? RAM_UNAVAILABLE_CACHE_MS : RAM_AVAILABLE_CACHE_MS),
+        };
+        return value;
+      } finally {
+        pendingRam = null;
+      }
+    })();
+    return pendingRam;
+  };
+
   return (diskPath) => {
     const pending = pendingReads.get(diskPath);
     if (pending) return pending;
@@ -310,9 +468,8 @@ export function createSystemUsageReader(
     const read = (async () => {
       const cpuUsage = await sampleCpu();
       const sampledAt = now();
-      const total = totalMemory();
-      const ramUsage = total > 0 ? clampPercent(((total - freeMemory()) / total) * 100) : 0;
-      const [diskUsage, gpuUsage] = await Promise.all([
+      const [ramUsage, diskUsage, gpuUsage] = await Promise.all([
+        sampleRam(sampledAt),
         diskPercent(diskPath),
         sampleGpu(sampledAt),
       ]);

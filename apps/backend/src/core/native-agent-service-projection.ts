@@ -1350,6 +1350,46 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
   }
 
+  /**
+   * A live preview that still fits the window is not "older history".
+   *
+   * Providers report `complete: false` for a hydration hole as well as for a
+   * genuine remainder. Treating the flag alone as pageable hid the first
+   * prompt behind "Load earlier messages" on a two-row transcript. If the
+   * preview has not filled the live window, ask for the bounded remainder and
+   * show it when it still fits.
+   */
+  private async hydrateIncompleteProgressiveSnapshot(
+    provider: NativeAgentRuntimeProvider,
+    sessionId: string,
+    snapshot: ProviderTranscriptSnapshot,
+    liveWindow: { messages: number; targetBytes: number },
+  ): Promise<ProviderTranscriptSnapshot> {
+    if (snapshot.complete !== false) return snapshot;
+    const previewBytes = Buffer.byteLength(JSON.stringify(snapshot.messages));
+    if (
+      snapshot.messages.length >= liveWindow.messages ||
+      previewBytes >= liveWindow.targetBytes
+    ) {
+      return snapshot;
+    }
+    let fuller: unknown[];
+    try {
+      fuller = await provider.messages(sessionId, { limit: liveWindow.messages });
+    } catch {
+      return snapshot;
+    }
+    if (!Array.isArray(fuller) || fuller.length <= snapshot.messages.length) {
+      return { ...snapshot, complete: true };
+    }
+    return {
+      ...snapshot,
+      messages: fuller,
+      complete: fuller.length < liveWindow.messages,
+      freshness: "current",
+    };
+  }
+
   private async readProgressiveTranscript(
     input: NativeAgentTranscriptUpdateInput,
     key: string,
@@ -1401,7 +1441,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       this.progressiveSourceTokens.set(key, providerResult.sourceToken);
       return previous.value;
     }
-    const snapshot: ProviderTranscriptSnapshot = providerResult;
+    const snapshot: ProviderTranscriptSnapshot = await this.hydrateIncompleteProgressiveSnapshot(
+      resolved.provider,
+      resolved.session.providerSessionId,
+      providerResult,
+      input.liveWindow,
+    );
     if (snapshot.sourceToken) this.progressiveSourceTokens.set(key, snapshot.sourceToken);
     // The common identity must be identical across independently delivered
     // domains. Bridge/source generations remain bound into the transcript's
@@ -1424,7 +1469,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       input.liveWindow.messages,
       input.liveWindow.targetBytes,
     );
-    const complete = snapshot.complete !== false && !normalized.window.truncated;
+    // Only a window that actually omitted rows is pageable. `complete: false`
+    // on a preview that still fits is a hydration hole, not a remainder.
+    const pageable =
+      bounded.window.canLoadEarlier === true ||
+      (normalized.window.canLoadEarlier === true &&
+        normalized.window.truncationReason !== "bytes");
+    const truncated = Boolean(bounded.window.truncated || normalized.window.truncated);
+    const complete = !pageable && (snapshot.complete !== false || !truncated);
     const historyEpoch =
       snapshot.historyEpoch ??
       (previous?.value.identity.providerSessionId === resolved.session.providerSessionId
@@ -1447,18 +1499,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       messages: bounded.messages,
       messageWindow: {
         ...bounded.window,
-        // The provider may already have cut history before this window was
-        // bounded. Preserve that gap so the tab exposes transcript recovery.
-        // Part-only byte cuts are not pageable: a larger limit returns the
-        // same live head with the same omitted leading parts.
-        truncated: !complete || bounded.window.truncated,
-        canLoadEarlier: !complete || bounded.window.canLoadEarlier === true,
+        truncated,
+        canLoadEarlier: pageable,
       },
       ...(snapshot.title ? { title: snapshot.title } : {}),
       ...(snapshot.revision === undefined ? {} : { providerRevision: snapshot.revision }),
       ...(historyCursor ? { historyCursor } : {}),
       historyEpoch,
-      historyComplete: complete,
+      historyComplete: !pageable,
     };
     return value;
   }
@@ -1539,7 +1587,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           freshness: persisted.messages.length === 0 ? "empty" : "cached",
           messages: persisted.messages,
           historyEpoch: persisted.historyEpoch,
-          historyComplete: false,
+          // A cached tail has no remainder metadata. Claiming it incomplete
+          // put "Load earlier messages" on a one-prompt conversation that
+          // merely lost its in-memory snapshot.
+          historyComplete: true,
           ...(persisted.title ? { title: persisted.title } : {}),
         };
         const token = commit(value);

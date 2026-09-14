@@ -11,7 +11,7 @@ import {
 const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
 
 describe("native agent progressive remainder", () => {
-  test("keeps provider-trimmed history reachable when the preview fits the backend window", async () => {
+  test("shows a provider-trimmed first prompt when the full turn still fits", async () => {
     const prompt = {
       id: "prompt",
       role: "user",
@@ -26,10 +26,9 @@ describe("native agent progressive remainder", () => {
       parts: [{ type: "text", text: "Earlier response activity" }],
       createdAt: "2026-09-09T00:01:00.000Z",
     };
-    // The provider has already trimmed the prompt and older response parts to
-    // fit the preview it serves before hydration finishes, and says so with
-    // `complete: false`. The surviving message needs no further backend
-    // trimming, so nothing local reports the gap.
+    // The live preview omitted the prompt and reported `complete: false`
+    // before hydration finished. One prompt plus one reply still fits the
+    // window, so the remainder must be inlined rather than hidden.
     const stub = createProviderStub("claude", {
       transcriptSnapshot: async () => ({
         messages: [{ ...response, parts: [] }],
@@ -54,27 +53,52 @@ describe("native agent progressive remainder", () => {
         });
         expect(preview.status).toBe("snapshot");
         if (preview.status !== "snapshot") throw new Error("expected snapshot");
-        expect(preview.value.messages).toHaveLength(1);
-        expect(preview.value.historyComplete).toBe(false);
-        // The tab gates its recovery header on truncated, not canLoadEarlier.
+        expect(preview.value.messages).toMatchObject([prompt, { id: "response" }]);
+        expect(preview.value.historyComplete).toBe(true);
         expect(preview.value.messageWindow).toMatchObject({
-          truncated: true,
-          canLoadEarlier: true,
+          truncated: false,
+          canLoadEarlier: false,
         });
-        // No local byte/count cut occurred; don't invent a truncation reason.
-        expect(preview.value.messageWindow?.truncationReason).toBeUndefined();
+      },
+    );
+  });
 
-        // This is the authoritative read used by "Load earlier messages".
-        const recovered = await service.getProjectionUpdate({
+  test("does not offer to load earlier when an incomplete preview has no remainder", async () => {
+    const response = {
+      id: "response",
+      role: "assistant",
+      content: "Latest update",
+      parts: [],
+      createdAt: "2026-09-09T00:01:00.000Z",
+    };
+    const stub = createProviderStub("cursor", {
+      transcriptSnapshot: async () => ({
+        messages: [response],
+        complete: false,
+        freshness: "current" as const,
+      }),
+      messages: async () => [response],
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-no-remainder-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-no-remainder",
+        };
+        await service.ensureSession(identity);
+        const preview = await service.getTranscriptUpdate({
           ...identity,
-          syncVersion: 1,
+          viewVersion: 1,
           liveWindow,
-          forceSnapshot: true,
         });
-        expect(recovered.status).toBe("snapshot");
-        if (recovered.status !== "snapshot") throw new Error("expected snapshot");
-        expect(recovered.projection.messages).toMatchObject([prompt, response]);
-        expect(recovered.historyComplete).toBe(true);
+        expect(preview.status).toBe("snapshot");
+        if (preview.status !== "snapshot") throw new Error("expected snapshot");
+        expect(preview.value.messages).toHaveLength(1);
+        expect(preview.value.historyComplete).toBe(true);
+        expect(preview.value.messageWindow?.canLoadEarlier).toBe(false);
+        expect(preview.value.messageWindow?.truncated).toBe(false);
       },
     );
   });

@@ -13,7 +13,9 @@
  * bridges rather than listing them, so the next one cannot.
  */
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dir, "../..");
@@ -28,17 +30,33 @@ const taskCommands = (name: string) => {
   return Array.isArray(run) ? run.join("\n") : (run ?? "");
 };
 
+/**
+ * Workspace packages under `bridges/`, excluding agent-harness directories and
+ * anything that is not a package with a build script. Discovery and review
+ * agents create `bridges/.claude/` (and similar) in this workspace; those are
+ * not bridges and must not be read as `package.json`.
+ */
+function listBuildableBridges(bridgesRoot: string): string[] {
+  return readdirSync(bridgesRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => entry.name)
+    .filter((name) => {
+      const manifestPath = path.join(bridgesRoot, name, "package.json");
+      if (!existsSync(manifestPath)) return false;
+      try {
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+          scripts?: Record<string, string>;
+        };
+        return typeof manifest.scripts?.build === "string";
+      } catch {
+        return false;
+      }
+    })
+    .sort();
+}
+
 /** Every workspace bridge that produces a `dist/index.js` a runtime can start. */
-const buildableBridges = readdirSync(path.join(root, "bridges"), { withFileTypes: true })
-  .filter((entry) => entry.isDirectory())
-  .map((entry) => entry.name)
-  .filter((name) => {
-    const manifest = JSON.parse(read(path.join("bridges", name, "package.json"))) as {
-      scripts?: Record<string, string>;
-    };
-    return typeof manifest.scripts?.build === "string";
-  })
-  .sort();
+const buildableBridges = listBuildableBridges(path.join(root, "bridges"));
 
 describe("bridge packaging", () => {
   test("there is at least one buildable bridge to check", () => {
@@ -77,6 +95,27 @@ describe("bridge packaging", () => {
       expect(taskCommands(`build:${bridge}`)).toContain(`--filter=${bridge}`);
       expect(dockerfile, `the image does not install ${bridge}`).toContain(`--filter ${bridge}`);
       expect(dockerfile, `the image does not stage /opt/${bridge}`).toContain(`/opt/${bridge}`);
+    }
+  });
+
+  test("ignores hidden agent directories and folders without a package manifest", async () => {
+    const fixture = await realpath(await mkdtemp(path.join(tmpdir(), "ork-bridge-enum-")));
+    try {
+      mkdirSync(path.join(fixture, ".claude"), { recursive: true });
+      writeFileSync(path.join(fixture, ".claude", "settings.json"), "{}\n");
+      mkdirSync(path.join(fixture, "not-a-package"), { recursive: true });
+      writeFileSync(path.join(fixture, "not-a-package", "README.md"), "no manifest\n");
+      mkdirSync(path.join(fixture, "broken-json"), { recursive: true });
+      writeFileSync(path.join(fixture, "broken-json", "package.json"), "{not json");
+      mkdirSync(path.join(fixture, "real-bridge"), { recursive: true });
+      writeFileSync(
+        path.join(fixture, "real-bridge", "package.json"),
+        `${JSON.stringify({ scripts: { build: "bun build" } })}\n`,
+      );
+
+      expect(listBuildableBridges(fixture)).toEqual(["real-bridge"]);
+    } finally {
+      await rm(fixture, { recursive: true, force: true });
     }
   });
 });

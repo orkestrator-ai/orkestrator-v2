@@ -463,4 +463,4 @@ count.
 | Bumping any agent SDK, CLI, or pinned binary | [`docs/development/upgrade-agents.md`](../development/upgrade-agents.md) |
 | Background-reliability and transport invariants | [`AGENTS.md`](../../AGENTS.md) |
 | Agent-driven real-stack QA | [`docs/development/agent-testing.md`](../development/agent-testing.md) |
-| Known flakes and their root causes | [`docs/development/flaky-tests.md`](../development/flaky-tests.md) |
+| Known flakes and their root causes | [`docs/tests/flaky-tests/0000-index.md`](../tests/flaky-tests/0000-index.md) |

@@ -1,0 +1,8 @@
+# Environmental, not flaky: the root group while a `dev:test` profile is live
+
+- **ID:** 0111
+- **Status:** environmental
+- **Date observed:** 2026-08-14
+- **Observation:** `bun test ./tests --parallel` reported `3625 pass, 1 skip, 10 fail` in 179.8 s while an agent-testing profile (`dev:test --profile agent-model-picker-bullet`) was running its launcher, Vite, Electron, and backend on the same host. Every failure was a 5,000 ms timeout, spread across unrelated files: `process and platform command behavior` (`tests/unit/electron/commands-process-coverage.test.ts`, 2 tests), `Electron backend command registry` (`tests/unit/electron/commands.test.ts`, 2), `Electron tmux backend command registration` (`tests/unit/electron/tmux-backend.test.ts`, 2), `web-public install.sh` (`tests/unit/install-script.test.ts`, 2), `download-claude.sh` (`tests/unit/download-scripts.test.ts`, 1), and `Electron backend process supervisor` (`tests/unit/electron/backend-process.test.ts`, 1).
+- **Evidence:** rerunning all six owning files together with no profile running passed cleanly — `bun test tests/unit/download-scripts.test.ts tests/unit/install-script.test.ts tests/unit/electron/commands.test.ts tests/unit/electron/tmux-backend.test.ts tests/unit/electron/commands-process-coverage.test.ts tests/unit/electron/backend-process.test.ts` -> 698 passed, 1 skipped, 0 failed. The tests spawn real child processes and assert against short fixed deadlines, so a concurrently supervised Electron stack starves them.
+- **Guidance:** stop the `dev:test` profile before running a full suite, and do not record new flake entries for wall-clock timeouts observed while one is live. Only investigate if the same test times out on an otherwise idle host.

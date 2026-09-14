@@ -42,10 +42,10 @@ export function useAgentHandoff(
   environmentId: string,
   providerMessages: NativeMessage[],
   /**
-   * A handoff this tab dispatched whose snapshot has since been deleted (the tab
-   * resumed another session). The imported transcript is gone, but the bootstrap
-   * prompt is still the provider transcript's first message and must stay hidden
-   * rather than dumping its whole JSON frame into the chat.
+   * A handoff this tab has already dispatched. Suppresses a second bootstrap
+   * prepend if the tab remounts before the destination transcript loads. After
+   * the snapshot is detached (resume of another session) it also keeps that
+   * prompt hidden rather than dumping its JSON frame into the chat.
    */
   consumedHandoffId?: string,
 ): AgentHandoffState & {
@@ -205,7 +205,9 @@ export function useAgentHandoff(
     error: currentState.error,
     ready,
     pendingHistory:
-      ready && !destinationTranscriptStarted ? currentState.handoff?.bootstrapPrompt : undefined,
+      ready && !destinationTranscriptStarted && !consumedHandoffId
+        ? currentState.handoff?.bootstrapPrompt
+        : undefined,
     displayMessages,
   };
 }

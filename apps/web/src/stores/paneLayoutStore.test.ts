@@ -3118,6 +3118,44 @@ describe("paneLayoutStore pane and tab actions", () => {
     ]);
   });
 
+  test("consume keeps the live handoff reference and does not delete the snapshot", async () => {
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "handoff-tab",
+            type: "agent-native",
+            agentHandoffId: "handoff-1",
+            displayTitle: "Cursor · from Grok",
+            nativeAgentData: { environmentId: "env-handoff" },
+          },
+        ],
+        activeTabId: "handoff-tab",
+      },
+      "default",
+      "env-handoff",
+    );
+    rememberAgentHandoff({ id: "handoff-1" } as never);
+
+    usePaneLayoutStore.getState().consumeTabAgentHandoff("handoff-tab", "env-handoff");
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-handoff")[0]).toMatchObject({
+      id: "handoff-tab",
+      agentHandoffId: "handoff-1",
+      consumedAgentHandoffId: "handoff-1",
+      displayTitle: "Cursor · from Grok",
+      nativeAgentData: { environmentId: "env-handoff" },
+    });
+    expect(deleteAgentHandoff).not.toHaveBeenCalled();
+    expect(getAgentHandoff).not.toHaveBeenCalled();
+    await expect(loadAgentHandoff("handoff-1")).resolves.toMatchObject({ id: "handoff-1" });
+
+    usePaneLayoutStore.getState().consumeTabAgentHandoff("handoff-tab", "env-handoff");
+    expect(deleteAgentHandoff).not.toHaveBeenCalled();
+  });
+
   test("clears, deletes and evicts a consumed handoff reference", async () => {
     seedPaneTree(
       {
@@ -3666,6 +3704,27 @@ describe("paneLayoutStore guard branches", () => {
       initialAgentModel: "gpt-5.6-sol",
       initialReasoningEffort: "xhigh",
     });
+  });
+
+  test("consumeTabAgentHandoff is a no-op for unknown environments and tabs", () => {
+    const before = usePaneLayoutStore.getState().environments;
+    usePaneLayoutStore.getState().consumeTabAgentHandoff("tab-one");
+    expect(usePaneLayoutStore.getState().environments).toBe(before);
+
+    seedSingleTabEnvironment("env-handoff-consume-noop", null, {
+      id: "handoff-tab",
+      type: "plain",
+      agentHandoffId: "handoff-1",
+    });
+    const seeded = usePaneLayoutStore.getState().environments;
+
+    usePaneLayoutStore.getState().consumeTabAgentHandoff("handoff-tab", "missing-env");
+    usePaneLayoutStore.getState().consumeTabAgentHandoff("missing-tab", "env-handoff-consume-noop");
+
+    expect(usePaneLayoutStore.getState().environments).toBe(seeded);
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-handoff-consume-noop")[0]?.consumedAgentHandoffId,
+    ).toBeUndefined();
   });
 
   test("clearTabAgentHandoff is a no-op for unknown environments and tabs", () => {

@@ -29,6 +29,12 @@ import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionSto
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
 import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
+import {
+  AGENT_HANDOFF_VERSION,
+  createAgentHandoffSnapshot,
+  prependAgentHandoffHistory,
+  resetAgentHandoffCache,
+} from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { dispatchResourceChange } from "@/lib/resource-sync";
 import { GLOBAL_SETTINGS_REQUEST_EVENT } from "@/lib/settings-navigation";
@@ -132,6 +138,7 @@ const recoverMultiReviewFixSessionMock = mock(
 );
 const listNativeAgentResumableSessionsMock = mock(async () => []);
 const getAgentHandoffMock = mock(async (_handoffId: string): Promise<unknown> => null);
+const deleteAgentHandoffMock = mock(async (_handoffId: string, _environmentId: string) => true);
 const performNativeAgentSessionActionMock = mock(
   async (_input: { agent: string; action: { kind: string; text?: string } }) => ({
     outcome: "applied" as const,
@@ -248,6 +255,7 @@ mock.module("@/lib/backend", () => ({
   recoverMultiReviewFixSession: recoverMultiReviewFixSessionMock,
   listNativeAgentResumableSessions: listNativeAgentResumableSessionsMock,
   getAgentHandoff: getAgentHandoffMock,
+  deleteAgentHandoff: deleteAgentHandoffMock,
   dispatchNativeAgentIntent: dispatchNativeAgentIntentMock,
   retryNativeAgentDispatch: retryNativeAgentDispatchMock,
   discardNativeAgentDispatch: discardNativeAgentDispatchMock,
@@ -326,7 +334,11 @@ afterEach(() => {
     async () => ({ id: "multi-1", backendRevision: 2 }) as never,
   );
   listNativeAgentResumableSessionsMock.mockClear();
-  getAgentHandoffMock.mockClear();
+  getAgentHandoffMock.mockReset();
+  getAgentHandoffMock.mockResolvedValue(null);
+  deleteAgentHandoffMock.mockReset();
+  deleteAgentHandoffMock.mockResolvedValue(true);
+  resetAgentHandoffCache();
   dispatchNativeAgentIntentMock.mockClear();
   retryNativeAgentDispatchMock.mockClear();
   discardNativeAgentDispatchMock.mockClear();
@@ -513,6 +525,8 @@ function PaneBackedAgentNativeTab({ tabId = "tab-resume" }: { tabId?: string }) 
       initialConversationMode={tab?.initialConversationMode}
       initialFastMode={tab?.initialFastMode}
       initialExecutionProfileId={tab?.initialExecutionProfileId}
+      agentHandoffId={tab?.agentHandoffId}
+      consumedAgentHandoffId={tab?.consumedAgentHandoffId}
     />
   );
 }
@@ -4024,6 +4038,126 @@ describe("AgentNativeTab", () => {
       );
     },
   );
+
+  test("keeps transferred Grok history visible after the first Cursor prompt", async () => {
+    renderVirtualizedMessages = true;
+    const snapshot = createAgentHandoffSnapshot({
+      id: "handoff-grok-to-cursor",
+      environmentId: "env-1",
+      sourceProvider: "grok",
+      destinationProvider: "cursor",
+      sourceSessionId: "grok-session",
+      messages: [
+        {
+          id: "grok-user-1",
+          role: "user",
+          content: "Investigate the layout",
+          parts: [{ type: "text", content: "Investigate the layout" }],
+          createdAt: "2026-09-14T22:00:00.000Z",
+        },
+        {
+          id: "grok-assistant-1",
+          role: "assistant",
+          content: "I found three concrete gaps",
+          parts: [{ type: "text", content: "I found three concrete gaps" }],
+          createdAt: "2026-09-14T22:01:00.000Z",
+        },
+      ],
+      now: "2026-09-14T22:02:00.000Z",
+    });
+    getAgentHandoffMock.mockResolvedValue({
+      id: snapshot.id,
+      environmentId: snapshot.environmentId,
+      version: AGENT_HANDOFF_VERSION,
+      snapshot,
+    });
+    const transported = prependAgentHandoffHistory(
+      snapshot.bootstrapPrompt,
+      "Keep going in Cursor",
+    );
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+      getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+        ...(await defaultProjection(projectionInput)),
+        messages: [
+          {
+            id: "cursor-bootstrap",
+            role: "user" as const,
+            content: transported,
+            parts: [{ type: "text" as const, content: transported }],
+            createdAt: "2026-09-14T22:03:00.000Z",
+          },
+        ],
+      }));
+      return { outcome: "accepted" as const, requestId: input.requestId };
+    });
+
+    const tabId = "tab-handoff-cursor";
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        [
+          "env-1",
+          {
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [
+                {
+                  id: tabId,
+                  type: "agent-native",
+                  agentHandoffId: snapshot.id,
+                  nativeAgentData: identity("cursor"),
+                },
+              ],
+              activeTabId: tabId,
+            },
+            activePaneId: "default",
+            containerId: "container-1",
+          },
+        ],
+      ]),
+      hydration: new Map([["env-1", "done"]]),
+      activeEnvironmentId: "env-1",
+    });
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    expect(await screen.findByText("Investigate the layout")).toBeTruthy();
+    expect(screen.getByText("I found three concrete gaps")).toBeTruthy();
+    expect(screen.getByText(/Continued in Cursor from Grok/)).toBeTruthy();
+
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Keep going in Cursor" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    const dispatched = dispatchNativeAgentIntentMock.mock.calls[0]?.[0] as {
+      agent?: string;
+      prompt?: string;
+    };
+    expect(dispatched).toMatchObject({ agent: "cursor", prompt: transported });
+    expect(dispatched.prompt).toContain('<orkestrator-handoff format="json-v2">');
+    expect(dispatched.prompt).toContain("Investigate the layout");
+    expect(dispatched.prompt).toContain("I found three concrete gaps");
+    expect(dispatched.prompt).toContain(
+      "The handoff above is prior conversation history. Respond to the user's new",
+    );
+    expect(dispatched.prompt?.endsWith("Keep going in Cursor")).toBe(true);
+
+    const list = await screen.findByTestId("native-agent-transcript-test-list");
+    await waitFor(() => {
+      const rows = [...list.children].map((row) => row.textContent ?? "");
+      const historyIndex = rows.findIndex((row) => row.includes("Investigate the layout"));
+      const replyIndex = rows.findIndex((row) => row.includes("I found three concrete gaps"));
+      const promptIndex = rows.findIndex((row) => row.includes("Keep going in Cursor"));
+      expect(historyIndex).toBeGreaterThanOrEqual(0);
+      expect(replyIndex).toBeGreaterThan(historyIndex);
+      expect(promptIndex).toBeGreaterThan(replyIndex);
+    });
+
+    const tab = usePaneLayoutStore.getState().getAllTabs("env-1")[0];
+    expect(tab?.agentHandoffId).toBe(snapshot.id);
+    expect(tab?.consumedAgentHandoffId).toBe(snapshot.id);
+  });
 
   test("renders a mismatch notice instead of throwing on an unknown platform", async () => {
     // A persisted record can name a platform this build does not ship. Failing

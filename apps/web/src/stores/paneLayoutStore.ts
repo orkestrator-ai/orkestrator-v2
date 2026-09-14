@@ -213,6 +213,16 @@ interface PaneLayoutState {
   reorderTabs: (paneId: string, fromIndex: number, toIndex: number, environmentId?: string) => void;
   clearTabInitialPrompt: (tabId: string, environmentId?: string) => void;
   clearTabInitialAgentOptions: (tabId: string, environmentId?: string) => void;
+  /**
+   * Marks a live handoff as dispatched without dropping the imported
+   * transcript. The snapshot stays referenced so the destination tab keeps
+   * rendering transferred history after the first prompt.
+   */
+  consumeTabAgentHandoff: (tabId: string, environmentId?: string) => void;
+  /**
+   * Detaches imported history and deletes the snapshot. Used when this tab
+   * leaves the destination session (resume of another conversation).
+   */
   clearTabAgentHandoff: (tabId: string, environmentId?: string) => void;
   /**
    * Retire a setup tab's setup marker, leaving an ordinary terminal tab in
@@ -1028,6 +1038,31 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     console.debug("[PaneLayout] Cleared initial agent options for tab:", tabId);
   },
 
+  consumeTabAgentHandoff: (tabId, environmentId) => {
+    const state = get();
+    const envId = environmentId ?? state.activeEnvironmentId;
+    if (!envId) return;
+
+    const envState = state.environments.get(envId);
+    if (!envState) return;
+    const paneWithTab = findPaneWithTab(envState.root, tabId);
+    if (!paneWithTab) return;
+    const tabWithHandoff = paneWithTab.tabs.find((tab) => tab.id === tabId);
+    if (!tabWithHandoff?.agentHandoffId) return;
+    if (tabWithHandoff.consumedAgentHandoffId === tabWithHandoff.agentHandoffId) return;
+
+    const consumedAgentHandoffId = tabWithHandoff.agentHandoffId;
+    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+      ...leaf,
+      tabs: leaf.tabs.map((tab) =>
+        tab.id === tabId ? { ...tab, consumedAgentHandoffId } : tab,
+      ),
+    }));
+    const newEnvs = new Map(state.environments);
+    newEnvs.set(envId, { ...envState, root: newRoot });
+    set({ environments: newEnvs });
+  },
+
   clearTabAgentHandoff: (tabId, environmentId) => {
     const state = get();
     const envId = environmentId ?? state.activeEnvironmentId;
@@ -1040,9 +1075,10 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const tabWithHandoff = paneWithTab.tabs.find((tab) => tab.id === tabId);
     if (!tabWithHandoff?.agentHandoffId) return;
 
-    // Retain the id as consumed. The snapshot is deleted below, but the
-    // bootstrap prompt it produced is still the destination session's first
-    // message; forgetting the id entirely would render that raw JSON frame.
+    // Drop the live reference so imported rows leave the transcript. Keep the
+    // id as consumed: the bootstrap prompt it produced can still be the
+    // destination session's first message, and forgetting it would render that
+    // raw JSON frame.
     const consumedAgentHandoffId = tabWithHandoff.agentHandoffId;
     const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
       ...leaf,

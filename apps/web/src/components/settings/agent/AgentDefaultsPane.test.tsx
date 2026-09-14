@@ -4,13 +4,14 @@ import { useState } from "react";
 import * as realAgentModelPicker from "@/components/chat/AgentModelPicker";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
+import { ACTION_DEFAULT_KEYS } from "@orkestrator/protocol/action-defaults";
 import type { AgentSettingsTier, AgentSettingsTiers } from "@orkestrator/protocol/agent-settings";
 
 const realAgentModelPickerSnapshot = { ...realAgentModelPicker };
 
 mock.module("@/components/chat/AgentModelPicker", () => ({
   AgentModelPicker: (props: React.ComponentProps<typeof realAgentModelPicker.AgentModelPicker>) => (
-    <div data-testid={`picker-${props.id}`}>
+    <div data-testid={`picker-${props.id}`} data-picker-class-name={props.className}>
       <button type="button" role="combobox" aria-label={props.ariaLabel}>
         {props.selectedPlatform ? (
           <span data-native-model-platform={props.selectedPlatform} aria-hidden="true">
@@ -149,6 +150,46 @@ function SettingsHarness({
     />
   );
 }
+
+describe("AgentDefaultsPane action default layout", () => {
+  test("renders one card per action default in a container-query grid", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => {});
+    render(<SettingsHarness scope="global" onChange={onChange} />);
+
+    const grid = screen.getByRole("group", { name: "Action defaults" });
+    expect(grid.className).toContain("grid-cols-1");
+    expect(grid.className).toContain("@2xl:grid-cols-2");
+    // One card per key, so adding an action default cannot silently drop a row
+    // (nor break this test on a hard-coded count).
+    expect(grid.childElementCount).toBe(ACTION_DEFAULT_KEYS.length);
+  });
+
+  test("gives every card a full-height column so the grid row can align", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => {});
+    render(<SettingsHarness scope="global" onChange={onChange} />);
+
+    const grid = screen.getByRole("group", { name: "Action defaults" });
+    for (const card of Array.from(grid.children)) {
+      expect(card.className).toContain("h-full");
+      expect(card.className).toContain("flex-col");
+    }
+  });
+
+  test("pins each card's picker to the card foot without letting it stretch", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => {});
+    render(<SettingsHarness scope="global" onChange={onChange} />);
+
+    for (const key of ACTION_DEFAULT_KEYS) {
+      const picker = screen.getByTestId(`picker-action-default-${key}`);
+      const className = picker.getAttribute("data-picker-class-name") ?? "";
+      expect(className).toContain("mt-auto");
+      // The picker's own default is `flex-1` until `md`. A grow factor eats the
+      // free space before an auto margin can, so `mt-auto` only bottom-aligns
+      // the picker while the grow factor is cancelled.
+      expect(className).toContain("flex-none");
+    }
+  });
+});
 
 describe("AgentDefaultsPane create-script defaults", () => {
   test.each([

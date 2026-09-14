@@ -136,6 +136,31 @@ async function dragFavoriteRow(activeKey: string, overKey: string) {
 describe("AgentModelPicker", () => {
   afterEach(() => cleanup());
 
+  test("keeps its own trigger defaults when a caller passes no className", () => {
+    setMobileViewport(false);
+    renderPicker();
+
+    const trigger = screen.getByTitle("Choose model, reasoning, and speed");
+    expect(trigger.className).toContain("flex-1");
+  });
+
+  test("lets a caller's layout class override the trigger's own flex default", () => {
+    setMobileViewport(false);
+    // A caller that bottom-aligns the picker inside a flex column (the agent
+    // action-default cards) has to cancel the grow factor as well: flex-grow
+    // consumes free space before an auto margin can, so `mt-auto` alone leaves
+    // the trigger stretching. `cn` is tailwind-merge backed, so the caller's
+    // `flex-none` must win over the built-in `flex-1`.
+    renderPicker({ className: "mt-auto flex-none" });
+
+    const trigger = screen.getByTitle("Choose model, reasoning, and speed");
+    expect(trigger.className).toContain("mt-auto");
+    expect(trigger.className).toContain("flex-none");
+    expect(trigger.className.split(/\s+/)).not.toContain("flex-1");
+    // The merge must not take the fixed height with it.
+    expect(trigger.className).toContain("h-7");
+  });
+
   test("follows a platform restored after the picker first renders", () => {
     setMobileViewport(false);
     function HydratingPicker() {

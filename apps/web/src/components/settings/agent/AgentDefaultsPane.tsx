@@ -219,7 +219,7 @@ export function AgentDefaultsPane({
   };
 
   return (
-    <div className="max-w-3xl space-y-8">
+    <div className="@container max-w-5xl space-y-8">
       <div className="space-y-3">
         <div>
           <h3 className="text-sm font-medium text-foreground">Default agent</h3>
@@ -378,7 +378,11 @@ export function AgentDefaultsPane({
             with. The Default agent above applies only to actions left on Inherit at every level.
           </p>
         </div>
-        <div className="space-y-3">
+        <div
+          role="group"
+          aria-label="Action defaults"
+          className="grid grid-cols-1 gap-3 @2xl:grid-cols-2"
+        >
           {ACTION_DEFAULT_KEYS.map((key) => {
             const definition = ACTION_DEFINITIONS[key];
             const entry = actionDefaults[key];
@@ -479,10 +483,10 @@ export function AgentDefaultsPane({
             return (
               <div
                 key={key}
-                className="space-y-2 rounded-lg border border-zinc-800 bg-zinc-950/50 p-4"
+                className="flex h-full min-w-0 flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-950/50 p-3"
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 space-y-1">
                     <Label
                       htmlFor={`action-default-${key}`}
                       className="flex items-center gap-2 text-sm font-medium text-foreground"
@@ -490,7 +494,7 @@ export function AgentDefaultsPane({
                       {definition.icon}
                       {definition.label}
                     </Label>
-                    <p className="max-w-xl text-xs leading-relaxed text-muted-foreground">
+                    <p className="text-xs leading-relaxed text-muted-foreground">
                       {definition.description}
                     </p>
                   </div>
@@ -569,6 +573,13 @@ export function AgentDefaultsPane({
                   onFastModeInherit={
                     actionSpeedCapable ? () => persistActionSpeed(undefined) : undefined
                   }
+                  // The picker defaults to `flex-1` until `md`, and a flex
+                  // item's grow factor consumes free space before an auto
+                  // margin can. Without `flex-none` the picker stretches down
+                  // the card instead of sitting at its foot, in the band where
+                  // the grid is already two columns but the viewport has not
+                  // reached `md` yet.
+                  className="mt-auto flex-none"
                 />
                 {actionModelMissing && (
                   <p className="text-xs text-amber-300">

@@ -780,6 +780,25 @@ export abstract class StorageSessions extends StorageConfig {
     providerSessionId?: string;
     existingOnly?: boolean;
     upgradeOnly?: boolean;
+    /**
+     * Bind the tab to `agent` even before a provider session exists.
+     *
+     * Used when the create dialog already submitted an opening prompt: that
+     * dispatch is committed, so the user must not be able to switch providers
+     * underneath it. Prompt-less launches leave the tab unassigned and only
+     * lock once the first send creates a session.
+     */
+    lockPlatform?: boolean;
+    /**
+     * Treat this publish like the first provider-session bind for setup
+     * focus handoff. Prompt-less launches never bind a session, but they
+     * still need to move off the setup terminal once setup is ready.
+     */
+    activateOnSetupHandoff?: boolean;
+    initialAgentModel?: string;
+    initialReasoningEffort?: string;
+    initialConversationMode?: "build" | "plan";
+    initialFastMode?: boolean;
   }): Promise<PersistedPaneLayout | null> {
     return this.enqueuePaneLayoutMutation(async () => {
       const environment = await this.getEnvironment(input.environmentId);
@@ -838,9 +857,14 @@ export abstract class StorageSessions extends StorageConfig {
           : undefined;
       const nativeAgentData: Record<string, unknown> = {
         ...previousNativeAgentData,
-        platform: input.agent,
         environmentId: input.environmentId,
       };
+      // A provider session, or an already-committed opening prompt, is what
+      // locks the tab. Until then the create-dialog agent is only a preselect
+      // on the unassigned composer.
+      if (input.providerSessionId || input.lockPlatform) {
+        nativeAgentData.platform = input.agent;
+      }
       if (environment.environmentType === "local") {
         nativeAgentData.isLocal = true;
         // A worktree environment has no container, so a stale id carried over
@@ -859,6 +883,14 @@ export abstract class StorageSessions extends StorageConfig {
         type: "agent-native",
         nativeAgentData,
       };
+      if (input.initialAgentModel !== undefined) tab.initialAgentModel = input.initialAgentModel;
+      if (input.initialReasoningEffort !== undefined) {
+        tab.initialReasoningEffort = input.initialReasoningEffort;
+      }
+      if (input.initialConversationMode !== undefined) {
+        tab.initialConversationMode = input.initialConversationMode;
+      }
+      if (input.initialFastMode !== undefined) tab.initialFastMode = input.initialFastMode;
       // The tab is definitively a native agent surface now, so payloads that
       // belong to the other tab kinds cannot apply. Everything else the tab
       // carried is user state and is preserved by the spread above.
@@ -875,13 +907,15 @@ export abstract class StorageSessions extends StorageConfig {
       if (existingIndex >= 0) target.tabs[existingIndex] = tab;
       else target.tabs.push(tab);
 
-      // The handoff is driven by the publish that first binds a provider session
-      // to the tab, never by "setup is ready" on its own. Readiness stays true
-      // for the life of the environment and `isSetupTab` is never cleared, so a
-      // state-only condition would re-steal the selection on every two-second
-      // reconcile sweep — and every ten-second launch retry — for as long as the
-      // launch stays pending. Binding a session id happens once per launch, and
-      // the launch intent is consumed immediately afterwards.
+      // The handoff is driven by launch convergence, never by "setup is ready"
+      // on its own. Readiness stays true for the life of the environment and
+      // `isSetupTab` is never cleared, so a state-only condition would re-steal
+      // the selection on every two-second reconcile sweep — and every ten-second
+      // launch retry — for as long as the launch stays pending. Convergence is
+      // either the first provider-session bind (an opening prompt was sent) or
+      // the one-shot `activateOnSetupHandoff` publish that consumes a
+      // prompt-less launch. Both happen once, and the launch intent is consumed
+      // immediately afterwards.
       const previousProviderSessionId =
         typeof previousNativeAgentData?.sessionId === "string"
           ? previousNativeAgentData.sessionId
@@ -889,6 +923,7 @@ export abstract class StorageSessions extends StorageConfig {
       const bindsNewProviderSession =
         input.providerSessionId !== undefined &&
         previousProviderSessionId !== input.providerSessionId;
+      const shouldHandoffAfterSetup = bindsNewProviderSession || input.activateOnSetupHandoff === true;
       // Resolved from the same leaf list as `target` so both reads see one
       // parse of one tree, and a hit can be compared by reference.
       const focusedLeaf = previous
@@ -897,7 +932,7 @@ export abstract class StorageSessions extends StorageConfig {
       const shouldActivateStartupAgent =
         !input.existingOnly &&
         (existingIndex < 0 ||
-          (bindsNewProviderSession &&
+          (shouldHandoffAfterSetup &&
             environmentIsReadyForSetupHandoff(environment) &&
             // Both panes must consent: the startup agent's own pane is the one
             // whose selection changes, and the focused pane is where the user is

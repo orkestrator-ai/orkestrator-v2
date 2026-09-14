@@ -1318,6 +1318,48 @@ describe("AgentNativeTab", () => {
     );
   });
 
+  test("unassigned composer preselects the create-dialog model without locking the tab", async () => {
+    seedUnassignedDefaultCatalog();
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      agentSettings: {
+        defaultAgent: "claude",
+        platforms: { claude: { model: "claude-sonnet-5" } },
+      },
+    });
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Native agent test",
+          order: 0,
+          setupPhase: "ready",
+          agentSettings: { defaultAgent: "codex" },
+        } as never,
+      ],
+    });
+
+    render(
+      <AgentNativeTab
+        tabId="tab-create-dialog-preselect"
+        data={{ environmentId: "env-1" }}
+        isActive
+        initialAgentModel="gpt-5.4"
+        initialReasoningEffort="high"
+        initialFastMode
+      />,
+    );
+
+    await expectUnassignedPicker("codex", "GPT-5.4");
+    expect(screen.getByText("High")).toBeTruthy();
+    expect(screen.getByTestId("unassigned-native-compose-bar")).toBeTruthy();
+    fireEvent.pointerDown(screen.getByTitle(/Choose model/));
+    expect(screen.getByRole("menuitemradio", { name: /^Fast/ }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+  });
+
   test("unassigned composer adopts the repository default when the environment inherits", async () => {
     seedUnassignedDefaultCatalog();
     useConfigStore.getState().updateGlobalConfig({

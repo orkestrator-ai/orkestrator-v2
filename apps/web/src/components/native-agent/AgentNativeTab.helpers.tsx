@@ -1,5 +1,5 @@
 import { resolvedDefaultAgent, resolvedPlatformSettings } from "@/lib/agent-settings";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, History } from "lucide-react";
 import {
   AGENT_PLATFORMS,
@@ -334,6 +334,11 @@ export function UnassignedNativeAgentComposer({
   emptyPlatformsMessage,
   workspacePath,
   writeImage,
+  initialAgentModel,
+  initialReasoningEffort,
+  initialConversationMode,
+  initialFastMode,
+  initialExecutionProfileId,
 }: {
   tabId: string;
   environmentId: string;
@@ -387,6 +392,12 @@ export function UnassignedNativeAgentComposer({
    * a read-only coordinator's workspace is the user's own checkout.
    */
   writeImage?: (filename: string, base64Data: string) => Promise<string>;
+  /** Create-dialog model preselect; does not lock the tab. */
+  initialAgentModel?: string;
+  initialReasoningEffort?: string;
+  initialConversationMode?: "build" | "plan";
+  initialFastMode?: boolean;
+  initialExecutionProfileId?: string;
 }) {
   const sessionKey = createSessionKey(environmentId, tabId);
   const inputRef = useRef<MentionableInputRef>(null);
@@ -444,6 +455,42 @@ export function UnassignedNativeAgentComposer({
     },
     [configured.fastMode, updateStoreDraft],
   );
+  // One-shot create-dialog choices are tab-owned so they survive the backend
+  // consuming `pendingAgentLaunch`. Seed them into the draft without locking
+  // the platform — a later picker change must win.
+  useLayoutEffect(() => {
+    const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+    const seeded: Partial<typeof draft> = {};
+    if (initialAgentModel && current?.modelId === undefined) {
+      seeded.modelId = initialAgentModel;
+    }
+    if (initialReasoningEffort && current?.reasoningId === undefined) {
+      seeded.reasoningId = initialReasoningEffort;
+    }
+    if (initialConversationMode && current === undefined) {
+      seeded.mode = initialConversationMode;
+    }
+    if (typeof initialFastMode === "boolean" && current === undefined) {
+      seeded.fastMode = initialFastMode;
+    }
+    if (initialExecutionProfileId && current?.executionProfileId === undefined) {
+      seeded.executionProfileId = initialExecutionProfileId;
+    }
+    if (Object.keys(seeded).length === 0) return;
+    updateStoreDraft(sessionKey, {
+      ...(current ? {} : { fastMode: configured.fastMode ?? false }),
+      ...seeded,
+    });
+  }, [
+    configured.fastMode,
+    initialAgentModel,
+    initialConversationMode,
+    initialExecutionProfileId,
+    initialFastMode,
+    initialReasoningEffort,
+    sessionKey,
+    updateStoreDraft,
+  ]);
   useNativeComposeDraftPersistence(
     "agent-native",
     environmentId,

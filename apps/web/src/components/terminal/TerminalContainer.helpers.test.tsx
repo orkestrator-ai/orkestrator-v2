@@ -2996,6 +2996,56 @@ describe("TerminalContainer", () => {
       },
     );
 
+    test("preselects a create-dialog model without locking the native tab", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="cursor"
+            options={{
+              tabId: "create-dialog-preselect",
+              agentLaunchMode: "native",
+              initialAgentModel: "composer-1.5",
+              initialReasoningEffort: "high",
+              initialFastMode: true,
+            }}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        const created = usePaneLayoutStore
+          .getState()
+          .getAllTabs("env-visible")
+          .find((tab) => tab.id === "create-dialog-preselect");
+        expect(created).toMatchObject({
+          type: "agent-native",
+          initialAgentModel: "composer-1.5",
+          initialReasoningEffort: "high",
+          initialFastMode: true,
+          nativeAgentData: {
+            environmentId: "env-visible",
+            platform: undefined,
+          },
+        });
+        expect(
+          useNativeComposeStore
+            .getState()
+            .drafts.get(createNativeSessionKey("env-visible", "create-dialog-preselect")),
+        ).toMatchObject({
+          platform: "cursor",
+          modelId: "composer-1.5",
+          reasoningId: "high",
+          fastMode: true,
+        });
+      });
+    });
+
     test("carries one-shot review model and effort settings into the created native tab", async () => {
       render(
         <TerminalProvider>

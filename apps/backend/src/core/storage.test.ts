@@ -1740,7 +1740,6 @@ describe("backend-owned setup and build surfaces", () => {
         }
       ).tabs[1]!;
       expect(startupTab.nativeAgentData).toEqual({
-        platform: "codex",
         environmentId: environment.id,
         isLocal: false,
       });
@@ -1764,6 +1763,72 @@ describe("backend-owned setup and build surfaces", () => {
         containerId: "container-1",
         sessionId: "codex-session-1",
       });
+    });
+  });
+
+  test("publishes a prompt-less startup tab unlocked with the create-dialog model", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-startup-unlocked-preselect";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      environment.setupPhase = "ready";
+      environment.setupScriptsComplete = true;
+      await storage.addEnvironment(environment);
+
+      const published = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "cursor",
+        initialAgentModel: "composer-1.5",
+        initialReasoningEffort: "high",
+        initialFastMode: true,
+      });
+      const startupTab = (
+        published!.root as {
+          tabs: Array<Record<string, unknown>>;
+        }
+      ).tabs[1]!;
+      expect(startupTab).toMatchObject({
+        id: "startup-agent",
+        type: "agent-native",
+        initialAgentModel: "composer-1.5",
+        initialReasoningEffort: "high",
+        initialFastMode: true,
+        nativeAgentData: {
+          environmentId: environment.id,
+          isLocal: true,
+        },
+      });
+      expect((startupTab.nativeAgentData as { platform?: string }).platform).toBeUndefined();
+
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            ...(published!.root as Record<string, unknown>),
+            activeTabId: "default",
+          },
+        },
+        published!.revision,
+      );
+
+      const handedOff = await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "cursor",
+        activateOnSetupHandoff: true,
+        initialAgentModel: "composer-1.5",
+      });
+      expect(handedOff?.root).toMatchObject({ activeTabId: "startup-agent" });
+      expect(
+        (
+          handedOff!.root as {
+            tabs: Array<{ nativeAgentData?: { platform?: string } }>;
+          }
+        ).tabs[1]?.nativeAgentData?.platform,
+      ).toBeUndefined();
     });
   });
 

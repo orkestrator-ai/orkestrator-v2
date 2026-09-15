@@ -166,6 +166,36 @@ export function usesReviewFanout(
 }
 
 /**
+ * Backend label for one independent fan-out reviewer.
+ *
+ * Classic one-model reviews keep the distinct `Review Session` label, so the
+ * build tab can tell the two apart without an extra session field.
+ */
+export function pipelineIndependentReviewLabel(index: number): string {
+  return `Review ${index + 1}`;
+}
+
+const INDEPENDENT_REVIEW_LABEL = /^Review (\d+)$/;
+
+/**
+ * Zero-based reviewer slot encoded in {@link pipelineIndependentReviewLabel}.
+ *
+ * Identity stays attached to that slot even when an earlier reviewer never
+ * created a session, or when a retry leaves leftover tiles in the same
+ * iteration.
+ */
+export function pipelineIndependentReviewSlot(label: string): number | null {
+  const match = INDEPENDENT_REVIEW_LABEL.exec(label);
+  if (!match) return null;
+  const slot = Number(match[1]) - 1;
+  return Number.isInteger(slot) && slot >= 0 ? slot : null;
+}
+
+export function isPipelineIndependentReviewLabel(label: string): boolean {
+  return pipelineIndependentReviewSlot(label) !== null;
+}
+
+/**
  * Which configured step owns a session phase.
  *
  * Every phase maps to its own step except `fix`: it re-implements against
@@ -294,6 +324,10 @@ export interface PipelineSession {
   sdkSessionId: string;
   status: "running" | "idle" | "error";
   startedAt: string;
+  /** End of this stage attempt, retained for settled runtime presentation. */
+  completedAt?: string;
+  /** Cumulative provider-session usage captured for an independent reviewer. */
+  tokenCount?: number;
   label: string;
   /** Provider transcript snapshot. The backend refreshes it; clients only render it. */
   messages?: unknown[];
@@ -854,6 +888,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     value.sdkSessionId.length > 0 &&
     (value.status === "running" || value.status === "idle" || value.status === "error") &&
     isIsoDate(value.startedAt) &&
+    (value.completedAt === undefined || isIsoDate(value.completedAt)) &&
+    (value.tokenCount === undefined || isNonNegativeInteger(value.tokenCount)) &&
     typeof value.label === "string" &&
     (value.messages === undefined || Array.isArray(value.messages)) &&
     (value.messageRevision === undefined || isNonNegativeInteger(value.messageRevision)) &&

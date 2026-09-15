@@ -619,8 +619,14 @@ export interface ReviewFanoutHost {
   ): Promise<void>;
   /** Best-effort abort of a session the workflow is discarding. */
   abandonSession(selection: ReviewerModelSelection, providerSessionId: string): Promise<void>;
-  /** Multi Review renders reviewer usage; pipeline fanout deliberately does not. */
+  /** Whether this owner persists provider-session usage for reviewer presentation. */
   readonly captureReviewerUsage?: boolean;
+  /**
+   * When false, token-count deltas stay in memory until the owner already has
+   * another reason to save. Pipeline fan-out sets this so a streaming meter
+   * cannot rewrite the whole build-pipelines file on every poll.
+   */
+  readonly persistReviewerUsageImmediately?: boolean;
   /**
    * Lets an owner mirror a reviewer's transcript into its own read model.
    *
@@ -1132,7 +1138,9 @@ export class ReviewFanoutRunner {
     }
     const elapsedMs = noProgressElapsedMs(reviewer.progressAt, reviewer.startedAt);
     if (elapsedMs === null) {
-      if (usageChanged || reviewer.progressDigest !== previousDigest) await this.host.save();
+      if (this.shouldPersistUsageOrProgress(usageChanged, previousDigest, reviewer)) {
+        await this.host.save();
+      }
       return "continue";
     }
     if (elapsedMs >= this.stallAbandonMs()) {
@@ -1153,8 +1161,19 @@ export class ReviewFanoutRunner {
       await this.host.save();
       return "continue";
     }
-    if (usageChanged || reviewer.progressDigest !== previousDigest) await this.host.save();
+    if (this.shouldPersistUsageOrProgress(usageChanged, previousDigest, reviewer)) {
+      await this.host.save();
+    }
     return "continue";
+  }
+
+  private shouldPersistUsageOrProgress(
+    usageChanged: boolean,
+    previousDigest: string | undefined,
+    reviewer: ReviewerRecord,
+  ): boolean {
+    if (reviewer.progressDigest !== previousDigest) return true;
+    return usageChanged && this.host.persistReviewerUsageImmediately !== false;
   }
 
   private async prepareReviewerReportRepair(

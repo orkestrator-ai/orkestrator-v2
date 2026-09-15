@@ -143,6 +143,7 @@ ENV CLAUDE_CLI_PATH=/usr/local/share/npm-global/bin/claude
 
 # Install OpenCode from the same pinned, digest-verified release artifacts as
 # the packaged desktop toolchain.
+# Retry transient release-host failures with bounded attempts and timeouts.
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
     amd64) OPENCODE_ARCH=x64; OPENCODE_SHA=ea800b7ff56226b70952126c9fc1e2517ca4c4b5682fd9d3f9e87449697a1194 ;; \
@@ -150,7 +151,8 @@ RUN ARCH="$(dpkg --print-architecture)" && \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   mkdir -p /home/node/.opencode/bin && \
-  curl -fsSL "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_CLI_VERSION}/opencode-linux-${OPENCODE_ARCH}.tar.gz" -o /tmp/opencode.tar.gz && \
+  curl -fsSL --retry 5 --retry-max-time 300 --connect-timeout 30 --max-time 300 \
+    "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_CLI_VERSION}/opencode-linux-${OPENCODE_ARCH}.tar.gz" -o /tmp/opencode.tar.gz && \
   printf '%s  %s\n' "$OPENCODE_SHA" /tmp/opencode.tar.gz | sha256sum -c - && \
   tar -xzf /tmp/opencode.tar.gz -C /home/node/.opencode/bin opencode && \
   chmod 755 /home/node/.opencode/bin/opencode && \

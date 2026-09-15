@@ -12,6 +12,7 @@ import {
   consumeWindowStartupAgentActivation,
   getWindowBuildPipelineActivation,
   readStoredPaneSelection,
+  wasWindowBuildPipelineSetupReadyAtArm,
   readWindowPaneSelection,
   writeWindowPaneSelection,
 } from "./pane-selection-storage";
@@ -100,6 +101,18 @@ describe("read/clear", () => {
 
     clearWindowBuildPipelineActivation("env-2");
     expect(getWindowBuildPipelineActivation("env-2")).toBeNull();
+  });
+
+  test("remembers whether setup was already ready when the pipeline was armed", () => {
+    armWindowBuildPipelineActivation("env-1", "pipeline-1", true);
+    armWindowBuildPipelineActivation("env-2", "pipeline-2");
+
+    expect(wasWindowBuildPipelineSetupReadyAtArm("env-1")).toBe(true);
+    expect(wasWindowBuildPipelineSetupReadyAtArm("env-2")).toBe(false);
+    expect(wasWindowBuildPipelineSetupReadyAtArm("env-missing")).toBe(false);
+
+    consumeWindowBuildPipelineActivation("env-1", "pipeline-1");
+    expect(wasWindowBuildPipelineSetupReadyAtArm("env-1")).toBe(false);
   });
 
   test("stores current window selection separately from legacy migration state", () => {

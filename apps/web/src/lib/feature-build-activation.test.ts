@@ -24,7 +24,8 @@ mock.module("@/lib/build-pipeline-persistence", () => ({
   hydrateBuildPipeline: mockHydrateBuildPipeline,
 }));
 
-const { activateFeatureBuildEnvironment } = await import("./feature-build-activation");
+const { activateFeatureBuildEnvironment, scheduleBuildPipelineTabActivation } =
+  await import("./feature-build-activation");
 const { getWindowBuildPipelineActivation } = await import("./pane-selection-storage");
 const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
@@ -116,6 +117,33 @@ describe("activateFeatureBuildEnvironment", () => {
 
       expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-deferred");
       expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("scheduleBuildPipelineTabActivation arms once a later environment id arrives", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      scheduleBuildPipelineTabActivation("project-1", "pipeline-kanban");
+      expect(getWindowBuildPipelineActivation("env-kanban")).toBeNull();
+
+      useBuildPipelineStore.getState().replacePipeline(
+        buildPipelineFixture({
+          id: "pipeline-kanban",
+          projectId: "project-1",
+          environmentId: "env-kanban",
+        }),
+      );
+      await Promise.resolve();
+
+      expect(getWindowBuildPipelineActivation("env-kanban")).toBe("pipeline-kanban");
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-kanban");
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;

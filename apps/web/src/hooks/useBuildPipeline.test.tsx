@@ -165,6 +165,50 @@ describe("useBuildPipeline", () => {
     }
   });
 
+  test("defers arming when the idempotent start response has no environment yet", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    startBuildPipelineMock.mockResolvedValueOnce(
+      buildPipelineFixture({
+        id: "pipeline-pending",
+        environmentId: "",
+        taskId: "task-1",
+        projectId: "project-1",
+      }),
+    );
+    try {
+      const { result } = renderHook(() => useBuildPipeline());
+
+      await act(async () => {
+        await result.current.startBuild(task, "local");
+      });
+
+      expect(getWindowBuildPipelineActivation("env-later")).toBeNull();
+      expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+
+      await act(async () => {
+        useBuildPipelineStore.getState().replacePipeline(
+          buildPipelineFixture({
+            id: "pipeline-pending",
+            environmentId: "env-later",
+            taskId: "task-1",
+            projectId: "project-1",
+          }),
+        );
+      });
+
+      expect(getWindowBuildPipelineActivation("env-later")).toBe("pipeline-pending");
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-later");
+      expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
   test("converts Linear and GitHub issues into backend-owned task snapshots", async () => {
     const { result } = renderHook(() => useBuildPipeline());
     await act(async () => {

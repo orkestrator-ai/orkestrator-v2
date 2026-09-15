@@ -13,7 +13,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
 import * as backend from "@/lib/backend";
 import { resolveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
-import { armBuildPipelineTabActivation } from "@/lib/pane-layout-authoritative";
+import { scheduleBuildPipelineTabActivation } from "@/lib/feature-build-activation";
 import { buildPipelineConfiguredDefaults } from "@/lib/build-launch-options";
 import type { DefaultAgent, EnvironmentType } from "@/types";
 import type { KanbanTask } from "@/lib/backend";
@@ -208,9 +208,14 @@ export function useBuildPipeline() {
         const authoritative = await backend.startBuildPipeline(input);
         const pipeline = authoritative as BuildPipeline;
         replacePipeline(pipeline);
-        armBuildPipelineTabActivation(pipeline.environmentId, pipeline.id);
-        setProjectCollapsed(ticket.projectId, false);
-        selectProjectAndEnvironment(ticket.projectId, pipeline.environmentId);
+        // An idempotent admission can return a pipeline whose environment is
+        // still being provisioned. Defer the tab handoff until that id arrives,
+        // the same way the create-feature dialog does.
+        scheduleBuildPipelineTabActivation(
+          ticket.projectId,
+          pipeline.id,
+          pipeline.environmentId || undefined,
+        );
         toast.success("Build pipeline started");
         return pipeline.id;
       } catch (error) {
@@ -221,7 +226,7 @@ export function useBuildPipeline() {
         return undefined;
       }
     },
-    [config, replacePipeline, selectProjectAndEnvironment, setProjectCollapsed],
+    [config, replacePipeline],
   );
 
   const startBuild = useCallback(

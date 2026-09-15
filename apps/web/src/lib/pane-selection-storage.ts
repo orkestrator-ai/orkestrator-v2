@@ -60,6 +60,20 @@ function writeStartupAgentActivations(environmentIds: string[]): void {
 interface BuildPipelineActivation {
   environmentId: string;
   pipelineId: string;
+  /** True when the environment was already setup-ready at the moment this window armed. */
+  setupReadyAtArm: boolean;
+}
+
+function parseBuildPipelineActivation(value: unknown): BuildPipelineActivation | null {
+  if (!isRecord(value)) return null;
+  const { environmentId, pipelineId, setupReadyAtArm } = value;
+  if (typeof environmentId !== "string" || environmentId.length === 0) return null;
+  if (typeof pipelineId !== "string" || pipelineId.length === 0) return null;
+  return {
+    environmentId,
+    pipelineId,
+    setupReadyAtArm: setupReadyAtArm === true,
+  };
 }
 
 function readBuildPipelineActivations(): BuildPipelineActivation[] {
@@ -70,14 +84,9 @@ function readBuildPipelineActivations(): BuildPipelineActivation[] {
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed) || !Array.isArray(parsed.entries)) return [];
-    return parsed.entries.filter(
-      (entry): entry is BuildPipelineActivation =>
-        isRecord(entry) &&
-        typeof entry.environmentId === "string" &&
-        entry.environmentId.length > 0 &&
-        typeof entry.pipelineId === "string" &&
-        entry.pipelineId.length > 0,
-    );
+    return parsed.entries
+      .map(parseBuildPipelineActivation)
+      .filter((entry): entry is BuildPipelineActivation => entry !== null);
   } catch {
     return [];
   }
@@ -255,12 +264,16 @@ export function clearWindowStartupAgentActivation(environmentId: string): void {
 }
 
 /** Remember the pipeline tab that should replace setup in the launching window. */
-export function armWindowBuildPipelineActivation(environmentId: string, pipelineId: string): void {
+export function armWindowBuildPipelineActivation(
+  environmentId: string,
+  pipelineId: string,
+  setupReadyAtArm = false,
+): void {
   if (!environmentId || !pipelineId) return;
   const entries = readBuildPipelineActivations().filter(
     (candidate) => candidate.environmentId !== environmentId,
   );
-  entries.push({ environmentId, pipelineId });
+  entries.push({ environmentId, pipelineId, setupReadyAtArm });
   writeBuildPipelineActivations(entries);
 }
 
@@ -269,6 +282,18 @@ export function getWindowBuildPipelineActivation(environmentId: string): string 
   return (
     readBuildPipelineActivations().find((candidate) => candidate.environmentId === environmentId)
       ?.pipelineId ?? null
+  );
+}
+
+/**
+ * True when this window armed after setup had already finished, so there is no
+ * long setup whose user-chosen tab we must protect. A rebuild into an existing
+ * environment is this case: the user just clicked Start Build.
+ */
+export function wasWindowBuildPipelineSetupReadyAtArm(environmentId: string): boolean {
+  return (
+    readBuildPipelineActivations().find((candidate) => candidate.environmentId === environmentId)
+      ?.setupReadyAtArm === true
   );
 }
 

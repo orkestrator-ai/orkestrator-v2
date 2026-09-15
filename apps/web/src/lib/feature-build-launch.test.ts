@@ -40,6 +40,7 @@ function models(): FeatureBuildModelState {
     review2: { agent: "codex", model: "gpt-5.6" },
     reviewPreparation: { agent: "claude", model: "opus", reasoningEffort: "max" },
     address: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+    verify: { agent: "claude", model: "sonnet", reasoningEffort: "low" },
     pr: { agent: "claude", model: "sonnet" },
     resolve: { agent: "claude", model: "opus" },
   });
@@ -181,8 +182,12 @@ describe("featureBuildStepConfigs", () => {
     expect(reviewers[0]).toEqual(steps.review!);
   });
 
-  test("does not send a verify step; the backend runs it on the address model", () => {
-    expect(featureBuildStepConfigs(models()).steps.verify).toBeUndefined();
+  test("sends verification as its own configured step", () => {
+    expect(featureBuildStepConfigs(models()).steps.verify).toEqual({
+      agent: "claude",
+      model: "sonnet",
+      reasoningEffort: "low",
+    });
   });
 
   test("sends review preparation separately from the fix steps", () => {

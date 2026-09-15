@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { buildLaunchDefaults } from "./build-launch-options";
+import {
+  buildLaunchDefaults,
+  buildPipelineConfiguredDefaults,
+  configuredOpenCodeModelIds,
+} from "./build-launch-options";
+import { MAX_BUILD_PIPELINE_REVIEWERS } from "@orkestrator/protocol/build-pipeline";
 import type { AppConfig, GlobalConfig, RepositoryConfig } from "@/types";
 
 function makeConfig(
@@ -49,7 +54,9 @@ describe("buildLaunchDefaults", () => {
       makeConfig({
         agentSettings: {
           defaultAgent: "codex",
-          platforms: { codex: { model: "gpt-5.4-codex", reasoningEffort: "high" } },
+          platforms: {
+            codex: { model: "gpt-5.4-codex", reasoningEffort: "high" },
+          },
         },
       }),
       "project-1",
@@ -69,7 +76,9 @@ describe("buildLaunchDefaults", () => {
     const defaults = buildLaunchDefaults(
       makeConfig({
         agentSettings: {
-          platforms: { claude: { model: "default", reasoningEffort: "default" } },
+          platforms: {
+            claude: { model: "default", reasoningEffort: "default" },
+          },
         },
       }),
       "project-1",
@@ -144,7 +153,12 @@ describe("buildLaunchDefaults", () => {
       makeConfig({
         agentSettings: {
           defaultAgent: "opencode",
-          platforms: { opencode: { model: "opencode/other-model", reasoningEffort: "deep" } },
+          platforms: {
+            opencode: {
+              model: "opencode/other-model",
+              reasoningEffort: "deep",
+            },
+          },
         },
       }),
       "project-1",
@@ -240,26 +254,279 @@ describe("buildLaunchDefaults", () => {
 
   test("leaves speed unseeded when no tier expresses one", () => {
     // Absent means the provider decides, which is not the same as Normal.
-    expect(buildLaunchDefaults(makeConfig(), "project-1", false).preferredFastModes).toEqual({});
+    expect(
+      buildLaunchDefaults(makeConfig(), "project-1", false).preferredFastModes,
+    ).toEqual({});
   });
 
   test("prefers the repository's last environment type, then the project's path", () => {
     expect(
-      buildLaunchDefaults(makeConfig({ lastEnvironmentType: "containerized" }), "project-1", true)
+      buildLaunchDefaults(
+        makeConfig({ lastEnvironmentType: "containerized" }),
+        "project-1",
+        true,
+      ).defaultEnvironmentType,
+    ).toBe("containerized");
+    expect(
+      buildLaunchDefaults(
+        makeConfig({ lastEnvironmentType: "local" }),
+        "project-1",
+        false,
+      ).defaultEnvironmentType,
+    ).toBe("local");
+    expect(
+      buildLaunchDefaults(makeConfig(), "project-1", true)
+        .defaultEnvironmentType,
+    ).toBe("local");
+    expect(
+      buildLaunchDefaults(makeConfig(), "project-1", false)
         .defaultEnvironmentType,
     ).toBe("containerized");
     expect(
-      buildLaunchDefaults(makeConfig({ lastEnvironmentType: "local" }), "project-1", false)
+      buildLaunchDefaults(makeConfig(), "unknown-project", false)
         .defaultEnvironmentType,
-    ).toBe("local");
-    expect(buildLaunchDefaults(makeConfig(), "project-1", true).defaultEnvironmentType).toBe(
-      "local",
+    ).toBe("containerized");
+  });
+});
+
+describe("buildPipelineConfiguredDefaults", () => {
+  test("uses Multi Review and the dedicated verification action for every ticket build", () => {
+    const config = makeConfig(undefined, {
+      agentSettings: {
+        defaultAgent: "claude",
+        platforms: {
+          claude: { model: "claude-sonnet-5" },
+          codex: { model: "gpt-5.4", reasoningEffort: "medium" },
+        },
+        actionDefaults: {
+          review: { platform: "claude", model: "claude-opus" },
+          review2: {
+            platform: "codex",
+            model: "gpt-5.6",
+            reasoningEffort: "high",
+          },
+          reviewPreparation: { platform: "codex", model: "gpt-5.6" },
+          fixReviewIssues: { platform: "claude", model: "claude-sonnet-5" },
+          verify: {
+            platform: "codex",
+            model: "gpt-5.6",
+            reasoningEffort: "xhigh",
+          },
+        },
+        multiReview: {
+          reviewerCount: 3,
+          additionalReviewers: [{ platform: "claude", model: "claude-haiku" }],
+        },
+      },
+    });
+
+    const defaults = buildPipelineConfiguredDefaults(config, "project-1");
+
+    expect(defaults.reviewers).toEqual([
+      { agent: "claude", model: "claude-opus" },
+      { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+      { agent: "claude", model: "claude-haiku" },
+    ]);
+    expect(defaults.reviewPreparation).toEqual({
+      agent: "codex",
+      model: "gpt-5.6",
+      reasoningEffort: "medium",
+    });
+    expect(defaults.steps.address).toEqual({
+      agent: "claude",
+      model: "claude-sonnet-5",
+    });
+    expect(defaults.steps.verify).toEqual({
+      agent: "codex",
+      model: "gpt-5.6",
+      reasoningEffort: "xhigh",
+    });
+    expect(configuredOpenCodeModelIds(defaults)).toEqual([]);
+  });
+
+  test("defaults to two identical reviewers and a preparation model copied from review", () => {
+    const defaults = buildPipelineConfiguredDefaults(makeConfig(), "project-1");
+
+    expect(defaults.reviewers).toEqual([
+      { agent: "claude", model: "claude-sonnet-5" },
+      { agent: "claude", model: "claude-sonnet-5" },
+    ]);
+    expect(defaults.reviewPreparation).toEqual({
+      agent: "claude",
+      model: "claude-sonnet-5",
+    });
+    expect(defaults.steps.verify).toEqual({
+      agent: "claude",
+      model: "claude-sonnet-5",
+    });
+  });
+
+  test("seeds verify from address when the dedicated action is unset", () => {
+    const defaults = buildPipelineConfiguredDefaults(
+      makeConfig(undefined, {
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: {
+            claude: { model: "claude-sonnet-5" },
+            codex: { model: "gpt-5.4", reasoningEffort: "medium" },
+          },
+          actionDefaults: {
+            fixReviewIssues: { platform: "codex", model: "gpt-5.6" },
+          },
+        },
+      }),
+      "project-1",
     );
-    expect(buildLaunchDefaults(makeConfig(), "project-1", false).defaultEnvironmentType).toBe(
-      "containerized",
+
+    expect(defaults.steps.address).toEqual({
+      agent: "codex",
+      model: "gpt-5.6",
+      reasoningEffort: "medium",
+    });
+    expect(defaults.steps.verify).toEqual({
+      agent: "codex",
+      model: "gpt-5.6",
+      reasoningEffort: "medium",
+    });
+  });
+
+  test("drops the OpenCode placeholder instead of pinning it on a launch path", () => {
+    const defaults = buildPipelineConfiguredDefaults(
+      makeConfig(undefined, {
+        agentSettings: {
+          defaultAgent: "opencode",
+          platforms: {
+            opencode: { model: "default", reasoningEffort: "default" },
+          },
+          actionDefaults: {
+            review: { platform: "opencode" },
+            verify: { platform: "opencode" },
+          },
+        },
+      }),
+      "project-1",
     );
-    expect(buildLaunchDefaults(makeConfig(), "unknown-project", false).defaultEnvironmentType).toBe(
-      "containerized",
+
+    expect(defaults.steps.review).toEqual({ agent: "opencode" });
+    expect(defaults.steps.verify).toEqual({ agent: "opencode" });
+    expect(defaults.reviewers[0]).toEqual({ agent: "opencode" });
+  });
+
+  test("omits reviewPreparation when the configured reviewer count is one", () => {
+    const defaults = buildPipelineConfiguredDefaults(
+      makeConfig(undefined, {
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: { claude: { model: "claude-sonnet-5" } },
+          actionDefaults: {
+            review: { platform: "claude", model: "claude-opus" },
+            reviewPreparation: { platform: "codex", model: "gpt-5.6" },
+          },
+          multiReview: { reviewerCount: 1 },
+        },
+      }),
+      "project-1",
     );
+
+    expect(defaults.reviewers).toEqual([
+      { agent: "claude", model: "claude-opus" },
+    ]);
+    expect(defaults.reviewPreparation).toBeUndefined();
+  });
+
+  test("falls back to reviewer 1 when review2 or an additional slot is unset", () => {
+    const defaults = buildPipelineConfiguredDefaults(
+      makeConfig(undefined, {
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: { claude: { model: "claude-sonnet-5" } },
+          actionDefaults: {
+            review: { platform: "claude", model: "claude-opus" },
+          },
+          multiReview: {
+            reviewerCount: 4,
+            additionalReviewers: [null],
+          },
+        },
+      }),
+      "project-1",
+    );
+
+    expect(defaults.reviewers).toEqual([
+      { agent: "claude", model: "claude-opus" },
+      { agent: "claude", model: "claude-opus" },
+      { agent: "claude", model: "claude-opus" },
+      { agent: "claude", model: "claude-opus" },
+    ]);
+  });
+
+  test("ignores an action default whose platform is not enabled", () => {
+    const defaults = buildPipelineConfiguredDefaults(
+      makeConfig(undefined, {
+        enabledAgentPlatforms: ["claude"],
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: { claude: { model: "claude-sonnet-5" } },
+          actionDefaults: {
+            review: { platform: "codex", model: "gpt-5.6" },
+            verify: { platform: "codex", model: "gpt-5.6" },
+          },
+        },
+      }),
+      "project-1",
+    );
+
+    expect(defaults.steps.review).toEqual({
+      agent: "claude",
+      model: "claude-sonnet-5",
+    });
+    expect(defaults.steps.verify).toEqual({
+      agent: "claude",
+      model: "claude-sonnet-5",
+    });
+  });
+
+  test("clamps reviewer count to the pipeline maximum", () => {
+    const defaults = buildPipelineConfiguredDefaults(
+      makeConfig(undefined, {
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: { claude: { model: "claude-sonnet-5" } },
+          actionDefaults: {
+            review: { platform: "claude", model: "claude-opus" },
+          },
+          multiReview: { reviewerCount: 99 },
+        },
+      }),
+      "project-1",
+    );
+
+    expect(defaults.reviewers).toHaveLength(MAX_BUILD_PIPELINE_REVIEWERS);
+  });
+
+  test("lists configured OpenCode ids so launchers can keep them before the catalogue loads", () => {
+    const defaults = buildPipelineConfiguredDefaults(
+      makeConfig(undefined, {
+        agentSettings: {
+          defaultAgent: "opencode",
+          platforms: { opencode: { model: "acme/platform" } },
+          actionDefaults: {
+            review: { platform: "opencode", model: "acme/review" },
+            review2: { platform: "opencode", model: "acme/review-2" },
+            reviewPreparation: { platform: "opencode", model: "acme/prep" },
+            verify: { platform: "opencode", model: "acme/verify" },
+          },
+        },
+      }),
+      "project-1",
+    );
+
+    expect(configuredOpenCodeModelIds(defaults)).toEqual([
+      "acme/review",
+      "acme/platform",
+      "acme/verify",
+      "acme/review-2",
+      "acme/prep",
+    ]);
   });
 });

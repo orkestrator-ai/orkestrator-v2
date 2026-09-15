@@ -19,6 +19,7 @@ import {
   GitPullRequest,
   RotateCcw,
   ScanSearch,
+  ShieldCheck,
   Upload,
   Wrench,
 } from "lucide-react";
@@ -35,7 +36,11 @@ import {
   toPickerModel,
   type AgentModelCatalog,
 } from "@/lib/agent-launch";
-import { TIER_LABELS, withPlatformField, type AgentSettingsTierName } from "@/lib/agent-settings";
+import {
+  TIER_LABELS,
+  withPlatformField,
+  type AgentSettingsTierName,
+} from "@/lib/agent-settings";
 import { cn } from "@/lib/utils";
 import {
   ACTION_DEFAULT_KEYS,
@@ -56,7 +61,10 @@ import {
   type AgentSettingsTier,
   type AgentSettingsTiers,
 } from "@orkestrator/protocol/agent-settings";
-import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
+import type {
+  AgentModel,
+  AgentReasoningOption,
+} from "@orkestrator/protocol/native-agent";
 import { INHERIT } from "./InheritedValue";
 
 const ACTION_DEFINITIONS: Record<
@@ -70,28 +78,39 @@ const ACTION_DEFINITIONS: Record<
   },
   createScript: {
     label: "Create run script",
-    description: "Preselected when you configure a script from the Run Commands button.",
+    description:
+      "Preselected when you configure a script from the Run Commands button.",
     icon: <FilePlus2 className="h-4 w-4" />,
   },
   review: {
     label: "Review",
-    description: "Used by the Code Review button and as the first model in Multi Review.",
+    description:
+      "Used by the Code Review button, as the first model in Multi Review, and as Reviewer 1 in feature and ticket builds.",
     icon: <Eye className="h-4 w-4" />,
   },
   review2: {
     label: "Review 2",
-    description: "Used as the second review model in Multi Review.",
+    description:
+      "Used as the second review model in Multi Review and as Reviewer 2 in feature and ticket builds.",
     icon: <Eye className="h-4 w-4" />,
   },
   reviewPreparation: {
     label: "Review preparation & consolidation",
-    description: "Prepares the shared review package and consolidates Multi Review findings.",
+    description:
+      "Prepares the shared review package and consolidates findings for Multi Review and for feature and ticket builds.",
     icon: <ScanSearch className="h-4 w-4" />,
   },
   fixReviewIssues: {
     label: "Fix review issues",
-    description: "Addresses the consolidated findings after Multi Review.",
+    description:
+      "Addresses the consolidated findings after Multi Review and in every build pipeline.",
     icon: <Wrench className="h-4 w-4" />,
+  },
+  verify: {
+    label: "Verify",
+    description:
+      "Verifies every build pipeline after review findings have been addressed.",
+    icon: <ShieldCheck className="h-4 w-4" />,
   },
   pr: {
     label: "PR",
@@ -142,7 +161,8 @@ export function AgentDefaultsPane({
   }, [tiers, tier]);
 
   const inheritedAgent = resolveDefaultAgent(parentTiers);
-  const inheritedAgentSource: AgentSettingsTierName = parentTiers.environment?.defaultAgent
+  const inheritedAgentSource: AgentSettingsTierName = parentTiers.environment
+    ?.defaultAgent
     ? "environment"
     : parentTiers.repository?.defaultAgent
       ? "repository"
@@ -164,19 +184,25 @@ export function AgentDefaultsPane({
   const selectedModel = storedForAgent?.model
     ? models.find(
         (model) =>
-          model.id === storedForAgent.model || model.resolvedModel === storedForAgent.model,
+          model.id === storedForAgent.model ||
+          model.resolvedModel === storedForAgent.model,
       )
     : undefined;
   const effectiveModel = storedForAgent?.model ?? resolvedForAgent.model;
   const reasoningModel = effectiveModel
-    ? models.find((model) => model.id === effectiveModel || model.resolvedModel === effectiveModel)
+    ? models.find(
+        (model) =>
+          model.id === effectiveModel || model.resolvedModel === effectiveModel,
+      )
     : models[0];
 
   const pickerModels = useMemo<AgentModel[]>(
     () =>
       enabledPlatforms.flatMap((platform) =>
         modelsForAgent(catalog, platform)
-          .filter((option) => !(platform === "opencode" && option.id === "default"))
+          .filter(
+            (option) => !(platform === "opencode" && option.id === "default"),
+          )
           .map((option) => toPickerModel(platform, option)),
       ),
     [catalog, enabledPlatforms],
@@ -185,7 +211,8 @@ export function AgentDefaultsPane({
   const reasoningOptions = useMemo<AgentReasoningOption[]>(() => {
     const efforts = reasoningModel?.reasoningEfforts ?? [];
     const current = storedForAgent?.reasoningEffort;
-    const ids = current && !efforts.includes(current) ? [...efforts, current] : efforts;
+    const ids =
+      current && !efforts.includes(current) ? [...efforts, current] : efforts;
     if (ids.length === 0) return [];
     return [
       { id: INHERIT, label: canInherit ? "Inherit" : "Provider default" },
@@ -195,9 +222,15 @@ export function AgentDefaultsPane({
 
   const speedCapable = platformOwnsSpeed(effectiveAgent);
   const selectedSupportsSpeed = reasoningModel?.supportsSpeed === true;
-  const inheritedSpeed = resolveAgentPlatformSettings(parentTiers, effectiveAgent).fastMode;
+  const inheritedSpeed = resolveAgentPlatformSettings(
+    parentTiers,
+    effectiveAgent,
+  ).fastMode;
 
-  const setModel = (platform: AgentPlatform, modelId: string): AgentSettingsTier => {
+  const setModel = (
+    platform: AgentPlatform,
+    modelId: string,
+  ): AgentSettingsTier => {
     let next = withPlatformField(tier, platform, "model", modelId);
     const nextModel = modelsForAgent(catalog, platform).find(
       (model) => model.id === modelId || model.resolvedModel === modelId,
@@ -211,7 +244,10 @@ export function AgentDefaultsPane({
   const actionDefaults: ActionDefaults = tier?.actionDefaults ?? {};
   const inheritedActions: ActionDefaults = resolveActionDefaults(parentTiers);
 
-  const setAction = (key: ActionDefaultKey, entry: AgentActionDefault | undefined) => {
+  const setAction = (
+    key: ActionDefaultKey,
+    entry: AgentActionDefault | undefined,
+  ) => {
     const next = { ...actionDefaults };
     if (entry) next[key] = entry;
     else delete next[key];
@@ -224,7 +260,8 @@ export function AgentDefaultsPane({
         <div>
           <h3 className="text-sm font-medium text-foreground">Default agent</h3>
           <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            The agent {scopeLabel} launches when nothing more specific names one.
+            The agent {scopeLabel} launches when nothing more specific names
+            one.
             {canInherit && " Leave on Inherit to follow the level above."}
           </p>
         </div>
@@ -269,7 +306,11 @@ export function AgentDefaultsPane({
               )}
             >
               <div className="flex items-center gap-2 text-sm font-medium">
-                <AgentPlatformIcon platform={platform} accent className="h-4 w-4" />
+                <AgentPlatformIcon
+                  platform={platform}
+                  accent
+                  className="h-4 w-4"
+                />
                 {AGENT_PLATFORM_LABELS[platform]}
               </div>
             </button>
@@ -281,9 +322,10 @@ export function AgentDefaultsPane({
         <div>
           <h3 className="text-sm font-medium text-foreground">Default model</h3>
           <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            The model {AGENT_PLATFORM_LABELS[effectiveAgent]} starts on. This is the same setting as
-            the one on the {AGENT_PLATFORM_LABELS[effectiveAgent]} tab — changing either changes
-            both. Other platforms keep their own.
+            The model {AGENT_PLATFORM_LABELS[effectiveAgent]} starts on. This is
+            the same setting as the one on the{" "}
+            {AGENT_PLATFORM_LABELS[effectiveAgent]} tab — changing either
+            changes both. Other platforms keep their own.
           </p>
         </div>
         {models.length > 0 ? (
@@ -300,7 +342,9 @@ export function AgentDefaultsPane({
             onReorderFavorites={favorites.reorderFavorites}
             // Choosing a platform on the rail sets the default agent; its model
             // then comes from that platform's own column.
-            onPlatformChange={(next) => onChange({ ...tier, defaultAgent: next })}
+            onPlatformChange={(next) =>
+              onChange({ ...tier, defaultAgent: next })
+            }
             selectedModelId={selectedModel?.id}
             selectedModelLabel={
               storedForAgent?.model
@@ -309,7 +353,9 @@ export function AgentDefaultsPane({
                     resolvedForAgent.model ?? "provider default"
                   }`
             }
-            onModelChange={(nextModelId) => onChange(setModel(effectiveAgent, nextModelId))}
+            onModelChange={(nextModelId) =>
+              onChange(setModel(effectiveAgent, nextModelId))
+            }
             onModelSelect={(nextModel) =>
               onChange({
                 ...setModel(nextModel.platform, nextModel.id),
@@ -320,7 +366,8 @@ export function AgentDefaultsPane({
             selectedReasoningId={storedForAgent?.reasoningEffort ?? INHERIT}
             selectedReasoningLabel={
               reasoningOptions.find(
-                (option) => option.id === (storedForAgent?.reasoningEffort ?? INHERIT),
+                (option) =>
+                  option.id === (storedForAgent?.reasoningEffort ?? INHERIT),
               )?.label
             }
             onReasoningChange={(nextId) =>
@@ -336,7 +383,9 @@ export function AgentDefaultsPane({
             speedCapable={speedCapable}
             fastModeAvailable={speedCapable && selectedSupportsSpeed}
             fastModeEnabled={
-              speedCapable ? (storedForAgent?.fastMode ?? inheritedSpeed ?? null) : false
+              speedCapable
+                ? (storedForAgent?.fastMode ?? inheritedSpeed ?? null)
+                : false
             }
             speedInherit={
               speedCapable
@@ -349,12 +398,27 @@ export function AgentDefaultsPane({
             onFastModeChange={
               speedCapable
                 ? (enabled) =>
-                    onChange(withPlatformField(tier, effectiveAgent, "fastMode", enabled))
+                    onChange(
+                      withPlatformField(
+                        tier,
+                        effectiveAgent,
+                        "fastMode",
+                        enabled,
+                      ),
+                    )
                 : undefined
             }
             onFastModeInherit={
               speedCapable
-                ? () => onChange(withPlatformField(tier, effectiveAgent, "fastMode", undefined))
+                ? () =>
+                    onChange(
+                      withPlatformField(
+                        tier,
+                        effectiveAgent,
+                        "fastMode",
+                        undefined,
+                      ),
+                    )
                 : undefined
             }
             className="min-h-11 w-full max-w-none justify-start border border-zinc-700/80 bg-zinc-900 py-2.5 text-sm text-zinc-100 md:max-w-none md:flex-1"
@@ -368,14 +432,18 @@ export function AgentDefaultsPane({
 
       <div className="space-y-3">
         <div>
-          <h3 className="text-sm font-medium text-foreground">Action defaults</h3>
+          <h3 className="text-sm font-medium text-foreground">
+            Action defaults
+          </h3>
           <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            The agent, model, reasoning level and Fast each toolbar workflow uses. Configure dialogs
-            open on the default set here, and confirming a single run never changes these settings.
+            The agent, model, reasoning level and Fast each toolbar workflow
+            uses. Configure dialogs open on the default set here, and confirming
+            a single run never changes these settings.
           </p>
           <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            An action default is what that action uses, whichever agent the environment was created
-            with. The Default agent above applies only to actions left on Inherit at every level.
+            An action default is what that action uses, whichever agent the
+            environment was created with. The Default agent above applies only
+            to actions left on Inherit at every level.
           </p>
         </div>
         <div
@@ -396,7 +464,8 @@ export function AgentDefaultsPane({
             // inherited provider is ignored whole by the runtime resolver, so
             // constrain the icon, label and initial catalogue the same way.
             const inheritedPlatform =
-              inheritedEntry?.platform && enabledPlatforms.includes(inheritedEntry.platform)
+              inheritedEntry?.platform &&
+              enabledPlatforms.includes(inheritedEntry.platform)
                 ? inheritedEntry.platform
                 : undefined;
             const displayedPlatform = inheritedPlatform ?? effectiveAgent;
@@ -406,12 +475,15 @@ export function AgentDefaultsPane({
               platform && entry?.model
                 ? actionModels.find((model) => model.id === entry.model)
                 : undefined;
-            const actionModelMissing = Boolean(platform && entry?.model && !actionSelected);
+            const actionModelMissing = Boolean(
+              platform && entry?.model && !actionSelected,
+            );
             // A stored level the catalog no longer lists stays selectable, so
             // opening this pane cannot quietly rewrite a saved default.
             const actionEfforts = actionSelected?.reasoningEfforts ?? [];
             const actionEffortIds =
-              entry?.reasoningEffort && !actionEfforts.includes(entry.reasoningEffort)
+              entry?.reasoningEffort &&
+              !actionEfforts.includes(entry.reasoningEffort)
                 ? [...actionEfforts, entry.reasoningEffort]
                 : actionEfforts;
             const actionReasoning: AgentReasoningOption[] =
@@ -433,7 +505,9 @@ export function AgentDefaultsPane({
             const actionSpeedCapable = platformOwnsSpeed(actionPlatform);
             const effectiveActionModel =
               (platform ? entry?.model : undefined) ??
-              (inheritedPlatform === actionPlatform ? inheritedEntry?.model : undefined) ??
+              (inheritedPlatform === actionPlatform
+                ? inheritedEntry?.model
+                : undefined) ??
               resolveAgentPlatformSettings(tiers, actionPlatform).model;
             const actionSupportsSpeed = modelSupportsSpeed(
               actionPlatform,
@@ -453,7 +527,8 @@ export function AgentDefaultsPane({
                 ? inheritedEntry
                 : undefined;
             const actionStoredSpeed = activeEntry?.fastMode;
-            const actionInheritedSpeed = inheritedActionEntry?.fastMode ?? actionPlatformSpeed;
+            const actionInheritedSpeed =
+              inheritedActionEntry?.fastMode ?? actionPlatformSpeed;
             const persistAction = (
               nextPlatform: AgentPlatform,
               fields: Omit<AgentActionDefault, "platform"> = {},
@@ -467,11 +542,16 @@ export function AgentDefaultsPane({
               const base = activeEntry ?? inheritedActionEntry;
               persistAction(actionPlatform, {
                 ...(base?.model ? { model: base.model } : {}),
-                ...(base?.reasoningEffort ? { reasoningEffort: base.reasoningEffort } : {}),
+                ...(base?.reasoningEffort
+                  ? { reasoningEffort: base.reasoningEffort }
+                  : {}),
                 ...(fastMode !== undefined ? { fastMode } : {}),
               });
             };
-            const persistActionModel = (nextPlatform: AgentPlatform, nextModelId: string) =>
+            const persistActionModel = (
+              nextPlatform: AgentPlatform,
+              nextModelId: string,
+            ) =>
               persistAction(nextPlatform, {
                 model: nextModelId,
                 ...(modelSupportsSpeed(nextPlatform, catalog, nextModelId)
@@ -521,12 +601,16 @@ export function AgentDefaultsPane({
                   favorites={favorites.favorites}
                   onToggleFavorite={favorites.toggleFavorite}
                   onReorderFavorites={favorites.reorderFavorites}
-                  onPlatformChange={(next) => setAction(key, { platform: next })}
+                  onPlatformChange={(next) =>
+                    setAction(key, { platform: next })
+                  }
                   selectedModelId={actionSelected?.id}
                   selectedModelLabel={
                     platform
                       ? `${AGENT_PLATFORM_LABELS[platform]} · ${
-                          entry?.model ? (actionSelected?.name ?? entry.model) : "Default model"
+                          entry?.model
+                            ? (actionSelected?.name ?? entry.model)
+                            : "Default model"
                         }`
                       : inheritedPlatform
                         ? `Inherit — ${AGENT_PLATFORM_LABELS[inheritedPlatform]}`
@@ -534,7 +618,9 @@ export function AgentDefaultsPane({
                           ? "Inherit"
                           : "App default"
                   }
-                  onModelChange={(nextModelId) => persistActionModel(actionPlatform, nextModelId)}
+                  onModelChange={(nextModelId) =>
+                    persistActionModel(actionPlatform, nextModelId)
+                  }
                   onModelSelect={(nextModel) =>
                     persistActionModel(nextModel.platform, nextModel.id)
                   }
@@ -542,7 +628,8 @@ export function AgentDefaultsPane({
                   selectedReasoningId={entry?.reasoningEffort ?? INHERIT}
                   selectedReasoningLabel={
                     actionReasoning.find(
-                      (option) => option.id === (entry?.reasoningEffort ?? INHERIT),
+                      (option) =>
+                        option.id === (entry?.reasoningEffort ?? INHERIT),
                     )?.label
                   }
                   // Provider and model move together, so the reasoning level
@@ -550,14 +637,20 @@ export function AgentDefaultsPane({
                   onReasoningChange={(nextId) =>
                     persistAction(actionPlatform, {
                       ...(entry?.model ? { model: entry.model } : {}),
-                      ...(nextId === INHERIT ? {} : { reasoningEffort: nextId }),
-                      ...(entry?.fastMode !== undefined ? { fastMode: entry.fastMode } : {}),
+                      ...(nextId === INHERIT
+                        ? {}
+                        : { reasoningEffort: nextId }),
+                      ...(entry?.fastMode !== undefined
+                        ? { fastMode: entry.fastMode }
+                        : {}),
                     })
                   }
                   speedCapable={actionSpeedCapable}
                   fastModeAvailable={actionSpeedCapable && actionSupportsSpeed}
                   fastModeEnabled={
-                    actionSpeedCapable ? (actionStoredSpeed ?? actionInheritedSpeed ?? null) : false
+                    actionSpeedCapable
+                      ? (actionStoredSpeed ?? actionInheritedSpeed ?? null)
+                      : false
                   }
                   speedInherit={
                     actionSpeedCapable
@@ -568,10 +661,14 @@ export function AgentDefaultsPane({
                       : undefined
                   }
                   onFastModeChange={
-                    actionSpeedCapable ? (enabled) => persistActionSpeed(enabled) : undefined
+                    actionSpeedCapable
+                      ? (enabled) => persistActionSpeed(enabled)
+                      : undefined
                   }
                   onFastModeInherit={
-                    actionSpeedCapable ? () => persistActionSpeed(undefined) : undefined
+                    actionSpeedCapable
+                      ? () => persistActionSpeed(undefined)
+                      : undefined
                   }
                   // The picker defaults to `flex-1` until `md`, and a flex
                   // item's grow factor consumes free space before an auto
@@ -583,8 +680,9 @@ export function AgentDefaultsPane({
                 />
                 {actionModelMissing && (
                   <p className="text-xs text-amber-300">
-                    {entry?.model} is not in the current catalog. It is still saved and will be sent
-                    as-is; pick another model to replace it.
+                    {entry?.model} is not in the current catalog. It is still
+                    saved and will be sent as-is; pick another model to replace
+                    it.
                   </p>
                 )}
               </div>

@@ -5,6 +5,7 @@ import {
   isEmptyAgentSettings,
   normalizeAgentSettings,
   resolveActionDefaults,
+  resolveMultiReviewSettings,
   resolveAgentPlatformSettings,
   resolveDefaultAgent,
   SHIPPED_PLATFORM_MODES,
@@ -222,6 +223,23 @@ describe("resolveActionDefaults", () => {
 
   test("is empty when no tier sets any", () => {
     expect(resolveActionDefaults({})).toEqual({});
+  });
+});
+
+describe("resolveMultiReviewSettings", () => {
+  test("resolves count and reviewer rows from the narrowest tier that sets each field", () => {
+    expect(
+      resolveMultiReviewSettings({
+        environment: { multiReview: { reviewerCount: 3 } },
+        repository: {
+          multiReview: { additionalReviewers: [{ platform: "codex", model: "gpt-5.6" }] },
+        },
+        global: { multiReview: { reviewerCount: 4 } },
+      }),
+    ).toEqual({
+      reviewerCount: 3,
+      additionalReviewers: [{ platform: "codex", model: "gpt-5.6" }],
+    });
   });
 });
 

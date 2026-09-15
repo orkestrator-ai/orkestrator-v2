@@ -8,6 +8,7 @@ import {
   MessageSquareText,
   Plus,
   ScanSearch,
+  ShieldCheck,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -65,11 +66,10 @@ const BUILD_INTENTS: Array<{
 /**
  * The single-selection steps, in the order the pipeline runs them.
  *
- * Review is absent because it is a list rather than one decision, and Verify is
- * absent because it runs on the address model — see `FeatureBuildModelState`.
+ * Review is absent because it is a list rather than one decision.
  */
 const SINGLE_STEPS: Array<{
-  key: "build" | "reviewPreparation" | "address" | "pr" | "resolve";
+  key: "build" | "reviewPreparation" | "address" | "verify" | "pr" | "resolve";
   title: string;
   description: string;
   icon: React.ReactNode;
@@ -89,8 +89,14 @@ const SINGLE_STEPS: Array<{
   {
     key: "address",
     title: "Address issues",
-    description: "Fixes the consolidated review findings, and verifies the result.",
+    description: "Fixes the consolidated review findings.",
     icon: <ListChecks className="size-4" />,
+  },
+  {
+    key: "verify",
+    title: "Verify",
+    description: "Checks the completed fix against the ticket.",
+    icon: <ShieldCheck className="size-4" />,
   },
   {
     key: "pr",

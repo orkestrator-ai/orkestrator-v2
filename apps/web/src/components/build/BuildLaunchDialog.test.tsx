@@ -1,5 +1,20 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentModelRef } from "@orkestrator/protocol/native-agent";
 import * as realDialog from "@/components/ui/dialog";
@@ -12,16 +27,27 @@ mock.module("@/components/ui/dialog", () => ({
   DialogContent: ({ children }: { children: React.ReactNode }) => (
     <div role="dialog">{children}</div>
   ),
-  DialogDescription: ({ children }: { children: React.ReactNode }) => <p>{children}</p>,
-  DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
+  DialogDescription: ({ children }: { children: React.ReactNode }) => (
+    <p>{children}</p>
+  ),
+  DialogFooter: ({ children }: { children: React.ReactNode }) => (
+    <div>{children}</div>
+  ),
+  DialogHeader: ({ children }: { children: React.ReactNode }) => (
+    <div>{children}</div>
+  ),
+  DialogTitle: ({ children }: { children: React.ReactNode }) => (
+    <h2>{children}</h2>
+  ),
 }));
 
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 import { useConfigStore } from "@/stores/configStore";
-import { BuildLaunchDialog, type BuildLaunchSelection } from "./BuildLaunchDialog";
+import {
+  BuildLaunchDialog,
+  type BuildLaunchSelection,
+} from "./BuildLaunchDialog";
 
 const catalog: AgentModelCatalog = {
   claude: [
@@ -33,7 +59,9 @@ const catalog: AgentModelCatalog = {
       reasoningEfforts: ["xhigh"],
     },
   ],
-  codex: [{ id: "codex-a", name: "Codex A", reasoningEfforts: ["medium", "high"] }],
+  codex: [
+    { id: "codex-a", name: "Codex A", reasoningEfforts: ["medium", "high"] },
+  ],
   opencode: [
     {
       id: "provider/model-a",
@@ -80,7 +108,9 @@ afterAll(() => {
   mock.module("@/components/ui/dialog", () => realDialogSnapshot);
 });
 
-function renderDialog(overrides: Partial<Parameters<typeof BuildLaunchDialog>[0]> = {}) {
+function renderDialog(
+  overrides: Partial<Parameters<typeof BuildLaunchDialog>[0]> = {},
+) {
   const onConfirm = mock((_selection: BuildLaunchSelection) => undefined);
   const props = {
     open: true,
@@ -115,14 +145,20 @@ function chooseFavorite(step: (typeof STEP_LABELS)[number], name: RegExp) {
   openPicker(step);
   fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
   fireEvent.click(
-    within(screen.getByRole("group", { name: "Models" })).getByRole("menuitemradio", { name }),
+    within(screen.getByRole("group", { name: "Models" })).getByRole(
+      "menuitemradio",
+      { name },
+    ),
   );
 }
 
 function chooseReasoning(step: (typeof STEP_LABELS)[number], name: RegExp) {
   openPicker(step);
   fireEvent.click(
-    within(screen.getByRole("group", { name: "Reasoning" })).getByRole("menuitemradio", { name }),
+    within(screen.getByRole("group", { name: "Reasoning" })).getByRole(
+      "menuitemradio",
+      { name },
+    ),
   );
 }
 
@@ -135,7 +171,10 @@ function choosePlatform(step: (typeof STEP_LABELS)[number], platform: string) {
 function chooseSpeed(step: (typeof STEP_LABELS)[number], name: RegExp) {
   openPicker(step);
   fireEvent.click(
-    within(screen.getByRole("group", { name: "Speed mode" })).getByRole("menuitemradio", { name }),
+    within(screen.getByRole("group", { name: "Speed mode" })).getByRole(
+      "menuitemradio",
+      { name },
+    ),
   );
 }
 
@@ -147,7 +186,12 @@ function submit() {
 const speedCatalog: AgentModelCatalog = {
   ...catalog,
   claude: [
-    { id: "claude-a", name: "Claude A", reasoningEfforts: ["low", "high"], supportsSpeed: true },
+    {
+      id: "claude-a",
+      name: "Claude A",
+      reasoningEfforts: ["low", "high"],
+      supportsSpeed: true,
+    },
     {
       id: "claude-b",
       name: "Claude B",
@@ -161,7 +205,9 @@ describe("BuildLaunchDialog", () => {
   test("shows the ordered pipeline immediately with one model picker per step", () => {
     renderDialog();
 
-    expect(screen.getByRole("heading", { name: "Configure build" })).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Configure build" }),
+    ).toBeTruthy();
     const stepList = screen.getByRole("list", { name: "Build steps" });
     const cards = within(stepList).getAllByRole("listitem");
     expect(cards).toHaveLength(6);
@@ -173,26 +219,37 @@ describe("BuildLaunchDialog", () => {
       expect.stringContaining("Claude A"),
       expect.stringContaining("Claude A"),
     ]);
-    expect(screen.queryAllByText("Use one configuration for every step")).toHaveLength(0);
+    expect(
+      screen.queryAllByText("Use one configuration for every step"),
+    ).toHaveLength(0);
   });
 
   test("numbers the fixed step cards in pipeline order", () => {
     const { container } = renderDialog();
 
-    const numbers = Array.from(container.querySelectorAll("[data-build-step-number]")).map(
-      (node) => node.textContent,
-    );
+    const numbers = Array.from(
+      container.querySelectorAll("[data-build-step-number]"),
+    ).map((node) => node.textContent);
     expect(numbers).toEqual(["1", "2", "3", "4", "5", "6"]);
     expect(
       Array.from(container.querySelectorAll("[data-build-step]")).map((node) =>
         node.getAttribute("data-build-step"),
       ),
-    ).toEqual(["build", "review", "address", "verify", "pr", "resolve-conflicts"]);
+    ).toEqual([
+      "build",
+      "review",
+      "address",
+      "verify",
+      "pr",
+      "resolve-conflicts",
+    ]);
   });
 
   test("asks for the environment once, outside the step configuration", () => {
     const { onConfirm } = renderDialog();
-    const environment = screen.getByRole("radiogroup", { name: "Build environment" });
+    const environment = screen.getByRole("radiogroup", {
+      name: "Build environment",
+    });
 
     expect(screen.getAllByRole("radiogroup")).toHaveLength(1);
     fireEvent.click(within(environment).getByRole("radio", { name: /^Local/ }));
@@ -209,7 +266,11 @@ describe("BuildLaunchDialog", () => {
 
     submit();
 
-    const shared = { agent: "claude", model: "claude-b", reasoningEffort: "xhigh" };
+    const shared = {
+      agent: "claude",
+      model: "claude-b",
+      reasoningEffort: "xhigh",
+    };
     expect(onConfirm).toHaveBeenCalledWith({
       environmentType: "containerized",
       steps: {
@@ -220,6 +281,255 @@ describe("BuildLaunchDialog", () => {
         pr: shared,
         "resolve-conflicts": shared,
       },
+    });
+  });
+
+  test("keeps configured OpenCode models after the catalogue hydrates", () => {
+    const onConfirm = mock((_selection: BuildLaunchSelection) => undefined);
+    const pipelineDefaults = {
+      steps: {
+        review: {
+          agent: "opencode" as const,
+          model: "acme/review",
+          reasoningEffort: "high",
+        },
+        address: { agent: "opencode" as const, model: "acme/address" },
+        verify: {
+          agent: "opencode" as const,
+          model: "acme/verify",
+          reasoningEffort: "medium",
+        },
+        pr: { agent: "claude" as const, model: "claude-a" },
+        "resolve-conflicts": { agent: "claude" as const, model: "claude-a" },
+      },
+      reviewers: [
+        {
+          agent: "opencode" as const,
+          model: "acme/review",
+          reasoningEffort: "high",
+        },
+        {
+          agent: "opencode" as const,
+          model: "acme/review-2",
+          reasoningEffort: "low",
+        },
+      ],
+      reviewPreparation: {
+        agent: "opencode" as const,
+        model: "acme/prep",
+        reasoningEffort: "medium",
+      },
+    };
+    const placeholderCatalog: AgentModelCatalog = {
+      ...catalog,
+      opencode: [{ id: "default", name: "Default", reasoningEfforts: [] }],
+    };
+    const hydratedCatalog: AgentModelCatalog = {
+      ...catalog,
+      opencode: [
+        { id: "default", name: "Default", reasoningEfforts: [] },
+        {
+          id: "acme/review",
+          name: "Configured Review",
+          reasoningEfforts: ["low", "high"],
+        },
+        {
+          id: "acme/review-2",
+          name: "Configured Review 2",
+          reasoningEfforts: ["low", "high"],
+        },
+        {
+          id: "acme/prep",
+          name: "Configured Prep",
+          reasoningEfforts: ["medium", "high"],
+        },
+        {
+          id: "acme/address",
+          name: "Configured Address",
+          reasoningEfforts: [],
+        },
+        {
+          id: "acme/verify",
+          name: "Configured Verify",
+          reasoningEfforts: ["medium"],
+        },
+      ],
+    };
+    const view = render(
+      <BuildLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        catalog={placeholderCatalog}
+        defaultAgent="claude"
+        defaultEnvironmentType="containerized"
+        pipelineDefaults={pipelineDefaults}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    expect(picker("Reviewer 1").textContent).toContain("acme/review");
+
+    view.rerender(
+      <BuildLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        catalog={hydratedCatalog}
+        defaultAgent="claude"
+        defaultEnvironmentType="containerized"
+        pipelineDefaults={pipelineDefaults}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    expect(picker("Reviewer 1").textContent).toContain("Configured Review");
+    expect(picker("Reviewer 2").textContent).toContain("Configured Review 2");
+    expect(picker("Review preparation & consolidation").textContent).toContain(
+      "Configured Prep",
+    );
+    expect(picker("Verify").textContent).toContain("Configured Verify");
+    submit();
+
+    const selection = onConfirm.mock.calls[0]![0];
+    expect(selection.steps.review).toEqual({
+      agent: "opencode",
+      model: "acme/review",
+      reasoningEffort: "high",
+      fastMode: undefined,
+    });
+    expect(selection.steps.verify).toEqual({
+      agent: "opencode",
+      model: "acme/verify",
+      reasoningEffort: "medium",
+      fastMode: undefined,
+    });
+    expect(selection.reviewers).toEqual([
+      {
+        agent: "opencode",
+        model: "acme/review",
+        reasoningEffort: "high",
+        fastMode: undefined,
+      },
+      { agent: "opencode", model: "acme/review-2", reasoningEffort: "low" },
+    ]);
+    expect(selection.reviewPreparation).toEqual({
+      agent: "opencode",
+      model: "acme/prep",
+      reasoningEffort: "medium",
+    });
+  });
+
+  test("changing the visible Reviewer 1 picker leaves the remaining fan-out intact", () => {
+    const { onConfirm } = renderDialog({
+      pipelineDefaults: {
+        steps: {
+          review: {
+            agent: "claude",
+            model: "claude-b",
+            reasoningEffort: "xhigh",
+          },
+          address: { agent: "codex", model: "codex-a" },
+          verify: { agent: "codex", model: "codex-a", reasoningEffort: "high" },
+          pr: { agent: "claude", model: "claude-a" },
+          "resolve-conflicts": { agent: "claude", model: "claude-b" },
+        },
+        reviewers: [
+          { agent: "claude", model: "claude-b", reasoningEffort: "xhigh" },
+          { agent: "codex", model: "codex-a", reasoningEffort: "medium" },
+        ],
+        reviewPreparation: {
+          agent: "codex",
+          model: "codex-a",
+          reasoningEffort: "high",
+        },
+      },
+    });
+
+    expect(
+      screen.getByRole("combobox", { name: "Reviewer 1 step model" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("combobox", { name: "Reviewer 2 step model" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("combobox", {
+        name: "Review preparation & consolidation step model",
+      }),
+    ).toBeTruthy();
+
+    chooseVisibleModel("Reviewer 1", /Claude A/);
+    submit();
+
+    const selection = onConfirm.mock.calls[0]![0];
+    expect(selection.steps.review).toEqual({
+      agent: "claude",
+      model: "claude-a",
+      reasoningEffort: undefined,
+      fastMode: undefined,
+    });
+    expect(selection.reviewers).toEqual([
+      {
+        agent: "claude",
+        model: "claude-a",
+        reasoningEffort: undefined,
+        fastMode: undefined,
+      },
+      { agent: "codex", model: "codex-a", reasoningEffort: "medium" },
+    ]);
+    expect(selection.reviewPreparation).toEqual({
+      agent: "codex",
+      model: "codex-a",
+      reasoningEffort: "high",
+    });
+  });
+
+  test("submits the shared Multi Review fan-out and dedicated verify default", () => {
+    const { onConfirm } = renderDialog({
+      pipelineDefaults: {
+        steps: {
+          review: {
+            agent: "claude",
+            model: "claude-b",
+            reasoningEffort: "xhigh",
+          },
+          address: { agent: "codex", model: "codex-a" },
+          verify: { agent: "codex", model: "codex-a", reasoningEffort: "high" },
+          pr: { agent: "claude", model: "claude-a" },
+          "resolve-conflicts": { agent: "claude", model: "claude-b" },
+        },
+        reviewers: [
+          { agent: "claude", model: "claude-b", reasoningEffort: "xhigh" },
+          { agent: "codex", model: "codex-a", reasoningEffort: "medium" },
+        ],
+        reviewPreparation: {
+          agent: "codex",
+          model: "codex-a",
+          reasoningEffort: "high",
+        },
+      },
+    });
+
+    submit();
+
+    const selection = onConfirm.mock.calls[0]![0];
+    expect(selection.steps.verify).toEqual({
+      agent: "codex",
+      model: "codex-a",
+      reasoningEffort: "high",
+      fastMode: undefined,
+    });
+    expect(selection.reviewers).toEqual([
+      {
+        agent: "claude",
+        model: "claude-b",
+        reasoningEffort: "xhigh",
+        fastMode: undefined,
+      },
+      { agent: "codex", model: "codex-a", reasoningEffort: "medium" },
+    ]);
+    expect(selection.reviewPreparation).toEqual({
+      agent: "codex",
+      model: "codex-a",
+      reasoningEffort: "high",
     });
   });
 
@@ -257,7 +567,9 @@ describe("BuildLaunchDialog", () => {
     chooseVisibleModel("Build", /Claude B/);
     submit();
 
-    expect(onConfirm.mock.calls[0]![0].steps.build).toMatchObject({ model: "claude-b" });
+    expect(onConfirm.mock.calls[0]![0].steps.build).toMatchObject({
+      model: "claude-b",
+    });
     expect(onConfirm.mock.calls[0]![0].steps.build.fastMode).toBeUndefined();
   });
 
@@ -270,7 +582,9 @@ describe("BuildLaunchDialog", () => {
     submit();
 
     expect(onConfirm.mock.calls[0]![0].steps.build.fastMode).toBe(true);
-    expect(onConfirm.mock.calls[0]![0].steps["resolve-conflicts"].fastMode).toBe(true);
+    expect(
+      onConfirm.mock.calls[0]![0].steps["resolve-conflicts"].fastMode,
+    ).toBe(true);
   });
 
   test("keeps every step's model, platform and reasoning independent", () => {
@@ -278,7 +592,9 @@ describe("BuildLaunchDialog", () => {
       { platform: "codex", modelId: "codex-a" },
       { platform: "opencode", modelId: "provider/model-a" },
     ]);
-    const { onConfirm } = renderDialog({ preferredReasoningEfforts: { codex: "high" } });
+    const { onConfirm } = renderDialog({
+      preferredReasoningEfforts: { codex: "high" },
+    });
 
     chooseFavorite("Review", /Codex A/);
     chooseVisibleModel("Address issues", /Claude B/);
@@ -291,7 +607,11 @@ describe("BuildLaunchDialog", () => {
       build: { agent: "claude", model: "claude-a", reasoningEffort: undefined },
       review: { agent: "codex", model: "codex-a", reasoningEffort: "high" },
       address: { agent: "claude", model: "claude-b", reasoningEffort: "xhigh" },
-      verify: { agent: "opencode", model: "provider/model-a", reasoningEffort: undefined },
+      verify: {
+        agent: "opencode",
+        model: "provider/model-a",
+        reasoningEffort: undefined,
+      },
       pr: { agent: "codex", model: "codex-a", reasoningEffort: "high" },
       "resolve-conflicts": {
         agent: "claude",
@@ -304,7 +624,9 @@ describe("BuildLaunchDialog", () => {
   test("adopts the platform of a favorite chosen from another provider", () => {
     setEnabledPlatforms(["claude", "codex", "opencode", "pi"]);
     setFavorites([{ platform: "pi", modelId: "anthropic/pi-a" }]);
-    const { onConfirm } = renderDialog({ preferredReasoningEfforts: { pi: "high" } });
+    const { onConfirm } = renderDialog({
+      preferredReasoningEfforts: { pi: "high" },
+    });
 
     chooseFavorite("Build", /Pi A/);
     submit();
@@ -317,17 +639,23 @@ describe("BuildLaunchDialog", () => {
   });
 
   test("lets a step return to default reasoning from the integrated picker", () => {
-    const { onConfirm } = renderDialog({ preferredReasoningEfforts: { claude: "high" } });
+    const { onConfirm } = renderDialog({
+      preferredReasoningEfforts: { claude: "high" },
+    });
 
     expect(picker("Review").textContent).toContain("High");
     chooseReasoning("Review", /^Default$/);
     submit();
 
-    expect(onConfirm.mock.calls[0]![0].steps.review.reasoningEffort).toBeUndefined();
+    expect(
+      onConfirm.mock.calls[0]![0].steps.review.reasoningEffort,
+    ).toBeUndefined();
   });
 
   test("drops an effort that the newly selected model does not offer", () => {
-    const { onConfirm } = renderDialog({ preferredReasoningEfforts: { claude: "high" } });
+    const { onConfirm } = renderDialog({
+      preferredReasoningEfforts: { claude: "high" },
+    });
 
     chooseVisibleModel("Build", /Claude B/);
     expect(picker("Build").textContent).toContain("Default effort");
@@ -346,16 +674,21 @@ describe("BuildLaunchDialog", () => {
     choosePlatform("Build", "opencode");
 
     expect(picker("Build").textContent?.includes("effort")).toBe(false);
-    expect(screen.getAllByText("This model uses its default reasoning setting.")).toHaveLength(1);
+    expect(
+      screen.getAllByText("This model uses its default reasoning setting."),
+    ).toHaveLength(1);
   });
 
   test("shows catalog descriptions as the model row caption", () => {
     renderDialog();
 
     openPicker("Build");
-    const row = within(screen.getByRole("group", { name: "Models" })).getByRole("menuitemradio", {
-      name: /Claude B/,
-    });
+    const row = within(screen.getByRole("group", { name: "Models" })).getByRole(
+      "menuitemradio",
+      {
+        name: /Claude B/,
+      },
+    );
     expect(row.textContent).toContain("Fast implementation model");
   });
 
@@ -364,9 +697,12 @@ describe("BuildLaunchDialog", () => {
 
     openPicker("Build");
     fireEvent.click(screen.getByRole("button", { name: "opencode models" }));
-    const row = within(screen.getByRole("group", { name: "Models" })).getByRole("menuitemradio", {
-      name: /OpenCode A/,
-    });
+    const row = within(screen.getByRole("group", { name: "Models" })).getByRole(
+      "menuitemradio",
+      {
+        name: /OpenCode A/,
+      },
+    );
     expect(row.textContent).toContain("Provider Cloud");
     expect(row.textContent).not.toContain("Fallback provider description");
   });
@@ -378,8 +714,12 @@ describe("BuildLaunchDialog", () => {
 
     openPicker("Build");
 
-    expect(screen.queryAllByRole("button", { name: "grok models" })).toHaveLength(0);
-    expect(screen.queryAllByRole("menuitemradio", { name: /Grok A/ })).toHaveLength(0);
+    expect(
+      screen.queryAllByRole("button", { name: "grok models" }),
+    ).toHaveLength(0);
+    expect(
+      screen.queryAllByRole("menuitemradio", { name: /Grok A/ }),
+    ).toHaveLength(0);
   });
 
   test("keeps a non-default selection when browsing the same provider", () => {
@@ -388,7 +728,9 @@ describe("BuildLaunchDialog", () => {
 
     openPicker("Build");
     fireEvent.click(screen.getByRole("button", { name: "claude models" }));
-    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
     submit();
 
     expect(onConfirm.mock.calls[0]![0].steps.build).toEqual({
@@ -403,9 +745,15 @@ describe("BuildLaunchDialog", () => {
     const { onConfirm } = renderDialog();
 
     openPicker("Build");
-    const unavailable = screen.getByRole("menuitemradio", { name: /claude-retired/ });
-    expect((unavailable as HTMLElement).getAttribute("data-disabled")).not.toBeNull();
-    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    const unavailable = screen.getByRole("menuitemradio", {
+      name: /claude-retired/,
+    });
+    expect(
+      (unavailable as HTMLElement).getAttribute("data-disabled"),
+    ).not.toBeNull();
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
     submit();
 
     expect(onConfirm.mock.calls[0]![0].steps.build.model).toBe("claude-a");
@@ -427,10 +775,18 @@ describe("BuildLaunchDialog", () => {
   test("keeps all step controls in the scroll region and the actions outside it", () => {
     renderDialog();
 
-    const scrollRegion = screen.getByRole("region", { name: "Build configuration" });
+    const scrollRegion = screen.getByRole("region", {
+      name: "Build configuration",
+    });
     expect(scrollRegion.className).toContain("overflow-y-auto");
-    expect(STEP_LABELS.every((label) => scrollRegion.contains(picker(label)))).toBe(true);
-    expect(scrollRegion.contains(screen.getByRole("button", { name: "Start build" }))).toBe(false);
+    expect(
+      STEP_LABELS.every((label) => scrollRegion.contains(picker(label))),
+    ).toBe(true);
+    expect(
+      scrollRegion.contains(
+        screen.getByRole("button", { name: "Start build" }),
+      ),
+    ).toBe(false);
     expect(scrollRegion.getAttribute("tabindex")).toBeNull();
   });
 
@@ -449,8 +805,12 @@ describe("BuildLaunchDialog", () => {
       </DockerAvailabilityProvider>,
     );
 
-    const environment = screen.getByRole("radiogroup", { name: "Build environment" });
-    const container = within(environment).getByRole("radio", { name: /^Container/ });
+    const environment = screen.getByRole("radiogroup", {
+      name: "Build environment",
+    });
+    const container = within(environment).getByRole("radio", {
+      name: /^Container/,
+    });
     const local = within(environment).getByRole("radio", { name: /^Local/ });
     await waitFor(() => expect((local as HTMLInputElement).checked).toBe(true));
     expect((container as HTMLInputElement).disabled).toBe(true);
@@ -472,16 +832,26 @@ describe("BuildLaunchDialog", () => {
       />
     );
     const view = render(
-      <DockerAvailabilityProvider available>{dialog}</DockerAvailabilityProvider>,
+      <DockerAvailabilityProvider available>
+        {dialog}
+      </DockerAvailabilityProvider>,
     );
-    const environment = screen.getByRole("radiogroup", { name: "Build environment" });
+    const environment = screen.getByRole("radiogroup", {
+      name: "Build environment",
+    });
 
     view.rerender(
-      <DockerAvailabilityProvider available={false}>{dialog}</DockerAvailabilityProvider>,
+      <DockerAvailabilityProvider available={false}>
+        {dialog}
+      </DockerAvailabilityProvider>,
     );
     await waitFor(() => {
       expect(
-        (within(environment).getByRole("radio", { name: /^Local/ }) as HTMLInputElement).checked,
+        (
+          within(environment).getByRole("radio", {
+            name: /^Local/,
+          }) as HTMLInputElement
+        ).checked,
       ).toBe(true);
     });
 
@@ -505,25 +875,42 @@ describe("BuildLaunchDialog", () => {
       </DockerAvailabilityProvider>,
     );
 
-    const environment = screen.getByRole("radiogroup", { name: "Build environment" });
+    const environment = screen.getByRole("radiogroup", {
+      name: "Build environment",
+    });
     expect(
-      (within(environment).getByRole("radio", { name: /^Container/ }) as HTMLInputElement).disabled,
+      (
+        within(environment).getByRole("radio", {
+          name: /^Container/,
+        }) as HTMLInputElement
+      ).disabled,
     ).toBe(true);
     expect(
-      (within(environment).getByRole("radio", { name: /^Local/ }) as HTMLInputElement).disabled,
+      (
+        within(environment).getByRole("radio", {
+          name: /^Local/,
+        }) as HTMLInputElement
+      ).disabled,
     ).toBe(true);
     expect(
-      (screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement)
+        .disabled,
     ).toBe(true);
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
   test("opens on the local environment when it is the configured default", () => {
     const { onConfirm } = renderDialog({ defaultEnvironmentType: "local" });
-    const environment = screen.getByRole("radiogroup", { name: "Build environment" });
+    const environment = screen.getByRole("radiogroup", {
+      name: "Build environment",
+    });
 
     expect(
-      (within(environment).getByRole("radio", { name: /^Local/ }) as HTMLInputElement).checked,
+      (
+        within(environment).getByRole("radio", {
+          name: /^Local/,
+        }) as HTMLInputElement
+      ).checked,
     ).toBe(true);
     submit();
     expect(onConfirm.mock.calls[0]![0].environmentType).toBe("local");
@@ -546,10 +933,15 @@ describe("BuildLaunchDialog", () => {
     );
     const view = render(dialog(true, false));
     await waitFor(() => {
-      const environment = screen.getByRole("radiogroup", { name: "Build environment" });
+      const environment = screen.getByRole("radiogroup", {
+        name: "Build environment",
+      });
       expect(
-        (within(environment).getByRole("radio", { name: /^Container/ }) as HTMLInputElement)
-          .checked,
+        (
+          within(environment).getByRole("radio", {
+            name: /^Container/,
+          }) as HTMLInputElement
+        ).checked,
       ).toBe(true);
     });
 
@@ -557,9 +949,15 @@ describe("BuildLaunchDialog", () => {
     view.rerender(dialog(true, true));
 
     await waitFor(() => {
-      const environment = screen.getByRole("radiogroup", { name: "Build environment" });
+      const environment = screen.getByRole("radiogroup", {
+        name: "Build environment",
+      });
       expect(
-        (within(environment).getByRole("radio", { name: /^Local/ }) as HTMLInputElement).checked,
+        (
+          within(environment).getByRole("radio", {
+            name: /^Local/,
+          }) as HTMLInputElement
+        ).checked,
       ).toBe(true);
     });
     submit();
@@ -617,7 +1015,9 @@ describe("BuildLaunchDialog", () => {
   });
 
   test("falls back when a preferred model is no longer in the catalog", () => {
-    const { onConfirm } = renderDialog({ preferredModels: { claude: "claude-retired" } });
+    const { onConfirm } = renderDialog({
+      preferredModels: { claude: "claude-retired" },
+    });
 
     submit();
     expect(onConfirm.mock.calls[0]![0].steps.build.model).toBe("claude-a");

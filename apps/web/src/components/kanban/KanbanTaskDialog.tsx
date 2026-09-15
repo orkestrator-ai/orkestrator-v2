@@ -624,6 +624,8 @@ export function KanbanTaskDialog({
         selection.steps.build.agent,
         {
           steps: selection.steps,
+          reviewers: selection.reviewers,
+          reviewPreparation: selection.reviewPreparation,
         },
       );
       if (!pipelineId) return;
@@ -700,7 +702,11 @@ export function KanbanTaskDialog({
         newTask,
         selection.environmentType,
         selection.steps.build.agent,
-        { steps: selection.steps },
+        {
+          steps: selection.steps,
+          reviewers: selection.reviewers,
+          reviewPreparation: selection.reviewPreparation,
+        },
       );
       if (!pipelineId) return;
       handleOpenChange(false);

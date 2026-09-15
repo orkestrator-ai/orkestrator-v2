@@ -8,7 +8,9 @@ const realBackendSnapshot = { ...realBackend };
 const getCachedOpenCodeModelCatalogMock = mock(
   async (_projectId: string): Promise<unknown> => null,
 );
-const getOpencodeModelPreferencesMock = mock(async (): Promise<unknown> => undefined);
+const getOpencodeModelPreferencesMock = mock(
+  async (): Promise<unknown> => undefined,
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -36,7 +38,11 @@ describe("useBuildLaunchOptions", () => {
     getCachedOpenCodeModelCatalogMock.mockImplementation(async () => null);
     getOpencodeModelPreferencesMock.mockImplementation(async () => undefined);
     useConfigStore.setState({ config: baseConfig });
-    useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
+    useAgentModelCatalogStore.setState({
+      cursorModels: [],
+      grokModels: [],
+      piModels: [],
+    });
   });
 
   test("resolves OpenCode favorite model refs to ids, deduplicated and in order", async () => {
@@ -45,7 +51,9 @@ describe("useBuildLaunchOptions", () => {
       recent: [],
       variant: {},
     }));
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHook(() =>
+      useBuildLaunchOptions("project-1", true),
+    );
     await flushPromises();
 
     expect(result.current.favoriteOpenCodeModelIds).toEqual([
@@ -66,14 +74,20 @@ describe("useBuildLaunchOptions", () => {
       recent: [],
       variant: {},
     }));
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHook(() =>
+      useBuildLaunchOptions("project-1", true),
+    );
     await flushPromises();
 
-    expect(result.current.favoriteOpenCodeModelIds).toEqual(["provider/model-a"]);
+    expect(result.current.favoriteOpenCodeModelIds).toEqual([
+      "provider/model-a",
+    ]);
   });
 
   test("does not fetch models or preferences while disabled", async () => {
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", false));
+    const { result } = renderHook(() =>
+      useBuildLaunchOptions("project-1", false),
+    );
     await flushPromises();
 
     expect(getCachedOpenCodeModelCatalogMock).not.toHaveBeenCalled();
@@ -91,19 +105,30 @@ describe("useBuildLaunchOptions", () => {
     await flushPromises();
 
     expect(getCachedOpenCodeModelCatalogMock).not.toHaveBeenCalled();
-    expect(result.current.favoriteOpenCodeModelIds).toEqual(["provider/model-b"]);
+    expect(result.current.favoriteOpenCodeModelIds).toEqual([
+      "provider/model-b",
+    ]);
   });
 
   test("builds the OpenCode catalog from the project's cached models", async () => {
-    getCachedOpenCodeModelCatalogMock.mockImplementation(async (projectId: string) =>
-      projectId === "project-1"
-        ? {
-            projectId: "project-1",
-            models: [{ id: "provider/model-a", name: "OpenCode A", provider: "Provider A" }],
-          }
-        : null,
+    getCachedOpenCodeModelCatalogMock.mockImplementation(
+      async (projectId: string) =>
+        projectId === "project-1"
+          ? {
+              projectId: "project-1",
+              models: [
+                {
+                  id: "provider/model-a",
+                  name: "OpenCode A",
+                  provider: "Provider A",
+                },
+              ],
+            }
+          : null,
     );
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHook(() =>
+      useBuildLaunchOptions("project-1", true),
+    );
     await flushPromises();
 
     const opencode = result.current.catalog.opencode ?? [];
@@ -118,16 +143,63 @@ describe("useBuildLaunchOptions", () => {
       projectId: "project-1",
       models: [{ id: modelId, name: modelId, provider: "provider" }],
     }));
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHook(() =>
+      useBuildLaunchOptions("project-1", true),
+    );
     await flushPromises();
-    expect(result.current.catalog.opencode?.map((model) => model.id)).toEqual(["provider/model-a"]);
+    expect(result.current.catalog.opencode?.map((model) => model.id)).toEqual([
+      "provider/model-a",
+    ]);
 
     modelId = "provider/model-b";
-    act(() => window.dispatchEvent(new Event("orkestrator:model-catalog-refreshed")));
+    act(() =>
+      window.dispatchEvent(new Event("orkestrator:model-catalog-refreshed")),
+    );
     await flushPromises();
 
     expect(getCachedOpenCodeModelCatalogMock).toHaveBeenCalledTimes(2);
-    expect(result.current.catalog.opencode?.map((model) => model.id)).toEqual(["provider/model-b"]);
+    expect(result.current.catalog.opencode?.map((model) => model.id)).toEqual([
+      "provider/model-b",
+    ]);
+  });
+
+  test("synthesises configured pipeline OpenCode models before a cached catalogue exists", async () => {
+    useConfigStore.setState({
+      config: {
+        ...baseConfig,
+        global: {
+          ...baseConfig.global,
+          agentSettings: {
+            ...baseConfig.global.agentSettings,
+            actionDefaults: {
+              review: {
+                platform: "opencode",
+                model: "opencode-go/build-review",
+              },
+              verify: {
+                platform: "opencode",
+                model: "opencode-go/build-verify",
+              },
+            },
+          },
+        },
+      },
+    });
+    const { result } = renderHook(() =>
+      useBuildLaunchOptions("project-1", true),
+    );
+    await flushPromises();
+
+    expect(result.current.catalog.opencode?.map((model) => model.id)).toEqual(
+      expect.arrayContaining([
+        "opencode-go/build-review",
+        "opencode-go/build-verify",
+      ]),
+    );
+    expect(result.current.defaults.pipelineDefaults.steps.review).toEqual({
+      agent: "opencode",
+      model: "opencode-go/build-review",
+    });
   });
 
   test("includes favourited OpenCode models before a cached catalogue exists", async () => {
@@ -136,11 +208,15 @@ describe("useBuildLaunchOptions", () => {
         ...baseConfig,
         global: {
           ...baseConfig.global,
-          favoriteModels: [{ platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" }],
+          favoriteModels: [
+            { platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" },
+          ],
         },
       },
     });
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHook(() =>
+      useBuildLaunchOptions("project-1", true),
+    );
     await flushPromises();
 
     expect(result.current.catalog.opencode).toEqual([
@@ -158,22 +234,32 @@ describe("useBuildLaunchOptions", () => {
         ...baseConfig,
         global: {
           ...baseConfig.global,
-          favoriteModels: [{ platform: "opencode", modelId: "openrouter/kimi-k2.5" }],
+          favoriteModels: [
+            { platform: "opencode", modelId: "openrouter/kimi-k2.5" },
+          ],
           openCodeModelProviders: ["opencode", "opencode-go"],
         },
       },
     });
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHook(() =>
+      useBuildLaunchOptions("project-1", true),
+    );
     await flushPromises();
 
-    expect(result.current.catalog.opencode?.map((model) => model.id)).toEqual(["default"]);
+    expect(result.current.catalog.opencode?.map((model) => model.id)).toEqual([
+      "default",
+    ]);
   });
 
   test("reacts to shared backend-hydrated Cursor and Pi catalogues", async () => {
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHook(() =>
+      useBuildLaunchOptions("project-1", true),
+    );
     await flushPromises();
 
-    expect(result.current.catalog.cursor?.map((model) => model.id)).toEqual(["default"]);
+    expect(result.current.catalog.cursor?.map((model) => model.id)).toEqual([
+      "default",
+    ]);
     act(() => {
       useAgentModelCatalogStore.getState().setAcpModels([
         {
@@ -189,8 +275,12 @@ describe("useBuildLaunchOptions", () => {
       ]);
     });
 
-    expect(result.current.catalog.cursor?.map((model) => model.id)).toEqual(["composer-2.5"]);
-    expect(result.current.catalog.pi?.map((model) => model.id)).toEqual(["anthropic/claude-pi"]);
+    expect(result.current.catalog.cursor?.map((model) => model.id)).toEqual([
+      "composer-2.5",
+    ]);
+    expect(result.current.catalog.pi?.map((model) => model.id)).toEqual([
+      "anthropic/claude-pi",
+    ]);
   });
 
   test("ignores a cached catalog snapshot that belongs to another project", async () => {
@@ -198,7 +288,9 @@ describe("useBuildLaunchOptions", () => {
       projectId: "other-project",
       models: [{ id: "other/model", name: "Other", provider: "Other" }],
     }));
-    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    const { result } = renderHook(() =>
+      useBuildLaunchOptions("project-1", true),
+    );
     await flushPromises();
 
     const opencode = result.current.catalog.opencode ?? [];
@@ -220,7 +312,8 @@ describe("useBuildLaunchOptions", () => {
     }));
 
     const { result, rerender } = renderHook(
-      (props: { projectId: string }) => useBuildLaunchOptions(props.projectId, true),
+      (props: { projectId: string }) =>
+        useBuildLaunchOptions(props.projectId, true),
       { initialProps: { projectId: "project-1" } },
     );
 

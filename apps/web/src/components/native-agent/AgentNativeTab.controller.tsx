@@ -424,6 +424,7 @@ export function SharedNativeAgentController({
     data.environmentId,
     sessionKey,
     nativeComposePersistenceStore,
+    "agent-native",
   );
   const addTranscriptAnnotation = useCallback(
     (selectedText: string): TranscriptAnnotation | null => {
@@ -916,12 +917,15 @@ export function SharedNativeAgentController({
     ],
   );
   const discardProvisionalDraft = useCallback(() => {
-    void discardComposeDraft(composeDraftKey("agent-native", data.environmentId, sessionKey)).catch(
-      (error) => {
-        console.warn("[AgentNativeTab] Failed to discard provisional compose draft:", error);
-      },
-    );
-  }, [data.environmentId, sessionKey]);
+    const discard = (namespace: "agent-native" | typeof platform) =>
+      discardComposeDraft(composeDraftKey(namespace, data.environmentId, sessionKey)).catch(
+        (error) => {
+          console.warn("[AgentNativeTab] Failed to discard compose draft:", error);
+        },
+      );
+    void discard("agent-native");
+    void discard(platform);
+  }, [data.environmentId, platform, sessionKey]);
 
   const clearConfirmedDraft = useCallback(
     (requestId: string | undefined): boolean => {
@@ -941,6 +945,17 @@ export function SharedNativeAgentController({
   useEffect(() => {
     if (authenticationRequired) setSendError(null);
   }, [authenticationRequired]);
+
+  useEffect(() => {
+    const confirmation = draft.pendingTranscriptConfirmation;
+    if (!confirmation || confirmation.sessionId || !projection?.sessionId) return;
+    updateDraft(sessionKey, {
+      pendingTranscriptConfirmation: {
+        ...confirmation,
+        sessionId: projection.sessionId,
+      },
+    });
+  }, [draft.pendingTranscriptConfirmation, projection?.sessionId, sessionKey, updateDraft]);
 
   useEffect(() => {
     if (!transcriptEchoedOptimistic) return;
@@ -2121,18 +2136,23 @@ export function SharedNativeAgentController({
           testId="shared-native-compose-bar"
           layout={composerCentered ? "centered" : "bottom"}
           attachments={draft.attachments}
-          onRemoveAttachment={(attachmentId) =>
+          onRemoveAttachment={(attachmentId) => {
+            if (draft.submissionPending) return;
             updateDraft(sessionKey, {
               attachments: draft.attachments.filter((candidate) => candidate.id !== attachmentId),
-            })
-          }
+            });
+          }}
           annotations={draft.annotations}
-          onClearAnnotations={() => updateDraft(sessionKey, { annotations: [] })}
+          onClearAnnotations={() => {
+            if (draft.submissionPending) return;
+            updateDraft(sessionKey, { annotations: [] });
+          }}
           inputRef={inputRef}
           inputContainerRef={inputContainerRef}
           text={draft.text}
           mentions={draft.mentions}
           onTextAndMentionsChange={(text, mentions) => {
+            if (draft.submissionPending) return;
             updateDraft(sessionKey, { text, mentions });
           }}
           onCursorPositionChange={detectFileMention}
@@ -2153,7 +2173,7 @@ export function SharedNativeAgentController({
             void submit(draft.text);
           }}
           placeholder={`Message ${label}`}
-          disabled={isSubmitting}
+          disabled={isSubmitting || draft.submissionPending === true}
           isSending={isDispatching || isSubmitting}
           isLoading={isTurnActive}
           menus={

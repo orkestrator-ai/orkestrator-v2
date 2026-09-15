@@ -6,15 +6,68 @@ import { Button } from "@/components/ui/button";
 import { createPersistedPaneLayoutInput, flushPaneLayoutNow } from "@/lib/pane-layout-persistence";
 import { dispatchNativeAgentIntent, writeCoordinatorAttachment } from "@/lib/backend";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
-import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
+import {
+  awaitComposeDraftWrites,
+  composeDraftKey,
+  discardComposeDraft,
+  loadComposeDraft,
+  persistComposeDraft,
+} from "@/lib/compose-draft-persistence";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { createSessionKey } from "@/lib/utils";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import {
+  nativeComposeDraftPersistValue,
+  useNativeComposeStore,
+  type NativeComposeDraftPersistValue,
+} from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { type AgentNativeTabProps, findNativeAgentAdapter } from "./adapter";
 import { UnassignedNativeAgentComposer } from "./AgentNativeTab.helpers";
 import { SharedNativeAgentController } from "./AgentNativeTab.controller";
+
+function firstPromptDraftKeys(
+  environmentId: string,
+  sessionKey: string,
+  platform: AgentPlatform,
+): { provisionalKey: string; providerKey: string } {
+  return {
+    provisionalKey: composeDraftKey("agent-native", environmentId, sessionKey),
+    providerKey: composeDraftKey(platform, environmentId, sessionKey),
+  };
+}
+
+function discardFirstPromptDrafts(
+  environmentId: string,
+  sessionKey: string,
+  platform: AgentPlatform,
+): void {
+  const { provisionalKey, providerKey } = firstPromptDraftKeys(environmentId, sessionKey, platform);
+  void discardComposeDraft(provisionalKey).catch(() => undefined);
+  void discardComposeDraft(providerKey).catch(() => undefined);
+}
+
+async function persistFirstPromptDraftToLockedProvider(
+  environmentId: string,
+  sessionKey: string,
+  platform: AgentPlatform,
+): Promise<void> {
+  const { provisionalKey, providerKey } = firstPromptDraftKeys(environmentId, sessionKey, platform);
+  await awaitComposeDraftWrites(provisionalKey);
+  const live = useNativeComposeStore.getState().drafts.get(sessionKey);
+  const snapshot: NativeComposeDraftPersistValue | undefined = live
+    ? nativeComposeDraftPersistValue(live)
+    : (await loadComposeDraft<NativeComposeDraftPersistValue>(provisionalKey))?.value;
+  if (!snapshot) return;
+  const metadata = snapshot.metadata;
+  const hasRequestId =
+    metadata &&
+    typeof metadata === "object" &&
+    !Array.isArray(metadata) &&
+    typeof (metadata as { requestId?: unknown }).requestId === "string";
+  if (!snapshot.text && !hasRequestId) return;
+  await persistComposeDraft(providerKey, "environment", environmentId, snapshot);
+}
 
 export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTabProps) {
   const pendingFirstPrompt = useRef<Parameters<typeof dispatchNativeAgentIntent>[0] | null>(null);
@@ -50,6 +103,13 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
         return;
       }
       try {
+        if (submission) {
+          await persistFirstPromptDraftToLockedProvider(
+            props.data.environmentId,
+            sessionKey,
+            submission.agent,
+          );
+        }
         await flushPaneLayoutNow(
           props.data.environmentId,
           createPersistedPaneLayoutInput(environment),
@@ -65,17 +125,38 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
           try {
             const outcome = await dispatchNativeAgentIntent(submission);
             const store = useNativeComposeStore.getState();
-            if (store.drafts.get(sessionKey)?.requestId === submission.requestId) {
-              if (outcome.outcome === "accepted") {
-                store.clearDraft(sessionKey);
-                void discardComposeDraft(
-                  composeDraftKey("agent-native", props.data.environmentId, sessionKey),
-                ).catch(() => undefined);
-              } else
+            const ownsDraft = store.drafts.get(sessionKey)?.requestId === submission.requestId;
+            if (outcome.outcome === "accepted") {
+              discardFirstPromptDrafts(props.data.environmentId, sessionKey, submission.agent);
+              if (ownsDraft) store.clearDraft(sessionKey);
+              else
                 store.updateDraft(sessionKey, {
                   submissionPending: false,
-                  submissionError: outcome.outcome === "rejected" ? outcome.error : undefined,
+                  submissionError: undefined,
                 });
+            } else {
+              store.updateDraft(sessionKey, {
+                submissionPending: false,
+                submissionError: outcome.outcome === "rejected" ? outcome.error : undefined,
+                ...(ownsDraft && outcome.outcome === "unknown"
+                  ? {
+                      pendingTranscriptConfirmation: {
+                        requestId: submission.requestId,
+                        sessionId: "",
+                        priorMessageIds: [],
+                      },
+                    }
+                  : {}),
+              });
+              const settled = useNativeComposeStore.getState().drafts.get(sessionKey);
+              if (settled) {
+                void persistComposeDraft(
+                  composeDraftKey(submission.agent, props.data.environmentId, sessionKey),
+                  "environment",
+                  props.data.environmentId,
+                  nativeComposeDraftPersistValue(settled),
+                ).catch(() => undefined);
+              }
             }
           } catch {
             useNativeComposeStore.getState().updateDraft(sessionKey, {

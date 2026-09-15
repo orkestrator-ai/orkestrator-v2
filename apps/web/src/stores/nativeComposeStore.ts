@@ -79,6 +79,32 @@ const VALID_AGENT_PLATFORMS = new Set<AgentPlatform>([
 
 const DRAFT_METADATA_CACHE = new WeakMap<NativeComposeDraft, Readonly<Record<string, unknown>>>();
 
+function restorePendingTranscriptConfirmation(
+  value: unknown,
+): NativeComposeDraft["pendingTranscriptConfirmation"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.requestId !== "string" ||
+    record.requestId.length === 0 ||
+    record.requestId.length > 200
+  ) {
+    return undefined;
+  }
+  if (typeof record.sessionId !== "string" || record.sessionId.length > 200) return undefined;
+  if (
+    !Array.isArray(record.priorMessageIds) ||
+    record.priorMessageIds.some((id) => typeof id !== "string" || id.length > 200)
+  ) {
+    return undefined;
+  }
+  return {
+    requestId: record.requestId,
+    sessionId: record.sessionId,
+    priorMessageIds: record.priorMessageIds as string[],
+  };
+}
+
 function persistedDraftMetadata(draft: NativeComposeDraft): Readonly<Record<string, unknown>> {
   const cached = DRAFT_METADATA_CACHE.get(draft);
   if (cached) return cached;
@@ -87,12 +113,46 @@ function persistedDraftMetadata(draft: NativeComposeDraft): Readonly<Record<stri
     ...(draft.modelId ? { modelId: draft.modelId } : {}),
     ...(draft.reasoningId ? { reasoningId: draft.reasoningId } : {}),
     ...(draft.requestId ? { requestId: draft.requestId } : {}),
+    ...(draft.pendingTranscriptConfirmation
+      ? { pendingTranscriptConfirmation: draft.pendingTranscriptConfirmation }
+      : {}),
     fastMode: draft.fastMode,
     mode: draft.mode,
     ...(draft.executionProfileId ? { executionProfileId: draft.executionProfileId } : {}),
   });
   DRAFT_METADATA_CACHE.set(draft, metadata);
   return metadata;
+}
+
+function hasPersistableDraftMetadata(draft: NativeComposeDraft): boolean {
+  return Boolean(
+    draft.platform ||
+      draft.modelId ||
+      draft.reasoningId ||
+      draft.requestId ||
+      draft.pendingTranscriptConfirmation ||
+      draft.executionProfileId,
+  );
+}
+
+export interface NativeComposeDraftPersistValue {
+  text: string;
+  mentions: FileMention[];
+  attachments: WorkspaceAttachment[];
+  annotations: TranscriptAnnotation[];
+  metadata: Readonly<Record<string, unknown>>;
+}
+
+export function nativeComposeDraftPersistValue(
+  draft: NativeComposeDraft,
+): NativeComposeDraftPersistValue {
+  return {
+    text: draft.text,
+    mentions: draft.mentions,
+    attachments: draft.attachments,
+    annotations: draft.annotations,
+    metadata: persistedDraftMetadata(draft),
+  };
 }
 
 function restoreDraftMetadata(value: unknown): Partial<NativeComposeDraft> | undefined {
@@ -123,10 +183,15 @@ function restoreDraftMetadata(value: unknown): Partial<NativeComposeDraft> | und
     metadata.executionProfileId.length <= 256
       ? metadata.executionProfileId
       : undefined;
+  const pendingTranscriptConfirmation = restorePendingTranscriptConfirmation(
+    metadata.pendingTranscriptConfirmation,
+  );
   if (
     !platform &&
     !modelId &&
     !reasoningId &&
+    !requestId &&
+    !pendingTranscriptConfirmation &&
     fastMode === undefined &&
     !mode &&
     !executionProfileId
@@ -137,6 +202,7 @@ function restoreDraftMetadata(value: unknown): Partial<NativeComposeDraft> | und
     modelId,
     reasoningId,
     requestId,
+    ...(pendingTranscriptConfirmation ? { pendingTranscriptConfirmation } : {}),
     fastMode,
     mode,
     executionProfileId,
@@ -162,7 +228,15 @@ export const useNativeComposeStore = create<NativeComposeState>()((set) => ({
         update.attachments !== undefined;
       const annotationContentChanged = update.annotations !== undefined;
       const next = { ...EMPTY_DRAFT, ...existing, ...update };
-      if ((contentChanged || annotationContentChanged) && update.requestId === undefined) {
+      // Content edits drop dispatch ownership so a late transcript echo cannot
+      // delete the next prompt. An in-flight first submission is the exception:
+      // clearing requestId there strands settlement and leaves submissionPending
+      // stuck after the backend answers.
+      if (
+        (contentChanged || annotationContentChanged) &&
+        update.requestId === undefined &&
+        !next.submissionPending
+      ) {
         delete next.requestId;
         delete next.pendingTranscriptConfirmation;
       }
@@ -177,6 +251,19 @@ export const useNativeComposeStore = create<NativeComposeState>()((set) => ({
       return { drafts };
     }),
 }));
+
+function applyRestoredDraftMetadata(sessionKey: string, metadata: unknown): void {
+  const restored = restoreDraftMetadata(metadata);
+  if (restored) useNativeComposeStore.getState().updateDraft(sessionKey, restored);
+}
+
+function persistableDraftMetadataMap(state: NativeComposeState): Map<string, unknown> {
+  return new Map(
+    [...state.drafts]
+      .filter(([, draft]) => hasPersistableDraftMetadata(draft))
+      .map(([key, draft]) => [key, persistedDraftMetadata(draft)]),
+  );
+}
 
 function persistenceState(state: NativeComposeState): NativeComposePersistenceState {
   return {
@@ -201,6 +288,14 @@ function persistenceState(state: NativeComposeState): NativeComposePersistenceSt
   };
 }
 
+function lockedPersistenceState(state: NativeComposeState): NativeComposePersistenceState {
+  return {
+    ...persistenceState(state),
+    draftMetadata: persistableDraftMetadataMap(state),
+    setDraftMetadata: applyRestoredDraftMetadata,
+  };
+}
+
 /**
  * Compatibility surface for the existing backend-backed compose-draft hook.
  *
@@ -210,7 +305,7 @@ function persistenceState(state: NativeComposeState): NativeComposePersistenceSt
  * second source of truth.
  */
 export const nativeComposePersistenceStore = {
-  getState: () => persistenceState(useNativeComposeStore.getState()),
+  getState: () => lockedPersistenceState(useNativeComposeStore.getState()),
   subscribe: (
     listener: (
       state: NativeComposePersistenceState,
@@ -218,7 +313,7 @@ export const nativeComposePersistenceStore = {
     ) => void,
   ) =>
     useNativeComposeStore.subscribe((state, previous) => {
-      listener(persistenceState(state), persistenceState(previous));
+      listener(lockedPersistenceState(state), lockedPersistenceState(previous));
     }),
 };
 
@@ -235,10 +330,7 @@ export const unassignedNativeComposePersistenceStore = {
       draftMetadata: new Map(
         [...state.drafts].map(([key, draft]) => [key, persistedDraftMetadata(draft)]),
       ),
-      setDraftMetadata: (sessionKey: string, metadata: unknown) => {
-        const restored = restoreDraftMetadata(metadata);
-        if (restored) useNativeComposeStore.getState().updateDraft(sessionKey, restored);
-      },
+      setDraftMetadata: applyRestoredDraftMetadata,
     };
   },
   subscribe: (

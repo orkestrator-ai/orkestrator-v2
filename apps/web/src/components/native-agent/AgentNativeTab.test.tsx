@@ -28,6 +28,7 @@ import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
 import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
+import { composeDraftKey } from "@/lib/compose-draft-persistence";
 import { createSessionKey } from "@/lib/utils";
 import {
   AGENT_HANDOFF_VERSION,
@@ -232,6 +233,47 @@ const writeCoordinatorAttachmentMock = mock(
   async (environmentId: string, filename: string, _base64Data: string) =>
     `/data/coordinator-attachments/${environmentId}/${filename}`,
 );
+type StoredComposeDraft = {
+  draftKey: string;
+  ownerType: "environment" | "project";
+  ownerId: string;
+  value: unknown;
+  updatedAt: string;
+  revision: number;
+};
+const composeDraftRecords = new Map<string, StoredComposeDraft>();
+const getComposeDraftMock = mock(async (draftKey: string) => composeDraftRecords.get(draftKey) ?? null);
+const saveComposeDraftMock = mock(
+  async (
+    draftKey: string,
+    ownerType: "environment" | "project",
+    ownerId: string,
+    value: unknown,
+    expectedRevision?: number,
+  ) => {
+    const existing = composeDraftRecords.get(draftKey);
+    if (expectedRevision !== undefined && existing && existing.revision !== expectedRevision) {
+      throw new Error("Compose draft revision conflict");
+    }
+    const saved = {
+      draftKey,
+      ownerType,
+      ownerId,
+      value,
+      updatedAt: "2026-09-15T00:00:00.000Z",
+      revision: (existing?.revision ?? 0) + 1,
+    };
+    composeDraftRecords.set(draftKey, saved);
+    return saved;
+  },
+);
+const deleteComposeDraftMock = mock(async (draftKey: string, expectedRevision?: number) => {
+  const existing = composeDraftRecords.get(draftKey);
+  if (expectedRevision !== undefined && existing && existing.revision !== expectedRevision) {
+    throw new Error("Compose draft revision conflict");
+  }
+  composeDraftRecords.delete(draftKey);
+});
 
 // The paste handler itself needs a canvas the test environment does not have.
 // What broke for coordinators was the wiring into it, so that is what this
@@ -268,6 +310,9 @@ mock.module("@/lib/backend", () => ({
   writeCoordinatorAttachment: writeCoordinatorAttachmentMock,
   getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   getNativeAgentProjection: getNativeAgentProjectionMock,
+  getComposeDraft: getComposeDraftMock,
+  saveComposeDraft: saveComposeDraftMock,
+  deleteComposeDraft: deleteComposeDraftMock,
   performNativeAgentSessionAction: performNativeAgentSessionActionMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
   removePromptQueueMessage: removePromptQueueMessageMock,
@@ -358,6 +403,10 @@ afterEach(() => {
   getNativeAgentProjectionMock.mockImplementation(defaultProjection);
   getLocalFileTreeMock.mockClear();
   writeCoordinatorAttachmentMock.mockClear();
+  getComposeDraftMock.mockClear();
+  saveComposeDraftMock.mockClear();
+  deleteComposeDraftMock.mockClear();
+  composeDraftRecords.clear();
   latestPasteOptions = null;
   useEnvironmentStore.setState({ environments: [] });
   useConfigStore.getState().updateGlobalConfig({
@@ -2612,6 +2661,8 @@ describe("AgentNativeTab", () => {
         prompt: expect.stringMatching(
           /\[@widget\.ts\]\(src\/widget\.ts\)[\s\S]*layout\.png: \/workspace\/\.orkestrator\/clipboard\/layout\.png/,
         ),
+        sessionMode: "build",
+        parameterValues: { thinking: "adaptive", context1m: false },
         attachments: [
           {
             type: "image",
@@ -2620,6 +2671,7 @@ describe("AgentNativeTab", () => {
           },
         ],
       });
+      expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0].executionProfileId).toBeUndefined();
       const sessionKey = createSessionKey("env-1", "tab-first-prompt");
       expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.submissionPending).toBe(true);
       // Return while dispatch is pending, then leave again. Rehydration must not
@@ -2636,6 +2688,229 @@ describe("AgentNativeTab", () => {
       expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
     },
   );
+
+  test("settles a first prompt after the remounted composer is edited while dispatch is pending", async () => {
+    let releaseDispatch!: () => void;
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+      await new Promise<void>((resolve) => {
+        releaseDispatch = resolve;
+      });
+      return { outcome: "accepted", requestId: input.requestId };
+    });
+    const tabId = "tab-first-prompt-edit-pending";
+    const sessionKey = createSessionKey("env-1", tabId);
+    seedUnassignedPane(tabId);
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      text: "Ship the original prompt",
+      platform: "claude",
+    });
+
+    const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    const remounted = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    // A content write that drops requestId is the settlement-mismatch case:
+    // submissionPending must still clear or the remounted controller stays locked.
+    useNativeComposeStore.setState((state) => {
+      const current = state.drafts.get(sessionKey);
+      if (!current) return state;
+      const drafts = new Map(state.drafts);
+      const next = { ...current, text: "A follow-up typed during send" };
+      delete next.requestId;
+      drafts.set(sessionKey, next);
+      return { drafts };
+    });
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId).toBeUndefined();
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.submissionPending).toBe(true);
+    releaseDispatch();
+
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.submissionPending).not.toBe(
+        true,
+      ),
+    );
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByTitle("Send")).toBeTruthy());
+    remounted.unmount();
+  });
+
+  test.each([
+    {
+      name: "rejected",
+      settle: async (input: { requestId: string }) => ({
+        outcome: "rejected" as const,
+        requestId: input.requestId,
+        error: "Provider refused the first prompt.",
+      }),
+      expectedError: "Provider refused the first prompt.",
+    },
+    {
+      name: "unknown",
+      settle: async (input: { requestId: string }) => ({
+        outcome: "unknown" as const,
+        requestId: input.requestId,
+        error: "The response was lost",
+      }),
+      expectedError: undefined,
+    },
+    {
+      name: "thrown transport",
+      settle: async () => {
+        throw new Error("socket closed");
+      },
+      expectedError:
+        "The connection dropped before your message was confirmed. Retry with the same message to check its submission.",
+    },
+  ])(
+    "unlocks a remounted first-prompt composer after a $name dispatch",
+    async ({ name, settle, expectedError }) => {
+      let releaseDispatch!: () => void;
+      dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+        await new Promise<void>((resolve) => {
+          releaseDispatch = resolve;
+        });
+        return settle(input);
+      });
+      const tabId = `tab-first-prompt-${name.replace(/\s+/g, "-")}-remount`;
+      const sessionKey = createSessionKey("env-1", tabId);
+      seedUnassignedPane(tabId);
+      useNativeComposeStore.getState().updateDraft(sessionKey, {
+        text: "Retry this first prompt",
+        platform: "claude",
+      });
+
+      const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+      fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+      first.unmount();
+
+      const remounted = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.submissionPending).toBe(true);
+      releaseDispatch();
+
+      await waitFor(() =>
+        expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.submissionPending).toBe(
+          false,
+        ),
+      );
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.submissionError).toBe(
+        expectedError,
+      );
+      if (!expectedError) {
+        expect(
+          useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation
+            ?.requestId,
+        ).toMatch(/\S/);
+      }
+      await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+      await waitFor(() => expect(screen.getByTitle("Send")).toBeTruthy());
+      remounted.unmount();
+    },
+  );
+
+  test("restores a pending first draft after a cold remount onto the locked provider key", async () => {
+    let releaseDispatch!: () => void;
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+      await new Promise<void>((resolve) => {
+        releaseDispatch = resolve;
+      });
+      return { outcome: "accepted", requestId: input.requestId };
+    });
+    const tabId = "tab-first-prompt-cold-remount";
+    const sessionKey = createSessionKey("env-1", tabId);
+    seedUnassignedPane(tabId);
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      text: "Survive a renderer restart",
+      platform: "claude",
+      requestId: "first-prompt-request-1",
+    });
+
+    const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
+    await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(
+        composeDraftRecords.get(composeDraftKey("claude", "env-1", sessionKey))?.value,
+      ).toMatchObject({
+        text: "Survive a renderer restart",
+        metadata: { requestId: "first-prompt-request-1" },
+      }),
+    );
+    expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+    first.unmount();
+    useNativeComposeStore.setState({ drafts: new Map() });
+
+    const remounted = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toMatchObject({
+        text: "Survive a renderer restart",
+        requestId: "first-prompt-request-1",
+      }),
+    );
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.submissionPending).not.toBe(
+      true,
+    );
+    expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+    expect((await screen.findByRole("textbox")).textContent).toBe("Survive a renderer restart");
+    remounted.unmount();
+    releaseDispatch();
+  });
+
+  test("clears an unknown first prompt after remount sees the authoritative user row", async () => {
+    let releaseDispatch!: () => void;
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+      await new Promise<void>((resolve) => {
+        releaseDispatch = resolve;
+      });
+      return {
+        outcome: "unknown" as const,
+        requestId: input.requestId,
+        error: "The response was lost",
+      };
+    });
+    const tabId = "tab-first-prompt-unknown-echo";
+    const sessionKey = createSessionKey("env-1", tabId);
+    seedUnassignedPane(tabId);
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      text: "Run the focused tests",
+      platform: "claude",
+    });
+
+    const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    releaseDispatch();
+    await waitFor(() =>
+      expect(
+        useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation
+          ?.requestId,
+      ).toMatch(/\S/),
+    );
+    first.unmount();
+
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      turn: { phase: "running" as const },
+      messages: [
+        {
+          id: "first-prompt-echo",
+          role: "user" as const,
+          content: "Run the focused tests",
+          parts: [{ type: "text" as const, content: "Run the focused tests" }],
+          createdAt: "2026-08-26T14:00:00.000Z",
+        },
+      ],
+    }));
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
+    );
+    expect((await screen.findByRole("textbox")).textContent).toBe("");
+  });
 
   test("carries a coordinator-staged image through assignment as a structured attachment", async () => {
     seedUnassignedDefaultCatalog();
@@ -2734,10 +3009,18 @@ describe("AgentNativeTab", () => {
       await screen.findByText("The agent choice is locked, but could not be saved."),
     ).toBeTruthy();
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe("Keep this prompt");
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.submissionPending).toBe(false);
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.submissionError).toBe(
+      "The agent choice could not be saved. Your message has not been sent.",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
 
     expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
     expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
+      prompt: "Keep this prompt",
+    });
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined();
   });
 

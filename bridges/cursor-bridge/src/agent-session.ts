@@ -23,7 +23,7 @@ import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, resolveCredential } from "./cre
 import { schedulePlanAccountRefresh } from "./plan-usage.js";
 import { emptyComposer, hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
-import { cursorMcpServers, mcpConnectionKey } from "./mcp.js";
+import { cursorMcpServers, hostOrkestratorCustomTools, mcpConnectionKey } from "./mcp.js";
 import {
   cursorLocalAgentStore,
   hasUnusedInitialRun,
@@ -187,11 +187,11 @@ const CURSOR_CAPABILITY_TOOLS: Readonly<Record<string, readonly ToolName[]>> = O
  * writing tool stays unavailable until reviewed.
  *
  * `mcp` has to be in here explicitly. The SDK treats it as a capability group
- * for the whole MCP family (including Grok's dynamic MCP discovery tools);
- * omitting it disables every server, including the Orkestrator control server
- * a coordinator exists to call. User and project MCP stay unloaded on
- * read-only attaches (`settingSources: []` and a policy-aware
- * `cursorMcpServers` that returns only the injected Orkestrator entry).
+ * for the whole MCP family (including in-process `customTools`); omitting it
+ * disables every server, including the Orkestrator control tools a
+ * coordinator exists to call. HTTP MCP stays unloaded on read-only attaches
+ * (`settingSources: []`); those tools are hosted in-process because the
+ * sandbox approval path fails closed without a callback.
  */
 export const CURSOR_READ_ONLY_TOOLS = [
   "read",
@@ -279,7 +279,15 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     readOnly,
     projectResources: policy.projectResources,
   });
-  state.mcpServerNames = Object.keys(mcpServers);
+  // A provider-sandbox coordinator cannot call HTTP MCP: the SDK's approval
+  // path fails closed with no callback. Host those tools in-process instead.
+  // If the control server is down, keep the HTTP map so a later unsandboxed
+  // or container attach can still try the vendor client.
+  const hosted = readOnly
+    ? await hostOrkestratorCustomTools(state.agentMcp, state.health)
+    : undefined;
+  state.hostedMcpClose = hosted?.close;
+  state.mcpServerNames = hosted ? ["orkestrator"] : Object.keys(mcpServers);
   state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
   const options: AgentOptions = {
     apiKey,
@@ -297,6 +305,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
           : ["user"],
       sandboxOptions: { enabled: policy.sandbox === "provider" },
       autoReview: policy.sandbox === "provider" && policy.approvals === "auto-approve",
+      ...(hosted ? { customTools: hosted.customTools } : {}),
     },
     ...(readOnly
       ? { tools: [...CURSOR_READ_ONLY_TOOLS] }
@@ -310,7 +319,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
           return denied.length > 0 ? { disallowedTools: denied } : {};
         })()
       : {}),
-    ...(state.mcpServerNames.length > 0 ? { mcpServers } : {}),
+    ...(!hosted && state.mcpServerNames.length > 0 ? { mcpServers } : {}),
   };
   const releaseWarmWorkspace = await prewarmCursorWorkspace(options, policy.sandbox);
   state.workspaceWarmRelease = releaseWarmWorkspace;
@@ -349,7 +358,11 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     return created;
   } catch (error) {
     state.workspaceWarmRelease = undefined;
-    await releaseWarmWorkspace?.().catch(() => undefined);
+    state.hostedMcpClose = undefined;
+    await Promise.allSettled([
+      ...(releaseWarmWorkspace ? [releaseWarmWorkspace()] : []),
+      ...(hosted ? [hosted.close()] : []),
+    ]);
     throw error;
   }
 }
@@ -461,12 +474,15 @@ function clearAgentScopedUsage(state: SessionState): boolean {
 export async function detachAgent(state: SessionState): Promise<void> {
   const agent = state.agent;
   const releaseWarmWorkspace = state.workspaceWarmRelease;
+  const hostedMcpClose = state.hostedMcpClose;
   state.agent = null;
   state.attachedMcpKey = undefined;
   state.workspaceWarmRelease = undefined;
+  state.hostedMcpClose = undefined;
   await Promise.allSettled([
     ...(agent ? [agent[Symbol.asyncDispose]()] : []),
     ...(releaseWarmWorkspace ? [releaseWarmWorkspace()] : []),
+    ...(hostedMcpClose ? [hostedMcpClose()] : []),
   ]);
 }
 

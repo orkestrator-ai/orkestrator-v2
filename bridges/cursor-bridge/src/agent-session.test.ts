@@ -22,6 +22,8 @@ const previousStateDir = process.env.CURSOR_BRIDGE_STATE_DIR;
 const previousCredentialFile = process.env.CURSOR_BRIDGE_AUTH_FILE;
 const previousExecutionPolicy = process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
 const previousProjectSettings = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
+const previousMcpUrl = process.env.ORKESTRATOR_AGENT_MCP_URL;
+const previousMcpToken = process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
 const bridgeStateRoot = join(tmpdir(), `cursor-bridge-sdk-test-${process.pid}`);
 process.env.CURSOR_BRIDGE_STATE_DIR = bridgeStateRoot;
 process.env.CURSOR_BRIDGE_AUTH_FILE = join(bridgeStateRoot, "missing-auth.json");
@@ -144,6 +146,7 @@ const { resetPlanAccountWindowsForTests } = await import("./plan-usage.js");
 const { useCursorModelsForTests } = await import("./models.js");
 const { useCursorCredentialRuntimeForTests } = await import("./credentials.js");
 const { clientSessionKeys, sessions } = await import("./state.js");
+const { setCursorMcpTransportForTests } = await import("./mcp.js");
 
 const testStore = new FakeJsonlLocalAgentStore(
   join(bridgeStateRoot, "cursor-sdk"),
@@ -199,6 +202,9 @@ beforeEach(() => {
   warmWorkspaceReleases = 0;
   delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
   delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
+  delete process.env.ORKESTRATOR_AGENT_MCP_URL;
+  delete process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
+  setCursorMcpTransportForTests();
 });
 
 test("restoring injected runtime dependencies reinstates the prior SDK configure callback", () => {
@@ -285,6 +291,10 @@ afterAll(() => {
   else process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = previousExecutionPolicy;
   if (previousProjectSettings === undefined) delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
   else process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = previousProjectSettings;
+  if (previousMcpUrl === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_URL;
+  else process.env.ORKESTRATOR_AGENT_MCP_URL = previousMcpUrl;
+  if (previousMcpToken === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
+  else process.env.ORKESTRATOR_AGENT_MCP_TOKEN = previousMcpToken;
 });
 
 /** A conversation turn in the shape `run.conversation()` returns. */
@@ -616,6 +626,47 @@ describe("ensureAgent", () => {
     });
     expect(created[0]?.tools).not.toEqual(expect.arrayContaining(["shell", "edit", "task"]));
     expect(mcpServerNames(created[0])).toEqual(["orkestrator"]);
+  });
+
+  test("a read-only coordinator hosts Orkestrator tools in-process instead of HTTP MCP", async () => {
+    setCursorMcpTransportForTests({
+      async connect() {
+        return {
+          tools: [{ name: "launch_environment", description: "Create a worker" }],
+          async call() {
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+          async close() {},
+        };
+      },
+    });
+    const state = newSessionState(undefined, {
+      id: "coordinator-read-only",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: false,
+      networkAccess: "restricted",
+    });
+    state.readOnly = true;
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "coord-token" };
+
+    await ensureAgent(state);
+
+    expect(created[0]?.mcpServers).toBeUndefined();
+    expect(created[0]).toMatchObject({
+      tools: expect.arrayContaining(["mcp"]),
+      local: {
+        customTools: {
+          launch_environment: expect.objectContaining({
+            description: expect.stringContaining("Orkestrator"),
+          }),
+        },
+      },
+    });
+    expect(state.mcpServerNames).toEqual(["orkestrator"]);
+    expect(state.hostedMcpClose).toBeFunction();
+    await detachAgent(state);
+    expect(state.hostedMcpClose).toBeUndefined();
   });
 
   test("a read-only attach drops repository MCP servers even when project settings are opted in", async () => {

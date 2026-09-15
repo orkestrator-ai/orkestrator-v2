@@ -5,10 +5,13 @@ import { newSessionState } from "./agent-session.js";
 import { MAX_MESSAGES, workingDirectory } from "./config.js";
 import {
   cursorMcpServers,
+  hostOrkestratorCustomTools,
   mcpConnectionKey,
   parseAgentMcpConnection,
   publicCursorMcpServers,
   seedObservedMcpTools,
+  setCursorMcpTimeoutsForTests,
+  setCursorMcpTransportForTests,
 } from "./mcp.js";
 import type { SessionState } from "./state.js";
 import { boundTranscript } from "./transcript.js";
@@ -27,6 +30,8 @@ const previousToken = process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
 const previousProjectSettings = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
 
 afterEach(() => {
+  setCursorMcpTransportForTests();
+  setCursorMcpTimeoutsForTests();
   if (previousUrl === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_URL;
   else process.env.ORKESTRATOR_AGENT_MCP_URL = previousUrl;
   if (previousToken === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
@@ -249,5 +254,77 @@ describe("Cursor MCP inventory", () => {
     const tools = publicCursorMcpServers(state)[0]?.tools ?? [];
     expect(tools).toHaveLength(2);
     expect(Math.max(...tools.map((tool) => tool.length))).toBe(128);
+  });
+
+  test("a custom-user-tools call is published as the Orkestrator server", () => {
+    const state = newSessionState();
+    state.mcpServerNames = ["orkestrator"];
+    callMcpTool(
+      state,
+      { providerIdentifier: "custom-user-tools", toolName: "launch_environment", args: {} },
+      "hosted",
+    );
+
+    expect(publicCursorMcpServers(state)).toEqual([
+      {
+        id: "orkestrator",
+        name: "orkestrator",
+        status: "connected",
+        scope: "orkestrator",
+        actions: [],
+      },
+    ]);
+  });
+});
+
+describe("hosted Orkestrator custom tools", () => {
+  test("registers Control MCP tools for in-process execution", async () => {
+    setCursorMcpTransportForTests({
+      async connect() {
+        return {
+          tools: [
+            {
+              name: "launch_environment",
+              description: "Create a worker",
+              inputSchema: { type: "object", properties: { name: { type: "string" } } },
+            },
+          ],
+          async call(name, args) {
+            return { content: [{ type: "text", text: `${name}:${JSON.stringify(args)}` }] };
+          },
+          async close() {},
+        };
+      },
+    });
+    const hosted = await hostOrkestratorCustomTools({
+      url: "http://127.0.0.1:4567/mcp",
+      token: "coord-token",
+    });
+    expect(hosted?.toolNames).toEqual(["launch_environment"]);
+    expect(hosted?.customTools.launch_environment?.description).toContain("Orkestrator");
+    await expect(
+      hosted?.customTools.launch_environment?.execute({ name: "worker" }, {}),
+    ).resolves.toEqual({
+      content: [{ type: "text", text: 'launch_environment:{"name":"worker"}' }],
+    });
+    await hosted?.close();
+  });
+
+  test("a failed connect is a notice, not a thrown attach", async () => {
+    setCursorMcpTransportForTests({
+      async connect() {
+        throw new Error("connection refused Bearer secret-token");
+      },
+    });
+    const state = newSessionState();
+    await expect(
+      hostOrkestratorCustomTools(
+        { url: "http://127.0.0.1:4567/mcp", token: "secret-token" },
+        state.health,
+      ),
+    ).resolves.toBeUndefined();
+    const snapshot = JSON.stringify(state.health.snapshot());
+    expect(snapshot).toContain("Orkestrator MCP failed to connect");
+    expect(snapshot).not.toContain("secret-token");
   });
 });

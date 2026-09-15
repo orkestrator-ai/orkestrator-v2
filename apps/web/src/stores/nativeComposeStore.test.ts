@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
+  nativeComposePersistenceStore,
   unassignedNativeComposePersistenceStore,
   useNativeComposeStore,
 } from "./nativeComposeStore";
@@ -76,6 +77,71 @@ describe("nativeComposeStore", () => {
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId).toBe(
       "plan",
     );
+  });
+
+  test("content edits keep dispatch ownership while a first submission is pending", () => {
+    const sessionKey = "env-env-1:tab-pending-edit";
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      text: "original",
+      requestId: "request-1",
+      submissionPending: true,
+      pendingTranscriptConfirmation: {
+        requestId: "request-1",
+        sessionId: "",
+        priorMessageIds: [],
+      },
+    });
+
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      text: "typed while pending",
+    });
+
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toMatchObject({
+      text: "typed while pending",
+      requestId: "request-1",
+      submissionPending: true,
+      pendingTranscriptConfirmation: {
+        requestId: "request-1",
+        sessionId: "",
+        priorMessageIds: [],
+      },
+    });
+  });
+
+  test("locked persistence includes a request id without default-only metadata", () => {
+    const sessionKey = "env-env-1:tab-locked-request";
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      text: "pending first prompt",
+      requestId: "request-locked",
+    });
+    expect(nativeComposePersistenceStore.getState().draftMetadata?.get(sessionKey)).toMatchObject({
+      requestId: "request-locked",
+    });
+
+    const emptyKey = "env-env-1:tab-locked-empty";
+    useNativeComposeStore.getState().updateDraft(emptyKey, { text: "just text" });
+    expect(nativeComposePersistenceStore.getState().draftMetadata?.has(emptyKey)).toBe(false);
+  });
+
+  test("restores request id and transcript confirmation from persisted metadata", () => {
+    const sessionKey = "env-env-1:tab-restore-confirmation";
+    unassignedNativeComposePersistenceStore.getState().setDraftMetadata?.(sessionKey, {
+      requestId: "request-9",
+      pendingTranscriptConfirmation: {
+        requestId: "request-9",
+        sessionId: "",
+        priorMessageIds: [],
+      },
+    });
+
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toMatchObject({
+      requestId: "request-9",
+      pendingTranscriptConfirmation: {
+        requestId: "request-9",
+        sessionId: "",
+        priorMessageIds: [],
+      },
+    });
   });
 
   test("annotation edits invalidate dispatch ownership", () => {

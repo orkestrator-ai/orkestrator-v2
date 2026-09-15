@@ -166,6 +166,36 @@ export function usesReviewFanout(
 }
 
 /**
+ * Backend label for one independent fan-out reviewer.
+ *
+ * Classic one-model reviews keep the distinct `Review Session` label, so the
+ * build tab can tell the two apart without an extra session field.
+ */
+export function pipelineIndependentReviewLabel(index: number): string {
+  return `Review ${index + 1}`;
+}
+
+const INDEPENDENT_REVIEW_LABEL = /^Review (\d+)$/;
+
+/**
+ * Zero-based reviewer slot encoded in {@link pipelineIndependentReviewLabel}.
+ *
+ * Identity stays attached to that slot even when an earlier reviewer never
+ * created a session, or when a retry leaves leftover tiles in the same
+ * iteration.
+ */
+export function pipelineIndependentReviewSlot(label: string): number | null {
+  const match = INDEPENDENT_REVIEW_LABEL.exec(label);
+  if (!match) return null;
+  const slot = Number(match[1]) - 1;
+  return Number.isInteger(slot) && slot >= 0 ? slot : null;
+}
+
+export function isPipelineIndependentReviewLabel(label: string): boolean {
+  return pipelineIndependentReviewSlot(label) !== null;
+}
+
+/**
  * Which configured step owns a session phase.
  *
  * Every phase maps to its own step except `fix`: it re-implements against
@@ -270,6 +300,16 @@ export function isVerificationVerdict(value: unknown): value is VerificationVerd
   return VERIFICATION_VERDICT_FIELD_ENTRIES.every(([field, type]) => typeof record[field] === type);
 }
 
+/**
+ * Display label the backend assigns to the dedicated review-package session.
+ *
+ * Fan-out and review-preparation pipelines create a session with this label.
+ * Single-review pipelines reuse the build or fix session instead, so callers
+ * that need to recognize every preparation turn should use
+ * {@link isReviewPackagePreparationSession}.
+ */
+export const REVIEW_PACKAGE_SESSION_LABEL = "Package Preparation Session";
+
 export interface PipelineSession {
   phase: PipelineSessionPhase;
   /**
@@ -294,6 +334,10 @@ export interface PipelineSession {
   sdkSessionId: string;
   status: "running" | "idle" | "error";
   startedAt: string;
+  /** End of this stage attempt, retained for settled runtime presentation. */
+  completedAt?: string;
+  /** Cumulative provider-session usage captured for an independent reviewer. */
+  tokenCount?: number;
   label: string;
   /** Provider transcript snapshot. The backend refreshes it; clients only render it. */
   messages?: unknown[];
@@ -369,6 +413,46 @@ export interface PipelineSession {
   autoDeclineCount?: number;
   /** Reviewer-visible history owned by the workflow, not by provider cards. */
   interactionTranscript?: PipelineInteractionTranscriptEntry[];
+  /**
+   * Sticky record that this session produced, or is producing, the review-package
+   * plan. Live `structuredRequestId` / `structuredResultStatus` are cleared when
+   * a queued user message is dispatched and are also stamped on resume of an
+   * ordinary build, so they cannot be the durable classification.
+   */
+  producedReviewPackagePlan?: boolean;
+}
+
+/**
+ * Whether this session is the turn that produced the review-package plan.
+ *
+ * The dedicated session is labelled {@link REVIEW_PACKAGE_SESSION_LABEL}. The
+ * default single-review path reuses a build or fix session and records that
+ * with {@link PipelineSession.producedReviewPackagePlan}. Older snapshots
+ * without that field still fall back to live structured-request bookkeeping,
+ * but only on the single-review path: fan-out and explicit review-preparation
+ * pipelines stamp those fields on resume of ordinary build turns.
+ */
+export function isReviewPackagePreparationSession(
+  session:
+    | Pick<
+        PipelineSession,
+        | "label"
+        | "phase"
+        | "producedReviewPackagePlan"
+        | "structuredRequestId"
+        | "structuredResultStatus"
+      >
+    | undefined,
+  pipeline?: Pick<BuildPipeline, "reviewers" | "steps" | "agentType" | "reviewPreparation">,
+): boolean {
+  if (!session) return false;
+  if (session.label === REVIEW_PACKAGE_SESSION_LABEL) return true;
+  if (session.phase !== "build" && session.phase !== "fix") return false;
+  if (session.producedReviewPackagePlan === true) return true;
+  if (pipeline && (usesReviewFanout(pipeline) || pipeline.reviewPreparation)) {
+    return false;
+  }
+  return session.structuredRequestId !== undefined || session.structuredResultStatus !== undefined;
 }
 
 export interface PipelineInteractionTranscriptQuestion {
@@ -854,6 +938,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     value.sdkSessionId.length > 0 &&
     (value.status === "running" || value.status === "idle" || value.status === "error") &&
     isIsoDate(value.startedAt) &&
+    (value.completedAt === undefined || isIsoDate(value.completedAt)) &&
+    (value.tokenCount === undefined || isNonNegativeInteger(value.tokenCount)) &&
     typeof value.label === "string" &&
     (value.messages === undefined || Array.isArray(value.messages)) &&
     (value.messageRevision === undefined || isNonNegativeInteger(value.messageRevision)) &&
@@ -871,6 +957,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.structuredResultStatus === undefined ||
       value.structuredResultStatus === "pending" ||
       value.structuredResultStatus === "accepted") &&
+    (value.producedReviewPackagePlan === undefined ||
+      typeof value.producedReviewPackagePlan === "boolean") &&
     hasValidValidationWorktreeBaseline(value) &&
     (value.structuredWaitStartedAt === undefined || isIsoDate(value.structuredWaitStartedAt)) &&
     (value.structuredReportRepairAttempts === undefined ||

@@ -1002,6 +1002,15 @@ export abstract class BuildPipelineServiceBase {
       delete reviewer.stalledSince;
       delete reviewer.idleResultPolls;
       if (reviewer.providerSessionId) {
+        const session = pipeline.sessions.find(
+          (candidate) => candidate.sdkSessionId === reviewer.providerSessionId,
+        );
+        if (session) {
+          session.completedAt = now;
+          if (reviewer.tokenCount !== undefined) session.tokenCount = reviewer.tokenCount;
+          if (!reviewer.modelUnpinned) session.model = reviewer.model;
+          if (reviewer.reasoningEffort) session.reasoningEffort = reviewer.reasoningEffort;
+        }
         targets.push({
           agent: reviewer.agent as BuildPipelineAgent,
           sessionId: reviewer.providerSessionId,

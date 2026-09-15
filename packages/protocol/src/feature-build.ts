@@ -27,7 +27,7 @@ export const MAX_FEATURE_BUILD_TEXT_LENGTH = 100_000;
 
 export interface CreateFeatureBuildInput {
   projectId: string;
-  /** Becomes the ticket title and the environment's naming prompt. */
+  /** Becomes the ticket title; blank asks the backend to derive it from `description`. */
   title: string;
   description?: string;
   acceptanceCriteria?: string;
@@ -85,9 +85,10 @@ export function isCreateFeatureBuildInput(value: unknown): value is CreateFeatur
     typeof value.projectId === "string" &&
     value.projectId.trim().length > 0 &&
     typeof value.title === "string" &&
-    value.title.trim().length > 0 &&
     value.title.length <= MAX_FEATURE_BUILD_TITLE_LENGTH &&
     isBoundedText(value.description, MAX_FEATURE_BUILD_TEXT_LENGTH) &&
+    (value.title.trim().length > 0 ||
+      (typeof value.description === "string" && value.description.trim().length > 0)) &&
     isBoundedText(value.acceptanceCriteria, MAX_FEATURE_BUILD_TEXT_LENGTH) &&
     (value.environmentType === "containerized" || value.environmentType === "local") &&
     (value.environmentOptions === undefined ||

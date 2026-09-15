@@ -23,6 +23,8 @@ import { dockerExec } from "./commands-container-exec.js";
 import type { AcpLocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 
+type ManagedBinaryContext = Pick<CommandContext, "appRoot" | "resourceRoot" | "toolchainBinDir">;
+
 export function quoteShell(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
@@ -318,7 +320,7 @@ export async function allocateEnvironmentBranchName(options: {
   });
 }
 
-export function managedBinaryCandidates(context: CommandContext, name: string): string[] {
+export function managedBinaryCandidates(context: ManagedBinaryContext, name: string): string[] {
   return [
     ...(context.toolchainBinDir ? [path.join(context.toolchainBinDir, name)] : []),
     path.join(context.resourceRoot, "bin", name),
@@ -327,11 +329,14 @@ export function managedBinaryCandidates(context: CommandContext, name: string): 
   ];
 }
 
-export function resolveManagedBinary(context: CommandContext, name: string): string | undefined {
+export function resolveManagedBinary(
+  context: ManagedBinaryContext,
+  name: string,
+): string | undefined {
   return managedBinaryCandidates(context, name).find((candidate) => existsSync(candidate));
 }
 
-export function resolveCodexBinary(context: CommandContext): string {
+export function resolveCodexBinary(context: ManagedBinaryContext): string {
   return resolveManagedBinary(context, "codex") ?? "codex";
 }
 
@@ -633,7 +638,7 @@ export function resolveBunBinary(context: CommandContext): string {
 
 export async function generateEnvironmentNameWithCodexExec(
   prompt: string,
-  context: CommandContext,
+  context: ManagedBinaryContext,
 ): Promise<string> {
   const trimmedPrompt = prompt.trim();
   if (!trimmedPrompt) throw new Error("Prompt cannot be empty");

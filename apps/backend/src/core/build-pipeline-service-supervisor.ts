@@ -20,6 +20,7 @@ import {
   executionModeForSessionPhase,
   isBuildPipeline,
   isActiveBuildPhase,
+  REVIEW_PACKAGE_SESSION_LABEL,
   usesReviewFanout,
 } from "@orkestrator/protocol/build-pipeline";
 import {
@@ -502,7 +503,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       case "fixing":
         if (
           (usesReviewFanout(pipeline) || pipeline.reviewPreparation) &&
-          session.label !== "Package Preparation Session"
+          session.label !== REVIEW_PACKAGE_SESSION_LABEL
         ) {
           await this.startReviewPackagePreparation(pipeline);
           return;
@@ -668,6 +669,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       const startedAt = new Date().toISOString();
       const prompt = withUnattendedPolicy(reviewPackagePreparationPrompt(pipeline, targetBranch));
       session.structuredRequestId = requestId;
+      session.producedReviewPackagePlan = true;
       session.resultTransport = this.workflowToolEnabled(
         sessionAgent(pipeline, session),
         "review-preparation",
@@ -713,6 +715,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         Date.now() - Date.parse(session.turnStartedAt ?? session.startedAt),
       );
       session.structuredResultStatus = "accepted";
+      session.producedReviewPackagePlan = true;
       this.stageWorkflowResultConsumption(pipeline, session, session.structuredRequestId);
       await this.save(pipeline, pipeline.backendRevision);
       await this.consumeWorkflowResult(pipeline, session, session.structuredRequestId);
@@ -737,6 +740,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       targetBranch,
     });
     session.structuredResultStatus = "accepted";
+    session.producedReviewPackagePlan = true;
     this.stageWorkflowResultConsumption(pipeline, session, session.structuredRequestId);
     await this.startStage(pipeline, "review", "reviewing");
     await this.consumeWorkflowResult(pipeline, session, session.structuredRequestId);
@@ -867,6 +871,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       // Any implementation follow-up can change HEAD, validation artifacts, or
       // the uncommitted set. The earlier structured preparation result no
       // longer describes the state that will be packaged after this turn.
+      // Keep producedReviewPackagePlan: the transcript still contains that
+      // plan, and the renderer keys redaction on the sticky fact.
       delete session.structuredRequestId;
       delete session.structuredResultStatus;
       delete session.structuredWaitStartedAt;
@@ -962,7 +968,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       prompt: reviewValidationDiscoveryPrompt(targetBranch),
       images: [],
       schema: REVIEW_VALIDATION_PLAN_SCHEMA,
-      label: "Package Preparation Session",
+      label: REVIEW_PACKAGE_SESSION_LABEL,
       settings: pipeline.reviewPreparation
         ? {
             agent: pipeline.reviewPreparation.agent,
@@ -1120,6 +1126,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         resultTransport,
         resultSubmission: resultTransport === "tool-v1" ? ("preparing" as const) : undefined,
         structuredResultStatus: schema !== undefined ? "pending" : undefined,
+        ...(schema === REVIEW_VALIDATION_PLAN_SCHEMA ||
+        schema === REVIEW_PREPARATION_RESULT_JSON_SCHEMA
+          ? { producedReviewPackagePlan: true as const }
+          : {}),
         validationHeadAtStart: validationWorktree?.head,
         validationWorktreeStatusAtStart: validationWorktree?.status,
         validationUncommittedPathsAtStart: validationWorktree

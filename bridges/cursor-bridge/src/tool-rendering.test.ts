@@ -78,6 +78,22 @@ describe("renderToolCall", () => {
     expect(rendered.toolError).toBe("quota exceeded");
   });
 
+  test("names an in-process custom-user-tools call as Orkestrator", () => {
+    const rendered = renderToolCall({
+      type: "mcp",
+      args: {
+        providerIdentifier: "custom-user-tools",
+        toolName: "launch_environment",
+        args: { name: "worker" },
+      },
+      result: { status: "success", value: { content: [{ text: "created" }], isError: false } },
+    });
+    expect(rendered.toolName).toBe("mcp__orkestrator__launch_environment");
+    expect(rendered.toolTitle).toBe("orkestrator: launch_environment");
+    expect(rendered.toolArgs).toEqual({ name: "worker" });
+    expect(rendered.toolOutput).toBe("created");
+  });
+
   test("names an MCP card after its tool so servers stay distinguishable", () => {
     const rendered = renderToolCall({
       type: "mcp",

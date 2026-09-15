@@ -11,6 +11,7 @@ import {
   jsonPayloadTitle,
   MAX_JSON_PAYLOAD_LENGTH,
   parseJsonPayload,
+  structuredReviewJsonPayload,
 } from "./json-payload";
 
 describe("jsonPayloadSource", () => {
@@ -229,6 +230,13 @@ describe("jsonPayloadTitle and jsonPayloadSummary", () => {
     expect(jsonPayloadTitle(payload)).toBe("Structured review report");
     expect(jsonPayloadSummary(payload)).toContain("Ready: ");
     expect(jsonPayloadSummary(payload)).toContain(" risk");
+  });
+
+  test("wraps a durable report as the structured-review transcript payload", () => {
+    const payload = structuredReviewJsonPayload(TEST_STRUCTURED_REVIEW_REPORT);
+    expect(payload.kind).toBe("structured-review");
+    expect(payload.report).toBe(TEST_STRUCTURED_REVIEW_REPORT);
+    expect(payload.source).toContain("reviewScope");
   });
 });
 

@@ -3,11 +3,16 @@ import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import type { PaneNode } from "@/types/paneLayout";
 import {
   applyStoredPaneSelection,
+  armWindowBuildPipelineActivation,
   armWindowStartupAgentActivation,
   clearStoredPaneSelection,
+  clearWindowBuildPipelineActivation,
   clearWindowStartupAgentActivation,
+  consumeWindowBuildPipelineActivation,
   consumeWindowStartupAgentActivation,
+  getWindowBuildPipelineActivation,
   readStoredPaneSelection,
+  wasWindowBuildPipelineSetupReadyAtArm,
   readWindowPaneSelection,
   writeWindowPaneSelection,
 } from "./pane-selection-storage";
@@ -81,6 +86,33 @@ describe("read/clear", () => {
 
     expect(consumeWindowStartupAgentActivation("env-1")).toBe(false);
     expect(consumeWindowStartupAgentActivation("env-2")).toBe(true);
+  });
+
+  test("keeps one pipeline handoff per environment and consumes the matching pipeline", () => {
+    armWindowBuildPipelineActivation("env-1", "pipeline-old");
+    armWindowBuildPipelineActivation("env-2", "pipeline-2");
+    armWindowBuildPipelineActivation("env-1", "pipeline-new");
+
+    expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-new");
+    expect(consumeWindowBuildPipelineActivation("env-1", "pipeline-old")).toBe(false);
+    expect(consumeWindowBuildPipelineActivation("env-1", "pipeline-new")).toBe(true);
+    expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+    expect(getWindowBuildPipelineActivation("env-2")).toBe("pipeline-2");
+
+    clearWindowBuildPipelineActivation("env-2");
+    expect(getWindowBuildPipelineActivation("env-2")).toBeNull();
+  });
+
+  test("remembers whether setup was already ready when the pipeline was armed", () => {
+    armWindowBuildPipelineActivation("env-1", "pipeline-1", true);
+    armWindowBuildPipelineActivation("env-2", "pipeline-2");
+
+    expect(wasWindowBuildPipelineSetupReadyAtArm("env-1")).toBe(true);
+    expect(wasWindowBuildPipelineSetupReadyAtArm("env-2")).toBe(false);
+    expect(wasWindowBuildPipelineSetupReadyAtArm("env-missing")).toBe(false);
+
+    consumeWindowBuildPipelineActivation("env-1", "pipeline-1");
+    expect(wasWindowBuildPipelineSetupReadyAtArm("env-1")).toBe(false);
   });
 
   test("stores current window selection separately from legacy migration state", () => {

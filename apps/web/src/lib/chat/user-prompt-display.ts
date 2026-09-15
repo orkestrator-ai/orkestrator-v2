@@ -13,6 +13,7 @@ import {
   REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
+  STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
   SYSTEM_INSTRUCTIONS_FRAME_CLOSE,
   isReviewValidationDiscoveryPrompt,
   parseCoordinatorDelegatedPrompt,
@@ -29,7 +30,7 @@ import { parseJsonPayload, type JsonPayload } from "./json-payload";
 
 export interface UserPromptPresentation {
   displayText: string;
-  /** A fix prompt's framed report, rendered after its visible instructions. */
+  /** A fix prompt's framed report, rendered above its visible instructions. */
   evidencePayload: JsonPayload | null;
 }
 
@@ -193,40 +194,103 @@ function presentationForContract(
   return null;
 }
 
-/** Build the visible prompt and any structured evidence rendered beneath it. */
-export function userPromptPresentation(
+function isAddressInstructionDisplay(displayText: string): boolean {
+  const text = displayText.trim();
+  return (
+    text === STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION ||
+    text === MULTI_REVIEW_ADDRESS_USER_INSTRUCTION ||
+    text.endsWith(`\n\n${STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION}`) ||
+    text.endsWith(`\n\n${MULTI_REVIEW_ADDRESS_USER_INSTRUCTION}`)
+  );
+}
+
+function promptDisplaySource(
   source: string,
   promptPresentation?: UserPromptPresentationKind,
-): UserPromptPresentation {
+): string {
   const delegation =
     promptPresentation === COORDINATOR_DELEGATION_PRESENTATION
       ? parseCoordinatorDelegatedPrompt(source)
       : null;
-  const displaySource = delegation?.source ?? source;
+  return delegation?.source ?? source;
+}
+
+/**
+ * True when this user row is the Fix tab's address or custom-fix opening prompt.
+ *
+ * Used to pin the durable Multi Review report to the handoff bubble rather than
+ * to an earlier review-stage prompt or a later follow-up in a windowed
+ * transcript.
+ */
+export function isFixOpeningPrompt(
+  source: string,
+  promptPresentation?: UserPromptPresentationKind,
+): boolean {
+  const displaySource = promptDisplaySource(source, promptPresentation);
+  if (customFixPresentation(displaySource) !== null) return true;
+  if (generatedReviewInstructionPresentation(displaySource) !== null) return true;
+  const presentation = userPromptPresentation(source, promptPresentation);
+  if (presentation.evidencePayload !== null) return true;
+  if (isAddressInstructionDisplay(presentation.displayText)) return true;
+  const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
+  const stripped = stripSystemInstructions(displaySource);
+  return stripped.includes(
+    `${contract.continuationPrefix}\n\n${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n`,
+  );
+}
+
+/** Recover a framed findings document from an address prompt before frames are stripped. */
+function extractStructuredReviewFindings(source: string): JsonPayload | null {
+  const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
+  const open = source.indexOf(contract.openMarker);
+  if (open < 0) return null;
+  let close = source.lastIndexOf(contract.closeMarker);
+  while (close > open) {
+    const evidenceSource = source.slice(open + contract.openMarker.length, close).trim();
+    const parsedEvidence = parseJsonPayload(evidenceSource);
+    if (parsedEvidence) return readableEvidencePayload(parsedEvidence);
+    close = source.lastIndexOf(contract.closeMarker, close - 1);
+  }
+  return null;
+}
+
+function attachAddressFindings(
+  source: string,
+  presentation: UserPromptPresentation,
+): UserPromptPresentation {
+  if (presentation.evidencePayload || !isAddressInstructionDisplay(presentation.displayText)) {
+    return presentation;
+  }
+  const evidencePayload = extractStructuredReviewFindings(source);
+  return evidencePayload ? { ...presentation, evidencePayload } : presentation;
+}
+
+/** Build the visible prompt and any structured evidence rendered above it. */
+export function userPromptPresentation(
+  source: string,
+  promptPresentation?: UserPromptPresentationKind,
+): UserPromptPresentation {
+  const displaySource = promptDisplaySource(source, promptPresentation);
+  const delegation =
+    promptPresentation === COORDINATOR_DELEGATION_PRESENTATION
+      ? parseCoordinatorDelegatedPrompt(source)
+      : null;
+  const finish = (presentation: UserPromptPresentation): UserPromptPresentation => {
+    const withFindings = attachAddressFindings(displaySource, presentation);
+    return delegation ? withCoordinatorDelegationNotice(withFindings) : withFindings;
+  };
   const customFix = customFixPresentation(displaySource);
-  if (customFix !== null) {
-    return delegation ? withCoordinatorDelegationNotice(customFix) : customFix;
-  }
+  if (customFix !== null) return finish(customFix);
   const generatedReviewInstruction = generatedReviewInstructionPresentation(displaySource);
-  if (generatedReviewInstruction !== null) {
-    return delegation
-      ? withCoordinatorDelegationNotice(generatedReviewInstruction)
-      : generatedReviewInstruction;
-  }
+  if (generatedReviewInstruction !== null) return finish(generatedReviewInstruction);
   const reviewPackagePreparation = reviewPackagePreparationPresentation(displaySource);
-  if (reviewPackagePreparation !== null) {
-    return delegation
-      ? withCoordinatorDelegationNotice(reviewPackagePreparation)
-      : reviewPackagePreparation;
-  }
+  if (reviewPackagePreparation !== null) return finish(reviewPackagePreparation);
   // Backend producers wrap their provider-only guidance in a
   // system-instructions frame. Once it is removed, whatever remains is exactly
   // what the user wrote, so it is shown without any structural reconstruction.
   const strippedSystemInstructions = stripSystemInstructions(displaySource);
   const strippedPreparation = reviewPackagePreparationPresentation(strippedSystemInstructions);
-  if (strippedPreparation !== null) {
-    return delegation ? withCoordinatorDelegationNotice(strippedPreparation) : strippedPreparation;
-  }
+  if (strippedPreparation !== null) return finish(strippedPreparation);
   const evidenceSource =
     strippedSystemInstructions === displaySource ? displaySource : strippedSystemInstructions;
   // Try the evidence contracts against the stripped prompt too: a producer that
@@ -234,12 +298,9 @@ export function userPromptPresentation(
   // evidence hidden, not rendered as raw JSON by the bounded fallback.
   for (const contract of REVIEW_EVIDENCE_FRAME_DISPLAY_CONTRACTS) {
     const presentation = presentationForContract(evidenceSource, contract);
-    if (presentation !== null) {
-      return delegation ? withCoordinatorDelegationNotice(presentation) : presentation;
-    }
+    if (presentation !== null) return finish(presentation);
   }
-  const presentation = boundedPromptDisplay(evidenceSource);
-  return delegation ? withCoordinatorDelegationNotice(presentation) : presentation;
+  return finish(boundedPromptDisplay(evidenceSource));
 }
 
 /** Hide the reviewer-report JSON that already has a structured presentation. */

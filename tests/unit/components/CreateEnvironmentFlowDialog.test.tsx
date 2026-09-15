@@ -502,6 +502,12 @@ describe("CreateEnvironmentFlowDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
   }
 
+  function startFeatureBuildFromDescription(description: string) {
+    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.change(screen.getByLabelText(/^Description$/i), { target: { value: description } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+  }
+
   test("warns before a containerized feature build when credentials are unavailable", async () => {
     getContainerGitHubCredentialStatusMock.mockResolvedValueOnce({
       source: "host-cli",
@@ -533,6 +539,30 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(createEnvironment).not.toHaveBeenCalled();
     const request = createFeatureBuildMock.mock.calls[0]![0] as Record<string, unknown>;
     expect(request.title).toBe("Dark mode toggle");
+    expect(request.environmentType).toBe("containerized");
+  });
+
+  test("starts a description-only feature build through the production wrapper", async () => {
+    const createEnvironment = mock(async () => ({ id: "env-feature" }) as Environment);
+
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={createEnvironment}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    startFeatureBuildFromDescription("Add sign in with passkeys.");
+
+    await waitFor(() => expect(createFeatureBuildMock).toHaveBeenCalledTimes(1));
+    expect(createEnvironment).not.toHaveBeenCalled();
+    const request = createFeatureBuildMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(request.title).toBe("");
+    expect(request.description).toBe("Add sign in with passkeys.");
     expect(request.environmentType).toBe("containerized");
   });
 

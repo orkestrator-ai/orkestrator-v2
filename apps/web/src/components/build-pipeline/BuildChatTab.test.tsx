@@ -1,13 +1,18 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
+  BUILD_PIPELINE_AGENTS,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
+  REVIEW_PACKAGE_SESSION_LABEL,
+  pipelineIndependentReviewLabel,
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import { useCodexStore } from "@/stores/codexStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
+import { nativeAgentAdapters } from "@/components/native-agent/adapter";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { restoreMatchMedia, setMobileViewport } from "../../../../../tests/mocks/match-media";
@@ -112,7 +117,8 @@ mock.module("@/lib/backend", () => ({
   getBuildPipelineConditional: getBuildPipelineConditionalMock,
 }));
 
-const { BuildChatTab } = await import("./BuildChatTab");
+const { BuildChatTab, pipelineReviewRuntimeSummary, reviewIterationLabels, reviewLetter } =
+  await import("./BuildChatTab");
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
@@ -176,6 +182,75 @@ const pipeline: BuildPipeline = {
   backendRevision: 8,
   controller: "backend",
 };
+
+type ValidationRun = NonNullable<BuildPipeline["validationRun"]>;
+
+function validationRun(overrides: Partial<ValidationRun> = {}): ValidationRun {
+  const command = {
+    id: "test",
+    command: "mise run test",
+    cwd: ".",
+    dependsOn: [] as string[],
+    resources: ["turbo"],
+    weight: 2 as const,
+    timeoutMs: 1_200_000,
+  };
+  return {
+    id: "validation-1",
+    status: "completed",
+    startedAt: "2026-09-08T20:00:04.000Z",
+    completedAt: "2026-09-08T20:00:07.000Z",
+    plan: {
+      headRef: "a".repeat(40),
+      commands: [command],
+      limitations: [],
+    },
+    results: [
+      {
+        id: "test",
+        command: "mise run test",
+        status: "passed",
+        exitCode: 0,
+        stdoutPath: ".orkestrator/test.stdout",
+        stderrPath: ".orkestrator/test.stderr",
+        stdoutBytes: 24,
+        stderrBytes: 0,
+        durationMs: 3_000,
+        limitation: null,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function validationResult(
+  status: ValidationRun["results"][number]["status"],
+  exitCode: number | null = status === "passed" || status === "skipped" ? 0 : 1,
+): ValidationRun["results"][number] {
+  return {
+    id: "test",
+    command: "mise run test",
+    status,
+    exitCode,
+    stdoutPath: ".orkestrator/test.stdout",
+    stderrPath: ".orkestrator/test.stderr",
+    stdoutBytes: 24,
+    stderrBytes: 0,
+    durationMs: 3_000,
+    limitation: null,
+  };
+}
+
+function testsTabIconClass(): string {
+  const tab = screen.getByRole("tab", { name: /Tests/ });
+  return tab.querySelector("svg")?.getAttribute("class") ?? "";
+}
+
+function stageTabLabels(): string[] {
+  return Array.from(
+    screen.getByRole("tablist", { name: "Build stages" }).querySelectorAll('[role="tab"]'),
+  ).map((tab) => tab.querySelector("span > span")?.textContent ?? tab.textContent ?? "");
+}
 
 describe("BuildChatTab backend projection", () => {
   beforeEach(() => {
@@ -320,6 +395,7 @@ describe("BuildChatTab backend projection", () => {
       />,
     );
     try {
+      fireEvent.click(screen.getByText("Tests"));
       expect(screen.getByText(/Validation: 6\.0s\./)).toBeTruthy();
       now = Date.parse("2026-09-08T20:00:13.000Z");
       act(() => tick?.());
@@ -330,6 +406,460 @@ describe("BuildChatTab backend projection", () => {
       window.setInterval = originalSetInterval;
       window.clearInterval = originalClearInterval;
     }
+  });
+
+  test("places backend tests between package creation and the individual reviews", () => {
+    const packageSession: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      phase: "fix",
+      sessionKey: "package-key",
+      sdkSessionId: "package-session",
+      label: REVIEW_PACKAGE_SESSION_LABEL,
+    };
+    const reviewOne: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      phase: "review",
+      sessionKey: "review-1-key",
+      sdkSessionId: "review-1-session",
+      label: "Review 1",
+    };
+    const reviewTwo: BuildPipeline["sessions"][number] = {
+      ...reviewOne,
+      sessionKey: "review-2-key",
+      sdkSessionId: "review-2-session",
+      label: "Review 2",
+    };
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      phase: "reviewing",
+      sessions: [pipeline.sessions[0]!, packageSession, reviewOne, reviewTwo],
+      currentSessionIndex: 3,
+      validationRun: {
+        id: "validation-ordered",
+        status: "completed",
+        startedAt: "2026-09-08T20:00:04.000Z",
+        completedAt: "2026-09-08T20:00:07.000Z",
+        plan: {
+          headRef: "a".repeat(40),
+          commands: [
+            {
+              id: "test",
+              command: "mise run test",
+              cwd: ".",
+              dependsOn: [],
+              resources: ["turbo"],
+              weight: 2,
+              timeoutMs: 1_200_000,
+            },
+          ],
+          limitations: [],
+        },
+        results: [
+          {
+            id: "test",
+            command: "mise run test",
+            status: "passed",
+            exitCode: 0,
+            stdoutPath: ".orkestrator/test.stdout",
+            stderrPath: ".orkestrator/test.stderr",
+            stdoutBytes: 24,
+            stderrBytes: 0,
+            durationMs: 3_000,
+            limitation: null,
+          },
+        ],
+      },
+      backendRevision: 9,
+    });
+
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    expect(stageTabLabels()).toEqual([
+      "Build Session",
+      "Package Preparation Session",
+      "Tests",
+      "Review Iteration 1 (A)",
+      "Review Iteration 1 (B)",
+    ]);
+    expect(screen.queryByLabelText("Review validation") === null).toBe(true);
+
+    fireEvent.click(screen.getByText("Tests"));
+
+    expect(screen.getByLabelText("Review validation")).toBeTruthy();
+    expect(screen.getByText("mise run test")).toBeTruthy();
+    expect(screen.getByText("Implementation complete").closest("[hidden]")).toBeTruthy();
+    expect(testsTabIconClass()).toContain("text-success");
+    expect(screen.getByText("1 check")).toBeTruthy();
+  });
+
+  test("shows a failure icon when a completed validation run has failed commands", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      validationRun: validationRun({
+        results: [validationResult("failed", 1)],
+      }),
+      backendRevision: 9,
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    expect(testsTabIconClass()).toContain("text-destructive");
+    expect(testsTabIconClass()).not.toContain("text-success");
+    expect(screen.getByText("1 check failed")).toBeTruthy();
+  });
+
+  test("shows a muted icon when a completed validation run has incomplete commands", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      validationRun: validationRun({
+        plan: {
+          headRef: "a".repeat(40),
+          commands: [
+            {
+              id: "test",
+              command: "mise run test",
+              cwd: ".",
+              dependsOn: [],
+              resources: ["turbo"],
+              weight: 2,
+              timeoutMs: 1_200_000,
+            },
+            {
+              id: "lint",
+              command: "mise run lint",
+              cwd: ".",
+              dependsOn: [],
+              resources: ["turbo"],
+              weight: 1,
+              timeoutMs: 1_200_000,
+            },
+          ],
+          limitations: [],
+        },
+        results: [
+          { ...validationResult("passed", 0), id: "test" },
+          {
+            ...validationResult("incomplete", null),
+            id: "lint",
+            command: "mise run lint",
+            limitation: "Host capacity wait timed out",
+          },
+        ],
+      }),
+      backendRevision: 9,
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    expect(testsTabIconClass()).toContain("text-muted-foreground");
+    expect(testsTabIconClass()).not.toContain("text-success");
+    expect(screen.getByText("1 of 2 checks incomplete")).toBeTruthy();
+  });
+
+  test("names a run-level failed Tests stage after the terminal outcome", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      validationRun: validationRun({
+        status: "failed",
+        error: "HEAD moved during validation",
+      }),
+      backendRevision: 9,
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    const tab = screen.getByRole("tab", { name: "Tests, HEAD moved during validation" });
+    expect(tab.textContent).toContain("HEAD moved during validation");
+    expect(testsTabIconClass()).toContain("text-destructive");
+    expect(testsTabIconClass()).not.toContain("text-success");
+  });
+
+  test("names a cancelled Tests stage without treating it as a failure", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      validationRun: validationRun({
+        status: "cancelled",
+      }),
+      backendRevision: 9,
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    const tab = screen.getByRole("tab", { name: "Tests, Validation cancelled" });
+    expect(tab.textContent).toContain("Validation cancelled");
+    expect(testsTabIconClass()).toContain("text-muted-foreground");
+    expect(testsTabIconClass()).not.toContain("text-destructive");
+  });
+
+  test("treats skipped commands as success when nothing failed", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      validationRun: validationRun({
+        results: [validationResult("skipped", 0)],
+      }),
+      backendRevision: 9,
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    expect(testsTabIconClass()).toContain("text-success");
+    expect(screen.getByText("1 check")).toBeTruthy();
+  });
+
+  test("inserts Tests before the first review when no preparation session exists", () => {
+    const reviewOne: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      phase: "review",
+      sessionKey: "review-1-key",
+      sdkSessionId: "review-1-session",
+      label: "Review 1",
+    };
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      phase: "reviewing",
+      sessions: [pipeline.sessions[0]!, reviewOne, pipeline.sessions[1]!],
+      currentSessionIndex: 2,
+      validationRun: validationRun({ id: "validation-fallback" }),
+      backendRevision: 9,
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    expect(stageTabLabels()).toEqual([
+      "Build Session",
+      "Tests",
+      "Review Iteration 1 (A)",
+      "Verification Session",
+    ]);
+  });
+
+  test("inserts Tests after a reused build session that produced the package plan", () => {
+    const preparedBuild: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      producedReviewPackagePlan: true,
+    };
+    const reviewOne: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      phase: "review",
+      sessionKey: "review-1-key",
+      sdkSessionId: "review-1-session",
+      label: "Review 1",
+    };
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      phase: "reviewing",
+      sessions: [preparedBuild, reviewOne],
+      currentSessionIndex: 1,
+      validationRun: validationRun({ id: "validation-reused" }),
+      backendRevision: 9,
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    expect(stageTabLabels()).toEqual(["Build Session", "Tests", "Review Iteration 1 (A)"]);
+  });
+
+  test("auto-follows Tests while the current session is package preparation", () => {
+    const packageSession: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      phase: "fix",
+      sessionKey: "package-key",
+      sdkSessionId: "package-session",
+      label: REVIEW_PACKAGE_SESSION_LABEL,
+    };
+    useBuildPipelineStore.setState({
+      pipelines: new Map([
+        [
+          pipeline.id,
+          {
+            ...pipeline,
+            phase: "fixing",
+            sessions: [pipeline.sessions[0]!, packageSession],
+            currentSessionIndex: 1,
+            validationRun: validationRun({ id: "validation-follow" }),
+            backendRevision: 9,
+          },
+        ],
+      ]),
+      viewedSessionIds: new Map(),
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    const selected = screen
+      .getAllByRole("tab")
+      .find((tab) => tab.getAttribute("aria-selected") === "true");
+    expect(selected?.textContent).toContain("Tests");
+    expect(screen.getByLabelText("Review validation")).toBeTruthy();
+  });
+
+  test("releases a pinned Tests selection when the validation run is removed", async () => {
+    const packageSession: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      phase: "fix",
+      sessionKey: "package-key",
+      sdkSessionId: "package-session",
+      label: REVIEW_PACKAGE_SESSION_LABEL,
+    };
+    const withRun: BuildPipeline = {
+      ...pipeline,
+      phase: "reviewing",
+      sessions: [pipeline.sessions[0]!, packageSession, pipeline.sessions[1]!],
+      currentSessionIndex: 2,
+      validationRun: validationRun({ id: "validation-pin" }),
+      backendRevision: 9,
+    };
+    useBuildPipelineStore.getState().replacePipeline(withRun);
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Tests"));
+    expect(screen.getByLabelText("Review validation")).toBeTruthy();
+
+    act(() => {
+      const next = { ...withRun, validationRun: undefined, backendRevision: 10 };
+      delete next.validationRun;
+      useBuildPipelineStore.getState().replacePipeline(next);
+    });
+
+    await waitFor(() => expect(screen.queryByText("Tests") === null).toBe(true));
+    const selected = screen
+      .getAllByRole("tab")
+      .find((tab) => tab.getAttribute("aria-selected") === "true");
+    expect(selected?.textContent).toContain("Verification Session");
+  });
+
+  test("rehydrates onto the replacement Tests tab after the run id changes", async () => {
+    const packageSession: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      phase: "fix",
+      sessionKey: "package-key",
+      sdkSessionId: "package-session",
+      label: REVIEW_PACKAGE_SESSION_LABEL,
+    };
+    const firstRun = validationRun({ id: "validation-old" });
+    const withRun: BuildPipeline = {
+      ...pipeline,
+      phase: "fixing",
+      sessions: [pipeline.sessions[0]!, packageSession],
+      currentSessionIndex: 1,
+      validationRun: firstRun,
+      backendRevision: 9,
+    };
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[pipeline.id, withRun]]),
+      viewedSessionIds: new Map(),
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Build Session"));
+    fireEvent.click(screen.getByText("Tests"));
+    const previousTab = screen.getByRole("tab", { name: /Tests/ });
+    expect(previousTab.id).toContain("stage-validation-validation-old");
+
+    act(() => {
+      useBuildPipelineStore.getState().replacePipeline({
+        ...withRun,
+        validationRun: validationRun({ id: "validation-new" }),
+        backendRevision: 10,
+      });
+    });
+
+    await waitFor(() => {
+      const tab = screen.getByRole("tab", { name: /Tests/ });
+      expect(tab.id).toContain("stage-validation-validation-new");
+      expect(tab.getAttribute("aria-selected")).toBe("true");
+    });
   });
 
   test("ignores malformed transcript entries and renders terminal errors", () => {
@@ -784,6 +1314,495 @@ describe("BuildChatTab presentation", () => {
     mockToastSuccess.mockClear();
   });
 
+  test("groups parallel review labels by iteration and formats their runtime metadata", () => {
+    const sessions: BuildPipeline["sessions"] = [
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(0),
+        sessionKey: "iteration-1-a",
+      },
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(1),
+        sessionKey: "iteration-1-b",
+      },
+      {
+        ...reviewSession,
+        iteration: 1,
+        label: pipelineIndependentReviewLabel(0),
+        sessionKey: "iteration-2-a",
+      },
+      { ...reviewSession, sessionKey: "classic-review" },
+    ];
+
+    expect(Array.from(reviewIterationLabels(sessions).values())).toEqual([
+      "Review Iteration 1 (A)",
+      "Review Iteration 1 (B)",
+      "Review Iteration 2 (A)",
+    ]);
+    expect(
+      pipelineReviewRuntimeSummary(
+        {
+          status: "idle",
+          startedAt: "2026-07-29T00:00:00.000Z",
+          completedAt: "2026-07-29T00:01:35.000Z",
+          tokenCount: 12_345,
+        },
+        Date.parse("2026-07-29T01:00:00.000Z"),
+      ),
+    ).toBe("1m 35s · 12k tokens");
+    expect(
+      pipelineReviewRuntimeSummary(
+        {
+          status: "running",
+          startedAt: "2026-07-29T00:00:00.000Z",
+        },
+        Date.parse("2026-07-29T00:00:07.000Z"),
+      ),
+    ).toBe("7s · Tokens pending");
+  });
+
+  test("keeps spreadsheet letters through the 32-reviewer limit", () => {
+    expect(reviewLetter(0)).toBe("A");
+    expect(reviewLetter(1)).toBe("B");
+    expect(reviewLetter(25)).toBe("Z");
+    expect(reviewLetter(26)).toBe("AA");
+    expect(reviewLetter(31)).toBe("AF");
+    const wide = Array.from({ length: 32 }, (_, index) => ({
+      ...reviewSession,
+      label: pipelineIndependentReviewLabel(index),
+      sessionKey: `wide-${index}`,
+    }));
+    expect(reviewIterationLabels(wide).get("wide-26")).toBe("Review Iteration 1 (AA)");
+    expect(reviewIterationLabels(wide).get("wide-31")).toBe("Review Iteration 1 (AF)");
+  });
+
+  test("letters a surviving later reviewer from its Review N slot, not session order", () => {
+    const sessions: BuildPipeline["sessions"] = [
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(1),
+        sessionKey: "only-review-2",
+      },
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(0),
+        sessionKey: "late-review-1",
+      },
+    ];
+
+    expect(Array.from(reviewIterationLabels(sessions).entries())).toEqual([
+      ["only-review-2", "Review Iteration 1 (B)"],
+      ["late-review-1", "Review Iteration 1 (A)"],
+    ]);
+  });
+
+  test("letters the live retry pair A/B and marks leftover tiles as previous", () => {
+    const sessions: BuildPipeline["sessions"] = [
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(0),
+        sessionKey: "stale-a",
+      },
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(1),
+        sessionKey: "stale-b",
+      },
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(0),
+        sessionKey: "live-a",
+      },
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(1),
+        sessionKey: "live-b",
+      },
+    ];
+
+    expect(
+      Array.from(reviewIterationLabels(sessions, new Set(["live-a", "live-b"])).entries()),
+    ).toEqual([
+      ["stale-a", "Review Iteration 1 (A) · previous"],
+      ["stale-b", "Review Iteration 1 (B) · previous"],
+      ["live-a", "Review Iteration 1 (A)"],
+      ["live-b", "Review Iteration 1 (B)"],
+    ]);
+    expect(Array.from(reviewIterationLabels(sessions).values())).toEqual([
+      "Review Iteration 1 (A) · previous",
+      "Review Iteration 1 (B) · previous",
+      "Review Iteration 1 (A)",
+      "Review Iteration 1 (B)",
+    ]);
+  });
+
+  test("shows iteration letters, the friendly model name, elapsed time, and tokens", () => {
+    const previousModels = useCodexStore.getState().models;
+    useCodexStore.setState({
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT 5.6 Sol",
+          description: "Frontier coding model",
+          reasoningEfforts: ["high"],
+        },
+      ],
+    });
+    const reviewA = {
+      ...reviewSession,
+      agent: "codex" as const,
+      model: "gpt-5.6-sol",
+      label: "Review 1",
+      sessionKey: "review-iteration-1-a",
+      sdkSessionId: "review-iteration-1-a-session",
+      completedAt: "2026-07-29T00:02:05.000Z",
+      tokenCount: 12_345,
+    };
+    const reviewB = {
+      ...reviewA,
+      label: "Review 2",
+      sessionKey: "review-iteration-1-b",
+      sdkSessionId: "review-iteration-1-b-session",
+    };
+
+    try {
+      renderTab({
+        ...reviewed,
+        reviewers: [
+          { agent: "codex", model: "gpt-5.6-sol" },
+          { agent: "codex", model: "gpt-5.6-sol" },
+        ],
+        sessions: [pipeline.sessions[0]!, reviewA, reviewB, pipeline.sessions[1]!],
+        currentSessionIndex: 3,
+      });
+
+      expect(screen.getByText("Review Iteration 1 (A)")).toBeTruthy();
+      expect(screen.getByText("Review Iteration 1 (B)")).toBeTruthy();
+      expect(screen.getAllByText("GPT 5.6 Sol")).toHaveLength(2);
+      expect(
+        screen.getByLabelText("Review Iteration 1 (A) runtime and token usage").textContent,
+      ).toBe("1m 35s · 12k tokens");
+    } finally {
+      cleanup();
+      useCodexStore.setState({ models: previousModels });
+    }
+  });
+
+  test("advances a running review iteration timer while the tab is active", () => {
+    const originalNow = Date.now;
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    let now = Date.parse("2026-07-29T00:00:05.000Z");
+    let tick: (() => void) | undefined;
+    Date.now = () => now;
+    window.setInterval = ((callback: TimerHandler) => {
+      tick = callback as () => void;
+      return 45;
+    }) as typeof window.setInterval;
+    window.clearInterval = mock(() => undefined) as typeof window.clearInterval;
+    const runningReview = {
+      ...reviewSession,
+      agent: "codex" as const,
+      model: "gpt-5.4",
+      label: "Review 1",
+      sessionKey: "running-review",
+      sdkSessionId: "running-review-session",
+      status: "running" as const,
+      startedAt: "2026-07-29T00:00:00.000Z",
+      completedAt: undefined,
+      tokenCount: undefined,
+    };
+    const running = {
+      ...pipeline,
+      phase: "reviewing" as const,
+      sessions: [runningReview],
+      currentSessionIndex: 0,
+      reviewers: [
+        { agent: "codex" as const, model: "gpt-5.4" },
+        { agent: "claude" as const, model: "opus" },
+      ],
+    };
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[running.id, running]]),
+      buildEnvironmentIds: new Set([running.environmentId]),
+      viewedSessionIds: new Map(),
+    });
+
+    try {
+      render(
+        <BuildChatTab
+          data={{
+            pipelineId: running.id,
+            environmentId: running.environmentId,
+            taskId: running.taskId,
+            isLocal: true,
+          }}
+          isActive
+        />,
+      );
+      const runtime = screen.getByLabelText("Review Iteration 1 (A) runtime and token usage");
+      expect(runtime.textContent).toBe("5s · Tokens pending");
+
+      now += 1_000;
+      act(() => tick?.());
+      expect(runtime.textContent).toBe("6s · Tokens pending");
+    } finally {
+      cleanup();
+      Date.now = originalNow;
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+    }
+  });
+
+  test("keeps a surviving Review 2 tab on letter B and its configured model", () => {
+    const previousModels = useCodexStore.getState().models;
+    useCodexStore.setState({
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT 5.6 Sol",
+          description: "Frontier coding model",
+          reasoningEfforts: ["high"],
+        },
+        {
+          id: "opus",
+          name: "Opus",
+          description: "Claude reviewer",
+          reasoningEfforts: ["high"],
+        },
+      ],
+    });
+    const reviewTwo = {
+      ...reviewSession,
+      agent: "codex" as const,
+      label: pipelineIndependentReviewLabel(1),
+      sessionKey: "sparse-review-2",
+      sdkSessionId: "sparse-review-2-session",
+      completedAt: "2026-07-29T00:02:05.000Z",
+      tokenCount: 2_000,
+    };
+
+    try {
+      renderTab({
+        ...reviewed,
+        reviewers: [
+          { agent: "claude", model: "opus" },
+          { agent: "codex", model: "gpt-5.6-sol" },
+        ],
+        sessions: [pipeline.sessions[0]!, reviewTwo, pipeline.sessions[1]!],
+        currentSessionIndex: 2,
+      });
+
+      expect(screen.getByText("Review Iteration 1 (B)")).toBeTruthy();
+      expect(screen.queryByText("Review Iteration 1 (A)") === null).toBe(true);
+      expect(screen.getByText("GPT 5.6 Sol")).toBeTruthy();
+      expect(screen.queryByText("Opus") === null).toBe(true);
+    } finally {
+      cleanup();
+      useCodexStore.setState({ models: previousModels });
+    }
+  });
+
+  test("letters the live retry pair A/B and keeps each slot's configured model", () => {
+    const previousModels = useCodexStore.getState().models;
+    useCodexStore.setState({
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT 5.6 Sol",
+          description: "Frontier coding model",
+          reasoningEfforts: ["high"],
+        },
+        {
+          id: "opus",
+          name: "Opus",
+          description: "Claude reviewer",
+          reasoningEfforts: ["high"],
+        },
+      ],
+    });
+    const staleA = {
+      ...reviewSession,
+      agent: "codex" as const,
+      label: pipelineIndependentReviewLabel(0),
+      sessionKey: "stale-a",
+      sdkSessionId: "stale-a-session",
+      completedAt: "2026-07-29T00:01:00.000Z",
+      tokenCount: 1_000,
+    };
+    const staleB = {
+      ...staleA,
+      label: pipelineIndependentReviewLabel(1),
+      sessionKey: "stale-b",
+      sdkSessionId: "stale-b-session",
+    };
+    const liveA = {
+      ...staleA,
+      sessionKey: "live-a",
+      sdkSessionId: "live-a-session",
+      status: "running" as const,
+      completedAt: undefined,
+      tokenCount: undefined,
+    };
+    const liveB = {
+      ...staleB,
+      sessionKey: "live-b",
+      sdkSessionId: "live-b-session",
+      status: "running" as const,
+      completedAt: undefined,
+      tokenCount: undefined,
+    };
+
+    try {
+      renderTab({
+        ...reviewed,
+        phase: "reviewing",
+        reviewers: [
+          { agent: "codex", model: "gpt-5.6-sol" },
+          { agent: "claude", model: "opus" },
+        ],
+        reviewFanout: {
+          reviewers: [
+            {
+              id: "live-1",
+              agent: "codex",
+              model: "gpt-5.6-sol",
+              status: "running",
+              sessionKey: "live-a",
+            },
+            {
+              id: "live-2",
+              agent: "claude",
+              model: "opus",
+              status: "running",
+              sessionKey: "live-b",
+            },
+          ],
+        },
+        sessions: [pipeline.sessions[0]!, staleA, staleB, liveA, liveB],
+        currentSessionIndex: 4,
+      });
+
+      expect(screen.getByText("Review Iteration 1 (A)")).toBeTruthy();
+      expect(screen.getByText("Review Iteration 1 (B)")).toBeTruthy();
+      expect(screen.getByText("Review Iteration 1 (A) · previous")).toBeTruthy();
+      expect(screen.getByText("Review Iteration 1 (B) · previous")).toBeTruthy();
+      expect(screen.getAllByText("GPT 5.6 Sol").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Opus").length).toBeGreaterThan(0);
+    } finally {
+      cleanup();
+      useCodexStore.setState({ models: previousModels });
+    }
+  });
+
+  test("shows Provider default when a reviewer pinned no model", () => {
+    const unpinned = {
+      ...reviewSession,
+      agent: "codex" as const,
+      label: pipelineIndependentReviewLabel(0),
+      sessionKey: "unpinned-review",
+      sdkSessionId: "unpinned-review-session",
+    };
+
+    renderTab({
+      ...reviewed,
+      reviewers: [{ agent: "codex" }, { agent: "claude" }],
+      reviewFanout: {
+        reviewers: [
+          {
+            id: "unpinned-1",
+            agent: "codex",
+            model: "default",
+            modelUnpinned: true,
+            status: "completed",
+            sessionKey: "unpinned-review",
+          },
+        ],
+      },
+      sessions: [pipeline.sessions[0]!, unpinned, pipeline.sessions[1]!],
+      currentSessionIndex: 2,
+    });
+
+    expect(screen.getByText("Review Iteration 1 (A)")).toBeTruthy();
+    expect(screen.getByText("Provider default")).toBeTruthy();
+  });
+
+  test("freezes a running review timer while inactive and restores persisted metadata on reactivation", () => {
+    const originalNow = Date.now;
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    let now = Date.parse("2026-07-29T00:00:05.000Z");
+    let tick: (() => void) | undefined;
+    Date.now = () => now;
+    window.setInterval = ((callback: TimerHandler) => {
+      tick = callback as () => void;
+      return 46;
+    }) as typeof window.setInterval;
+    window.clearInterval = mock(() => undefined) as typeof window.clearInterval;
+    const runningReview = {
+      ...reviewSession,
+      agent: "codex" as const,
+      model: "gpt-5.4",
+      label: pipelineIndependentReviewLabel(0),
+      sessionKey: "inactive-review",
+      sdkSessionId: "inactive-review-session",
+      status: "running" as const,
+      startedAt: "2026-07-29T00:00:00.000Z",
+      tokenCount: 12_345,
+    };
+    const running = {
+      ...pipeline,
+      phase: "reviewing" as const,
+      sessions: [runningReview],
+      currentSessionIndex: 0,
+      reviewers: [{ agent: "codex" as const, model: "gpt-5.4" }],
+    };
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[running.id, running]]),
+      buildEnvironmentIds: new Set([running.environmentId]),
+      viewedSessionIds: new Map(),
+    });
+
+    try {
+      const view = render(
+        <BuildChatTab
+          data={{
+            pipelineId: running.id,
+            environmentId: running.environmentId,
+            taskId: running.taskId,
+            isLocal: true,
+          }}
+        />,
+      );
+      const runtime = () => screen.getByLabelText("Review Iteration 1 (A) runtime and token usage");
+      expect(runtime().textContent).toBe("5s · 12k tokens");
+      expect(tick).toBeUndefined();
+
+      now += 4_000;
+      view.rerender(
+        <BuildChatTab
+          data={{
+            pipelineId: running.id,
+            environmentId: running.environmentId,
+            taskId: running.taskId,
+            isLocal: true,
+          }}
+          isActive
+        />,
+      );
+      expect(runtime().textContent).toBe("9s · 12k tokens");
+      now += 1_000;
+      act(() => tick?.());
+      expect(runtime().textContent).toBe("10s · 12k tokens");
+    } finally {
+      cleanup();
+      Date.now = originalNow;
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+    }
+  });
+
   test("marks the shown stage as selected in the stage list", async () => {
     renderTab(reviewed);
 
@@ -809,6 +1828,416 @@ describe("BuildChatTab presentation", () => {
     expect(screen.getByText("git diff --stat")).toBeTruthy();
     expect(screen.getByText("The review is complete")).toBeTruthy();
     expect(screen.queryByText(/"toolArgs"/) === null).toBe(true);
+  });
+
+  test("hides the package creation JSON while retaining its progress and tools", () => {
+    const plan = JSON.stringify({
+      headRef: "a".repeat(40),
+      commands: [{ id: "test", command: "mise run test" }],
+      limitations: [],
+    });
+    const packageSession: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      phase: "fix",
+      sessionKey: "package-key",
+      sdkSessionId: "package-session",
+      label: REVIEW_PACKAGE_SESSION_LABEL,
+      messages: [
+        {
+          id: "package-answer",
+          role: "assistant",
+          content: `I found the repository checks.\n${plan}`,
+          parts: [
+            { type: "text", content: "I found the repository checks." },
+            {
+              type: "tool-invocation",
+              content: "mise tasks validate",
+              toolName: "shell",
+              toolState: "success",
+            },
+            { type: "text", content: plan },
+          ],
+        },
+      ],
+    };
+    renderTab({
+      ...reviewed,
+      sessions: [pipeline.sessions[0]!, packageSession, reviewSession, pipeline.sessions[1]!],
+      currentSessionIndex: 3,
+    });
+
+    fireEvent.click(screen.getByText("Package Preparation Session"));
+
+    expect(visibleTextContents()).toEqual(["I found the repository checks."]);
+    expect(visibleToolInvocations()).toEqual(["mise tasks validate"]);
+    expect(JSON.stringify(listProps.messages)).not.toContain('"headRef"');
+    expect(screen.queryByText(plan) === null).toBe(true);
+  });
+
+  test("hides package JSON on a single-review Build Session that ran the schema", () => {
+    const plan = JSON.stringify({
+      headRef: "a".repeat(40),
+      commands: [{ id: "test", command: "mise run test" }],
+      limitations: [],
+    });
+    renderTab({
+      ...reviewed,
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          structuredRequestId: "prep-request",
+          structuredResultStatus: "accepted",
+          messages: [
+            {
+              id: "build-answer",
+              role: "assistant",
+              content: `I found the repository checks.\n${plan}`,
+              parts: [
+                { type: "text", content: "I found the repository checks." },
+                {
+                  type: "tool-invocation",
+                  content: "mise tasks validate",
+                  toolName: "shell",
+                  toolState: "success",
+                },
+                { type: "text", content: plan },
+              ],
+            },
+          ],
+        },
+        reviewSession,
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 2,
+    });
+
+    fireEvent.click(screen.getByText("Build Session"));
+
+    expect(visibleTextContents()).toEqual(["I found the repository checks."]);
+    expect(visibleToolInvocations()).toEqual(["mise tasks validate"]);
+    expect(JSON.stringify(listProps.messages)).not.toContain('"headRef"');
+    expect(screen.queryByText(plan) === null).toBe(true);
+  });
+
+  test("hides package JSON on a legacy reused Fix Session", () => {
+    const plan = JSON.stringify({
+      headRef: "a".repeat(40),
+      commands: [{ id: "test", command: "mise run test" }],
+      limitations: [],
+    });
+    renderTab({
+      ...reviewed,
+      sessions: [
+        pipeline.sessions[0]!,
+        {
+          ...pipeline.sessions[0]!,
+          phase: "fix",
+          sessionKey: "legacy-fix-key",
+          sdkSessionId: "legacy-fix-session",
+          label: "Fix Session",
+          structuredRequestId: "legacy-prep",
+          structuredResultStatus: "accepted",
+          messages: [
+            {
+              id: "fix-answer",
+              role: "assistant",
+              content: `I found the repository checks.\n${plan}`,
+              parts: [
+                { type: "text", content: "I found the repository checks." },
+                {
+                  type: "tool-invocation",
+                  content: "mise tasks validate",
+                  toolName: "shell",
+                  toolState: "success",
+                },
+                { type: "text", content: plan },
+              ],
+            },
+          ],
+        },
+        reviewSession,
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 3,
+    });
+
+    fireEvent.click(screen.getByText("Fix Session"));
+
+    expect(visibleTextContents()).toEqual(["I found the repository checks."]);
+    expect(visibleToolInvocations()).toEqual(["mise tasks validate"]);
+    expect(JSON.stringify(listProps.messages)).not.toContain('"headRef"');
+    expect(screen.queryByText(plan) === null).toBe(true);
+  });
+
+  test("hides a same-line commands-first or limitations-first package plan", () => {
+    const commandsFirst = JSON.stringify({
+      commands: [{ id: "test", command: "mise run test" }],
+      headRef: "a".repeat(40),
+      limitations: [],
+    });
+    const limitationsFirst = JSON.stringify({
+      limitations: ["host capacity"],
+      headRef: "a".repeat(40),
+      commands: [{ id: "test", command: "mise run test" }],
+    });
+    renderTab({
+      ...reviewed,
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          producedReviewPackagePlan: true,
+          messages: [
+            {
+              id: "commands-first",
+              role: "assistant",
+              content: `Prepared validation. ${commandsFirst}`,
+              parts: [{ type: "text", content: `Prepared validation. ${commandsFirst}` }],
+            },
+            {
+              id: "limitations-first",
+              role: "assistant",
+              content: `Prepared validation. ${limitationsFirst}`,
+              parts: [{ type: "text", content: `Prepared validation. ${limitationsFirst}` }],
+            },
+          ],
+        },
+        reviewSession,
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 2,
+    });
+
+    fireEvent.click(screen.getByText("Build Session"));
+
+    expect(visibleTextContents()).toEqual(["Prepared validation.", "Prepared validation."]);
+    expect(JSON.stringify(listProps.messages)).not.toContain('"headRef"');
+    expect(JSON.stringify(listProps.messages)).not.toContain('"commands"');
+  });
+
+  test("keeps earlier implementation JSON on a reused Build Session", () => {
+    const config = '```json\n{"strict":true,"retries":3}\n```';
+    const plan = JSON.stringify({
+      headRef: "a".repeat(40),
+      commands: [{ id: "test", command: "mise run test" }],
+      limitations: [],
+    });
+    renderTab({
+      ...reviewed,
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          producedReviewPackagePlan: true,
+          structuredRequestId: "prep-request",
+          structuredResultStatus: "accepted",
+          messages: [
+            {
+              id: "impl",
+              role: "assistant",
+              content: config,
+              parts: [{ type: "text", content: config }],
+            },
+            {
+              id: "plan",
+              role: "assistant",
+              content: `I found the repository checks.\n${plan}`,
+              parts: [
+                { type: "text", content: "I found the repository checks." },
+                { type: "text", content: plan },
+              ],
+            },
+          ],
+        },
+        reviewSession,
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 2,
+    });
+
+    fireEvent.click(screen.getByText("Build Session"));
+
+    expect(visibleTextContents()).toEqual([config, "I found the repository checks."]);
+    expect(JSON.stringify(listProps.messages)).toContain("strict");
+    expect(JSON.stringify(listProps.messages)).not.toContain('"headRef"');
+  });
+
+  test("still hides package JSON after structured request markers are cleared", () => {
+    const plan = JSON.stringify({
+      headRef: "a".repeat(40),
+      commands: [{ id: "test", command: "mise run test" }],
+      limitations: [],
+    });
+    renderTab({
+      ...reviewed,
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          messages: [
+            {
+              id: "build-answer",
+              role: "assistant",
+              content: `I found the repository checks.\n${plan}`,
+              parts: [
+                { type: "text", content: "I found the repository checks." },
+                { type: "text", content: plan },
+              ],
+            },
+          ],
+        },
+        reviewSession,
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 2,
+    });
+
+    fireEvent.click(screen.getByText("Build Session"));
+
+    expect(visibleTextContents()).toEqual(["I found the repository checks."]);
+    expect(JSON.stringify(listProps.messages)).not.toContain('"headRef"');
+  });
+
+  test("keeps a resumed fan-out build transcript visible", () => {
+    const config = '```json\n{"strict":true,"retries":3}\n```';
+    renderTab({
+      ...reviewed,
+      reviewers: [{ agent: "codex" }, { agent: "claude" }],
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          structuredRequestId: "resume-1",
+          structuredResultStatus: "pending",
+          messages: [
+            {
+              id: "impl",
+              role: "assistant",
+              content: config,
+              parts: [{ type: "text", content: config }],
+            },
+          ],
+        },
+        reviewSession,
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 2,
+    });
+
+    fireEvent.click(screen.getByText("Build Session"));
+
+    expect(visibleTextContents()).toEqual([config]);
+    expect(JSON.stringify(listProps.messages)).toContain("strict");
+  });
+
+  test("keeps the transcript list mounted when visiting Tests and returning", () => {
+    // The stub records prop identity only. Real react-virtuoso scroll
+    // retention across a display:none toggle belongs to the Playwright
+    // component suite; happy-dom never mounts Virtuoso rows.
+    renderTab({
+      ...reviewed,
+      validationRun: validationRun({ id: "validation-scroll" }),
+      currentSessionIndex: 2,
+    });
+
+    fireEvent.click(screen.getByText("Build Session"));
+    const before = JSON.stringify(listProps.messages);
+    expect(before).toContain("Implementation complete");
+
+    fireEvent.click(screen.getByText("Tests"));
+    expect(screen.getByLabelText("Review validation")).toBeTruthy();
+    expect(JSON.stringify(listProps.messages)).toBe(before);
+
+    fireEvent.click(screen.getByText("Build Session"));
+    expect(screen.queryByLabelText("Review validation") === null).toBe(true);
+    expect(JSON.stringify(listProps.messages)).toBe(before);
+    expect(screen.getByText("Implementation complete")).toBeTruthy();
+  });
+
+  test.each(Array.from(BUILD_PIPELINE_AGENTS))(
+    "shows the shared thinking footer for a running %s stage",
+    (agent) => {
+      const label = nativeAgentAdapters[agent].label;
+      renderTab({
+        ...pipeline,
+        agentType: agent,
+        phase: "building",
+        sessions: [
+          {
+            ...pipeline.sessions[0]!,
+            agent,
+            status: "running",
+          },
+        ],
+        currentSessionIndex: 0,
+        backendRevision: 39 + label.length,
+      });
+
+      const indicator = screen.getByRole("status");
+      expect(indicator.textContent).toBe(`${label} is thinking...`);
+      expect(indicator.classList.contains("agent-thinking-shimmer")).toBe(true);
+      expect(indicator.closest(".chat-status-row")).toBeTruthy();
+    },
+  );
+
+  test("does not show a thinking footer for the idle stage a user is reading", async () => {
+    renderTab({
+      ...pipeline,
+      phase: "verifying",
+      sessions: [
+        pipeline.sessions[0]!,
+        {
+          ...pipeline.sessions[1]!,
+          status: "running",
+        },
+      ],
+      backendRevision: 47,
+    });
+    expect(screen.getByText("Codex is thinking...")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Build Session"));
+
+    await waitFor(() => expect(screen.queryByText(/is thinking\.\.\./) === null).toBe(true));
+  });
+
+  test.each(["failed", "paused"] as const)(
+    "does not show a thinking footer when the pipeline is %s with a stale running session",
+    (phase) => {
+      renderTab({
+        ...pipeline,
+        phase,
+        sessions: [
+          {
+            ...pipeline.sessions[0]!,
+            status: "running",
+          },
+        ],
+        currentSessionIndex: 0,
+        backendRevision: 51,
+      });
+
+      expect(screen.queryByRole("status") === null).toBe(true);
+      expect(screen.queryByText(/is thinking\.\.\./) === null).toBe(true);
+    },
+  );
+
+  test("stacks the thinking footer under a structured review report while that stage is running", () => {
+    renderTab({
+      ...reviewed,
+      phase: "reviewing",
+      currentSessionIndex: 1,
+      sessions: [
+        reviewed.sessions[0]!,
+        {
+          ...reviewSession,
+          status: "running",
+        },
+        reviewed.sessions[2]!,
+      ],
+      backendRevision: 52,
+    });
+
+    expect(screen.getByLabelText("Structured review report")).toBeTruthy();
+    const indicator = screen.getByRole("status");
+    expect(indicator.textContent).toBe("Codex is thinking...");
+    expect(indicator.classList.contains("agent-thinking-shimmer")).toBe(true);
+    expect(indicator.closest(".chat-status-row")).toBeTruthy();
   });
 
   test("shows the structured review report only on the stage that produced it", async () => {
@@ -888,14 +2317,14 @@ describe("BuildChatTab presentation", () => {
       structuredReviewRequestId: "consolidation-request",
     });
 
-    fireEvent.click(screen.getByText("Review 1"));
+    fireEvent.click(screen.getByText("Review Iteration 1 (A)"));
     expect(await screen.findByLabelText("Reviewer report")).toBeTruthy();
     expect(visibleTextContents()).not.toContain(reviewerOnePayload);
     expect(visibleToolInvocations()).toEqual(["git diff --stat"]);
     fireEvent.click(screen.getByRole("button", { name: "Review summary" }));
     expect(screen.getByText("Reviewer one found the dispatch race.")).toBeTruthy();
 
-    fireEvent.click(screen.getByText("Review 2"));
+    fireEvent.click(screen.getByText("Review Iteration 1 (B)"));
     expect(await screen.findByLabelText("Reviewer report")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Review summary" }));
     expect(screen.getByText("Reviewer two found the recovery gap.")).toBeTruthy();
@@ -1581,6 +3010,65 @@ describe("BuildChatTab presentation", () => {
     // A tablist wraps rather than stopping at its ends.
     fireEvent.keyDown(tablist, { key: "ArrowDown" });
     await waitFor(() => expect(selected()).toContain("Build Session"));
+  });
+
+  test("moves onto and past the Tests tab with the arrow keys", async () => {
+    const packageSession: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      phase: "fix",
+      sessionKey: "package-key",
+      sdkSessionId: "package-session",
+      label: REVIEW_PACKAGE_SESSION_LABEL,
+    };
+    renderTab({
+      ...reviewed,
+      sessions: [pipeline.sessions[0]!, packageSession, reviewSession, pipeline.sessions[1]!],
+      currentSessionIndex: 3,
+      validationRun: validationRun({ id: "validation-keys" }),
+    });
+    const tablist = screen.getByRole("tablist", { name: "Build stages" });
+    const selected = () =>
+      screen.getAllByRole("tab").find((tab) => tab.getAttribute("aria-selected") === "true")
+        ?.textContent ?? null;
+
+    expect(selected()).toContain("Verification Session");
+
+    fireEvent.keyDown(tablist, { key: "ArrowUp" });
+    await waitFor(() => expect(selected()).toContain("Review Session"));
+    fireEvent.keyDown(tablist, { key: "ArrowUp" });
+    await waitFor(() => expect(selected()).toContain("Tests"));
+
+    const testsTab = screen.getByRole("tab", { name: /Tests/ });
+    expect(document.activeElement).toBe(testsTab);
+    expect(testsTab.id).toContain("stage-validation-validation-keys");
+    expect(testsTab.id).not.toContain("validation:");
+    expect(screen.getByLabelText("Review validation")).toBeTruthy();
+
+    fireEvent.keyDown(tablist, { key: "ArrowUp" });
+    await waitFor(() => expect(selected()).toContain(REVIEW_PACKAGE_SESSION_LABEL));
+    fireEvent.keyDown(tablist, { key: "Home" });
+    await waitFor(() => expect(selected()).toContain("Build Session"));
+    fireEvent.keyDown(tablist, { key: "End" });
+    await waitFor(() => expect(selected()).toContain("Verification Session"));
+  });
+
+  test("reaches the Tests tab from the mobile stage list", () => {
+    setMobileViewport(true);
+    try {
+      renderTab({
+        ...reviewed,
+        validationRun: validationRun({ id: "validation-mobile" }),
+        currentSessionIndex: 2,
+      });
+
+      fireEvent.click(screen.getByRole("tab", { name: "Stages" }));
+      fireEvent.click(screen.getByText("Tests"));
+
+      expect(screen.getByLabelText("Review validation")).toBeTruthy();
+      expect(screen.getByRole("tab", { name: "Tests" })).toBeTruthy();
+    } finally {
+      setMobileViewport(false);
+    }
   });
 
   test("holds the arrow-key stage the same way it holds a clicked one", async () => {
@@ -2592,6 +4080,20 @@ describe("BuildChatTab agent messaging", () => {
     });
     expect(button.disabled).toBe(true);
     expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  test("hides the compose box while the Tests stage is selected", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...running,
+      validationRun: validationRun({ id: "validation-composer" }),
+      backendRevision: 9,
+    });
+    renderTab();
+
+    expect(screen.getByLabelText("Send a message to the agent")).toBeTruthy();
+    fireEvent.click(screen.getByText("Tests"));
+    expect(screen.queryByLabelText("Send a message to the agent") === null).toBe(true);
+    expect(screen.getByLabelText("Review validation")).toBeTruthy();
   });
 
   test("hides the compose box once the build has finished", () => {

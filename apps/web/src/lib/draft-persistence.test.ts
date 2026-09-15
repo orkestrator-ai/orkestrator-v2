@@ -1178,6 +1178,42 @@ describe("useNativeComposeDraftPersistence", () => {
     hook.unmount();
   });
 
+  test("hydrates a locked provider draft from the provisional namespace when the provider key is empty", async () => {
+    const sessionKey = "env-locked:tab-fallback";
+    getComposeDraft.mockImplementation(async (draftKey: string) => {
+      if (draftKey === compose.composeDraftKey("claude", "env-locked", sessionKey)) return null;
+      if (draftKey === compose.composeDraftKey("agent-native", "env-locked", sessionKey)) {
+        return {
+          draftKey,
+          ownerType: "environment" as const,
+          ownerId: "env-locked",
+          value: {
+            text: "migrated first prompt",
+            mentions: [],
+            attachments: [],
+            metadata: { requestId: "provisional-request" },
+          },
+          updatedAt: "2026-09-15T00:00:00.000Z",
+          revision: 2,
+        };
+      }
+      return null;
+    });
+    const store = createNativeStore();
+    const hook = renderHook(() =>
+      useNativeComposeDraftPersistence("claude", "env-locked", sessionKey, store, "agent-native"),
+    );
+
+    await waitFor(() =>
+      expect(store.getState().draftText.get(sessionKey)).toBe("migrated first prompt"),
+    );
+    expect(store.getState().draftMetadata.get(sessionKey)).toMatchObject({
+      requestId: "provisional-request",
+    });
+
+    hook.unmount();
+  });
+
   test("restores only the attachments the stored platform can receive", async () => {
     const sessionKey = "env-neutral:tab-attachments";
     const file = {

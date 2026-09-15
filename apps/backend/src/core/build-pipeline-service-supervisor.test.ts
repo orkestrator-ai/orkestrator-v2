@@ -482,6 +482,12 @@ describe("BuildPipelineService", () => {
         ["verify", "accepted"],
         ["pr", undefined],
       ]);
+      expect(completed.sessions.map((session) => session.producedReviewPackagePlan)).toEqual([
+        true,
+        undefined,
+        undefined,
+        undefined,
+      ]);
       expect(provider.sent).toHaveLength(4);
       const buildDispatch = provider.sent.find(
         (entry) => provider.phases.get(entry.sessionId) === "build",

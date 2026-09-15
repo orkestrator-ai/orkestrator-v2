@@ -1,5 +1,5 @@
 /** Real SDK lifecycle/store; only model lookup and executor startup are stubbed. */
-import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
 import * as sdk from "@cursor/sdk";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -40,6 +40,7 @@ const { hasUnusedInitialRun, useCursorLocalAgentStoreForTests, useCursorSdkRunti
 const { newSessionState, ensureAgent, detachAgent, listResumableSessions, useCursorAgentForTests } =
   await import("./agent-session.js");
 const { resetPlanAccountWindowsForTests } = await import("./plan-usage.js");
+const { setCursorMcpTransportForTests } = await import("./mcp.js");
 platform = await sdk.createAgentPlatform({
   localStore: store,
   workspaceRef: root,
@@ -77,6 +78,17 @@ beforeEach(() => {
   acquiredExecutorOptions.length = 0;
   listedAgents = [];
   resetPlanAccountWindowsForTests();
+  // Read-only attaches now host Control MCP in-process. Keep that connect
+  // offline so HTTP-fallback assertions do not depend on port 4567.
+  setCursorMcpTransportForTests({
+    async connect() {
+      throw new Error("offline");
+    },
+  });
+});
+
+afterEach(() => {
+  setCursorMcpTransportForTests();
 });
 
 afterAll(async () => {

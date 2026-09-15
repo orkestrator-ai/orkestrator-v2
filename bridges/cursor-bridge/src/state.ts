@@ -280,6 +280,11 @@ export interface SessionState {
   /** Fingerprint of the MCP connection the attached SDK agent was built with. */
   attachedMcpKey?: string;
   /**
+   * Closes the in-process Orkestrator MCP client a sandboxed coordinator
+   * attach opened. Runtime-only — the bearer never reaches persistence.
+   */
+  hostedMcpClose?: () => Promise<void>;
+  /**
    * A turn the user cancelled before its run handle existed.
    *
    * `cancelTurn` is only assignable once `agent.send` has resolved, and that

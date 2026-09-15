@@ -8,12 +8,17 @@ import {
   isBuildPipeline,
   isBuildStepConfigs,
   isStartBuildPipelineInput,
+  isPipelineIndependentReviewLabel,
+  pipelineIndependentReviewLabel,
+  pipelineIndependentReviewSlot,
   pipelineReviewerConfigs,
   stepKeyForSessionPhase,
   usesReviewFanout,
   MAX_BUILD_PIPELINE_ITERATIONS,
   MAX_PIPELINE_USER_MESSAGES,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
+  REVIEW_PACKAGE_SESSION_LABEL,
+  isReviewPackagePreparationSession,
   isVerificationVerdict,
   VERIFICATION_VERDICT_SCHEMA,
   type BuildPipeline,
@@ -1357,6 +1362,14 @@ describe("build pipeline protocol", () => {
     ]);
     expect(usesReviewFanout({ ...base, reviewers })).toBe(true);
     expect(usesReviewFanout({ ...base, reviewers: undefined })).toBe(false);
+    expect(pipelineIndependentReviewLabel(0)).toBe("Review 1");
+    expect(pipelineIndependentReviewLabel(1)).toBe("Review 2");
+    expect(pipelineIndependentReviewSlot("Review 1")).toBe(0);
+    expect(pipelineIndependentReviewSlot("Review 2")).toBe(1);
+    expect(pipelineIndependentReviewSlot("Review Session")).toBeNull();
+    expect(pipelineIndependentReviewSlot("Package Preparation Session")).toBeNull();
+    expect(isPipelineIndependentReviewLabel("Review 32")).toBe(true);
+    expect(isPipelineIndependentReviewLabel("Review Session")).toBe(false);
     for (const malformed of [null, [], "claude", [{ agent: "gemini", model: "x" }]]) {
       expect(isStartBuildPipelineInput({ ...input, reviewers: malformed })).toBe(false);
       expect(isBuildPipeline({ ...base, reviewers: malformed })).toBe(false);
@@ -1631,8 +1644,14 @@ describe("build pipeline protocol", () => {
       ),
     ).toBe(true);
     expect(isBuildPipeline(withSession({ structuredResultStatus: "accepted" }))).toBe(true);
+    expect(isBuildPipeline(withSession({ producedReviewPackagePlan: true }))).toBe(true);
+    expect(isBuildPipeline(withSession({ producedReviewPackagePlan: false }))).toBe(true);
+    expect(isBuildPipeline(withSession({ producedReviewPackagePlan: "yes" }))).toBe(false);
     expect(isBuildPipeline(withSession({ structuredResultStatus: "complete" }))).toBe(false);
     expect(isBuildPipeline(withSession({ structuredReportRepairAttempts: 0 }))).toBe(true);
+    expect(
+      isBuildPipeline(withSession({ completedAt: "2026-07-29T00:01:00.000Z", tokenCount: 12_345 })),
+    ).toBe(true);
 
     // A malformed timestamp here is not cosmetic: the supervisor subtracts it
     // from now() to decide whether to fail a stalled turn.
@@ -1642,6 +1661,12 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline(withSession({ turnStartedAt: "March 5 2020" }))).toBe(false);
     expect(isBuildPipeline(withSession({ turnStartedAt: 0 }))).toBe(false);
     expect(isBuildPipeline(withSession({ messagesFingerprint: "" }))).toBe(false);
+    for (const completedAt of ["soon", "March 5 2020", 0, null]) {
+      expect(isBuildPipeline(withSession({ completedAt }))).toBe(false);
+    }
+    for (const tokenCount of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "12", null]) {
+      expect(isBuildPipeline(withSession({ tokenCount }))).toBe(false);
+    }
     // The repair budget is compared against a bound, and the supervisor refuses
     // to persist a snapshot this rejects — so a value that cannot be counted
     // has to fail here rather than strand every later save.
@@ -1978,6 +2003,104 @@ describe("execution mode policy", () => {
     for (const agent of BUILD_PIPELINE_AGENTS) {
       expect(isBuildStepConfigs({ build: { agent } })).toBe(true);
     }
+  });
+});
+
+describe("review package preparation session", () => {
+  test("publishes the dedicated session label the backend writes", () => {
+    expect(REVIEW_PACKAGE_SESSION_LABEL).toBe("Package Preparation Session");
+  });
+
+  test("recognizes the labelled session and reused structured turns", () => {
+    expect(
+      isReviewPackagePreparationSession({
+        label: REVIEW_PACKAGE_SESSION_LABEL,
+        phase: "fix",
+      }),
+    ).toBe(true);
+    expect(
+      isReviewPackagePreparationSession({
+        label: "Build Session",
+        phase: "build",
+        structuredRequestId: "prep-1",
+      }),
+    ).toBe(true);
+    expect(
+      isReviewPackagePreparationSession({
+        label: "Fix Session",
+        phase: "fix",
+        structuredResultStatus: "accepted",
+      }),
+    ).toBe(true);
+    expect(
+      isReviewPackagePreparationSession({
+        label: "Review Session",
+        phase: "review",
+        structuredRequestId: "review-1",
+      }),
+    ).toBe(false);
+    expect(
+      isReviewPackagePreparationSession({
+        label: "Verification Session",
+        phase: "verify",
+        structuredResultStatus: "accepted",
+      }),
+    ).toBe(false);
+    expect(
+      isReviewPackagePreparationSession({
+        label: "Build Session",
+        phase: "build",
+      }),
+    ).toBe(false);
+    expect(isReviewPackagePreparationSession(undefined)).toBe(false);
+  });
+
+  test("keeps the sticky plan marker after live request bookkeeping is cleared", () => {
+    expect(
+      isReviewPackagePreparationSession({
+        label: "Build Session",
+        phase: "build",
+        producedReviewPackagePlan: true,
+      }),
+    ).toBe(true);
+  });
+
+  test("does not treat other phases with leftover structured bookkeeping as preparation", () => {
+    for (const phase of ["address", "pr", "resolve-conflicts"] as const) {
+      expect(
+        isReviewPackagePreparationSession({
+          label: "Later Session",
+          phase,
+          structuredRequestId: "stale-1",
+          structuredResultStatus: "accepted",
+        }),
+      ).toBe(false);
+    }
+  });
+
+  test("does not treat a resumed fan-out or review-preparation build as the package turn", () => {
+    expect(
+      isReviewPackagePreparationSession(
+        {
+          label: "Build Session",
+          phase: "build",
+          structuredRequestId: "resume-1",
+          structuredResultStatus: "pending",
+        },
+        { reviewers: [{ agent: "codex" }, { agent: "claude" }], agentType: "codex" },
+      ),
+    ).toBe(false);
+    expect(
+      isReviewPackagePreparationSession(
+        {
+          label: "Build Session",
+          phase: "build",
+          structuredRequestId: "resume-1",
+          structuredResultStatus: "pending",
+        },
+        { agentType: "codex", reviewPreparation: { agent: "codex" } },
+      ),
+    ).toBe(false);
   });
 });
 

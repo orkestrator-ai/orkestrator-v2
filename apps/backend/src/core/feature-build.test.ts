@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import { StorageService } from "./storage.js";
-import { createFeatureBuild } from "./feature-build.js";
+import { createFeatureBuild, featureTitleFromGeneratedName } from "./feature-build.js";
 import type { Project } from "./models.js";
 import { mimeTypeForImageData } from "./prompt-attachments.js";
 
@@ -70,6 +70,61 @@ const validImageBase64 = Buffer.from(
 ).toString("base64");
 
 describe("createFeatureBuild", () => {
+  test("formats generated branch-style names as capitalized feature titles", () => {
+    expect(featureTitleFromGeneratedName("dark-mode_toggle")).toBe("Dark Mode Toggle");
+  });
+
+  test("generates a ticket title from the description when the title is blank", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      const prompts: string[] = [];
+      await createFeatureBuild(
+        {
+          ...input,
+          title: "   ",
+          description: "Add sign in with passkeys.",
+        },
+        {
+          storage,
+          buildPipelines: supervisor.service,
+          generateEnvironmentName: async (description) => {
+            prompts.push(description);
+            return "passkey-sign-in";
+          },
+        },
+      );
+
+      expect(prompts).toEqual(["Add sign in with passkeys."]);
+      expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe("Passkey Sign In");
+      expect(supervisor.started[0]!.taskTitle).toBe("Passkey Sign In");
+      expect(supervisor.started[0]!.namingPrompt).toBe(
+        "Passkey Sign In\n\nAdd sign in with passkeys.",
+      );
+    });
+  });
+
+  test("falls back to a local title when automatic naming is unavailable", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      await createFeatureBuild(
+        {
+          ...input,
+          title: "",
+          description: "Add account export controls",
+        },
+        {
+          storage,
+          buildPipelines: supervisor.service,
+          generateEnvironmentName: async () => {
+            throw new Error("offline");
+          },
+        },
+      );
+
+      expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe("Add Account Export");
+    });
+  });
+
   test("creates one in-progress ticket and starts the build that implements it", async () => {
     await withStorage(async (storage) => {
       const supervisor = fakeSupervisor();
@@ -448,7 +503,7 @@ describe("createFeatureBuild", () => {
       const supervisor = fakeSupervisor();
       await expect(
         createFeatureBuild(
-          { ...input, title: "   " },
+          { ...input, title: "   ", description: "   " },
           { storage, buildPipelines: supervisor.service },
         ),
       ).rejects.toThrow("Invalid feature build request");

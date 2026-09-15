@@ -25,10 +25,58 @@ import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { StorageService } from "./storage.js";
 import { resizeKanbanImage, type KanbanTask } from "./storage-shared.js";
 import { assertValidPromptImages } from "./prompt-attachments.js";
+import {
+  generateEnvironmentNameWithCodexExec,
+  sanitizeGeneratedEnvironmentName,
+} from "./commands-agent-support.js";
 
 export interface FeatureBuildContext {
   storage: StorageService;
   buildPipelines?: BuildPipelineService;
+  appRoot?: string;
+  resourceRoot?: string;
+  toolchainBinDir?: string;
+  /** Test seam for the same background naming task used by environments. */
+  generateEnvironmentName?: (description: string) => Promise<string>;
+}
+
+/** Turn a generated branch-style slug into the requested feature-title style. */
+export function featureTitleFromGeneratedName(name: string): string {
+  const words = name.split(/[-_\s]+/).filter(Boolean);
+  return words.map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`).join(" ");
+}
+
+function fallbackFeatureTitle(description: string): string {
+  try {
+    return featureTitleFromGeneratedName(sanitizeGeneratedEnvironmentName(description));
+  } catch {
+    return "New Feature";
+  }
+}
+
+async function generateFeatureTitle(
+  description: string,
+  context: FeatureBuildContext,
+): Promise<string> {
+  try {
+    const generatedName = context.generateEnvironmentName
+      ? await context.generateEnvironmentName(description)
+      : context.appRoot && context.resourceRoot
+        ? await generateEnvironmentNameWithCodexExec(description, {
+            appRoot: context.appRoot,
+            resourceRoot: context.resourceRoot,
+            ...(context.toolchainBinDir ? { toolchainBinDir: context.toolchainBinDir } : {}),
+          })
+        : "";
+    const title = featureTitleFromGeneratedName(generatedName);
+    if (title) return title;
+  } catch {
+    // Naming is an enhancement, not a reason to reject an otherwise valid
+    // feature. Avoid logging the error because a model response may contain
+    // user-supplied description text.
+    console.warn("[FeatureBuild] Automatic naming failed; using a local fallback");
+  }
+  return fallbackFeatureTitle(description);
 }
 
 export async function createFeatureBuild(
@@ -48,7 +96,7 @@ export async function createFeatureBuild(
     throw new Error("Project has no local path - cannot create a local worktree");
   }
 
-  const title = input.title.trim();
+  const requestedTitle = input.title.trim();
   const description = input.description?.trim() ?? "";
   const acceptanceCriteria = input.acceptanceCriteria?.trim() ?? "";
   const images = await normalizeFeatureImages(assertValidPromptImages(input.images ?? []));
@@ -57,7 +105,7 @@ export async function createFeatureBuild(
     ? featureBuildRequestHash({
         ...input,
         projectId,
-        title,
+        title: requestedTitle,
         description,
         acceptanceCriteria,
         requestId: undefined,
@@ -66,11 +114,12 @@ export async function createFeatureBuild(
 
   let task = await resolveTask(storage, {
     projectId,
-    title,
+    title: requestedTitle,
     description,
     acceptanceCriteria,
     requestId,
     requestHash,
+    generateTitle: () => generateFeatureTitle(description, context),
   });
 
   const snapshotImages = [];
@@ -111,7 +160,7 @@ export async function createFeatureBuild(
     // Linking the source is what makes the pipeline move this ticket through
     // its lifecycle and attach the environment to it.
     source: { type: "kanban", taskId: task.id },
-    namingPrompt: [title, description].filter(Boolean).join("\n\n"),
+    namingPrompt: [task.title, description].filter(Boolean).join("\n\n"),
   });
 
   return {
@@ -170,6 +219,7 @@ async function resolveTask(
     acceptanceCriteria: string;
     requestId?: string;
     requestHash?: string;
+    generateTitle: () => Promise<string>;
   },
 ): Promise<KanbanTask> {
   if (fields.requestId) {
@@ -181,7 +231,8 @@ async function resolveTask(
       return existing;
     }
   }
-  return storage.addKanbanTask(fields.projectId, fields.title, fields.description, {
+  const title = fields.title || (await fields.generateTitle());
+  return storage.addKanbanTask(fields.projectId, title, fields.description, {
     ...(fields.acceptanceCriteria ? { acceptanceCriteria: fields.acceptanceCriteria } : {}),
     // The build starts immediately, so the column reflects what is happening.
     // The pipeline's own lifecycle updates then move it on from here.

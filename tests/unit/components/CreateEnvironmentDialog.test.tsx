@@ -3779,6 +3779,28 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  test("allows a description-only feature so the backend can generate its name", async () => {
+    const onCreateFeatureBuild = mock(async () => true);
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    chooseFeature({ description: "Add sign in with passkeys." });
+    const createButton = screen.getByRole("button", { name: "Create Environment" });
+    expect((createButton as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(createButton);
+
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
+    expect(onCreateFeatureBuild.mock.calls[0]![0].title).toBe("");
+    expect(onCreateFeatureBuild.mock.calls[0]![0].description).toBe("Add sign in with passkeys.");
+  });
+
   test("shows a pasted feature image and includes it in the build request", async () => {
     mockReadImage.mockImplementation(async () => ({
       rgba: async () => new Uint8Array([255, 0, 0, 255]),

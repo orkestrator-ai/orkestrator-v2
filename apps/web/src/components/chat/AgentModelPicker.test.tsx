@@ -257,8 +257,10 @@ describe("AgentModelPicker", () => {
 
     fireEvent.pointerDown(screen.getByTitle(/Choose model/));
     expect(screen.getByRole("menuitemradio", { name: /claude-opus-4-5/ })).toBeTruthy();
-    expect(screen.queryByRole("menuitemradio", { name: /gpt-5.4/ })).toBeNull();
-    expect(document.querySelector('[data-native-model-row-platform="opencode"]')).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: /gpt-5.4/ }) === null).toBe(true);
+    expect(document.querySelector('[data-native-model-row-platform="opencode"]') === null).toBe(
+      true,
+    );
     expect(document.querySelector('[data-native-model-row-platform="pi"]')).toBeTruthy();
   });
 

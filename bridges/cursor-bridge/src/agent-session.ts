@@ -654,17 +654,34 @@ export async function resumeSession(
   patch: ComposerPatch | undefined,
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): Promise<SessionState> {
-  const state = newSessionState(undefined, resolveCursorExecutionPolicy(policy));
-  state.agentId = agentId;
-  applyComposerPatch(state, patch);
-  state.composer = await hydrateComposer(state.composer);
-  await hydrateHistory(state, { skipRunning: true }).catch(() => undefined);
-  sessions.set(state.id, state);
-  // Attach a surviving run before returning so `recoveringRun` is only set when
-  // a live stream is actually being rebuilt — not a permanently settled dummy.
-  await recoverActiveRun(state);
-  return state;
+  const existing = Array.from(sessions.values()).find((state) => state.agentId === agentId);
+  if (existing) return existing;
+  const pending = sessionResumesByAgentId.get(agentId);
+  if (pending) return pending;
+
+  const operation = (async () => {
+    const state = newSessionState(undefined, resolveCursorExecutionPolicy(policy));
+    state.agentId = agentId;
+    applyComposerPatch(state, patch);
+    state.composer = await hydrateComposer(state.composer);
+    await hydrateHistory(state, { skipRunning: true }).catch(() => undefined);
+    sessions.set(state.id, state);
+    // Attach a surviving run before returning so `recoveringRun` is only set when
+    // a live stream is actually being rebuilt — not a permanently settled dummy.
+    await recoverActiveRun(state);
+    return state;
+  })();
+  sessionResumesByAgentId.set(agentId, operation);
+  try {
+    return await operation;
+  } finally {
+    if (sessionResumesByAgentId.get(agentId) === operation) {
+      sessionResumesByAgentId.delete(agentId);
+    }
+  }
 }
+
+const sessionResumesByAgentId = new Map<string, Promise<SessionState>>();
 
 /**
  * Rebuild the transcript from the SDK's own record of past runs.

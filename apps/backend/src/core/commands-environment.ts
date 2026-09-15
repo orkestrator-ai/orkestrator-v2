@@ -1483,11 +1483,17 @@ export async function createLocalWorktree(
   }
 }
 
-export async function removeLocalWorktree(worktreePath: string): Promise<void> {
-  await runCommand("git", ["-C", worktreePath, "worktree", "remove", "--force", worktreePath], {
+export async function removeLocalWorktree(
+  projectPath: string,
+  worktreePath: string,
+): Promise<void> {
+  await runCommand("git", ["-C", projectPath, "worktree", "remove", "--force", worktreePath], {
     timeoutMs: 120_000,
   }).catch(async () => {
     await fs.rm(worktreePath, { recursive: true, force: true });
+    await runCommand("git", ["-C", projectPath, "worktree", "prune"], {
+      timeoutMs: 30_000,
+    }).catch(() => undefined);
   });
 }
 

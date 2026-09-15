@@ -2238,6 +2238,21 @@ describe("session routes", () => {
       expect(res.status).toBe(400);
     });
 
+    test("rejects non-string and oversized plan feedback before forwarding it", async () => {
+      const wrongType = await jsonRequest("POST", "/session/s-1/plan-approvals/a-1/respond", {
+        approved: false,
+        feedback: { secret: "not text" },
+      });
+      expect(wrongType.status).toBe(400);
+
+      const oversized = await jsonRequest("POST", "/session/s-1/plan-approvals/a-1/respond", {
+        approved: false,
+        feedback: "x".repeat(AGENT_INTERACTION_LIMITS.maxFreeTextBytes + 1),
+      });
+      expect(oversized.status).toBe(413);
+      expect(mockRespondToPlanApproval).not.toHaveBeenCalled();
+    });
+
     test("returns 404 for unknown session", async () => {
       const res = await jsonRequest("POST", "/session/s-unknown/plan-approvals/a-1/respond", {
         approved: true,

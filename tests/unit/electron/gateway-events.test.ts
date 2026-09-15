@@ -763,10 +763,17 @@ describe("gateway terminal WebSocket", () => {
   test("closes active sockets on credential rotation and gateway shutdown", async () => {
     const { gateway, info } = await startGateway({ env: {} });
     const active = await openTerminalSocket(info);
+    const stream = await openEventStream(gateway, info);
     const revoked = new Promise<void>((resolve) => active.socket.once("close", () => resolve()));
     const replacement = "replacement-token-123456";
     await gateway.setToken(replacement);
     await revoked;
+    await waitUntil(
+      () => stream.aborted(),
+      "SSE stream authenticated with the old token stayed open",
+    );
+    expect(eventClients(gateway).size).toBe(0);
+    stream.close();
 
     const replacementSocket = await openTerminalSocket({ ...info, token: replacement });
     const stopped = new Promise<void>((resolve) =>

@@ -58,12 +58,14 @@ export function useEnvironmentDiffStats() {
               // Non-critical: buffered changes still apply below, and the next
               // reconnect will request another authoritative snapshot.
             }
-
-            if (disposed) return;
-            const pending = bufferedEvents;
-            bufferedEvents = [];
-            for (const event of pending) applyChange(event);
           }
+          if (disposed) return;
+          // Keep live changes buffered through every snapshot requested by an
+          // overlapping reconnect. Replaying them after an intermediate pass
+          // lets the next (older-at-request-time) snapshot overwrite them.
+          const pending = bufferedEvents;
+          bufferedEvents = [];
+          for (const event of pending) applyChange(event);
         } finally {
           rehydrating = false;
         }

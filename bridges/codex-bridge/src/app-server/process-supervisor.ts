@@ -97,6 +97,7 @@ export interface AppServerSupervisorOptions {
   onStateChange?: (state: EngineState, detail?: string) => void;
   /** Called after a successful restart so callers can resume their threads. */
   onGenerationReady?: (generation: EngineGeneration, previous: EngineGeneration) => void;
+  onGenerationExit?: (generation: EngineGeneration) => void;
   /** Injected in tests. */
   spawnProcess?: typeof spawn;
   refreshEnvironment?: () => Promise<void>;
@@ -480,6 +481,11 @@ export class AppServerSupervisor {
       stdio: ["pipe", "pipe", "pipe"],
     }) as ChildProcessWithoutNullStreams;
 
+    // Install an error sink before even inspecting pid: spawn errors can arrive
+    // on the next tick, and an EventEmitter `error` with no listener is fatal.
+    child.once("error", () => undefined);
+    child.stdin.on("error", () => undefined);
+
     if (!child.pid) {
       throw new AppServerProcessExitError("app-server failed to spawn", {
         generation: generationId,
@@ -594,6 +600,10 @@ export class AppServerSupervisor {
       this.lastError = error.message;
       handleExit(null, null);
     });
+    child.stdin.on("error", (error: Error) => {
+      this.lastError = error.message;
+      handleExit(null, null);
+    });
 
     let initialize: InitializeResult;
     try {
@@ -668,6 +678,7 @@ export class AppServerSupervisor {
   ): void {
     if (this.current?.id !== generationId) return;
     this.current = null;
+    this.options.onGenerationExit?.(generationId);
     if (this.stopping) {
       this.setState("stopped");
       return;

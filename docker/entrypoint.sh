@@ -416,11 +416,17 @@ copy_agent_directory_entries() {
 
 log_progress "=== Claude Code Environment Initializing ==="
 
-# Initialize firewall if running with NET_ADMIN capability
-# Use sudo -E to preserve environment variables (NETWORK_MODE, ALLOWED_DOMAINS)
+# Initialize the firewall through the one exact privileged command granted to
+# node. The script reads Docker's immutable PID 1 environment, not caller input.
 if [ -x /usr/local/bin/init-firewall.sh ]; then
     log_progress "Initializing network firewall..."
-    sudo -E /usr/local/bin/init-firewall.sh || log_progress "Warning: Firewall initialization failed (may need NET_ADMIN capability)"
+    if ! sudo /usr/local/bin/init-firewall.sh; then
+        if [ "${NETWORK_MODE:-restricted}" != "full" ]; then
+            log_progress "ERROR: Restricted-network firewall initialization failed"
+            exit 1
+        fi
+        log_progress "Warning: Firewall initialization failed in full-network mode"
+    fi
 fi
 
 # Set up Claude Code configuration

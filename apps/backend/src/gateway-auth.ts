@@ -47,6 +47,14 @@ export abstract class GatewayAuth extends GatewayEvents {
     return this.gatewayCredentialMatches(credential);
   }
 
+  private authenticatedWithAgentTestSession(request: IncomingMessage): boolean {
+    if (!this.agentTestMode) return false;
+    const credential = getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE);
+    return Boolean(
+      credential && !tokenMatches(this.token, credential) && this.agentTestSessions.has(credential),
+    );
+  }
+
   protected gatewayCredentialMatches(candidate: string | null): boolean {
     if (tokenMatches(this.token, candidate)) return true;
     if (!this.agentTestMode || !candidate) return false;
@@ -402,6 +410,12 @@ export abstract class GatewayAuth extends GatewayEvents {
     response: ServerResponse,
     requestMetrics: GatewayRequestMetrics,
   ): Promise<void> {
+    // Agent-test sessions intentionally keep the durable gateway token out of
+    // the browser. Do not let that scoped credential read or rotate it here.
+    if (this.authenticatedWithAgentTestSession(request)) {
+      jsonResponse(response, 403, { error: "Gateway settings require the durable credential" });
+      return;
+    }
     if (request.method === "GET") {
       jsonResponse(response, 200, await this.getTokenSettings());
       return;
@@ -510,7 +524,21 @@ export abstract class GatewayAuth extends GatewayEvents {
       return;
     }
 
-    const token = await readLoginToken(request);
+    let token: string;
+    try {
+      token = await readLoginToken(request);
+    } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        textResponse(
+          response,
+          413,
+          loginPage("Login request is too large.", this.agentTestLoginHint()),
+          "text/html; charset=utf-8",
+        );
+        return;
+      }
+      throw error;
+    }
     if (!tokenMatches(this.token, token)) {
       textResponse(
         response,

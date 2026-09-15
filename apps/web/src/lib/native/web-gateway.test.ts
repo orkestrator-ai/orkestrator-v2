@@ -2455,6 +2455,92 @@ describe("web gateway browser API", () => {
     }
   });
 
+  test("isolates a throwing direct-stream listener from its siblings", async () => {
+    const encoder = new TextEncoder();
+    globalThis.fetch = mock(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode('data: {"event":"changed","payload":"delivered"}\n\n'),
+              );
+            },
+          }),
+          { status: 200 },
+        ),
+    ) as unknown as typeof fetch;
+    const error = mock(() => undefined);
+    const originalError = console.error;
+    console.error = error;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+    });
+    const received = mock(() => undefined);
+    const stopThrowing = api.listen("changed", () => {
+      throw new Error("listener failed");
+    });
+    const stopReceived = api.listen("changed", received);
+    try {
+      await new Promise<void>((resolve) => {
+        const poll = () => (received.mock.calls.length ? resolve() : setTimeout(poll, 1));
+        poll();
+      });
+      expect(received).toHaveBeenCalledWith("delivered");
+      expect(error).toHaveBeenCalledTimes(1);
+    } finally {
+      stopThrowing();
+      stopReceived();
+      console.error = originalError;
+    }
+  });
+
+  test("cancels a failed direct stream before reconnecting", async () => {
+    let attempts = 0;
+    const firstRequest: { signal?: AbortSignal } = {};
+    globalThis.fetch = mock(async (_input, init) => {
+      attempts += 1;
+      if (attempts === 1) {
+        if (init?.signal) firstRequest.signal = init.signal;
+        return new Response(
+          new ReadableStream({
+            pull(controller) {
+              controller.error(new Error("stream failed"));
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        new ReadableStream({
+          start() {},
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+    const warning = mock(() => undefined);
+    const originalWarn = console.warn;
+    console.warn = warning;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+      eventReconnectDelayMs: 0,
+    });
+    const unsubscribe = api.listen("changed", () => undefined);
+    try {
+      await new Promise<void>((resolve) => {
+        const poll = () => (attempts >= 2 ? resolve() : setTimeout(poll, 1));
+        poll();
+      });
+      expect(firstRequest.signal?.aborted).toBe(true);
+      expect(warning).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+      console.warn = originalWarn;
+    }
+  });
+
   test("announces a fresh browser stream but not a replayed reconnect", () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const api = createBrowserGatewayApi();

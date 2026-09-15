@@ -251,10 +251,7 @@ function parseCodexWindow(
   const usedPercent = finitePercent(raw.used_percent ?? raw.usedPercent);
   const windowMinutes =
     positiveNumber(
-      raw.window_minutes ??
-        raw.windowMinutes ??
-        raw.window_duration_mins ??
-        raw.windowDurationMins,
+      raw.window_minutes ?? raw.windowMinutes ?? raw.window_duration_mins ?? raw.windowDurationMins,
     ) ?? windowMinutesFromSeconds(raw.limit_window_seconds ?? raw.limitWindowSeconds);
   const resetsAt =
     isoReset(raw.resets_at ?? raw.resetsAt ?? raw.reset_at ?? raw.resetAt) ??

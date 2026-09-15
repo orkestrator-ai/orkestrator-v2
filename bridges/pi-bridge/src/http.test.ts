@@ -449,6 +449,63 @@ describe("successful lifecycle routes", () => {
     }
   });
 
+  test("refuses attach and idempotent create from rotating MCP during a live turn", async () => {
+    const {
+      closePiMcp,
+      preparePiMcp,
+      setPiMcpTransportForTests: setTransport,
+    } = await import("./mcp.js");
+    let closed = 0;
+    setTransport({
+      async connect() {
+        return {
+          tools: [],
+          async call() {
+            return {};
+          },
+          async close() {
+            closed += 1;
+          },
+        };
+      },
+    });
+    setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+    const directory = await mkdtemp(join(tmpdir(), "pi-http-busy-mcp-"));
+    const state = seedSession();
+    state.clientSessionKey = "tab-busy-mcp";
+    clientSessionKeys.set(state.clientSessionKey, state.id);
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "token-a" };
+    await preparePiMcp(state, { agentDir: directory, cwd: process.cwd(), env: {} });
+    state.status = "running";
+    try {
+      const rotated = {
+        agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "token-b" },
+      };
+      const attach = await call(`/session/${state.id}/attach`, {
+        method: "POST",
+        body: JSON.stringify(rotated),
+      });
+      expect(attach.status).toBe(409);
+      expect(state.agentMcp?.token).toBe("token-a");
+
+      const create = await call("/session/create", {
+        method: "POST",
+        body: JSON.stringify({ clientSessionKey: state.clientSessionKey, ...rotated }),
+      });
+      expect(create.status).toBe(409);
+      expect(state.agentMcp?.token).toBe("token-a");
+      expect(closed).toBe(0);
+    } finally {
+      state.status = "idle";
+      await closePiMcp(state);
+      setTransport();
+      sessions.delete(state.id);
+      clientSessionKeys.delete(state.clientSessionKey);
+      await rm(directory, { recursive: true, force: true });
+      resetTestDependencies();
+    }
+  });
+
   test("validates and symmetrically updates readOnly on idempotent creation", async () => {
     setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
     try {

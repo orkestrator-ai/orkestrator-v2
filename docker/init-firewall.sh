@@ -2,6 +2,16 @@
 set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
 IFS=$'\n\t'       # Stricter word splitting
 
+# Read Docker's original container configuration from PID 1. The node account
+# is allowed to invoke this exact script through sudo so the entrypoint can set
+# up networking, but it must not be able to widen the policy by replacing its
+# own environment first.
+container_env() {
+    tr '\0' '\n' < /proc/1/environ | sed -n "s/^$1=//p" | head -n 1
+}
+NETWORK_MODE="$(container_env NETWORK_MODE)"
+ALLOWED_DOMAINS="$(container_env ALLOWED_DOMAINS)"
+
 # Check network mode - if full, skip firewall entirely
 if [ "${NETWORK_MODE:-restricted}" = "full" ]; then
     echo "Network mode: FULL - skipping firewall configuration"
@@ -11,8 +21,22 @@ fi
 
 echo "Network mode: RESTRICTED - configuring firewall"
 
+firewall_fail_closed() {
+    trap - ERR
+    iptables -P INPUT DROP 2>/dev/null || true
+    iptables -P FORWARD DROP 2>/dev/null || true
+    iptables -P OUTPUT DROP 2>/dev/null || true
+}
+trap firewall_fail_closed ERR
+
 # 1. Extract Docker DNS info BEFORE any flushing
 DOCKER_DNS_RULES=$(iptables-save -t nat | grep "127\.0\.0\.11" || true)
+
+# Set the restrictive policies before clearing a single rule. Any later error
+# therefore leaves the namespace closed, including failures in discovery.
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+iptables -P OUTPUT DROP
 
 # Flush existing rules and delete existing ipsets
 iptables -F
@@ -33,25 +57,36 @@ else
     echo "No Docker DNS rules to restore"
 fi
 
-# First allow DNS and localhost before any restrictions
-# Allow outbound DNS
-iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
-# Allow inbound DNS responses
-iptables -A INPUT -p udp --sport 53 -j ACCEPT
-# Allow outbound SSH
-iptables -A OUTPUT -p tcp --dport 22 -j ACCEPT
-# Allow inbound SSH responses
-iptables -A INPUT -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT
 # Allow localhost
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A OUTPUT -o lo -j ACCEPT
 
+# Responses are allowed only for connections this namespace initiated.
+iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# DNS may only reach the resolvers Docker placed in resolv.conf. This keeps UDP
+# 53 from becoming a general-purpose exfiltration channel.
+while read -r resolver; do
+    [ -n "$resolver" ] || continue
+    iptables -A OUTPUT -p udp -d "$resolver" --dport 53 -j ACCEPT
+    iptables -A OUTPUT -p tcp -d "$resolver" --dport 53 -j ACCEPT
+done < <(awk '$1 == "nameserver" { print $2 }' /etc/resolv.conf)
+
 # Create ipset with CIDR support
 ipset create allowed-domains hash:net
 
+# Bootstrap only the GitHub metadata endpoint needed to discover the complete
+# published git/web/API ranges. The ordinary allowlist rule is already active,
+# so no temporary ACCEPT policy is required.
+while read -r ip; do
+    [ -n "$ip" ] && ipset add allowed-domains "$ip"
+done < <(dig +short A api.github.com | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/')
+iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
+
 # Fetch GitHub meta information and aggregate + add their IP ranges
 echo "Fetching GitHub IP ranges..."
-gh_ranges=$(curl -s https://api.github.com/meta)
+gh_ranges=$(curl -fsS --max-time 20 https://api.github.com/meta)
 if [ -z "$gh_ranges" ]; then
     echo "ERROR: Failed to fetch GitHub IP ranges"
     exit 1
@@ -193,18 +228,6 @@ echo "Host network detected as: $HOST_NETWORK"
 iptables -A INPUT -s "$HOST_NETWORK" -j ACCEPT
 iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
 
-# Set default policies to DROP first
-iptables -P INPUT DROP
-iptables -P FORWARD DROP
-iptables -P OUTPUT DROP
-
-# First allow established connections for already approved traffic
-iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-
-# Then allow only specific outbound traffic to allowed domains
-iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
-
 # Explicitly REJECT all other outbound traffic for immediate feedback
 iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
 
@@ -224,3 +247,5 @@ if ! curl --connect-timeout 5 https://api.github.com/zen >/dev/null 2>&1; then
 else
     echo "Firewall verification passed - able to reach https://api.github.com as expected"
 fi
+
+trap - ERR

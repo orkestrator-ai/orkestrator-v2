@@ -633,7 +633,17 @@ export class GatewayProxy extends GatewayHandlers {
     }
 
     const root = path.resolve(this.rendererRoot);
-    const decodedPath = decodeURIComponent(url.pathname);
+    let decodedPath: string;
+    try {
+      decodedPath = decodeURIComponent(url.pathname);
+    } catch {
+      textResponse(response, 400, "Malformed path");
+      return;
+    }
+    if (decodedPath.includes("\0")) {
+      textResponse(response, 400, "Malformed path");
+      return;
+    }
     const relativePath = decodedPath === "/" ? "index.html" : decodedPath.replace(/^\/+/, "");
     let filePath = path.resolve(root, relativePath);
 

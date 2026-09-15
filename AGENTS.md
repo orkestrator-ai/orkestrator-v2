@@ -75,9 +75,9 @@ must. Two properties are load-bearing:
   is signal worth keeping. Only the guard's own tests pass `force`.
 - **The blast radius is why it exists.** A rejected `reader.cancel()` inside a
   vendored SSE client killed the backend three times on 2026-09-07, and the
-  desktop supervisor answers a backend exit by telling the user the application
-  will close (`apps/desktop/electron/main.ts`). One dropped promise must degrade
-  one feature, not end the session.
+  desktop supervisor answers a backend exit by taking Local offline for the
+  session and asking the user to restart (`apps/desktop/electron/main.ts`). One
+  dropped promise must degrade one feature, not end the session.
 
 So: install it in any new long-lived entrypoint, and when aborting an
 `AbortController` whose signal is shared with in-flight work, check that every

@@ -254,38 +254,27 @@ describe("buildLaunchDefaults", () => {
 
   test("leaves speed unseeded when no tier expresses one", () => {
     // Absent means the provider decides, which is not the same as Normal.
-    expect(
-      buildLaunchDefaults(makeConfig(), "project-1", false).preferredFastModes,
-    ).toEqual({});
+    expect(buildLaunchDefaults(makeConfig(), "project-1", false).preferredFastModes).toEqual({});
   });
 
   test("prefers the repository's last environment type, then the project's path", () => {
     expect(
-      buildLaunchDefaults(
-        makeConfig({ lastEnvironmentType: "containerized" }),
-        "project-1",
-        true,
-      ).defaultEnvironmentType,
+      buildLaunchDefaults(makeConfig({ lastEnvironmentType: "containerized" }), "project-1", true)
+        .defaultEnvironmentType,
     ).toBe("containerized");
     expect(
-      buildLaunchDefaults(
-        makeConfig({ lastEnvironmentType: "local" }),
-        "project-1",
-        false,
-      ).defaultEnvironmentType,
-    ).toBe("local");
-    expect(
-      buildLaunchDefaults(makeConfig(), "project-1", true)
+      buildLaunchDefaults(makeConfig({ lastEnvironmentType: "local" }), "project-1", false)
         .defaultEnvironmentType,
     ).toBe("local");
-    expect(
-      buildLaunchDefaults(makeConfig(), "project-1", false)
-        .defaultEnvironmentType,
-    ).toBe("containerized");
-    expect(
-      buildLaunchDefaults(makeConfig(), "unknown-project", false)
-        .defaultEnvironmentType,
-    ).toBe("containerized");
+    expect(buildLaunchDefaults(makeConfig(), "project-1", true).defaultEnvironmentType).toBe(
+      "local",
+    );
+    expect(buildLaunchDefaults(makeConfig(), "project-1", false).defaultEnvironmentType).toBe(
+      "containerized",
+    );
+    expect(buildLaunchDefaults(makeConfig(), "unknown-project", false).defaultEnvironmentType).toBe(
+      "containerized",
+    );
   });
 });
 
@@ -428,9 +417,7 @@ describe("buildPipelineConfiguredDefaults", () => {
       "project-1",
     );
 
-    expect(defaults.reviewers).toEqual([
-      { agent: "claude", model: "claude-opus" },
-    ]);
+    expect(defaults.reviewers).toEqual([{ agent: "claude", model: "claude-opus" }]);
     expect(defaults.reviewPreparation).toBeUndefined();
   });
 

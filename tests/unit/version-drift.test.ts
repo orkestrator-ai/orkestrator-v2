@@ -262,7 +262,7 @@ const AGENT_PINS: Record<string, AgentPins> = {
   },
   opencode: {
     dockerArg: "OPENCODE_CLI_VERSION",
-    containerInstall: "installer",
+    containerInstall: "pinned-archive",
     sdkPins: [
       { file: "apps/web/package.json", dep: "@opencode-ai/sdk", tracksCli: true },
       // The backend drives build pipelines through the same SDK. Checking only
@@ -409,6 +409,15 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     const script = read("scripts/download-bun.sh");
     expect(script).not.toContain("releases/latest");
     expect(getShellVar("scripts/download-bun.sh", "BUN_VERSION")).toMatch(/^\d+\.\d+\.\d+$/);
+    for (const variable of [
+      "BUN_DARWIN_AARCH64_SHA",
+      "BUN_DARWIN_X64_SHA",
+      "BUN_LINUX_AARCH64_SHA",
+      "BUN_LINUX_X64_SHA",
+    ]) {
+      expect(getShellVar("scripts/download-bun.sh", variable)).toMatch(/^[a-f0-9]{64}$/);
+    }
+    expect(script).toContain("shasum -a 256 -c -");
   });
 
   test("Bun: package metadata requires the pinned runtime version", () => {
@@ -924,7 +933,10 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       'npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"',
     );
     expect(dockerfile).toContain('npm install -g "@openai/codex@${CODEX_CLI_VERSION}"');
-    expect(dockerfile).toContain('--version "$OPENCODE_CLI_VERSION"');
+    expect(dockerfile).toContain(
+      "releases/download/v${OPENCODE_CLI_VERSION}/opencode-linux-${OPENCODE_ARCH}.tar.gz",
+    );
+    expect(dockerfile).toContain("OPENCODE_SHA=");
     // The three CLI paths the backend resolves at runtime.
     expect(dockerfile).toContain("ENV CLAUDE_CLI_PATH=/usr/local/share/npm-global/bin/claude");
     expect(dockerfile).toContain("ENV CODEX_CLI_PATH=/usr/local/share/npm-global/bin/codex");

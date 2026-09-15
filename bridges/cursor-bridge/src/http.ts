@@ -126,7 +126,8 @@ export async function route(
     if (error instanceof PromptAttachmentError) {
       return json(response, 400, { error: error.message });
     }
-    return json(response, 500, { error: errorText(error) });
+    console.error("[cursor-bridge] Unexpected HTTP route failure");
+    return json(response, 500, { error: "Internal bridge error" });
   }
 }
 
@@ -259,7 +260,7 @@ async function startLogin(response: ServerResponse): Promise<void> {
 
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
 const SESSION_ROUTE =
-  /^\/session\/([^/]+)(?:\/(messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|steer|structured-output|interactions|config|approvals|runtime-health|commands|mcp|rewind-messages))?(?:\/([^/]+))?$/;
+  /^\/session\/([^/]+)(?:\/(messages|transcript|status|usage|activity|prompt|attach|dispatch|cancel|abort|hard-abort|steer|structured-output|interactions|config|approvals|runtime-health|commands|mcp|rewind-messages))?(?:\/([^/]+))?$/;
 
 async function routeSession(
   request: IncomingMessage,
@@ -272,6 +273,7 @@ async function routeSession(
   const state = sessions.get(match[1]!);
   const action = match[2];
   const subject = match[3];
+  if (!action && subject) return json(response, 404, { error: "Not found" });
   if (!state) {
     // Answered in band so the backend can tell "this session is gone" from
     // "this bridge predates the route" — a 404 here would have it delete a
@@ -695,6 +697,8 @@ async function handlePrompt(
     throw error;
   }
 
+  const messagesBeforeTurn = state.messages.slice();
+  const uncheckedTranscriptBytesBeforeTurn = state.uncheckedTranscriptBytes;
   const userMessageId = appendUserMessage(state, prompt, images);
   state.status = "running";
   state.error = undefined;
@@ -735,6 +739,8 @@ async function handlePrompt(
     state.currentRunUsageUpdatedAt = undefined;
     state.currentRunModelId = undefined;
     state.currentTurnUsage = undefined;
+    state.messages = messagesBeforeTurn;
+    state.uncheckedTranscriptBytes = uncheckedTranscriptBytesBeforeTurn;
     if (requestId) state.promptJournal.delete(requestId);
     state.revision += 1;
     schedulePersist();

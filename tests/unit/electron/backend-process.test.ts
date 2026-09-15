@@ -16,6 +16,7 @@ import {
 import {
   BackendHttpClient,
   BackendProcess,
+  MAX_BACKEND_EVENT_FRAME_BYTES,
   agentTestDockerConfigDir,
   agentTestKeychainDir,
   createBackendProcessEnvironment,
@@ -845,8 +846,79 @@ sleep 5
     ) as typeof fetch;
     await expect(client.getWebClientStatus()).rejects.toThrow("lifecycle unavailable");
 
+    globalThis.fetch = mock(
+      async () => new Response("upstream exploded", { status: 503 }),
+    ) as typeof fetch;
+    await expect(client.invoke("fail")).rejects.toThrow("Backend request failed with HTTP 503");
+
     globalThis.fetch = mock(async () => new Response("not json", { status: 200 })) as typeof fetch;
     await expect(client.setWebClientEnabled(true)).rejects.toThrow();
+  });
+
+  test("drops malformed event frames and reconnects after an oversized frame", async () => {
+    useNativeWebPlatform();
+    let attempts = 0;
+    let firstCancelled = false;
+    globalThis.fetch = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  'data: {not-json}\n\ndata: {"event":"kept","payload":1}\n\n',
+                ),
+              );
+              controller.enqueue(
+                new TextEncoder().encode("x".repeat(MAX_BACKEND_EVENT_FRAME_BYTES + 1)),
+              );
+            },
+            cancel() {
+              firstCancelled = true;
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        new ReadableStream({
+          start() {},
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+    const error = mock(() => undefined);
+    const warning = mock(() => undefined);
+    const previousError = console.error;
+    const previousWarning = console.warn;
+    console.error = error;
+    console.warn = warning;
+    const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456");
+    const events: string[] = [];
+    try {
+      await new Promise<void>((resolve) => {
+        client.listen((event) => {
+          events.push(event);
+          if (events.filter((entry) => entry === "native-event-stream-connected").length === 2) {
+            client.stopListening();
+            resolve();
+          }
+        });
+      });
+      expect(events).toEqual([
+        "native-event-stream-connected",
+        "kept",
+        "native-event-stream-connected",
+      ]);
+      expect(firstCancelled).toBe(true);
+      expect(warning).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledTimes(1);
+    } finally {
+      client.stopListening();
+      console.error = previousError;
+      console.warn = previousWarning;
+    }
   });
 
   test("announces each successful event-stream reconnection", async () => {

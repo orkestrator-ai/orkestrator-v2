@@ -498,6 +498,26 @@ describe("write path", () => {
     await settle();
     expect(resolved).toBe(true);
     expect(h.client.getMetrics().writeBackpressureEvents).toBe(1);
+    expect(stdin.listenerCount("drain")).toBe(0);
+    expect(stdin.listenerCount("error")).toBe(0);
+  });
+
+  test("does not dispatch a request that times out behind a queued write", async () => {
+    const stdin = new FakeWritable({ applyBackpressure: (_line, index) => index === 0 });
+    const h = harness({}, stdin);
+    const first = h.client.notify("initialized");
+    await settle();
+
+    await expect(
+      h.client.request("turn/start", undefined, { timeoutMs: 5 }),
+    ).rejects.toBeInstanceOf(AppServerTimeoutError);
+    stdin.drain();
+    await first;
+    await settle();
+
+    expect(stdin.parsed().map((message) => message.method)).toEqual(["initialized"]);
+    expect(stdin.listenerCount("drain")).toBe(0);
+    expect(stdin.listenerCount("error")).toBe(0);
   });
 
   test("serializes writes so concurrent requests cannot interleave lines", async () => {

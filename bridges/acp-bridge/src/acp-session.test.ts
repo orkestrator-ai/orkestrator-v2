@@ -170,6 +170,39 @@ describe("ACP bridge", () => {
     ).toMatchObject({ composer: { selectedModelId: "gpt-5.5" } });
   });
 
+  test("one aborted resume waiter does not kill the shared session/load", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "resume-abort.log");
+    const bridge = await spawnBridge({
+      env: { FAKE_ACP_LOAD_DELAY_MS: "400", FAKE_ACP_LIFECYCLE_FILE: lifecycleFile },
+    });
+    const listed = (await nativeFetch(`${bridge.base}/session/list`, {
+      headers: bridge.headers,
+    }).then((response) => response.json())) as { sessions: Array<{ id: string; title?: string }> };
+    const external = listed.sessions.find((session) => session.title === "Previous ACP work")!;
+    const controller = new AbortController();
+    const first = nativeFetch(`${bridge.base}/session/resume`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ sessionId: external.id }),
+      signal: controller.signal,
+    });
+    await Bun.sleep(100);
+    const joined = nativeFetch(`${bridge.base}/session/resume`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ sessionId: external.id }),
+    });
+    controller.abort();
+
+    await expect(first).rejects.toBeDefined();
+    const joinedResponse = await joined;
+    expect(joinedResponse.status).toBe(201);
+    const lifecycle = await fs.readFile(lifecycleFile, "utf8");
+    expect(lifecycle.match(/^start:/gm)).toHaveLength(2); // list probe + shared resume child
+    expect(lifecycle.match(/^load:/gm)).toHaveLength(1);
+  });
+
   test("omits model attribution entirely when the agent advertises no model", async () => {
     const { base, headers } = await spawnBridge({ env: { FAKE_ACP_NO_MODEL_OPTION: "1" } });
     const created = (await nativeFetch(`${base}/session/create`, {

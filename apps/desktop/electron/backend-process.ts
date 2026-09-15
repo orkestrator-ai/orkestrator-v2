@@ -255,6 +255,7 @@ export function createBackendProcessEnvironment(
 }
 
 type ReadyMessage = GatewayStartInfo & { type: "orkestrator-backend-ready" };
+export const MAX_BACKEND_EVENT_FRAME_BYTES = 1024 * 1024;
 
 export class BackendHttpClient {
   private abortEvents: AbortController | null = null;
@@ -270,7 +271,13 @@ export class BackendHttpClient {
       headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
       body: JSON.stringify({ command, args }),
     });
-    const payload = (await response.json()) as { result?: T; error?: string };
+    const payload = (await response.json().catch((error) => {
+      if (!response.ok) return {};
+      throw new Error("Backend command returned malformed JSON", { cause: error });
+    })) as {
+      result?: T;
+      error?: string;
+    };
     if (!response.ok)
       throw new Error(payload.error ?? `Backend request failed with HTTP ${response.status}`);
     return payload.result as T;
@@ -345,21 +352,37 @@ export class BackendHttpClient {
         onEvent("native-event-stream-connected", undefined);
         const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
         let pending = "";
-        while (!signal.aborted) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          pending += value;
-          const messages = pending.split("\n\n");
-          pending = messages.pop() ?? "";
-          for (const message of messages) {
-            const data = message
-              .split("\n")
-              .find((line) => line.startsWith("data: "))
-              ?.slice(6);
-            if (!data) continue;
-            const parsed = JSON.parse(data) as { event?: unknown; payload?: unknown };
-            if (typeof parsed.event === "string") onEvent(parsed.event, parsed.payload);
+        try {
+          while (!signal.aborted) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            pending += value;
+            const messages = pending.split("\n\n");
+            pending = messages.pop() ?? "";
+            if (Buffer.byteLength(pending, "utf8") > MAX_BACKEND_EVENT_FRAME_BYTES) {
+              throw new Error("Backend event stream frame exceeded the byte limit");
+            }
+            for (const message of messages) {
+              if (Buffer.byteLength(message, "utf8") > MAX_BACKEND_EVENT_FRAME_BYTES) {
+                throw new Error("Backend event stream frame exceeded the byte limit");
+              }
+              const data = message
+                .split("\n")
+                .find((line) => line.startsWith("data: "))
+                ?.slice(6);
+              if (!data) continue;
+              let parsed: { event?: unknown; payload?: unknown };
+              try {
+                parsed = JSON.parse(data) as { event?: unknown; payload?: unknown };
+              } catch {
+                console.warn("[BackendClient] Dropped malformed event stream frame");
+                continue;
+              }
+              if (typeof parsed.event === "string") onEvent(parsed.event, parsed.payload);
+            }
           }
+        } finally {
+          await reader.cancel().catch(() => undefined);
         }
       } catch (error) {
         if (signal.aborted) return;
@@ -381,7 +404,12 @@ export class BackendHttpClient {
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
-    const payload = (await response.json()) as GatewayTokenSettings & { error?: string };
+    const payload = (await response.json().catch((error) => {
+      if (!response.ok) return {};
+      throw new Error("Backend settings returned malformed JSON", { cause: error });
+    })) as GatewayTokenSettings & {
+      error?: string;
+    };
     if (!response.ok)
       throw new Error(
         payload.error ?? `Backend settings request failed with HTTP ${response.status}`,
@@ -401,7 +429,12 @@ export class BackendHttpClient {
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
-    const payload = (await response.json()) as WebClientStatus & { error?: string };
+    const payload = (await response.json().catch((error) => {
+      if (!response.ok) return {};
+      throw new Error("Backend web client response was malformed JSON", { cause: error });
+    })) as WebClientStatus & {
+      error?: string;
+    };
     if (!response.ok)
       throw new Error(
         payload.error ?? `Backend web client request failed with HTTP ${response.status}`,

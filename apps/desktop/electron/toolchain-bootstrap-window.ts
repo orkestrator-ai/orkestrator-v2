@@ -111,7 +111,7 @@ export async function chooseAgentPlatforms(options: {
       preload: path.join(options.dirname, "toolchain-bootstrap-preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -173,7 +173,7 @@ export async function createToolchainBootstrapWindow(options: {
       preload: path.join(options.dirname, "toolchain-bootstrap-preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));

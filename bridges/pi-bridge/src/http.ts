@@ -26,7 +26,7 @@ import {
 } from "./interactions.js";
 import { listModels, refreshModels } from "./models.js";
 import { parseAgentMcpConnection } from "./mcp-config.js";
-import { publicPiMcpServers } from "./mcp.js";
+import { mcpConnectionNeedsRefresh, publicPiMcpServers } from "./mcp.js";
 import { persistBarrier, schedulePersist } from "./persistence.js";
 import { dispatchPrompt, errorText, journal, setPromptJournal } from "./prompt.js";
 import {
@@ -147,7 +147,8 @@ export async function route(
     if (error instanceof PromptAttachmentError) {
       return json(response, 400, { error: error.message });
     }
-    return json(response, 500, { error: errorText(error) });
+    console.error("[pi-bridge] Unexpected HTTP route failure");
+    return json(response, 500, { error: "Internal bridge error" });
   }
 }
 
@@ -235,9 +236,17 @@ async function routeGlobal(
       parseComposerPatch(body),
       isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
     );
+    const previousAgentMcp = state.agentMcp;
     storeAgentMcp(state, body.agentMcp);
     // An idempotent create can return an already-attached session; a rotated
     // credential has to move the live MCP connection, not just memory.
+    if (
+      mcpConnectionNeedsRefresh(state) &&
+      (state.status === "running" || state.dispatching || state.compacting)
+    ) {
+      state.agentMcp = previousAgentMcp;
+      throw new HttpError(409, "Session is already running");
+    }
     await reconcileAgentMcp(state);
     if (typeof body.readOnly === "boolean") {
       if (
@@ -454,7 +463,15 @@ async function routeSession(
     // the process-env identity and the prompt would have to rebuild the session
     // to correct it.
     const body = await readJson(request);
+    const previousAgentMcp = state.agentMcp;
     storeAgentMcp(state, body.agentMcp);
+    if (
+      mcpConnectionNeedsRefresh(state) &&
+      (state.status === "running" || state.dispatching || state.compacting)
+    ) {
+      state.agentMcp = previousAgentMcp;
+      throw new HttpError(409, "Session is already running");
+    }
     await reconcileAgentMcp(state);
     // Truthiness, not `!== undefined`: an unattached session carries `null`,
     // which is exactly the check `ensureSession` itself makes.

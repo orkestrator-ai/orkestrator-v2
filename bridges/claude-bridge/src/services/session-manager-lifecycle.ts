@@ -444,7 +444,7 @@ export function listSessions(): SessionState[] {
  * Rejects any waiting promises so they don't hang
  */
 export function cleanupPendingPlanApprovals(sessionId: string): void {
-  for (const [approvalId, approval] of pendingPlanApprovals) {
+  for (const [approvalId, approval] of Array.from(pendingPlanApprovals)) {
     if (approval.sessionId === sessionId) {
       const resolver = planApprovalResolvers.get(approvalId);
       if (resolver) {
@@ -466,7 +466,7 @@ export function cleanupPendingPlanApprovals(sessionId: string): void {
  * Rejects any waiting promises so SDK callbacks cannot remain suspended.
  */
 export function cleanupPendingQuestions(sessionId: string): void {
-  for (const [questionId, question] of pendingQuestions) {
+  for (const [questionId, question] of Array.from(pendingQuestions)) {
     if (question.sessionId === sessionId) {
       const resolver = questionResolvers.get(questionId);
       if (resolver) {

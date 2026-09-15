@@ -578,8 +578,10 @@ if [ -f /workspace/orkestrator-ai.json ]; then
         run_root_step() {
             local step="$1"
             echo -e "Root command: ${GREEN}$step${NC}"
-            # Run as orkroot (UID 0, root-equivalent) using sudo
-            sudo -u orkroot /bin/bash -c "$step"
+            # Restricted containers never grant the agent a reusable root
+            # shell. The root-owned wrapper consults PID 1's immutable Docker
+            # environment and permits project root setup only in full mode.
+            sudo /usr/local/bin/run-root-setup.sh "$step"
         }
 
         ROOT_EXIT=0

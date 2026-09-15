@@ -1654,6 +1654,26 @@ describe("Electron StorageService", () => {
     await expect(fs.access(lockPath)).rejects.toThrow();
   });
 
+  test("serializes concurrent waiters reclaiming the same stale environment lock", async () => {
+    const dataDir = await createTempDir("ork-storage-concurrent-stale-lock-");
+    const first = new StorageService(dataDir);
+    const second = new StorageService(dataDir);
+    await Promise.all([first.init(), second.init()]);
+    const lockPath = path.join(dataDir, "environments.json.lock");
+    await fs.writeFile(lockPath, "abandoned");
+    const staleTime = new Date(Date.now() - 20_000);
+    await fs.utimes(lockPath, staleTime, staleTime);
+
+    const [one, two] = await Promise.all([
+      first.addEnvironment(createEnvironment("project-1", { name: "first" })),
+      second.addEnvironment(createEnvironment("project-1", { name: "second" })),
+    ]);
+
+    expect((await first.loadEnvironments()).map((environment) => environment.id).sort()).toEqual(
+      [one.id, two.id].sort(),
+    );
+  });
+
   test("round-trips max and ultra Codex reasoning preferences", async () => {
     const dataDir = await createTempDir("ork-storage-codex-effort-");
     const storage = new StorageService(dataDir);

@@ -65,7 +65,7 @@ export async function createMainWindow(options: CreateMainWindowOptions): Promis
       preload: path.join(options.dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       ...(options.partition ? { partition: options.partition } : {}),
     },
   });

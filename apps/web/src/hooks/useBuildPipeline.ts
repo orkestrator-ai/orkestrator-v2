@@ -7,10 +7,7 @@ import type {
   StartBuildPipelineInput,
   TaskSnapshot,
 } from "@orkestrator/protocol/build-pipeline";
-import {
-  useBuildPipelineStore,
-  type BuildPipeline,
-} from "@/stores/buildPipelineStore";
+import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { useConfigStore } from "@/stores";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
@@ -78,21 +75,14 @@ function linearIssueToTicketInput(
     ...(issue.url ? [{ text: `URL: ${issue.url}` }] : []),
     ...(issue.status ? [{ text: `Status: ${issue.status}` }] : []),
     ...(includeComments ? issue.comments : []).map((comment) => ({
-      text: comment.authorName
-        ? `${comment.authorName}: ${comment.body}`
-        : comment.body,
+      text: comment.authorName ? `${comment.authorName}: ${comment.body}` : comment.body,
     })),
   ];
   return {
     id: issue.id,
     projectId,
     title: `${issue.identifier}: ${issue.title}`,
-    namingPrompt: [
-      issue.identifier,
-      issue.title,
-      issue.description,
-      issue.status,
-    ]
+    namingPrompt: [issue.identifier, issue.title, issue.description, issue.status]
       .filter(Boolean)
       .join("\n\n"),
     source: {
@@ -158,9 +148,7 @@ function findBuildTabInTree(
 ): { paneId: string; tabId: string } | null {
   if (node.kind === "leaf") {
     const tab = node.tabs.find(
-      (candidate) =>
-        candidate.type === "claude-build" &&
-        candidate.buildTabData?.taskId === taskId,
+      (candidate) => candidate.type === "claude-build" && candidate.buildTabData?.taskId === taskId,
     );
     return tab ? { paneId: node.id, tabId: tab.id } : null;
   }
@@ -173,12 +161,8 @@ function findBuildTabInTree(
 
 export function useBuildPipeline() {
   const config = useConfigStore((state) => state.config);
-  const replacePipeline = useBuildPipelineStore(
-    (state) => state.replacePipeline,
-  );
-  const selectProjectAndEnvironment = useUIStore(
-    (state) => state.selectProjectAndEnvironment,
-  );
+  const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
+  const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
 
   const startBuildFromTicket = useCallback(
@@ -189,10 +173,7 @@ export function useBuildPipeline() {
       options: StartBuildOptions = {},
     ) => {
       try {
-        const configured = buildPipelineConfiguredDefaults(
-          config,
-          ticket.projectId,
-        );
+        const configured = buildPipelineConfiguredDefaults(config, ticket.projectId);
         const steps: BuildStepConfigs = {
           ...configured.steps,
           ...options.steps,
@@ -202,8 +183,7 @@ export function useBuildPipeline() {
           : configured.reviewers.map((reviewer, index) =>
               index === 0 && steps.review ? steps.review : reviewer,
             );
-        const reviewPreparation =
-          options.reviewPreparation ?? configured.reviewPreparation;
+        const reviewPreparation = options.reviewPreparation ?? configured.reviewPreparation;
         const input: StartBuildPipelineInput = {
           taskId: ticket.id,
           projectId: ticket.projectId,
@@ -276,8 +256,7 @@ export function useBuildPipeline() {
             acceptanceCriteria: task.acceptanceCriteria,
             comments: task.comments.map((comment) => ({ text: comment.text })),
             images: images.filter(
-              (image): image is { filename: string; data: string } =>
-                image !== null,
+              (image): image is { filename: string; data: string } => image !== null,
             ),
           },
         },
@@ -297,14 +276,10 @@ export function useBuildPipeline() {
       if (!pipeline.environmentId) return;
       setProjectCollapsed(pipeline.projectId, false);
       selectProjectAndEnvironment(pipeline.projectId, pipeline.environmentId);
-      const state = usePaneLayoutStore
-        .getState()
-        .environments.get(pipeline.environmentId);
+      const state = usePaneLayoutStore.getState().environments.get(pipeline.environmentId);
       const tab = state && findBuildTabInTree(state.root, pipeline.taskId);
       if (tab) {
-        usePaneLayoutStore
-          .getState()
-          .setActiveTab(tab.paneId, tab.tabId, pipeline.environmentId);
+        usePaneLayoutStore.getState().setActiveTab(tab.paneId, tab.tabId, pipeline.environmentId);
       }
     },
     [selectProjectAndEnvironment, setProjectCollapsed],
@@ -312,9 +287,7 @@ export function useBuildPipeline() {
 
   const navigateToBuild = useCallback(
     async (task: KanbanTask) => {
-      const pipeline = useBuildPipelineStore
-        .getState()
-        .getPipelineByTaskId(task.id);
+      const pipeline = useBuildPipelineStore.getState().getPipelineByTaskId(task.id);
       if (pipeline) await navigateToPipeline(pipeline);
     },
     [navigateToPipeline],
@@ -329,11 +302,7 @@ export function useBuildPipeline() {
       options: StartBuildOptions = {},
     ) =>
       startBuildFromTicket(
-        linearIssueToTicketInput(
-          issue,
-          projectId,
-          options.includeComments ?? true,
-        ),
+        linearIssueToTicketInput(issue, projectId, options.includeComments ?? true),
         environmentType,
         undefined,
         options,

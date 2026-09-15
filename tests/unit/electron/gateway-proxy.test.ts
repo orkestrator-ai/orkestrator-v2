@@ -54,6 +54,17 @@ import {
 } from "./gateway-test-harness.js";
 
 describe("remote gateway", () => {
+  test("rejects malformed and NUL-containing static paths without throwing", async () => {
+    const { info } = await startGateway();
+    for (const pathname of ["%E0%A4%A", "%00asset.js"]) {
+      const response = await requestUrl(`${info.url}${pathname}`, {
+        headers: { authorization: `Bearer ${info.token}` },
+      });
+      expect(response.status).toBe(400);
+      expect(response.body).toBe("Malformed path");
+    }
+  });
+
   test("covers dynamic compression MIME, size, chunk, and proxy eligibility boundaries", () => {
     for (const contentType of [
       "text/plain",

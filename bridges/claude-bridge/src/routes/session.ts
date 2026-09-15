@@ -83,6 +83,10 @@ const questionAnswerBodyLimit = bodyLimit({
   maxSize: MAX_QUESTION_ANSWER_REQUEST_BYTES,
   onError: (c) => c.json({ error: "Question answer request is too large" }, 413),
 });
+const planApprovalBodyLimit = bodyLimit({
+  maxSize: MAX_QUESTION_ANSWER_REQUEST_BYTES,
+  onError: (c) => c.json({ error: "Plan approval response is too large" }, 413),
+});
 
 /**
  * Map a session-manager refusal onto a status code.
@@ -1193,7 +1197,7 @@ session.get("/:id/plan-approvals", (c) => {
 });
 
 // Respond to a plan approval request (approve or reject)
-session.post("/:id/plan-approvals/:approvalId/respond", async (c) => {
+session.post("/:id/plan-approvals/:approvalId/respond", planApprovalBodyLimit, async (c) => {
   const sessionId = c.req.param("id");
   const approvalId = c.req.param("approvalId");
 
@@ -1205,10 +1209,19 @@ session.post("/:id/plan-approvals/:approvalId/respond", async (c) => {
   try {
     const body = await c.req.json();
     const approved = body.approved as boolean;
-    const feedback = body.feedback as string | undefined;
+    const feedback = body.feedback;
 
     if (typeof approved !== "boolean") {
       return c.json({ error: "'approved' boolean is required" }, 400);
+    }
+    if (feedback !== undefined && typeof feedback !== "string") {
+      return c.json({ error: "'feedback' must be a string" }, 400);
+    }
+    if (
+      typeof feedback === "string" &&
+      Buffer.byteLength(feedback, "utf8") > AGENT_INTERACTION_LIMITS.maxFreeTextBytes
+    ) {
+      return c.json({ error: "Plan approval feedback is too large" }, 413);
     }
 
     const pendingApproval = getPendingPlanApprovals(sessionId).find(

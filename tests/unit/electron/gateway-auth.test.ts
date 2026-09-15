@@ -631,6 +631,33 @@ describe("remote gateway", () => {
     expect(logout.headers["set-cookie"]?.[0]).toContain("Max-Age=0");
   });
 
+  test("treats malformed login bodies and cookies as unauthenticated input", async () => {
+    const logger = createLogger();
+    const { info } = await startGateway({ logger });
+    for (const body of ["{", "null"]) {
+      const response = await requestUrl(`${info.url}__orkestrator/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+      expect(response.status).toBe(401);
+      expect(response.body).toContain("Invalid gateway token");
+    }
+
+    const oversized = await requestUrl(`${info.url}__orkestrator/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "x".repeat(1024 * 1024 + 1) }),
+    });
+    expect(oversized.status).toBe(413);
+
+    const malformedCookie = await requestUrl(`${info.url}__orkestrator/status`, {
+      headers: { cookie: "orkestrator_gateway_auth=%E0%A4%A" },
+    });
+    expect(malformedCookie.status).toBe(401);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
   test("uses a loopback-only single-use exchange for agent-test browser sessions", async () => {
     const { info } = await startGateway({ agentTestMode: true });
     const bootstrapUrl = `${info.url}__orkestrator/agent-test/bootstrap`;
@@ -998,6 +1025,12 @@ describe("remote gateway", () => {
     expect(accepted.status).toBe(303);
     expect(cookie).toContain("orkestrator_gateway_auth=");
     expect(cookie).not.toContain(info.token);
+
+    const settings = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+      headers: { cookie: cookie! },
+    });
+    expect(settings.status).toBe(403);
+    expect(settings.body).not.toContain(info.token);
   });
 
   test("returns and rotates the persisted token for an authenticated client", async () => {

@@ -705,6 +705,20 @@ describe("listResumableSessions", () => {
 });
 
 describe("resumeSession", () => {
+  test("deduplicates concurrent and later resumes by Cursor agent id", async () => {
+    const [first, second] = await Promise.all([
+      resumeSession("agent-deduplicated", undefined),
+      resumeSession("agent-deduplicated", undefined),
+    ]);
+    const later = await resumeSession("agent-deduplicated", undefined);
+
+    expect(second).toBe(first);
+    expect(later).toBe(first);
+    expect(
+      Array.from(sessions.values()).filter((state) => state.agentId === first.agentId),
+    ).toEqual([first]);
+  });
+
   test("replays user text, assistant prose, reasoning and tool calls", async () => {
     runs = {
       items: [

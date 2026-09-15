@@ -83,7 +83,7 @@ describe("createMainWindow", () => {
         preload: path.join("/app/apps/desktop/dist/electron", "preload.js"),
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: false,
+        sandbox: true,
       },
     });
     expect(harness.windows[0].webContents.on.mock.calls[0]?.[0]).toBe("context-menu");

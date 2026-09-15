@@ -322,6 +322,25 @@ describe("liveness routes", () => {
     expect((await call("/session/nope/status")).status).toBe(404);
   });
 
+  test("routes usage explicitly and rejects unknown session subpaths", async () => {
+    const state = await createSession();
+    const agent = attachFake(state);
+    state.usage = {
+      turn: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      updatedAt: new Date(0).toISOString(),
+    };
+    const getUsage = spyOn(agent, "getUsage").mockResolvedValue({ runs: [] });
+
+    const usage = await call(`/session/${state.id}/usage`);
+    expect(usage.status).toBe(200);
+    expect(getUsage).toHaveBeenCalledTimes(1);
+    expect(await usage.json()).toHaveProperty("contextUsage");
+
+    const unknown = await call(`/session/${state.id}/unknown`, { method: "DELETE" });
+    expect(unknown.status).toBe(404);
+    expect(sessions.has(state.id)).toBe(true);
+  });
+
   test("reports working while a turn is in flight and idle once it settles", async () => {
     const state = await createSession();
     expect(await (await call(`/session/${state.id}/activity`)).json()).toEqual({
@@ -550,6 +569,8 @@ describe("prompt dispatch", () => {
     });
     expect(response.status).toBe(400);
     expect(state.promptJournal.has("r1")).toBe(false);
+    expect(state.messages).toEqual([]);
+    expect(state.uncheckedTranscriptBytes).toBe(0);
   });
 
   test("a run that fails to start rolls the turn back rather than wedging it", async () => {
@@ -579,6 +600,8 @@ describe("prompt dispatch", () => {
     // The id was released, so the caller may retry under the same one: nothing
     // ran, and that is provable rather than assumed.
     expect(state.promptJournal.has("r1")).toBe(false);
+    expect(state.messages).toEqual([]);
+    expect(state.uncheckedTranscriptBytes).toBe(0);
   });
 
   test("starting a prompt clears an estimate left by the previous run", async () => {

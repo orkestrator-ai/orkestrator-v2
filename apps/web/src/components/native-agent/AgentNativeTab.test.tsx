@@ -7960,7 +7960,7 @@ describe("AgentNativeTab", () => {
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ),
       ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
     });
 
     test("does not offer to load earlier messages when a byte-capped window omits canLoadEarlier", async () => {
@@ -7980,7 +7980,7 @@ describe("AgentNativeTab", () => {
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ),
       ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
     });
 
     test("does not offer to load a count-windowed transcript the server marked unpageable", async () => {
@@ -8000,7 +8000,7 @@ describe("AgentNativeTab", () => {
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ) === null,
       ).toBe(true);
-      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
     });
 
     test("does not offer to load a reasonless truncated window the server marked unpageable", async () => {
@@ -8019,7 +8019,7 @@ describe("AgentNativeTab", () => {
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ) === null,
       ).toBe(true);
-      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
     });
 
     test("does not offer to load a part-truncated window that cannot restore omitted parts", async () => {
@@ -8039,7 +8039,7 @@ describe("AgentNativeTab", () => {
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ),
       ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
     });
 
     test("does not offer to load a truncated window already at the message ceiling", async () => {
@@ -8063,7 +8063,7 @@ describe("AgentNativeTab", () => {
         useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.messageWindow
           ?.canLoadEarlier,
       ).toBe(false);
-      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
     });
 
     test("retires the load-earlier control after a wider read restores no messages", async () => {
@@ -8084,7 +8084,7 @@ describe("AgentNativeTab", () => {
         ).toBe(true),
       );
       await waitFor(() =>
-        expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull(),
+        expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true),
       );
       expect(
         screen.getByText(

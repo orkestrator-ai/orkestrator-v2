@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
+  pipelineIndependentReviewLabel,
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
@@ -113,7 +114,7 @@ mock.module("@/lib/backend", () => ({
   getBuildPipelineConditional: getBuildPipelineConditionalMock,
 }));
 
-const { BuildChatTab, pipelineReviewRuntimeSummary, reviewIterationLabels } =
+const { BuildChatTab, pipelineReviewRuntimeSummary, reviewIterationLabels, reviewLetter } =
   await import("./BuildChatTab");
 
 afterAll(() => {
@@ -788,12 +789,20 @@ describe("BuildChatTab presentation", () => {
 
   test("groups parallel review labels by iteration and formats their runtime metadata", () => {
     const sessions: BuildPipeline["sessions"] = [
-      { ...reviewSession, label: "Review 1", sessionKey: "iteration-1-a" },
-      { ...reviewSession, label: "Review 2", sessionKey: "iteration-1-b" },
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(0),
+        sessionKey: "iteration-1-a",
+      },
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(1),
+        sessionKey: "iteration-1-b",
+      },
       {
         ...reviewSession,
         iteration: 1,
-        label: "Review 1",
+        label: pipelineIndependentReviewLabel(0),
         sessionKey: "iteration-2-a",
       },
       { ...reviewSession, sessionKey: "classic-review" },
@@ -824,6 +833,81 @@ describe("BuildChatTab presentation", () => {
         Date.parse("2026-07-29T00:00:07.000Z"),
       ),
     ).toBe("7s · Tokens pending");
+  });
+
+  test("keeps spreadsheet letters through the 32-reviewer limit", () => {
+    expect(reviewLetter(0)).toBe("A");
+    expect(reviewLetter(1)).toBe("B");
+    expect(reviewLetter(25)).toBe("Z");
+    expect(reviewLetter(26)).toBe("AA");
+    expect(reviewLetter(31)).toBe("AF");
+    const wide = Array.from({ length: 32 }, (_, index) => ({
+      ...reviewSession,
+      label: pipelineIndependentReviewLabel(index),
+      sessionKey: `wide-${index}`,
+    }));
+    expect(reviewIterationLabels(wide).get("wide-26")).toBe("Review Iteration 1 (AA)");
+    expect(reviewIterationLabels(wide).get("wide-31")).toBe("Review Iteration 1 (AF)");
+  });
+
+  test("letters a surviving later reviewer from its Review N slot, not session order", () => {
+    const sessions: BuildPipeline["sessions"] = [
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(1),
+        sessionKey: "only-review-2",
+      },
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(0),
+        sessionKey: "late-review-1",
+      },
+    ];
+
+    expect(Array.from(reviewIterationLabels(sessions).entries())).toEqual([
+      ["only-review-2", "Review Iteration 1 (B)"],
+      ["late-review-1", "Review Iteration 1 (A)"],
+    ]);
+  });
+
+  test("letters the live retry pair A/B and marks leftover tiles as previous", () => {
+    const sessions: BuildPipeline["sessions"] = [
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(0),
+        sessionKey: "stale-a",
+      },
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(1),
+        sessionKey: "stale-b",
+      },
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(0),
+        sessionKey: "live-a",
+      },
+      {
+        ...reviewSession,
+        label: pipelineIndependentReviewLabel(1),
+        sessionKey: "live-b",
+      },
+    ];
+
+    expect(
+      Array.from(reviewIterationLabels(sessions, new Set(["live-a", "live-b"])).entries()),
+    ).toEqual([
+      ["stale-a", "Review Iteration 1 (A) · previous"],
+      ["stale-b", "Review Iteration 1 (B) · previous"],
+      ["live-a", "Review Iteration 1 (A)"],
+      ["live-b", "Review Iteration 1 (B)"],
+    ]);
+    expect(Array.from(reviewIterationLabels(sessions).values())).toEqual([
+      "Review Iteration 1 (A) · previous",
+      "Review Iteration 1 (B) · previous",
+      "Review Iteration 1 (A)",
+      "Review Iteration 1 (B)",
+    ]);
   });
 
   test("shows iteration letters, the friendly model name, elapsed time, and tokens", () => {
@@ -936,6 +1020,254 @@ describe("BuildChatTab presentation", () => {
       now += 1_000;
       act(() => tick?.());
       expect(runtime.textContent).toBe("6s · Tokens pending");
+    } finally {
+      cleanup();
+      Date.now = originalNow;
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+    }
+  });
+
+  test("keeps a surviving Review 2 tab on letter B and its configured model", () => {
+    const previousModels = useCodexStore.getState().models;
+    useCodexStore.setState({
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT 5.6 Sol",
+          description: "Frontier coding model",
+          reasoningEfforts: ["high"],
+        },
+        {
+          id: "opus",
+          name: "Opus",
+          description: "Claude reviewer",
+          reasoningEfforts: ["high"],
+        },
+      ],
+    });
+    const reviewTwo = {
+      ...reviewSession,
+      agent: "codex" as const,
+      label: pipelineIndependentReviewLabel(1),
+      sessionKey: "sparse-review-2",
+      sdkSessionId: "sparse-review-2-session",
+      completedAt: "2026-07-29T00:02:05.000Z",
+      tokenCount: 2_000,
+    };
+
+    try {
+      renderTab({
+        ...reviewed,
+        reviewers: [
+          { agent: "claude", model: "opus" },
+          { agent: "codex", model: "gpt-5.6-sol" },
+        ],
+        sessions: [pipeline.sessions[0]!, reviewTwo, pipeline.sessions[1]!],
+        currentSessionIndex: 2,
+      });
+
+      expect(screen.getByText("Review Iteration 1 (B)")).toBeTruthy();
+      expect(screen.queryByText("Review Iteration 1 (A)") === null).toBe(true);
+      expect(screen.getByText("GPT 5.6 Sol")).toBeTruthy();
+      expect(screen.queryByText("Opus") === null).toBe(true);
+    } finally {
+      cleanup();
+      useCodexStore.setState({ models: previousModels });
+    }
+  });
+
+  test("letters the live retry pair A/B and keeps each slot's configured model", () => {
+    const previousModels = useCodexStore.getState().models;
+    useCodexStore.setState({
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT 5.6 Sol",
+          description: "Frontier coding model",
+          reasoningEfforts: ["high"],
+        },
+        {
+          id: "opus",
+          name: "Opus",
+          description: "Claude reviewer",
+          reasoningEfforts: ["high"],
+        },
+      ],
+    });
+    const staleA = {
+      ...reviewSession,
+      agent: "codex" as const,
+      label: pipelineIndependentReviewLabel(0),
+      sessionKey: "stale-a",
+      sdkSessionId: "stale-a-session",
+      completedAt: "2026-07-29T00:01:00.000Z",
+      tokenCount: 1_000,
+    };
+    const staleB = {
+      ...staleA,
+      label: pipelineIndependentReviewLabel(1),
+      sessionKey: "stale-b",
+      sdkSessionId: "stale-b-session",
+    };
+    const liveA = {
+      ...staleA,
+      sessionKey: "live-a",
+      sdkSessionId: "live-a-session",
+      status: "running" as const,
+      completedAt: undefined,
+      tokenCount: undefined,
+    };
+    const liveB = {
+      ...staleB,
+      sessionKey: "live-b",
+      sdkSessionId: "live-b-session",
+      status: "running" as const,
+      completedAt: undefined,
+      tokenCount: undefined,
+    };
+
+    try {
+      renderTab({
+        ...reviewed,
+        phase: "reviewing",
+        reviewers: [
+          { agent: "codex", model: "gpt-5.6-sol" },
+          { agent: "claude", model: "opus" },
+        ],
+        reviewFanout: {
+          reviewers: [
+            {
+              id: "live-1",
+              agent: "codex",
+              model: "gpt-5.6-sol",
+              status: "running",
+              sessionKey: "live-a",
+            },
+            {
+              id: "live-2",
+              agent: "claude",
+              model: "opus",
+              status: "running",
+              sessionKey: "live-b",
+            },
+          ],
+        },
+        sessions: [pipeline.sessions[0]!, staleA, staleB, liveA, liveB],
+        currentSessionIndex: 4,
+      });
+
+      expect(screen.getByText("Review Iteration 1 (A)")).toBeTruthy();
+      expect(screen.getByText("Review Iteration 1 (B)")).toBeTruthy();
+      expect(screen.getByText("Review Iteration 1 (A) · previous")).toBeTruthy();
+      expect(screen.getByText("Review Iteration 1 (B) · previous")).toBeTruthy();
+      expect(screen.getAllByText("GPT 5.6 Sol").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Opus").length).toBeGreaterThan(0);
+    } finally {
+      cleanup();
+      useCodexStore.setState({ models: previousModels });
+    }
+  });
+
+  test("shows Provider default when a reviewer pinned no model", () => {
+    const unpinned = {
+      ...reviewSession,
+      agent: "codex" as const,
+      label: pipelineIndependentReviewLabel(0),
+      sessionKey: "unpinned-review",
+      sdkSessionId: "unpinned-review-session",
+    };
+
+    renderTab({
+      ...reviewed,
+      reviewers: [{ agent: "codex" }, { agent: "claude" }],
+      reviewFanout: {
+        reviewers: [
+          {
+            id: "unpinned-1",
+            agent: "codex",
+            model: "default",
+            modelUnpinned: true,
+            status: "completed",
+            sessionKey: "unpinned-review",
+          },
+        ],
+      },
+      sessions: [pipeline.sessions[0]!, unpinned, pipeline.sessions[1]!],
+      currentSessionIndex: 2,
+    });
+
+    expect(screen.getByText("Review Iteration 1 (A)")).toBeTruthy();
+    expect(screen.getByText("Provider default")).toBeTruthy();
+  });
+
+  test("freezes a running review timer while inactive and restores persisted metadata on reactivation", () => {
+    const originalNow = Date.now;
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    let now = Date.parse("2026-07-29T00:00:05.000Z");
+    let tick: (() => void) | undefined;
+    Date.now = () => now;
+    window.setInterval = ((callback: TimerHandler) => {
+      tick = callback as () => void;
+      return 46;
+    }) as typeof window.setInterval;
+    window.clearInterval = mock(() => undefined) as typeof window.clearInterval;
+    const runningReview = {
+      ...reviewSession,
+      agent: "codex" as const,
+      model: "gpt-5.4",
+      label: pipelineIndependentReviewLabel(0),
+      sessionKey: "inactive-review",
+      sdkSessionId: "inactive-review-session",
+      status: "running" as const,
+      startedAt: "2026-07-29T00:00:00.000Z",
+      tokenCount: 12_345,
+    };
+    const running = {
+      ...pipeline,
+      phase: "reviewing" as const,
+      sessions: [runningReview],
+      currentSessionIndex: 0,
+      reviewers: [{ agent: "codex" as const, model: "gpt-5.4" }],
+    };
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[running.id, running]]),
+      buildEnvironmentIds: new Set([running.environmentId]),
+      viewedSessionIds: new Map(),
+    });
+
+    try {
+      const view = render(
+        <BuildChatTab
+          data={{
+            pipelineId: running.id,
+            environmentId: running.environmentId,
+            taskId: running.taskId,
+            isLocal: true,
+          }}
+        />,
+      );
+      const runtime = () => screen.getByLabelText("Review Iteration 1 (A) runtime and token usage");
+      expect(runtime().textContent).toBe("5s · 12k tokens");
+      expect(tick).toBeUndefined();
+
+      now += 4_000;
+      view.rerender(
+        <BuildChatTab
+          data={{
+            pipelineId: running.id,
+            environmentId: running.environmentId,
+            taskId: running.taskId,
+            isLocal: true,
+          }}
+          isActive
+        />,
+      );
+      expect(runtime().textContent).toBe("9s · 12k tokens");
+      now += 1_000;
+      act(() => tick?.());
+      expect(runtime().textContent).toBe("10s · 12k tokens");
     } finally {
       cleanup();
       Date.now = originalNow;

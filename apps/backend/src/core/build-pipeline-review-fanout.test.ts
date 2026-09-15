@@ -7,7 +7,10 @@ import type {
   BuildPipelineAgent,
   PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
-import { MAX_BUILD_PIPELINE_REVIEWERS } from "@orkestrator/protocol/build-pipeline";
+import {
+  MAX_BUILD_PIPELINE_REVIEWERS,
+  pipelineIndependentReviewLabel,
+} from "@orkestrator/protocol/build-pipeline";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { StorageService } from "./storage.js";
@@ -109,10 +112,12 @@ class FanoutProvider implements BuildPipelineProvider {
    * failure before the fan-out opens the session it wants to fail.
    */
   readonly failingModels = new Set<string>();
+  readonly failingCreateLabels = new Set<string>();
   readonly runningModels = new Set<string>();
   readonly blockedModels = new Set<string>();
   readonly ambiguousModels = new Set<string>();
   usageFromMessages?: BuildPipelineProvider["usageFromMessages"];
+  usagePending = false;
   invalidConsolidationResults = 0;
   unknownSourceConsolidationResults = 0;
   runningConsolidation = false;
@@ -131,6 +136,9 @@ class FanoutProvider implements BuildPipelineProvider {
     label: string,
     options?: ProviderCreateSessionOptions,
   ): Promise<string> {
+    if (this.failingCreateLabels.has(label)) {
+      throw new Error(`Refusing to create ${label}`);
+    }
     this.created.push({ phase, label, options });
     const id = `${label.replace(/\s+/g, "-").toLowerCase()}-${++this.counter}`;
     this.sessionModels.set(id, options?.model);
@@ -160,6 +168,13 @@ class FanoutProvider implements BuildPipelineProvider {
     if (model !== undefined && this.runningModels.has(model)) return "running";
     if (model !== undefined && this.blockedModels.has(model)) return "blocked";
     return model !== undefined && this.failingModels.has(model) ? "error" : "idle";
+  }
+
+  async observeSession(sessionId: string) {
+    return {
+      status: await this.status(sessionId),
+      ...(this.usagePending ? { usagePending: true } : {}),
+    };
   }
 
   async messages(sessionId: string): Promise<unknown[]> {
@@ -666,6 +681,45 @@ describe("build pipeline multi-model review", () => {
       expect(addressing.error ?? addressing.phase).toBe("addressing");
       // The surviving reviewer's report is what got consolidated.
       expect(addressing.structuredReview?.reviewSummary).toBe("Merged review.");
+      const failedSession = addressing.sessions.find(
+        (session) => session.label === pipelineIndependentReviewLabel(1),
+      );
+      expect(failedSession?.status).toBe("idle");
+      expect(failedSession?.completedAt).toBeDefined();
+      expect(failedSession?.model).toBe("sonnet");
+    });
+  });
+
+  test("a reviewer that fails before mirroring does not shift the surviving Review N label", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      provider.failingCreateLabels.add(pipelineIndependentReviewLabel(0));
+      provider.runningModels.add("sonnet");
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+      );
+      await advanceUntil(service, read, started.id, "reviewing");
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        await service.advanceNow(started.id);
+        const current = await read(started.id);
+        if (
+          current.sessions.some((session) => session.label === pipelineIndependentReviewLabel(1))
+        ) {
+          break;
+        }
+      }
+      const reviewing = await read(started.id);
+      expect(reviewing.reviewFanout?.reviewers[0]?.status).toBe("failed");
+      expect(reviewing.reviewFanout?.reviewers[0]?.sessionKey).toBeUndefined();
+      const reviewSessions = reviewing.sessions.filter((session) =>
+        /^Review \d+$/.test(session.label),
+      );
+      expect(reviewSessions.map((session) => session.label)).toEqual([
+        pipelineIndependentReviewLabel(1),
+      ]);
+      expect(reviewSessions[0]?.model).toBe("sonnet");
     });
   });
 
@@ -894,6 +948,57 @@ describe("build pipeline multi-model review", () => {
     });
   });
 
+  test("review retry opens distinct sessions that do not inherit the previous runtime", async () => {
+    await withPipeline(async ({ service, storage, read, provider }) => {
+      provider.runningModels.add("opus");
+      provider.runningModels.add("sonnet");
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+      );
+      await advanceUntil(service, read, started.id, "reviewing");
+      await service.advanceNow(started.id);
+      const firstKeys = (await read(started.id)).reviewFanout!.reviewers.map(
+        (reviewer) => reviewer.sessionKey,
+      );
+      expect(firstKeys.every((key) => typeof key === "string")).toBe(true);
+      await rewritePipeline(storage, started.id, (pipeline) => {
+        for (const session of pipeline.sessions) {
+          if (!session.label.startsWith("Review ")) continue;
+          session.completedAt = "2026-07-29T00:01:00.000Z";
+          session.tokenCount = 9_001;
+        }
+      });
+
+      await service.retryReview(started.id);
+      let retried = await read(started.id);
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const liveKeys = (retried.reviewFanout?.reviewers ?? [])
+          .map((reviewer) => reviewer.sessionKey)
+          .filter((key): key is string => typeof key === "string");
+        if (liveKeys.length === 2 && liveKeys.every((key) => !firstKeys.includes(key))) break;
+        await service.advanceNow(started.id);
+        retried = await read(started.id);
+      }
+      const liveKeys = (retried.reviewFanout?.reviewers ?? [])
+        .map((reviewer) => reviewer.sessionKey)
+        .filter((key): key is string => typeof key === "string");
+      expect(liveKeys).toHaveLength(2);
+      expect(liveKeys.every((key) => !firstKeys.includes(key))).toBe(true);
+      const liveSessions = retried.sessions.filter((session) =>
+        liveKeys.includes(session.sessionKey),
+      );
+      expect(liveSessions).toHaveLength(2);
+      expect(liveSessions.every((session) => session.completedAt === undefined)).toBe(true);
+      expect(liveSessions.every((session) => session.tokenCount === undefined)).toBe(true);
+      expect(
+        firstKeys.every((key) => retried.sessions.some((session) => session.sessionKey === key)),
+      ).toBe(true);
+    });
+  });
+
   test("rejects user messages while fan-out owns the review phase", async () => {
     await withPipeline(async ({ service, read, provider }) => {
       provider.runningModels.add("opus");
@@ -971,6 +1076,67 @@ describe("build pipeline multi-model review", () => {
         codex.created.find((entry) => entry.label === "Review 2")?.options?.model,
       ).toBeUndefined();
       expect(codex.sent[0]?.model).toBeUndefined();
+    });
+  });
+
+  test("throttles token-count-only reviewer persistence", async () => {
+    await withPipeline(
+      async ({ service, storage, read, provider }) => {
+        provider.runningModels.add("opus");
+        provider.runningModels.add("sonnet");
+        let tokens = 1_000;
+        provider.usageFromMessages = () => {
+          tokens += 250;
+          return { usedTokens: 10, sessionTokens: tokens };
+        };
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+          ]),
+        );
+        await advanceUntil(service, read, started.id, "reviewing");
+        await service.advanceNow(started.id);
+        const before = (await storage.getBuildPipeline(started.id))!.revision;
+        const tokensAtPersist = tokens;
+
+        await service.advanceNow(started.id);
+        const after = (await storage.getBuildPipeline(started.id))!.revision;
+
+        expect(after).toBe(before);
+        expect(tokens).toBeGreaterThan(tokensAtPersist);
+      },
+      { transcriptPersistIntervalMs: 60_000 },
+    );
+  });
+
+  test("defers completion while a provider still reports usagePending", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      provider.usagePending = true;
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+      );
+      await advanceUntil(service, read, started.id, "reviewing");
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        await service.advanceNow(started.id);
+      }
+      const pending = await read(started.id);
+      expect(pending.phase).toBe("reviewing");
+      expect(
+        pending.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "running"),
+      ).toBe(true);
+      expect(
+        pending.reviewFanout?.reviewers.some(
+          (reviewer) => (reviewer.usageFinalizationPolls ?? 0) > 0,
+        ),
+      ).toBe(true);
+
+      provider.usagePending = false;
+      const addressing = await advanceUntil(service, read, started.id, "addressing");
+      expect(addressing.error ?? addressing.phase).toBe("addressing");
     });
   });
 

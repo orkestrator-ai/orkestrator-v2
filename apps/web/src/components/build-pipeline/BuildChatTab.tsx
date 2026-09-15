@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 import {
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
+  pipelineIndependentReviewSlot,
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -47,8 +48,7 @@ import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
-import { formatTokenCount } from "@/lib/context-usage";
-import { formatElapsed } from "@/lib/format-elapsed";
+import { runtimeSummary } from "@/lib/review/runtime-summary";
 import { modelsForAgent } from "@/lib/agent-launch";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { BuildCompletionStatus } from "./BuildCompletionStatus";
@@ -188,11 +188,11 @@ function issueCountLabel(count: number): string {
 
 /** Fan-out reviewers use this backend label; classic one-model reviews do not. */
 function isIndependentReviewSession(session: PipelineSession): boolean {
-  return session.phase === "review" && /^Review \d+$/.test(session.label);
+  return session.phase === "review" && pipelineIndependentReviewSlot(session.label) !== null;
 }
 
 /** Spreadsheet-style letters keep the label compact even at the 32-reviewer limit. */
-function reviewLetter(index: number): string {
+export function reviewLetter(index: number): string {
   let value = index + 1;
   let label = "";
   while (value > 0) {
@@ -203,18 +203,45 @@ function reviewLetter(index: number): string {
   return label;
 }
 
+function liveReviewKeysByIteration(
+  sessions: readonly PipelineSession[],
+  liveSessionKeys: ReadonlySet<string> | undefined,
+): Map<number, ReadonlySet<string>> {
+  const byIteration = new Map<number, Set<string>>();
+  if (!liveSessionKeys || liveSessionKeys.size === 0) return byIteration;
+  for (const session of sessions) {
+    if (!liveSessionKeys.has(session.sessionKey) || !isIndependentReviewSession(session)) continue;
+    const keys = byIteration.get(session.iteration) ?? new Set<string>();
+    keys.add(session.sessionKey);
+    byIteration.set(session.iteration, keys);
+  }
+  return byIteration;
+}
+
 /** User-facing identity for parallel reviews within the same pipeline iteration. */
-export function reviewIterationLabels(sessions: readonly PipelineSession[]): Map<string, string> {
-  const nextByIteration = new Map<number, number>();
+export function reviewIterationLabels(
+  sessions: readonly PipelineSession[],
+  liveSessionKeys?: ReadonlySet<string>,
+): Map<string, string> {
+  const latestBySlot = new Map<string, string>();
+  const liveByIteration = liveReviewKeysByIteration(sessions, liveSessionKeys);
+  for (const session of sessions) {
+    if (!isIndependentReviewSession(session)) continue;
+    const slot = pipelineIndependentReviewSlot(session.label);
+    if (slot === null) continue;
+    latestBySlot.set(`${session.iteration}:${slot}`, session.sessionKey);
+  }
   const labels = new Map<string, string>();
   for (const session of sessions) {
     if (!isIndependentReviewSession(session)) continue;
-    const index = nextByIteration.get(session.iteration) ?? 0;
-    nextByIteration.set(session.iteration, index + 1);
-    labels.set(
-      session.sessionKey,
-      `Review Iteration ${session.iteration + 1} (${reviewLetter(index)})`,
-    );
+    const slot = pipelineIndependentReviewSlot(session.label);
+    if (slot === null) continue;
+    const liveForIteration = liveByIteration.get(session.iteration);
+    const current = liveForIteration
+      ? liveForIteration.has(session.sessionKey)
+      : latestBySlot.get(`${session.iteration}:${slot}`) === session.sessionKey;
+    const title = `Review Iteration ${session.iteration + 1} (${reviewLetter(slot)})`;
+    labels.set(session.sessionKey, current ? title : `${title} · previous`);
   }
   return labels;
 }
@@ -224,17 +251,7 @@ export function pipelineReviewRuntimeSummary(
   session: Pick<PipelineSession, "status" | "startedAt" | "completedAt" | "tokenCount">,
   now = Date.now(),
 ): string | null {
-  const startedAt = Date.parse(session.startedAt);
-  if (!Number.isFinite(startedAt)) return null;
-  const tokens =
-    session.tokenCount === undefined ? null : `${formatTokenCount(session.tokenCount)} tokens`;
-  const completedAt = session.completedAt ? Date.parse(session.completedAt) : Number.NaN;
-  const running = session.status === "running" && !Number.isFinite(completedAt);
-  if (!running && !Number.isFinite(completedAt)) return tokens;
-  const end = running ? now : completedAt;
-  const elapsed = formatElapsed(Math.max(0, Math.floor((end - startedAt) / 1_000)));
-  if (!tokens) return running ? `${elapsed} · Tokens pending` : elapsed;
-  return `${elapsed} · ${tokens}`;
+  return runtimeSummary(session, session.status === "running", now);
 }
 
 function SessionStateIcon({ session }: { session: PipelineSession }) {
@@ -396,10 +413,6 @@ export function BuildChatTab({
   const selectedSessionIndex =
     pipeline?.sessions.findIndex((session) => session.sdkSessionId === selectedSessionId) ?? -1;
   const reportSession = pipeline ? reviewReportSession(pipeline) : undefined;
-  const reviewLabels = useMemo(
-    () => reviewIterationLabels(pipeline?.sessions ?? []),
-    [pipeline?.sessions],
-  );
   const fanoutReviewerBySessionKey = useMemo(
     () =>
       new Map(
@@ -408,6 +421,11 @@ export function BuildChatTab({
         ),
       ),
     [pipeline?.reviewFanout?.reviewers],
+  );
+  const reviewLabels = useMemo(
+    () =>
+      reviewIterationLabels(pipeline?.sessions ?? [], new Set(fanoutReviewerBySessionKey.keys())),
+    [fanoutReviewerBySessionKey, pipeline?.sessions],
   );
   const ownsCurrentReviewReport = Boolean(
     pipeline?.structuredReview &&
@@ -918,13 +936,7 @@ export function BuildChatTab({
                 const reviewLabel = reviewLabels.get(session.sessionKey);
                 const fanoutReviewer = fanoutReviewerBySessionKey.get(session.sessionKey);
                 const reviewerIndex = reviewLabel
-                  ? pipeline.sessions
-                      .filter(
-                        (candidate) =>
-                          candidate.iteration === session.iteration &&
-                          isIndependentReviewSession(candidate),
-                      )
-                      .findIndex((candidate) => candidate.sessionKey === session.sessionKey)
+                  ? (pipelineIndependentReviewSlot(session.label) ?? -1)
                   : -1;
                 const configuredReviewer =
                   reviewerIndex >= 0 && pipeline.reviewers?.length

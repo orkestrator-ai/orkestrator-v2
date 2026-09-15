@@ -8,6 +8,9 @@ import {
   isBuildPipeline,
   isBuildStepConfigs,
   isStartBuildPipelineInput,
+  isPipelineIndependentReviewLabel,
+  pipelineIndependentReviewLabel,
+  pipelineIndependentReviewSlot,
   pipelineReviewerConfigs,
   stepKeyForSessionPhase,
   usesReviewFanout,
@@ -1357,6 +1360,14 @@ describe("build pipeline protocol", () => {
     ]);
     expect(usesReviewFanout({ ...base, reviewers })).toBe(true);
     expect(usesReviewFanout({ ...base, reviewers: undefined })).toBe(false);
+    expect(pipelineIndependentReviewLabel(0)).toBe("Review 1");
+    expect(pipelineIndependentReviewLabel(1)).toBe("Review 2");
+    expect(pipelineIndependentReviewSlot("Review 1")).toBe(0);
+    expect(pipelineIndependentReviewSlot("Review 2")).toBe(1);
+    expect(pipelineIndependentReviewSlot("Review Session")).toBeNull();
+    expect(pipelineIndependentReviewSlot("Package Preparation Session")).toBeNull();
+    expect(isPipelineIndependentReviewLabel("Review 32")).toBe(true);
+    expect(isPipelineIndependentReviewLabel("Review Session")).toBe(false);
     for (const malformed of [null, [], "claude", [{ agent: "gemini", model: "x" }]]) {
       expect(isStartBuildPipelineInput({ ...input, reviewers: malformed })).toBe(false);
       expect(isBuildPipeline({ ...base, reviewers: malformed })).toBe(false);

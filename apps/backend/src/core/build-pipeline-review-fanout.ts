@@ -29,6 +29,7 @@
 import { randomUUID } from "node:crypto";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import {
+  pipelineIndependentReviewLabel,
   pipelineReviewerConfigs,
   type BuildPipeline,
   type BuildPipelineAgent,
@@ -205,7 +206,7 @@ export class BuildPipelineReviewFanout {
       targetBranch,
       label: FANOUT_LABEL,
       sessionKeyFor: (reviewer) => `${pipeline.id}:review:${pipeline.iteration}:${reviewer.id}`,
-      sessionLabelFor: (_reviewer, index) => `Review ${index + 1}`,
+      sessionLabelFor: (_reviewer, index) => pipelineIndependentReviewLabel(index),
       provider: (selection) => this.deps.provider(pipeline, selection.agent as BuildPipelineAgent),
       executionPolicy: () => this.deps.executionPolicy(pipeline),
       agentMcp: async (_selection, resultKey) => this.deps.agentMcp?.(pipeline, resultKey),
@@ -274,8 +275,10 @@ export class BuildPipelineReviewFanout {
         this.abandonSession(pipeline, selection.agent as BuildPipelineAgent, providerSessionId),
       // The stage rail shows the same usage line as standalone Multi Review.
       // Keep the counter in the authoritative fan-out record until it can be
-      // projected onto the durable pipeline session below.
+      // projected onto the durable pipeline session below. Persist the meter
+      // with the transcript throttle, not on every poll.
       captureReviewerUsage: true,
+      persistReviewerUsageImmediately: false,
       onReviewerObserved: (reviewer, index, provider, messages) =>
         this.mirrorReviewerSession(pipeline, reviewer, index, provider, messages),
       progress: this.deps.progress,
@@ -303,7 +306,7 @@ export class BuildPipelineReviewFanout {
       sessionKey: reviewer.sessionKey,
       sdkSessionId: reviewer.providerSessionId,
       agent: reviewer.agent as BuildPipelineAgent,
-      label: `Review ${index + 1}`,
+      label: pipelineIndependentReviewLabel(index),
       model: reviewer.modelUnpinned ? undefined : reviewer.model,
       reasoningEffort: reviewer.reasoningEffort,
       startedAt: reviewer.startedAt,
@@ -321,18 +324,20 @@ export class BuildPipelineReviewFanout {
       session.reasoningEffort = reviewer.reasoningEffort;
       metadataChanged = true;
     }
-    if (reviewer.tokenCount !== undefined && session.tokenCount !== reviewer.tokenCount) {
-      session.tokenCount = reviewer.tokenCount;
-      metadataChanged = true;
-    }
+    // Token counts change on essentially every poll. Treat them as a
+    // transcript-class delta so they cannot bypass the persist throttle and
+    // rewrite the whole build-pipelines file once per reviewer per tick.
+    const tokenCountChanged =
+      reviewer.tokenCount !== undefined && session.tokenCount !== reviewer.tokenCount;
     const changed = await this.deps.refreshTranscript(session, provider, messages);
     const status = reviewer.status === "running" ? "running" : "idle";
     const statusChanged = session.status !== status;
     if (
       metadataChanged ||
       statusChanged ||
-      (changed && this.deps.shouldPersistTranscript(session))
+      ((changed || tokenCountChanged) && this.deps.shouldPersistTranscript(session))
     ) {
+      if (tokenCountChanged) session.tokenCount = reviewer.tokenCount;
       session.status = status;
       session.messagesPersistedAt = reviewFanoutNowIso();
       await this.deps.save(pipeline);
@@ -367,7 +372,12 @@ export class BuildPipelineReviewFanout {
         session.completedAt = reviewer.completedAt;
         changed = true;
       }
-      if (reviewer.tokenCount !== undefined && session.tokenCount !== reviewer.tokenCount) {
+      const settled = reviewer.status !== "pending" && reviewer.status !== "running";
+      if (
+        settled &&
+        reviewer.tokenCount !== undefined &&
+        session.tokenCount !== reviewer.tokenCount
+      ) {
         session.tokenCount = reviewer.tokenCount;
         changed = true;
       }

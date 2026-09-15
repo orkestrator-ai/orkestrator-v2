@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,9 +19,10 @@ describe("Coordinator Codex server", () => {
   let storage: StorageService;
   let previousCodexHome: string | undefined;
   let previousClaudeConfigDir: string | undefined;
+  let previousCursorProjectSettings: string | undefined;
   let cleanupContext: CommandContext | null = null;
   let cleanupRuntimeId: string | null = null;
-  let cleanupKind: "codex" | "claude" = "codex";
+  let cleanupKind: "codex" | "claude" | "cursor" = "codex";
 
   beforeEach(async () => {
     commandTesting.resetLocalServerLifecycle();
@@ -70,6 +72,7 @@ describe("Coordinator Codex server", () => {
     );
     await fs.writeFile(path.join(sourceClaudeHome, "plugins", "evil.js"), "// unsafe\n");
     process.env.CLAUDE_CONFIG_DIR = sourceClaudeHome;
+    previousCursorProjectSettings = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
     cleanupKind = "codex";
   });
 
@@ -84,6 +87,8 @@ describe("Coordinator Codex server", () => {
     else process.env.CODEX_HOME = previousCodexHome;
     if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+    if (previousCursorProjectSettings === undefined) delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
+    else process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = previousCursorProjectSettings;
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -180,6 +185,89 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     // Codex's, so the reaper can find a Claude coordinator child too.
     expect(await storage.getCoordinatorWorkspace(project.id)).toMatchObject({
       conversations: [{ bridgePort: started.port, bridgePid: started.pid }],
+    });
+  });
+
+  test("a Cursor coordinator clears inherited project-settings opt-in", async () => {
+    process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";
+    const bridge = path.join(root, "bridges", "cursor-bridge", "dist");
+    await fs.mkdir(bridge, { recursive: true });
+    await fs.writeFile(
+      path.join(bridge, "index.js"),
+      `import { mkdir } from "node:fs/promises";
+const captured = {
+  projectSettings: process.env.CURSOR_BRIDGE_PROJECT_SETTINGS ?? null,
+  policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY,
+  mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL,
+  mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN,
+};
+await mkdir(process.env.CURSOR_BRIDGE_STATE_DIR, { recursive: true });
+await Bun.write(process.env.CURSOR_BRIDGE_STATE_DIR + "/captured.json", JSON.stringify(captured));
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+const stop = () => { server.stop(true); process.exit(0); };
+process.on("SIGTERM", stop); process.on("SIGINT", stop);
+`,
+    );
+    const project = await storage.addProject(createProject("remote", checkout));
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({
+      ...config.global,
+      enabledAgentPlatforms: [...(config.global.enabledAgentPlatforms ?? []), "cursor"],
+    });
+    const coordinator = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    await coordinator.assignConversationAgent(project.id, conversation.id, "cursor");
+    const issue = mock(() => ({ url: "http://127.0.0.1:1234/mcp", token: "scoped-token" }));
+    const context = {
+      storage,
+      coordinators: coordinator,
+      appRoot: root,
+      resourceRoot: root,
+      emit: () => undefined,
+      environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      controlMcp: {
+        getSettings: () => ({
+          enabled: true,
+          running: true,
+          url: "http://127.0.0.1:1234/mcp",
+          token: "",
+          error: null,
+        }),
+        rotateToken: async () => ({
+          enabled: true,
+          running: true,
+          url: "http://127.0.0.1:1234/mcp",
+          token: "",
+          error: null,
+        }),
+        issueCoordinatorCredential: issue,
+        revokeCoordinatorCredentials: () => undefined,
+      },
+    } as CommandContext;
+    const runtimeId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+    cleanupContext = context;
+    cleanupRuntimeId = runtimeId;
+    cleanupKind = "cursor";
+
+    const started = await startLocalServerUnlocked(runtimeId, context, "cursor");
+    expect(started).toMatchObject({ wasRunning: false, port: expect.any(Number) });
+
+    const capturedPath = path.join(
+      storage.getDataDir(),
+      "cursor-bridge-state",
+      createHash("sha256").update(runtimeId).digest("hex").slice(0, 32),
+      "captured.json",
+    );
+    expect(JSON.parse(await fs.readFile(capturedPath, "utf8"))).toEqual({
+      projectSettings: "0",
+      policy: "coordinator-read-only",
+      mcpUrl: "http://127.0.0.1:1234/mcp",
+      mcpToken: "scoped-token",
     });
   });
 

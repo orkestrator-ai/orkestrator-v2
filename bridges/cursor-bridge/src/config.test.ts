@@ -27,7 +27,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { applyWorkingDirectory, cursorSdkStateDirectoryPath, workingDirectory } from "./config.js";
+import {
+  applyWorkingDirectory,
+  cursorSdkStateDirectoryPath,
+  resolveCursorSettingSources,
+  workingDirectory,
+} from "./config.js";
 
 describe("Cursor SDK state", () => {
   test("nests the SDK store below CURSOR_BRIDGE_STATE_DIR", () => {
@@ -263,5 +268,22 @@ describe("the host execution posture", () => {
     // half-enabling a sandbox on a typo.
     expect(readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "true" })).toBe("false");
     expect(readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "0" })).toBe("false");
+  });
+
+  test("project settings are an exact opt-in read at the call site", () => {
+    const previous = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
+    try {
+      delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
+      expect(resolveCursorSettingSources()).toEqual(["user"]);
+      process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";
+      expect(resolveCursorSettingSources()).toEqual(["user", "project"]);
+      process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "0";
+      expect(resolveCursorSettingSources()).toEqual(["user"]);
+      process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "true";
+      expect(resolveCursorSettingSources()).toEqual(["user"]);
+    } finally {
+      if (previous === undefined) delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
+      else process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = previous;
+    }
   });
 });

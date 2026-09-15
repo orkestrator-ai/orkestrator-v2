@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 import type { McpServerConfig } from "@cursor/sdk";
 import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
-import { settingSources, workingDirectory } from "./config.js";
+import { resolveCursorSettingSources, workingDirectory } from "./config.js";
 import { isObject, nonBlank, type SessionState } from "./state.js";
 
 const MAX_MCP_CONFIG_BYTES = 1024 * 1024;
@@ -39,20 +39,38 @@ export function mcpConnectionKey(connection?: AgentMcpConnection): string {
   return connection ? `${connection.url}\u0000${connection.token}` : "";
 }
 
+export interface CursorMcpResolutionPolicy {
+  /**
+   * A read-only coordinator must never receive repository-defined servers.
+   * The `mcp` capability is granted so Orkestrator stays callable; that
+   * grant must not widen to `.cursor/mcp.json`.
+   */
+  readOnly?: boolean;
+  /** Session-level project-resource decision. False skips repository servers. */
+  projectResources?: boolean;
+}
+
 /**
  * Resolve the MCP launch set handed to Cursor's SDK.
  *
  * Project configuration is intentionally read only when the launcher opted
- * into Cursor's project settings (containers). A cloned repository therefore
- * cannot make the host bridge execute a command merely by containing
- * `.cursor/mcp.json`. The Orkestrator server is supplied by the backend in
- * private environment variables or a per-tab `agentMcp` body and wins a name
- * collision.
+ * into Cursor's project settings (containers) *and* this session is allowed
+ * to use them. A cloned repository therefore cannot make the host bridge
+ * execute a command merely by containing `.cursor/mcp.json`. Read-only
+ * attaches skip that file even when the process-wide opt-in is on, and
+ * return only the scoped Orkestrator entry. The Orkestrator server is
+ * supplied by the backend in private environment variables or a per-tab
+ * `agentMcp` body and wins a name collision.
  */
 export async function cursorMcpServers(
   agentMcp?: AgentMcpConnection,
+  policy?: CursorMcpResolutionPolicy,
 ): Promise<Record<string, McpServerConfig>> {
-  const servers = settingSources.includes("project") ? await readProjectMcpServers() : {};
+  const allowProject =
+    policy?.readOnly !== true &&
+    policy?.projectResources !== false &&
+    resolveCursorSettingSources().includes("project");
+  const servers = allowProject ? await readProjectMcpServers() : {};
   const url = agentMcp?.url.trim() || process.env.ORKESTRATOR_AGENT_MCP_URL?.trim();
   const token = agentMcp?.token.trim() || process.env.ORKESTRATOR_AGENT_MCP_TOKEN?.trim();
   if (url && token) {
@@ -61,6 +79,9 @@ export async function cursorMcpServers(
       url,
       headers: { Authorization: `Bearer ${token}` },
     };
+  }
+  if (policy?.readOnly === true) {
+    return servers.orkestrator ? { orkestrator: servers.orkestrator } : {};
   }
   return servers;
 }

@@ -183,8 +183,8 @@ const CURSOR_CAPABILITY_TOOLS: Readonly<Record<string, readonly ToolName[]>> = O
  * for the whole MCP family (including Grok's dynamic MCP discovery tools);
  * omitting it disables every server, including the Orkestrator control server
  * a coordinator exists to call. User and project MCP stay unloaded on
- * read-only attaches (`settingSources: []`); only the injected `mcpServers`
- * entry remains.
+ * read-only attaches (`settingSources: []` and a policy-aware
+ * `cursorMcpServers` that returns only the injected Orkestrator entry).
  */
 export const CURSOR_READ_ONLY_TOOLS = [
   "read",
@@ -268,7 +268,10 @@ async function attach(state: SessionState): Promise<SDKAgent> {
   if (!apiKey) {
     throw new CredentialError(CURSOR_AUTHENTICATION_REQUIRED_MESSAGE);
   }
-  const mcpServers = await cursorMcpServers(state.agentMcp);
+  const mcpServers = await cursorMcpServers(state.agentMcp, {
+    readOnly,
+    projectResources: policy.projectResources,
+  });
   state.mcpServerNames = Object.keys(mcpServers);
   state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
   const options: AgentOptions = {

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 import {
   hideMachineOutputText,
+  hideReviewPackagePlanText,
   showOnlyFinalStructuredReviewMessage,
   showOnlyFinalVerificationMessage,
 } from "./structured-review-messages";
@@ -396,6 +397,88 @@ describe("hideMachineOutputText", () => {
     expect(messages[0]?.parts.map((part) => part.content)).toEqual([prose]);
   });
 
+  test("removes a same-line commands-first or limitations-first package plan", () => {
+    const commentary = "Prepared validation.";
+    const cases = [
+      JSON.stringify({
+        commands: [{ id: "check", command: "bun run check" }],
+        headRef: "a".repeat(40),
+        limitations: [],
+      }),
+      JSON.stringify({
+        limitations: ["host capacity"],
+        headRef: "a".repeat(40),
+        commands: [{ id: "check", command: "bun run check" }],
+      }),
+    ];
+
+    for (const dataset of cases) {
+      const combined = `${commentary} ${dataset}`;
+      const messages = hideMachineOutputText(
+        [
+          {
+            id: "reordered",
+            role: "assistant",
+            content: combined,
+            parts: [{ type: "text", content: combined }],
+            createdAt: "2026-08-17T13:00:00.000Z",
+          },
+        ],
+        { stripTrailingPayload: true },
+      );
+
+      expect(messages).toHaveLength(1);
+      expect(messages[0]?.content).toBe(commentary);
+      expect(messages[0]?.parts).toEqual([{ type: "text", content: commentary }]);
+    }
+  });
+
+  test("strips streaming commands-first and limitations-first package drafts", () => {
+    const cases = [
+      'Preparing validation. {"commands":[{"id":"check"',
+      'Preparing validation. {"limitations":["host',
+    ];
+
+    for (const combined of cases) {
+      const messages = hideMachineOutputText(
+        [
+          {
+            id: "streaming-reordered",
+            role: "assistant",
+            content: combined,
+            parts: [{ type: "text", content: combined }],
+            createdAt: "2026-08-17T13:00:00.000Z",
+          },
+        ],
+        {
+          stripTrailingPayload: true,
+          trailingPayloadRootKeys: ["commands", "limitations"],
+        },
+      );
+
+      expect(messages[0]?.content).toBe("Preparing validation.");
+      expect(messages[0]?.parts[0]?.content).toBe("Preparing validation.");
+    }
+  });
+
+  test("keeps ordinary same-line JSON whose first key is commands", () => {
+    const content = 'I will run {"commands":["ls"]} next.';
+    const messages = hideMachineOutputText(
+      [
+        {
+          id: "ordinary",
+          role: "assistant",
+          content,
+          parts: [{ type: "text", content }],
+          createdAt: "2026-08-17T13:00:00.000Z",
+        },
+      ],
+      { stripTrailingPayload: true },
+    );
+
+    expect(messages[0]?.content).toBe(content);
+  });
+
   test("removes a trailing system dataset appended to commentary", () => {
     const commentary = "The tree is clean. Validation will run as separate commands.";
     const dataset = JSON.stringify({
@@ -610,5 +693,40 @@ describe("hideMachineOutputText", () => {
         },
       ]),
     ).toHaveLength(0);
+  });
+});
+
+describe("hideReviewPackagePlanText", () => {
+  test("keeps earlier implementation JSON and withholds only the package plan", () => {
+    const config = '```json\n{"strict":true,"retries":3}\n```';
+    const plan = JSON.stringify({
+      headRef: "a".repeat(40),
+      commands: [{ id: "check", command: "bun run check" }],
+      limitations: [],
+    });
+    const messages = hideReviewPackagePlanText([
+      {
+        id: "impl",
+        role: "assistant",
+        content: config,
+        parts: [{ type: "text", content: config }],
+        createdAt: "2026-08-17T13:00:00.000Z",
+      },
+      {
+        id: "plan",
+        role: "assistant",
+        content: `I found the checks.\n${plan}`,
+        parts: [
+          { type: "text", content: "I found the checks." },
+          { type: "text", content: plan },
+        ],
+        createdAt: "2026-08-17T13:01:00.000Z",
+      },
+    ]);
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0]?.content).toBe(config);
+    expect(JSON.stringify(messages)).not.toContain('"headRef"');
+    expect(messages[1]?.parts.map((part) => part.content)).toEqual(["I found the checks."]);
   });
 });

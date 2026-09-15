@@ -1633,6 +1633,9 @@ describe("build pipeline protocol", () => {
       ),
     ).toBe(true);
     expect(isBuildPipeline(withSession({ structuredResultStatus: "accepted" }))).toBe(true);
+    expect(isBuildPipeline(withSession({ producedReviewPackagePlan: true }))).toBe(true);
+    expect(isBuildPipeline(withSession({ producedReviewPackagePlan: false }))).toBe(true);
+    expect(isBuildPipeline(withSession({ producedReviewPackagePlan: "yes" }))).toBe(false);
     expect(isBuildPipeline(withSession({ structuredResultStatus: "complete" }))).toBe(false);
     expect(isBuildPipeline(withSession({ structuredReportRepairAttempts: 0 }))).toBe(true);
 
@@ -2030,6 +2033,54 @@ describe("review package preparation session", () => {
       }),
     ).toBe(false);
     expect(isReviewPackagePreparationSession(undefined)).toBe(false);
+  });
+
+  test("keeps the sticky plan marker after live request bookkeeping is cleared", () => {
+    expect(
+      isReviewPackagePreparationSession({
+        label: "Build Session",
+        phase: "build",
+        producedReviewPackagePlan: true,
+      }),
+    ).toBe(true);
+  });
+
+  test("does not treat other phases with leftover structured bookkeeping as preparation", () => {
+    for (const phase of ["address", "pr", "resolve-conflicts"] as const) {
+      expect(
+        isReviewPackagePreparationSession({
+          label: "Later Session",
+          phase,
+          structuredRequestId: "stale-1",
+          structuredResultStatus: "accepted",
+        }),
+      ).toBe(false);
+    }
+  });
+
+  test("does not treat a resumed fan-out or review-preparation build as the package turn", () => {
+    expect(
+      isReviewPackagePreparationSession(
+        {
+          label: "Build Session",
+          phase: "build",
+          structuredRequestId: "resume-1",
+          structuredResultStatus: "pending",
+        },
+        { reviewers: [{ agent: "codex" }, { agent: "claude" }], agentType: "codex" },
+      ),
+    ).toBe(false);
+    expect(
+      isReviewPackagePreparationSession(
+        {
+          label: "Build Session",
+          phase: "build",
+          structuredRequestId: "resume-1",
+          structuredResultStatus: "pending",
+        },
+        { agentType: "codex", reviewPreparation: { agent: "codex" } },
+      ),
+    ).toBe(false);
   });
 });
 

@@ -875,6 +875,82 @@ describe("AgentInfoButton provider resolution", () => {
     expect(screen.queryByRole("button", { name: "Message this tab…" }) === null).toBe(true);
   });
 
+  test("falls back to the current agent session while Tests is selected", async () => {
+    const sessions = [
+      {
+        phase: "build" as const,
+        agent: "codex" as const,
+        iteration: 0,
+        sessionKey: "pipeline-build-key",
+        sdkSessionId: "pipeline-build-session",
+        status: "idle" as const,
+        startedAt: "2026-09-08T10:00:00.000Z",
+        label: "Build Session",
+      },
+      {
+        phase: "verify" as const,
+        agent: "codex" as const,
+        iteration: 0,
+        sessionKey: "pipeline-verify-key",
+        sdkSessionId: "pipeline-verify-session",
+        status: "running" as const,
+        startedAt: "2026-09-08T10:01:00.000Z",
+        label: "Verification Session",
+      },
+    ];
+    useBuildPipelineStore.setState({
+      pipelines: new Map([
+        [
+          "pipeline-1",
+          buildPipelineFixture({
+            environmentId: ENVIRONMENT_ID,
+            sessions,
+            currentSessionIndex: 1,
+            validationRun: {
+              id: "validation-1",
+              status: "completed",
+              startedAt: "2026-09-08T10:00:30.000Z",
+              plan: {
+                headRef: "a".repeat(40),
+                commands: [
+                  {
+                    id: "test",
+                    command: "mise run test",
+                    cwd: ".",
+                    dependsOn: [],
+                    resources: ["turbo"],
+                    weight: 2,
+                    timeoutMs: 1_200_000,
+                  },
+                ],
+                limitations: [],
+              },
+              results: [],
+            },
+          }),
+        ],
+      ]),
+      buildEnvironmentIds: new Set([ENVIRONMENT_ID]),
+      viewedSessionIds: new Map([["pipeline-1", "validation:validation-1"]]),
+    });
+    useCodexStore.setState({
+      contextUsage: new Map([["pipeline-verify-key", usage({ source: "codex" })]]),
+      selectedModel: new Map([["pipeline-verify-key", "gpt-5.3-codex"]]),
+    } as never);
+
+    render(<AgentInfoButton activeTab={buildTab()} />);
+    open();
+
+    expect(screen.getByText("Codex Native")).toBeTruthy();
+    await waitFor(() =>
+      expect(nativeInvokeMock).toHaveBeenCalledWith("get_build_pipeline_session_projection", {
+        pipelineId: "pipeline-1",
+        sessionKey: "pipeline-verify-key",
+        refreshUsage: true,
+      }),
+    );
+  });
+
   test.each([
     ["claude", ["Fork session", "Compact", "Rewind files"]],
     ["codex", ["Fork session", "Compact", "Review changes"]],

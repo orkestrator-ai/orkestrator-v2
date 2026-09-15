@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import {
   isReviewPackagePreparationSession,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
+  REVIEW_PACKAGE_SESSION_LABEL,
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -33,6 +34,8 @@ import * as backend from "@/lib/backend";
 import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import {
   hideMachineOutputText,
+  hideReviewPackagePlanText,
+  REVIEW_PACKAGE_PLAN_ROOT_KEYS,
   showOnlyFinalStructuredReviewMessage,
   showOnlyFinalVerificationMessage,
 } from "@/lib/structured-review-messages";
@@ -135,17 +138,19 @@ type PipelineStageItem =
   | { kind: "validation"; id: string; key: string };
 
 type ValidationRun = NonNullable<BuildPipeline["validationRun"]>;
-type ValidationOutcome = "running" | "failed" | "incomplete" | "passed";
+type ValidationOutcome = "running" | "failed" | "cancelled" | "incomplete" | "passed";
 
 /**
  * Lifecycle `completed` means every command finished, not that they passed.
  * Failed is reserved for run-level faults (HEAD moved, runner died), so the
- * stage icon has to read the per-command results as well.
+ * stage icon has to read the per-command results as well. Cancellation is a
+ * distinct terminal state: the run stopped, it did not fail.
  */
 function validationOutcome(run: ValidationRun | undefined): ValidationOutcome {
   const status = run?.status;
   if (status === "planned" || status === "running") return "running";
-  if (status === "failed" || status === "cancelled") return "failed";
+  if (status === "cancelled") return "cancelled";
+  if (status === "failed") return "failed";
   const results = run?.results ?? [];
   if (results.some((result) => result.status === "failed")) return "failed";
   if (results.some((result) => result.status === "incomplete")) return "incomplete";
@@ -153,6 +158,14 @@ function validationOutcome(run: ValidationRun | undefined): ValidationOutcome {
 }
 
 function validationStageSummary(run: ValidationRun): string {
+  if (run.status === "failed") {
+    const error = run.error?.trim();
+    return error && error.length > 0 ? error : "Validation failed";
+  }
+  if (run.status === "cancelled") {
+    const error = run.error?.trim();
+    return error && error.length > 0 ? error : "Validation cancelled";
+  }
   const commandCount = run.plan.commands.length;
   const checkWord = commandCount === 1 ? "check" : "checks";
   const outcome = validationOutcome(run);
@@ -193,7 +206,7 @@ function pipelineStageItems(pipeline: BuildPipeline): PipelineStageItem[] {
   };
   let preparationIndex = -1;
   for (let index = pipeline.sessions.length - 1; index >= 0; index -= 1) {
-    if (isReviewPackagePreparationSession(pipeline.sessions[index])) {
+    if (isReviewPackagePreparationSession(pipeline.sessions[index], pipeline)) {
       preparationIndex = index;
       break;
     }
@@ -279,6 +292,9 @@ function ValidationStateIcon({ pipeline }: { pipeline: BuildPipeline }) {
   }
   if (outcome === "failed") {
     return <AlertCircle className="h-3.5 w-3.5 text-destructive" />;
+  }
+  if (outcome === "cancelled") {
+    return <Circle className="h-3.5 w-3.5 text-muted-foreground" />;
   }
   if (outcome === "incomplete") {
     return <AlertCircle className="h-3.5 w-3.5 text-muted-foreground" />;
@@ -421,7 +437,7 @@ export function BuildChatTab({
     if (selectionExists && pinnedSessionRef.current) return;
     const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
     const following =
-      validationStageId && isReviewPackagePreparationSession(currentSession)
+      validationStageId && isReviewPackagePreparationSession(currentSession, pipeline)
         ? validationStageId
         : (currentSession?.sdkSessionId ?? pipeline.sessions.at(-1)?.sdkSessionId ?? null);
     if (following !== selectedSessionId) setViewedSessionId(data.pipelineId, following);
@@ -477,7 +493,6 @@ export function BuildChatTab({
   // through the Claude adapter silently drops its subagent and tool-group parts.
   // Snapshots written before per-step harnesses carry no session agent.
   const agentType = selectedSession?.agent ?? pipeline?.agentType;
-  const hidePackagePlan = isReviewPackagePreparationSession(selectedSession);
   const messages = useMemo(() => {
     if (!agentType) return [];
     const transcript = toPipelineTranscript(
@@ -486,8 +501,14 @@ export function BuildChatTab({
       selectedSession?.startedAt ?? new Date().toISOString(),
       selectedSession?.interactionTranscript,
     );
-    if (hidePackagePlan) {
-      return hideMachineOutputText(transcript, { stripTrailingPayload: true });
+    if (selectedSession?.label === REVIEW_PACKAGE_SESSION_LABEL) {
+      return hideMachineOutputText(transcript, {
+        stripTrailingPayload: true,
+        trailingPayloadRootKeys: REVIEW_PACKAGE_PLAN_ROOT_KEYS,
+      });
+    }
+    if (selectedSession?.phase === "build" || selectedSession?.phase === "fix") {
+      return hideReviewPackagePlanText(transcript);
     }
     if (selectedSession?.phase === "review") {
       // Two passes, as in the Multi Review reviewer view. The first decides
@@ -520,7 +541,7 @@ export function BuildChatTab({
     selectedSession?.phase,
     selectedSession?.startedAt,
     selectedSession?.interactionTranscript,
-    hidePackagePlan,
+    selectedSession?.label,
     structuredResultAccepted,
   ]);
 
@@ -949,6 +970,9 @@ export function BuildChatTab({
               stageItems.map((stage, index) => {
                 if (stage.kind === "validation") {
                   const isSelected = selectedSessionId === stage.id;
+                  const testsSummary = pipeline.validationRun
+                    ? validationStageSummary(pipeline.validationRun)
+                    : "0 checks";
                   return (
                     <button
                       key={stage.key}
@@ -957,6 +981,7 @@ export function BuildChatTab({
                       role="tab"
                       aria-selected={isSelected}
                       aria-controls={transcriptPanelId}
+                      aria-label={`Tests, ${testsSummary}`}
                       tabIndex={isSelected || (selectedSessionId === null && index === 0) ? 0 : -1}
                       className={cn(
                         "flex w-full items-start gap-2 rounded-lg border px-2 py-2 text-left transition-colors",
@@ -977,9 +1002,7 @@ export function BuildChatTab({
                           Tests
                         </span>
                         <span className="block text-[11px] text-muted-foreground">
-                          {pipeline.validationRun
-                            ? validationStageSummary(pipeline.validationRun)
-                            : "0 checks"}
+                          {testsSummary}
                         </span>
                       </span>
                     </button>

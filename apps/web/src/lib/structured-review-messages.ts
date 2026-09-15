@@ -135,16 +135,25 @@ export function hideMachineOutputText(
     retainPayloadKind?: JsonPayload["kind"];
     /** ACP-style providers can append the final dataset to a prose text part. */
     stripTrailingPayload?: boolean;
+    /**
+     * Extra first-keys that identify a same-line *streaming* draft. Complete
+     * same-line documents are classified by schema, not by property order.
+     */
+    trailingPayloadRootKeys?: readonly string[];
+    /** Replace the default standalone-document withhold. */
+    withholdStandaloneText?: (text: string) => boolean;
   } = {},
 ): NativeMessage[] {
-  const { retainPayloadKind, stripTrailingPayload = false } = options;
+  const { retainPayloadKind, stripTrailingPayload = false, withholdStandaloneText } = options;
+  const trailingKeys = trailingPayloadRootKeySet(options.trailingPayloadRootKeys);
   const isWithheld = (text: string): boolean => {
+    if (withholdStandaloneText) return withholdStandaloneText(text);
     if (!isWithheldMachineOutput(text)) return false;
     return retainPayloadKind === undefined || !isPayloadKind(text, retainPayloadKind);
   };
   const visibleText = (text: string): string => {
     if (isWithheld(text)) return "";
-    return stripTrailingPayload ? withoutTrailingJsonPayload(text) : text;
+    return stripTrailingPayload ? withoutTrailingJsonPayload(text, trailingKeys) : text;
   };
   return messages.flatMap((message) => {
     if (message.role !== "assistant") return [message];
@@ -198,6 +207,22 @@ const KNOWN_REVIEW_PAYLOAD_ROOT_KEYS = new Set([
   "verdict",
 ]);
 
+/** First keys a streaming review-package plan or preparation result may open with. */
+export const REVIEW_PACKAGE_PLAN_ROOT_KEYS = [
+  "headRef",
+  "commands",
+  "limitations",
+  "validation",
+  "uncommittedFiles",
+] as const;
+
+function trailingPayloadRootKeySet(extra?: readonly string[]): ReadonlySet<string> {
+  if (!extra || extra.length === 0) return KNOWN_REVIEW_PAYLOAD_ROOT_KEYS;
+  const keys = new Set(KNOWN_REVIEW_PAYLOAD_ROOT_KEYS);
+  for (const key of extra) keys.add(key);
+  return keys;
+}
+
 function unfencedJsonCandidate(candidate: string): string {
   const trimmed = candidate.trim();
   if (!trimmed.startsWith("```")) return trimmed;
@@ -207,10 +232,60 @@ function unfencedJsonCandidate(candidate: string): string {
     .trim();
 }
 
-function hasKnownReviewPayloadRoot(candidate: string): boolean {
+function hasKnownReviewPayloadRoot(candidate: string, keys: ReadonlySet<string>): boolean {
   const json = unfencedJsonCandidate(candidate);
   const firstKey = /^\{\s*"([^"]+)"\s*:/.exec(json)?.[1];
-  return firstKey !== undefined && KNOWN_REVIEW_PAYLOAD_ROOT_KEYS.has(firstKey);
+  return firstKey !== undefined && keys.has(firstKey);
+}
+
+function tryParseJsonObject(candidate: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(unfencedJsonCandidate(candidate));
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function looksLikeReviewPackagePlan(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const hasHeadRef = typeof record.headRef === "string" && record.headRef.length > 0;
+  const hasCommands = Array.isArray(record.commands);
+  const hasLimitations = Array.isArray(record.limitations);
+  if (hasHeadRef && (hasCommands || hasLimitations)) return true;
+  return (
+    Array.isArray(record.validation) && Array.isArray(record.uncommittedFiles) && hasLimitations
+  );
+}
+
+/** True when a text block is, or is becoming, a review-package plan. */
+export function looksLikeReviewPackagePlanText(text: string): boolean {
+  const document = lastMachineJsonDocument(text);
+  if (document) {
+    try {
+      if (looksLikeReviewPackagePlan(JSON.parse(document))) return true;
+    } catch {
+      // The recovered document can still be a streaming draft.
+    }
+  }
+  return hasKnownReviewPayloadRoot(text, new Set(REVIEW_PACKAGE_PLAN_ROOT_KEYS));
+}
+
+/**
+ * Withhold review-package JSON without redacting earlier implementation dumps
+ * on a reused build or fix transcript.
+ */
+export function hideReviewPackagePlanText(messages: NativeMessage[]): NativeMessage[] {
+  return hideMachineOutputText(messages, {
+    stripTrailingPayload: true,
+    trailingPayloadRootKeys: REVIEW_PACKAGE_PLAN_ROOT_KEYS,
+    withholdStandaloneText: (text) =>
+      isWithheldMachineOutput(text) && looksLikeReviewPackagePlanText(text),
+  });
 }
 
 function hasLineBreakBefore(text: string, index: number): boolean {
@@ -238,9 +313,14 @@ function isNonEmptyJsonDocument(candidate: string): boolean {
  * known review-workflow root key. Complete values must also be non-empty.
  *
  * The scan is bounded and fails open. Streaming candidates are classified by
- * delimiter state and never sent through JSON.parse.
+ * delimiter state and never sent through JSON.parse. A complete same-line
+ * document is stripped when it is a review-package plan, regardless of key
+ * order; other same-line values still need a known first key.
  */
-function withoutTrailingJsonPayload(text: string): string {
+function withoutTrailingJsonPayload(
+  text: string,
+  keys: ReadonlySet<string> = KNOWN_REVIEW_PAYLOAD_ROOT_KEYS,
+): string {
   const trimmed = text.trimEnd();
   const firstCandidate = Math.max(0, trimmed.length - TRAILING_PAYLOAD_SCAN_CHARS);
   let candidates = 0;
@@ -257,7 +337,19 @@ function withoutTrailingJsonPayload(text: string): string {
     const candidate = trimmed.slice(index);
     const state = jsonDocumentState(candidate);
     if (state === "not-json") continue;
-    if (!hasLineBreakBefore(trimmed, index) && !hasKnownReviewPayloadRoot(candidate)) continue;
+    if (!hasLineBreakBefore(trimmed, index)) {
+      if (state === "complete") {
+        const parsed = tryParseJsonObject(candidate);
+        if (
+          !(parsed && looksLikeReviewPackagePlan(parsed)) &&
+          !hasKnownReviewPayloadRoot(candidate, KNOWN_REVIEW_PAYLOAD_ROOT_KEYS)
+        ) {
+          continue;
+        }
+      } else if (!hasKnownReviewPayloadRoot(candidate, keys)) {
+        continue;
+      }
+    }
     if (state === "complete" && !isNonEmptyJsonDocument(candidate)) continue;
     const unfinished = unfencedJsonCandidate(candidate);
     if (state === "incomplete" && unfinished.slice(1).trim().length === 0) continue;

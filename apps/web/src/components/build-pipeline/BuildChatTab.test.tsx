@@ -579,6 +579,57 @@ describe("BuildChatTab backend projection", () => {
     expect(screen.getByText("1 of 2 checks incomplete")).toBeTruthy();
   });
 
+  test("names a run-level failed Tests stage after the terminal outcome", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      validationRun: validationRun({
+        status: "failed",
+        error: "HEAD moved during validation",
+      }),
+      backendRevision: 9,
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    const tab = screen.getByRole("tab", { name: "Tests, HEAD moved during validation" });
+    expect(tab.textContent).toContain("HEAD moved during validation");
+    expect(testsTabIconClass()).toContain("text-destructive");
+    expect(testsTabIconClass()).not.toContain("text-success");
+  });
+
+  test("names a cancelled Tests stage without treating it as a failure", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      validationRun: validationRun({
+        status: "cancelled",
+      }),
+      backendRevision: 9,
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    const tab = screen.getByRole("tab", { name: "Tests, Validation cancelled" });
+    expect(tab.textContent).toContain("Validation cancelled");
+    expect(testsTabIconClass()).toContain("text-muted-foreground");
+    expect(testsTabIconClass()).not.toContain("text-destructive");
+  });
+
   test("treats skipped commands as success when nothing failed", () => {
     useBuildPipelineStore.getState().replacePipeline({
       ...pipeline,
@@ -640,8 +691,7 @@ describe("BuildChatTab backend projection", () => {
   test("inserts Tests after a reused build session that produced the package plan", () => {
     const preparedBuild: BuildPipeline["sessions"][number] = {
       ...pipeline.sessions[0]!,
-      structuredRequestId: "prep-request",
-      structuredResultStatus: "accepted",
+      producedReviewPackagePlan: true,
     };
     const reviewOne: BuildPipeline["sessions"][number] = {
       ...pipeline.sessions[0]!,
@@ -1432,7 +1482,167 @@ describe("BuildChatTab presentation", () => {
     expect(screen.queryByText(plan) === null).toBe(true);
   });
 
+  test("hides a same-line commands-first or limitations-first package plan", () => {
+    const commandsFirst = JSON.stringify({
+      commands: [{ id: "test", command: "mise run test" }],
+      headRef: "a".repeat(40),
+      limitations: [],
+    });
+    const limitationsFirst = JSON.stringify({
+      limitations: ["host capacity"],
+      headRef: "a".repeat(40),
+      commands: [{ id: "test", command: "mise run test" }],
+    });
+    renderTab({
+      ...reviewed,
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          producedReviewPackagePlan: true,
+          messages: [
+            {
+              id: "commands-first",
+              role: "assistant",
+              content: `Prepared validation. ${commandsFirst}`,
+              parts: [{ type: "text", content: `Prepared validation. ${commandsFirst}` }],
+            },
+            {
+              id: "limitations-first",
+              role: "assistant",
+              content: `Prepared validation. ${limitationsFirst}`,
+              parts: [{ type: "text", content: `Prepared validation. ${limitationsFirst}` }],
+            },
+          ],
+        },
+        reviewSession,
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 2,
+    });
+
+    fireEvent.click(screen.getByText("Build Session"));
+
+    expect(visibleTextContents()).toEqual(["Prepared validation.", "Prepared validation."]);
+    expect(JSON.stringify(listProps.messages)).not.toContain('"headRef"');
+    expect(JSON.stringify(listProps.messages)).not.toContain('"commands"');
+  });
+
+  test("keeps earlier implementation JSON on a reused Build Session", () => {
+    const config = '```json\n{"strict":true,"retries":3}\n```';
+    const plan = JSON.stringify({
+      headRef: "a".repeat(40),
+      commands: [{ id: "test", command: "mise run test" }],
+      limitations: [],
+    });
+    renderTab({
+      ...reviewed,
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          producedReviewPackagePlan: true,
+          structuredRequestId: "prep-request",
+          structuredResultStatus: "accepted",
+          messages: [
+            {
+              id: "impl",
+              role: "assistant",
+              content: config,
+              parts: [{ type: "text", content: config }],
+            },
+            {
+              id: "plan",
+              role: "assistant",
+              content: `I found the repository checks.\n${plan}`,
+              parts: [
+                { type: "text", content: "I found the repository checks." },
+                { type: "text", content: plan },
+              ],
+            },
+          ],
+        },
+        reviewSession,
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 2,
+    });
+
+    fireEvent.click(screen.getByText("Build Session"));
+
+    expect(visibleTextContents()).toEqual([config, "I found the repository checks."]);
+    expect(JSON.stringify(listProps.messages)).toContain("strict");
+    expect(JSON.stringify(listProps.messages)).not.toContain('"headRef"');
+  });
+
+  test("still hides package JSON after structured request markers are cleared", () => {
+    const plan = JSON.stringify({
+      headRef: "a".repeat(40),
+      commands: [{ id: "test", command: "mise run test" }],
+      limitations: [],
+    });
+    renderTab({
+      ...reviewed,
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          messages: [
+            {
+              id: "build-answer",
+              role: "assistant",
+              content: `I found the repository checks.\n${plan}`,
+              parts: [
+                { type: "text", content: "I found the repository checks." },
+                { type: "text", content: plan },
+              ],
+            },
+          ],
+        },
+        reviewSession,
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 2,
+    });
+
+    fireEvent.click(screen.getByText("Build Session"));
+
+    expect(visibleTextContents()).toEqual(["I found the repository checks."]);
+    expect(JSON.stringify(listProps.messages)).not.toContain('"headRef"');
+  });
+
+  test("keeps a resumed fan-out build transcript visible", () => {
+    const config = '```json\n{"strict":true,"retries":3}\n```';
+    renderTab({
+      ...reviewed,
+      reviewers: [{ agent: "codex" }, { agent: "claude" }],
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          structuredRequestId: "resume-1",
+          structuredResultStatus: "pending",
+          messages: [
+            {
+              id: "impl",
+              role: "assistant",
+              content: config,
+              parts: [{ type: "text", content: config }],
+            },
+          ],
+        },
+        reviewSession,
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 2,
+    });
+
+    fireEvent.click(screen.getByText("Build Session"));
+
+    expect(visibleTextContents()).toEqual([config]);
+    expect(JSON.stringify(listProps.messages)).toContain("strict");
+  });
+
   test("keeps the transcript list mounted when visiting Tests and returning", () => {
+    // The stub records prop identity only. Real react-virtuoso scroll
+    // retention across a display:none toggle belongs to the Playwright
+    // component suite; happy-dom never mounts Virtuoso rows.
     renderTab({
       ...reviewed,
       validationRun: validationRun({ id: "validation-scroll" }),

@@ -379,24 +379,45 @@ export interface PipelineSession {
   autoDeclineCount?: number;
   /** Reviewer-visible history owned by the workflow, not by provider cards. */
   interactionTranscript?: PipelineInteractionTranscriptEntry[];
+  /**
+   * Sticky record that this session produced, or is producing, the review-package
+   * plan. Live `structuredRequestId` / `structuredResultStatus` are cleared when
+   * a queued user message is dispatched and are also stamped on resume of an
+   * ordinary build, so they cannot be the durable classification.
+   */
+  producedReviewPackagePlan?: boolean;
 }
 
 /**
  * Whether this session is the turn that produced the review-package plan.
  *
  * The dedicated session is labelled {@link REVIEW_PACKAGE_SESSION_LABEL}. The
- * default single-review path and recovered in-flight sessions reuse a build or
- * fix session and record that with `structuredRequestId` / `structuredResultStatus`
- * instead, so matching only the display label misses the common case.
+ * default single-review path reuses a build or fix session and records that
+ * with {@link PipelineSession.producedReviewPackagePlan}. Older snapshots
+ * without that field still fall back to live structured-request bookkeeping,
+ * but only on the single-review path: fan-out and explicit review-preparation
+ * pipelines stamp those fields on resume of ordinary build turns.
  */
 export function isReviewPackagePreparationSession(
   session:
-    | Pick<PipelineSession, "label" | "phase" | "structuredRequestId" | "structuredResultStatus">
+    | Pick<
+        PipelineSession,
+        | "label"
+        | "phase"
+        | "producedReviewPackagePlan"
+        | "structuredRequestId"
+        | "structuredResultStatus"
+      >
     | undefined,
+  pipeline?: Pick<BuildPipeline, "reviewers" | "steps" | "agentType" | "reviewPreparation">,
 ): boolean {
   if (!session) return false;
   if (session.label === REVIEW_PACKAGE_SESSION_LABEL) return true;
-  if (session.phase === "review" || session.phase === "verify") return false;
+  if (session.phase !== "build" && session.phase !== "fix") return false;
+  if (session.producedReviewPackagePlan === true) return true;
+  if (pipeline && (usesReviewFanout(pipeline) || pipeline.reviewPreparation)) {
+    return false;
+  }
   return session.structuredRequestId !== undefined || session.structuredResultStatus !== undefined;
 }
 
@@ -900,6 +921,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.structuredResultStatus === undefined ||
       value.structuredResultStatus === "pending" ||
       value.structuredResultStatus === "accepted") &&
+    (value.producedReviewPackagePlan === undefined ||
+      typeof value.producedReviewPackagePlan === "boolean") &&
     hasValidValidationWorktreeBaseline(value) &&
     (value.structuredWaitStartedAt === undefined || isIsoDate(value.structuredWaitStartedAt)) &&
     (value.structuredReportRepairAttempts === undefined ||

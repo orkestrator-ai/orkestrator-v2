@@ -9,6 +9,7 @@ import type {
 } from "@orkestrator/protocol/build-pipeline";
 import {
   MAX_BUILD_PIPELINE_REVIEWERS,
+  REVIEW_PACKAGE_SESSION_LABEL,
   pipelineIndependentReviewLabel,
 } from "@orkestrator/protocol/build-pipeline";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
@@ -470,7 +471,7 @@ describe("build pipeline multi-model review", () => {
       await advanceUntil(service, read, started.id, "reviewing");
       expect(
         [...providers.values()].flatMap((provider) =>
-          provider.created.filter((entry) => entry.label === "Package Preparation Session"),
+          provider.created.filter((entry) => entry.label === REVIEW_PACKAGE_SESSION_LABEL),
         ),
       ).toEqual([]);
     });
@@ -494,7 +495,7 @@ describe("build pipeline multi-model review", () => {
       expect(providers.get("codex")!.created).toContainEqual(
         expect.objectContaining({
           phase: "fix",
-          label: "Package Preparation Session",
+          label: REVIEW_PACKAGE_SESSION_LABEL,
           options: expect.objectContaining({
             model: "review-coordinator",
             effort: "medium",
@@ -623,7 +624,7 @@ describe("build pipeline multi-model review", () => {
         expect.arrayContaining([
           expect.objectContaining({
             phase: "fix",
-            label: "Package Preparation Session",
+            label: REVIEW_PACKAGE_SESSION_LABEL,
             options: expect.objectContaining({
               model: "review-coordinator",
               effort: "medium",

@@ -35,7 +35,11 @@ interface BuildPipelineState {
   /** Backend snapshots cached for rendering; never authored by this store. */
   pipelines: Map<string, BuildPipeline>;
   buildEnvironmentIds: Set<string>;
-  /** Renderer-only stage selection shared by the build tab and shell info pane. */
+  /**
+   * Renderer-only stage selection shared by the build tab and shell info pane.
+   * Agent stages use their SDK session id; backend validation uses a namespaced
+   * synthetic id because it has no agent session.
+   */
   viewedSessionIds: Map<string, string>;
 
   /** The only insertion/update path: replace with an authoritative snapshot. */

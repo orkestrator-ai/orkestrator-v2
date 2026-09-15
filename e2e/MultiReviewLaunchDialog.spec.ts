@@ -61,7 +61,7 @@ test("maximum reviewer rows scroll while initial focus and actions remain usable
   expect(layout.footerBottom).toBeLessThanOrEqual(300);
 
   const consolidationPicker = page.getByRole("button", {
-    name: "Consolidation & fix model model",
+    name: "Preparation & consolidation model model",
   });
   await consolidationPicker.scrollIntoViewIfNeeded();
   await expect

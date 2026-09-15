@@ -372,24 +372,36 @@ export class ProjectGitService {
         ) {
           return before;
         }
-        if (!before.remote) {
+        const configuredRemotes = before.remote
+          ? [before.remote]
+          : (
+              await runCommand("git", ["remote"], {
+                cwd: root,
+                timeoutMs: 10_000,
+              })
+            ).stdout
+              .split("\n")
+              .map((remote) => remote.trim())
+              .filter(Boolean);
+        if (configuredRemotes.length === 0) {
           return this.persist(projectId, {
             ...before,
             remoteState: "unknown",
-            lastError: {
-              operation: "fetch",
-              message: "The current branch has no configured upstream remote.",
-              occurredAt: new Date().toISOString(),
-              retryable: false,
-            },
+            // A repository without remotes is a valid local-only state, so do
+            // not retain an error that makes the checkout look broken.
+            lastError: null,
           });
         }
         await this.operationState(projectId, "fetching");
         try {
-          await runCommand("git", ["fetch", "--prune", before.remote], {
-            cwd: root,
-            timeoutMs: 60_000,
-          });
+          await runCommand(
+            "git",
+            before.remote ? ["fetch", "--prune", before.remote] : ["fetch", "--prune", "--all"],
+            {
+              cwd: root,
+              timeoutMs: 60_000,
+            },
+          );
           const refreshed = await this.readStatus(projectId, root, before);
           refreshed.remoteState = "fresh";
           refreshed.fetchedAt = new Date().toISOString();
@@ -415,6 +427,7 @@ export class ProjectGitService {
     projectId: string,
     state: "syncing" | "switching",
     action: (root: string, status: ProjectGitStatus) => Promise<void>,
+    options: { allowDirty?: boolean } = {},
   ): Promise<ProjectGitStatus> {
     if (this.activeMutations.has(projectId)) {
       throw new Error("The project checkout is already changing");
@@ -431,8 +444,14 @@ export class ProjectGitService {
           root,
           (await this.storage.getCoordinatorWorkspace(projectId))?.repositoryStatus,
         );
-        if (before.repositoryOperationBlockedReason) {
+        const dirty = before.trackedChanges > 0 || before.untrackedChanges > 0;
+        const discardableDirty =
+          dirty && !before.mergeInProgress && !before.rebaseInProgress && before.conflicts === 0;
+        if (before.repositoryOperationBlockedReason && !(options.allowDirty && discardableDirty)) {
           throw new Error(before.repositoryOperationBlockedReason);
+        }
+        if (dirty && !options.allowDirty) {
+          throw new Error("Commit or discard local checkout changes before switching or syncing.");
         }
         await this.operationState(projectId, state);
         if (await this.hasActiveCoordinatorTurns(projectId)) {
@@ -484,27 +503,54 @@ export class ProjectGitService {
     });
   }
 
-  async switchBranch(projectId: string, ref: string): Promise<ProjectGitStatus> {
-    return this.mutation(projectId, "switching", async (root, status) => {
-      const branch = status.branches.find((item) => item.ref === ref);
-      if (!branch) throw new Error("The selected branch is no longer available");
-      if (branch.occupiedWorktreePath)
-        throw new Error("That branch is checked out in another worktree");
-      if (branch.kind === "local") {
-        await runCommand("git", ["check-ref-format", "--branch", branch.name], { cwd: root });
-        await runCommand("git", ["switch", branch.name], { cwd: root, timeoutMs: 30_000 });
-        return;
-      }
-      if (!branch.remote) throw new Error("Remote branch identity is invalid");
-      const remoteBranch = branch.name.slice(branch.remote.length + 1);
-      await runCommand("git", ["check-ref-format", "--branch", remoteBranch], { cwd: root });
-      if (status.branches.some((item) => item.kind === "local" && item.name === remoteBranch)) {
-        throw new Error("A local branch with that name already exists");
-      }
-      await runCommand("git", ["switch", "--track", "-c", remoteBranch, branch.ref], {
-        cwd: root,
-        timeoutMs: 30_000,
-      });
-    });
+  async switchBranch(
+    projectId: string,
+    ref: string,
+    discardChanges = false,
+  ): Promise<ProjectGitStatus> {
+    return this.mutation(
+      projectId,
+      "switching",
+      async (root, status) => {
+        const branch = status.branches.find((item) => item.ref === ref);
+        if (!branch) throw new Error("The selected branch is no longer available");
+        if (branch.occupiedWorktreePath)
+          throw new Error("That branch is checked out in another worktree");
+
+        let switchArgs: string[];
+        if (branch.kind === "local") {
+          await runCommand("git", ["check-ref-format", "--branch", branch.name], { cwd: root });
+          switchArgs = ["switch", branch.name];
+        } else {
+          if (!branch.remote) throw new Error("Remote branch identity is invalid");
+          const remoteBranch = branch.name.slice(branch.remote.length + 1);
+          await runCommand("git", ["check-ref-format", "--branch", remoteBranch], { cwd: root });
+          if (status.branches.some((item) => item.kind === "local" && item.name === remoteBranch)) {
+            throw new Error("A local branch with that name already exists");
+          }
+          switchArgs = ["switch", "--track", "-c", remoteBranch, branch.ref];
+        }
+
+        const dirty = status.trackedChanges > 0 || status.untrackedChanges > 0;
+        if (dirty) {
+          if (status.headCommit) {
+            await runCommand("git", ["reset", "--hard", "HEAD"], {
+              cwd: root,
+              timeoutMs: 30_000,
+            });
+          } else {
+            // An unborn branch has no HEAD for reset --hard. Empty the index so
+            // the clean below can remove files staged for the initial commit.
+            await runCommand("git", ["rm", "-r", "-f", "--cached", "--ignore-unmatch", "."], {
+              cwd: root,
+              timeoutMs: 30_000,
+            });
+          }
+          await runCommand("git", ["clean", "-f", "-d"], { cwd: root, timeoutMs: 30_000 });
+        }
+        await runCommand("git", switchArgs, { cwd: root, timeoutMs: 30_000 });
+      },
+      { allowDirty: discardChanges },
+    );
   }
 }

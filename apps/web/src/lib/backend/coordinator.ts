@@ -47,8 +47,12 @@ export const fetchProjectGit = (projectId: string, force = false): Promise<Proje
 export const syncProjectGit = (projectId: string): Promise<ProjectGitStatus> =>
   invoke("sync_project_git", { projectId });
 
-export const switchProjectGitBranch = (projectId: string, ref: string): Promise<ProjectGitStatus> =>
-  invoke("switch_project_git_branch", { projectId, ref });
+export const switchProjectGitBranch = (
+  projectId: string,
+  ref: string,
+  discardChanges = false,
+): Promise<ProjectGitStatus> =>
+  invoke("switch_project_git_branch", { projectId, ref, discardChanges });
 
 export const writeCoordinatorAttachment = (
   environmentId: string,

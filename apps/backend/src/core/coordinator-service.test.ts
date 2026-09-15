@@ -394,7 +394,7 @@ describe("project coordinator", () => {
     expect(workspace.conversations[0]).not.toHaveProperty("codexBridgePort");
   });
 
-  test("Git status blocks dirty mutations and detects external context changes", async () => {
+  test("Git status permits confirmed dirty branch switches and detects external context changes", async () => {
     const project = await storage.addProject(
       createProject("https://example.invalid/repo.git", checkout),
     );
@@ -408,11 +408,9 @@ describe("project coordinator", () => {
     const first = await git.status(project.id);
     expect(first).toMatchObject({ branch: "main", trackedChanges: 0, untrackedChanges: 0 });
     expect(await git.fetch(project.id, true)).toMatchObject({
-      lastError: {
-        operation: "fetch",
-        retryable: false,
-        message: "The current branch has no configured upstream remote.",
-      },
+      upstream: null,
+      remoteState: "unknown",
+      lastError: null,
     });
     const firstStoredRevision = (await storage.getCoordinatorWorkspace(project.id))!
       .repositoryStatus!.revision;
@@ -442,6 +440,12 @@ describe("project coordinator", () => {
     await expect(git.switchBranch(project.id, "refs/heads/occupied")).rejects.toThrow(
       "another worktree",
     );
+    await fs.writeFile(path.join(checkout, "preserved.txt"), "keep me\n");
+    await expect(git.switchBranch(project.id, "refs/heads/occupied", true)).rejects.toThrow(
+      "another worktree",
+    );
+    expect(await fs.readFile(path.join(checkout, "preserved.txt"), "utf8")).toBe("keep me\n");
+    await fs.rm(path.join(checkout, "preserved.txt"));
     await runCommand("git", ["worktree", "remove", occupiedWorktree], { cwd: checkout });
 
     const gitDirectory = (
@@ -461,14 +465,24 @@ describe("project coordinator", () => {
     await expect(git.switchBranch(project.id, "refs/heads/main")).rejects.toThrow("current rebase");
     await fs.rm(rebaseMarker, { recursive: true });
 
+    await fs.writeFile(path.join(checkout, "README.md"), "changed\n");
     await fs.writeFile(path.join(checkout, "untracked.txt"), "local\n");
     const dirty = await git.status(project.id);
+    expect(dirty.trackedChanges).toBe(1);
     expect(dirty.untrackedChanges).toBe(1);
-    await expect(git.switchBranch(project.id, "refs/heads/main")).rejects.toThrow(
+    expect(dirty.repositoryOperationBlockedReason).toContain("Commit or discard");
+    await expect(git.switchBranch(project.id, "refs/heads/occupied")).rejects.toThrow(
       "Commit or discard",
     );
+    const discarded = await git.switchBranch(project.id, "refs/heads/occupied", true);
+    expect(discarded).toMatchObject({
+      branch: "occupied",
+      trackedChanges: 0,
+      untrackedChanges: 0,
+    });
+    expect(await fs.readFile(path.join(checkout, "README.md"), "utf8")).toBe("initial\n");
+    await expect(fs.access(path.join(checkout, "untracked.txt"))).rejects.toThrow();
 
-    await fs.rm(path.join(checkout, "untracked.txt"));
     await runCommand("git", ["switch", "-c", "external"], { cwd: checkout });
     const changed = await git.status(project.id);
     const snapshot = await coordinator.get(project.id);
@@ -490,6 +504,17 @@ describe("project coordinator", () => {
     await coordinator.ensure(project.id);
     const git = new ProjectGitService(storage);
 
+    await runCommand("git", ["branch", "--unset-upstream"], { cwd: checkout });
+    expect(await git.fetch(project.id, true)).toMatchObject({
+      upstream: null,
+      remote: null,
+      remoteState: "fresh",
+      lastError: null,
+    });
+    await runCommand("git", ["branch", "--set-upstream-to", "origin/main", "main"], {
+      cwd: checkout,
+    });
+    await git.status(project.id);
     const baseline = await git.fetch(project.id, true);
     expect((await git.fetch(project.id)).fetchedAt).toBe(baseline.fetchedAt);
     await Bun.sleep(5);

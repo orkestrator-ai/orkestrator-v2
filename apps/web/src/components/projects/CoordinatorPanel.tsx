@@ -27,6 +27,16 @@ import {
 import { AgentNativeTab } from "@/components/native-agent";
 import { TAB_ICON_CLASS, TAB_STRIP_CLASS, TabShell } from "@/components/pane-layout/TabShell";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -66,6 +76,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const [operation, setOperation] = useState<"fetch" | "sync" | "switch" | "conversation" | null>(
     null,
   );
+  const [pendingSwitchRef, setPendingSwitchRef] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingLaunch, setPendingLaunch] = useState<{
     conversationId: string;
@@ -124,7 +135,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   }, [projectId]);
 
   const runGit = useCallback(
-    async (kind: "fetch" | "sync" | "switch", ref?: string) => {
+    async (kind: "fetch" | "sync" | "switch", ref?: string, discardChanges = false) => {
       setOperation(kind);
       setError(null);
       try {
@@ -133,7 +144,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             ? await backend.fetchProjectGit(projectId, true)
             : kind === "sync"
               ? await backend.syncProjectGit(projectId)
-              : await backend.switchProjectGitBranch(projectId, ref!);
+              : await backend.switchProjectGitBranch(projectId, ref!, discardChanges);
         setGit(next);
         const refreshed = await backend.getProjectCoordinator(projectId);
         if (refreshed) setSnapshot(refreshed);
@@ -280,6 +291,11 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     selectedTurnPhase === "recovering";
   const blocked = git?.repositoryOperationBlockedReason ?? null;
   const dirty = Boolean(git && (git.trackedChanges > 0 || git.untrackedChanges > 0));
+  const discardableDirty = Boolean(
+    dirty && git && !git.mergeInProgress && !git.rebaseInProgress && git.conflicts === 0,
+  );
+  const switchBlocked = Boolean(blocked && !discardableDirty);
+  const pendingSwitchBranch = git?.branches.find((branch) => branch.ref === pendingSwitchRef);
   const newestContextEvent = snapshot?.workspace.repositoryContextEvents?.at(-1);
   const contextNoticeSessionIdentity = snapshot
     ? `coordinator\u0000${projectId}\u0000${snapshot.workspace.id}\u0000${selected?.id ?? "none"}`
@@ -379,7 +395,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   }
 
   const providerState = selected?.agent ? snapshot.providerAvailability[selected.agent] : undefined;
-  const gitMutationDisabled = operation !== null || Boolean(blocked) || coordinatorTurnActive;
+  const branchSwitchDisabled = operation !== null || switchBlocked || coordinatorTurnActive;
+  const syncDisabled = branchSwitchDisabled || dirty;
   const canSync = Boolean(git?.upstream && git.behind && git.behind > 0 && !git.ahead && !blocked);
 
   return (
@@ -421,10 +438,25 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           <div className="min-w-3 flex-1" />
           <Select
             value={git?.branch ? `refs/heads/${git.branch}` : undefined}
-            onValueChange={(value) => void runGit("switch", value)}
-            disabled={gitMutationDisabled}
+            onValueChange={(value) => {
+              if (dirty) {
+                setPendingSwitchRef(value);
+                return;
+              }
+              void runGit("switch", value);
+            }}
+            disabled={branchSwitchDisabled}
           >
-            <SelectTrigger size="sm" className="max-w-56" title={blocked ?? "Switch branch"}>
+            <SelectTrigger
+              size="sm"
+              className="max-w-56"
+              title={
+                (switchBlocked ? blocked : null) ??
+                (dirty
+                  ? "Switch branch and choose whether to discard local changes"
+                  : "Switch branch")
+              }
+            >
               <GitBranch className="size-3.5" />
               <SelectValue placeholder={git?.detached ? "Detached HEAD" : "Choose branch"} />
             </SelectTrigger>
@@ -456,7 +488,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             <Button
               size="sm"
               variant="outline"
-              disabled={gitMutationDisabled}
+              disabled={syncDisabled}
               onClick={() => void runGit("sync")}
             >
               <RotateCcw className="size-3.5" />
@@ -477,10 +509,10 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         {dirty ? (
           <p className="mt-1 text-xs text-amber-300">
             The checkout has {git?.trackedChanges} tracked and {git?.untrackedChanges} untracked
-            changes. Conversations remain read-only; Git mutations are blocked.
+            changes. Sync is blocked; switching branches will ask before discarding them.
           </p>
         ) : null}
-        {blocked && !dirty ? <p className="mt-1 text-xs text-amber-300">{blocked}</p> : null}
+        {blocked && switchBlocked ? <p className="mt-1 text-xs text-amber-300">{blocked}</p> : null}
         {git?.lastError || error ? (
           <details className="mt-1 text-xs text-red-300">
             <summary className="cursor-pointer">Repository or coordinator error</summary>
@@ -734,6 +766,36 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         Coordinator can inspect and plan against this checkout. Code changes, commands, builds, and
         fixes run in disposable worker environments.
       </div>
+      <AlertDialog
+        open={pendingSwitchRef !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingSwitchRef(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard changes and switch branch?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Switching to {pendingSwitchBranch?.name ?? "the selected branch"} will permanently
+              discard {git?.trackedChanges ?? 0} tracked and {git?.untrackedChanges ?? 0} untracked
+              changes from this checkout. Ignored files are kept.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep changes</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                const ref = pendingSwitchRef;
+                setPendingSwitchRef(null);
+                if (ref) void runGit("switch", ref, true);
+              }}
+            >
+              Discard and switch
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -482,10 +482,12 @@ describe("CoordinatorPanel", () => {
     ensuredGit = {
       ...gitStatus,
       trackedChanges: 2,
-      repositoryOperationBlockedReason: "Commit or discard changes.",
+      repositoryOperationBlockedReason:
+        "Commit or discard local checkout changes before switching or syncing.",
     };
     render(<CoordinatorPanel projectId="project-1" />);
     expect(await screen.findByText(/2 tracked/)).toBeTruthy();
+    expect(screen.getByRole("combobox").hasAttribute("disabled")).toBe(false);
   });
 
   test("rehydrates from the backend after remount and shows load failures", async () => {
@@ -550,10 +552,46 @@ describe("CoordinatorPanel", () => {
     fireEvent.click(screen.getByRole("combobox"));
     fireEvent.click(await screen.findByRole("option", { name: "origin/feature" }));
     await waitFor(() =>
-      expect(switchBranch).toHaveBeenCalledWith("project-1", "refs/remotes/origin/feature"),
+      expect(switchBranch).toHaveBeenCalledWith("project-1", "refs/remotes/origin/feature", false),
     );
     fireEvent.click(screen.getByRole("button", { name: "Sync" }));
     await waitFor(() => expect(syncGit).toHaveBeenCalledWith("project-1"));
+  });
+
+  test("keeps branch switching available without an upstream and confirms dirty discard", async () => {
+    ensuredGit = {
+      ...gitStatus,
+      trackedChanges: 1,
+      untrackedChanges: 2,
+      repositoryOperationBlockedReason:
+        "Commit or discard local checkout changes before switching or syncing.",
+      branches: [
+        ...gitStatus.branches,
+        { ref: "refs/heads/feature", name: "feature", kind: "local" },
+      ],
+    };
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+
+    const branchPicker = screen.getByRole("combobox");
+    expect(branchPicker.hasAttribute("disabled")).toBe(false);
+    expect(screen.getByText("No upstream configured")).toBeTruthy();
+
+    fireEvent.click(branchPicker);
+    fireEvent.click(await screen.findByRole("option", { name: "feature" }));
+    expect(await screen.findByText("Discard changes and switch branch?")).toBeTruthy();
+    expect(screen.getByRole("alertdialog").textContent).toContain("1 tracked and 2 untracked");
+    expect(switchBranch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Keep changes" }));
+    expect(switchBranch).not.toHaveBeenCalled();
+
+    fireEvent.click(branchPicker);
+    fireEvent.click(await screen.findByRole("option", { name: "feature" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard and switch" }));
+    await waitFor(() =>
+      expect(switchBranch).toHaveBeenCalledWith("project-1", "refs/heads/feature", true),
+    );
   });
 
   test("disables Git mutations during an active turn and persists dismissed context warnings", async () => {

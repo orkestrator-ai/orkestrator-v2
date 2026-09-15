@@ -245,11 +245,12 @@ export function registerCoordinatorCommands(
     if (!context.projectGit) throw new Error("Project Git service is unavailable");
     return context.projectGit.sync(asNonBlankString(projectId, "projectId"));
   });
-  register("switch_project_git_branch", ({ projectId, ref }, context) => {
+  register("switch_project_git_branch", ({ projectId, ref, discardChanges }, context) => {
     if (!context.projectGit) throw new Error("Project Git service is unavailable");
     return context.projectGit.switchBranch(
       asNonBlankString(projectId, "projectId"),
       asNonBlankString(ref, "ref"),
+      discardChanges === true,
     );
   });
   register(

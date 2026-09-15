@@ -132,8 +132,12 @@ runtime.
 The toolbar shows the canonical path, branch, upstream freshness, ahead/behind
 state, local changes, and any retained Git error. **Refresh** fetches remote
 state. **Sync** performs only a fast-forward pull. Branch switching and sync are
-disabled for dirty or conflicted repositories, an ongoing merge or rebase, an
-occupied worktree branch, or an active coordinator turn.
+disabled for conflicted repositories, an ongoing merge or rebase, an occupied
+worktree branch, or an active coordinator turn. A dirty checkout blocks sync,
+but the branch picker remains available and asks the user to confirm discarding
+tracked and untracked changes before switching. A branch without an upstream is
+a valid local-only state and does not block branch switching; refresh fetches
+all configured remotes in that state so their branches remain discoverable.
 
 These buttons are explicit user actions. The coordinator agent cannot invoke
 them. Mutations are serialized by canonical repository root, across windows and

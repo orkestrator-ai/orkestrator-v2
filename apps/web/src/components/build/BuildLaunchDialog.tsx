@@ -1165,6 +1165,7 @@ export function BuildLaunchDialog({
                       />
                     );
                   }
+                  if (card.kind !== "step") return null;
                   return (
                     <BuildStepCard
                       key={card.key}

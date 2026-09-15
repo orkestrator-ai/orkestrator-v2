@@ -223,10 +223,29 @@ export interface ProjectGitStatus {
   conflicts: number;
   mergeInProgress: boolean;
   rebaseInProgress: boolean;
+  sequencerInProgress: boolean;
   operationState: "idle" | "fetching" | "syncing" | "switching";
   repositoryOperationBlockedReason: string | null;
   branches: ProjectGitBranch[];
   lastError: ProjectGitError | null;
+}
+
+/** One-time authorization to discard the checkout state shown at prepare time. */
+export interface ProjectGitSwitchConfirmation {
+  token: string;
+  projectId: string;
+  ref: string;
+  expiresAt: string;
+  trackedChanges: number;
+  untrackedFiles: number;
+  nestedRepositories: string[];
+  dirtySubmodules: string[];
+  requiresEnhancedConfirmation: boolean;
+}
+
+export interface ProjectGitSwitchOptions {
+  confirmationToken?: string;
+  includeNestedRepositories?: boolean;
 }
 
 export function coordinatorRuntimeId(coordinatorId: string, conversationId?: string): string {

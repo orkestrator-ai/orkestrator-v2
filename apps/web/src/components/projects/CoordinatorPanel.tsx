@@ -18,6 +18,7 @@ import {
   coordinatorRuntimeId,
   type CoordinatorSnapshot,
   type ProjectGitStatus,
+  type ProjectGitSwitchConfirmation,
 } from "@orkestrator/protocol/coordinator";
 import {
   AGENT_PLATFORM_LABELS,
@@ -76,7 +77,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const [operation, setOperation] = useState<"fetch" | "sync" | "switch" | "conversation" | null>(
     null,
   );
-  const [pendingSwitchRef, setPendingSwitchRef] = useState<string | null>(null);
+  const [pendingSwitch, setPendingSwitch] = useState<ProjectGitSwitchConfirmation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingLaunch, setPendingLaunch] = useState<{
     conversationId: string;
@@ -135,7 +136,11 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   }, [projectId]);
 
   const runGit = useCallback(
-    async (kind: "fetch" | "sync" | "switch", ref?: string, discardChanges = false) => {
+    async (
+      kind: "fetch" | "sync" | "switch",
+      ref?: string,
+      confirmation?: ProjectGitSwitchConfirmation,
+    ) => {
       setOperation(kind);
       setError(null);
       try {
@@ -144,7 +149,16 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             ? await backend.fetchProjectGit(projectId, true)
             : kind === "sync"
               ? await backend.syncProjectGit(projectId)
-              : await backend.switchProjectGitBranch(projectId, ref!, discardChanges);
+              : await backend.switchProjectGitBranch(
+                  projectId,
+                  ref!,
+                  confirmation
+                    ? {
+                        confirmationToken: confirmation.token,
+                        includeNestedRepositories: confirmation.requiresEnhancedConfirmation,
+                      }
+                    : {},
+                );
         setGit(next);
         const refreshed = await backend.getProjectCoordinator(projectId);
         if (refreshed) setSnapshot(refreshed);
@@ -292,10 +306,15 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const blocked = git?.repositoryOperationBlockedReason ?? null;
   const dirty = Boolean(git && (git.trackedChanges > 0 || git.untrackedChanges > 0));
   const discardableDirty = Boolean(
-    dirty && git && !git.mergeInProgress && !git.rebaseInProgress && git.conflicts === 0,
+    dirty &&
+      git &&
+      !git.mergeInProgress &&
+      !git.rebaseInProgress &&
+      !git.sequencerInProgress &&
+      git.conflicts === 0,
   );
   const switchBlocked = Boolean(blocked && !discardableDirty);
-  const pendingSwitchBranch = git?.branches.find((branch) => branch.ref === pendingSwitchRef);
+  const pendingSwitchBranch = git?.branches.find((branch) => branch.ref === pendingSwitch?.ref);
   const newestContextEvent = snapshot?.workspace.repositoryContextEvents?.at(-1);
   const contextNoticeSessionIdentity = snapshot
     ? `coordinator\u0000${projectId}\u0000${snapshot.workspace.id}\u0000${selected?.id ?? "none"}`
@@ -439,11 +458,25 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           <Select
             value={git?.branch ? `refs/heads/${git.branch}` : undefined}
             onValueChange={(value) => {
-              if (dirty) {
-                setPendingSwitchRef(value);
+              if (!discardableDirty) {
+                void runGit("switch", value);
                 return;
               }
-              void runGit("switch", value);
+              setOperation("switch");
+              setError(null);
+              void backend
+                .prepareProjectGitBranchSwitch(projectId, value)
+                .then(setPendingSwitch)
+                .catch((cause) => {
+                  setError(
+                    cause instanceof Error ? cause.message : "Could not prepare branch switch",
+                  );
+                  void backend
+                    .getProjectGitStatus(projectId)
+                    .then(setGit)
+                    .catch(() => undefined);
+                })
+                .finally(() => setOperation(null));
             }}
             disabled={branchSwitchDisabled}
           >
@@ -509,7 +542,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         {dirty ? (
           <p className="mt-1 text-xs text-amber-300">
             The checkout has {git?.trackedChanges} tracked and {git?.untrackedChanges} untracked
-            changes. Sync is blocked; switching branches will ask before discarding them.
+            changes. Sync is blocked
+            {discardableDirty ? "; switching branches will ask before discarding them." : "."}
           </p>
         ) : null}
         {blocked && switchBlocked ? <p className="mt-1 text-xs text-amber-300">{blocked}</p> : null}
@@ -767,9 +801,9 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         fixes run in disposable worker environments.
       </div>
       <AlertDialog
-        open={pendingSwitchRef !== null}
+        open={pendingSwitch !== null}
         onOpenChange={(open) => {
-          if (!open) setPendingSwitchRef(null);
+          if (!open) setPendingSwitch(null);
         }}
       >
         <AlertDialogContent>
@@ -777,8 +811,15 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             <AlertDialogTitle>Discard changes and switch branch?</AlertDialogTitle>
             <AlertDialogDescription>
               Switching to {pendingSwitchBranch?.name ?? "the selected branch"} will permanently
-              discard {git?.trackedChanges ?? 0} tracked and {git?.untrackedChanges ?? 0} untracked
-              changes from this checkout. Ignored files are kept.
+              discard {pendingSwitch?.trackedChanges ?? 0} tracked changes and{" "}
+              {pendingSwitch?.untrackedFiles ?? 0} untracked files from this checkout, including
+              files inside untracked directories. Ignored files are kept.
+              {pendingSwitch?.nestedRepositories.length
+                ? ` This will also permanently delete nested repositories: ${pendingSwitch.nestedRepositories.join(", ")}.`
+                : ""}
+              {pendingSwitch?.dirtySubmodules.length
+                ? ` This will also reset dirty submodules: ${pendingSwitch.dirtySubmodules.join(", ")}.`
+                : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -786,9 +827,9 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => {
-                const ref = pendingSwitchRef;
-                setPendingSwitchRef(null);
-                if (ref) void runGit("switch", ref, true);
+                const confirmation = pendingSwitch;
+                setPendingSwitch(null);
+                if (confirmation) void runGit("switch", confirmation.ref, confirmation);
               }}
             >
               Discard and switch

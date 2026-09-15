@@ -245,14 +245,29 @@ export function registerCoordinatorCommands(
     if (!context.projectGit) throw new Error("Project Git service is unavailable");
     return context.projectGit.sync(asNonBlankString(projectId, "projectId"));
   });
-  register("switch_project_git_branch", ({ projectId, ref, discardChanges }, context) => {
+  register("prepare_project_git_branch_switch", ({ projectId, ref }, context) => {
     if (!context.projectGit) throw new Error("Project Git service is unavailable");
-    return context.projectGit.switchBranch(
+    return context.projectGit.prepareSwitchBranch(
       asNonBlankString(projectId, "projectId"),
       asNonBlankString(ref, "ref"),
-      discardChanges === true,
     );
   });
+  register(
+    "switch_project_git_branch",
+    ({ projectId, ref, confirmationToken, includeNestedRepositories }, context) => {
+      if (!context.projectGit) throw new Error("Project Git service is unavailable");
+      return context.projectGit.switchBranch(
+        asNonBlankString(projectId, "projectId"),
+        asNonBlankString(ref, "ref"),
+        {
+          ...(typeof confirmationToken === "string" && confirmationToken
+            ? { confirmationToken }
+            : {}),
+          includeNestedRepositories: includeNestedRepositories === true,
+        },
+      );
+    },
+  );
   register(
     "write_coordinator_attachment",
     async ({ environmentId, filename, base64Data }, context) => {

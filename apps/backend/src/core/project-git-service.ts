@@ -1,15 +1,61 @@
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type {
   ProjectGitBranch,
   ProjectGitError,
   ProjectGitStatus,
+  ProjectGitSwitchConfirmation,
+  ProjectGitSwitchOptions,
 } from "@orkestrator/protocol/coordinator";
 import { CommandFailedError, runCommand } from "./shell.js";
 import type { StorageService } from "./storage.js";
 
 const FETCH_COOLDOWN_MS = 60_000;
+const CONFIRMATION_TTL_MS = 120_000;
 const MAX_ERROR_CHARS = 4_000;
+const OPERATION_MARKERS = [
+  "MERGE_HEAD",
+  "rebase-merge",
+  "rebase-apply",
+  "CHERRY_PICK_HEAD",
+  "REVERT_HEAD",
+  "sequencer",
+] as const;
+
+type CheckoutInspection = {
+  fingerprint: string;
+  untrackedFiles: number;
+  nestedRepositories: string[];
+  dirtySubmodules: string[];
+};
+
+function isDiscardableDirty(status: ProjectGitStatus): boolean {
+  return (
+    (status.trackedChanges > 0 || status.untrackedChanges > 0) &&
+    !status.mergeInProgress &&
+    !status.rebaseInProgress &&
+    !status.sequencerInProgress &&
+    status.conflicts === 0
+  );
+}
+
+function operationBlockedReason(
+  ongoing: readonly string[],
+  conflicts: number,
+  dirty: boolean,
+): string | null {
+  if (ongoing.includes("MERGE_HEAD")) return "Finish the current merge first.";
+  if (ongoing.includes("rebase-merge") || ongoing.includes("rebase-apply")) {
+    return "Finish the current rebase first.";
+  }
+  if (ongoing.includes("CHERRY_PICK_HEAD")) return "Finish the current cherry-pick first.";
+  if (ongoing.includes("REVERT_HEAD")) return "Finish the current revert first.";
+  if (ongoing.includes("sequencer")) return "Finish the current sequencer operation first.";
+  if (conflicts > 0) return "Resolve repository conflicts first.";
+  if (dirty) return "Commit or discard local checkout changes before switching or syncing.";
+  return null;
+}
 
 function cleanErrorText(value: unknown): string {
   return (value instanceof Error ? value.message : String(value))
@@ -69,6 +115,15 @@ export class ProjectGitService {
   private readonly fetches = new Map<
     string,
     { force: boolean; promise: Promise<ProjectGitStatus> }
+  >();
+  private readonly confirmations = new Map<
+    string,
+    {
+      token: string;
+      ref: string;
+      fingerprint: string;
+      expiresAt: number;
+    }
   >();
 
   constructor(
@@ -190,6 +245,146 @@ export class ProjectGitService {
       .slice(0, 2_000);
   }
 
+  private async inspectCheckout(root: string, status: ProjectGitStatus): Promise<CheckoutInspection> {
+    const [indexTree, trackedDiff, unstagedDiff, untrackedList, cleanPreview, submoduleStatus] =
+      await Promise.all([
+        runCommand("git", ["write-tree"], { cwd: root, timeoutMs: 10_000 }).catch(() => ({
+          stdout: "",
+        })),
+        status.headCommit
+          ? runCommand("git", ["diff-index", "--raw", "-z", "HEAD"], {
+              cwd: root,
+              timeoutMs: 10_000,
+            }).catch(() => ({ stdout: "" }))
+          : runCommand("git", ["diff", "--cached", "--raw", "-z"], {
+              cwd: root,
+              timeoutMs: 10_000,
+            }).catch(() => ({ stdout: "" })),
+        runCommand("git", ["diff", "--raw", "-z"], { cwd: root, timeoutMs: 10_000 }).catch(() => ({
+          stdout: "",
+        })),
+        runCommand("git", ["ls-files", "-z", "-o", "--exclude-standard"], {
+          cwd: root,
+          timeoutMs: 10_000,
+        }),
+        runCommand("git", ["clean", "-ndff"], { cwd: root, timeoutMs: 10_000 }).catch(() => ({
+          stdout: "",
+        })),
+        runCommand("git", ["submodule", "status", "--recursive"], {
+          cwd: root,
+          timeoutMs: 10_000,
+        }).catch(() => ({ stdout: "" })),
+      ]);
+    const untrackedPaths = untrackedList.stdout.split("\0").filter(Boolean);
+    const untrackedHashes = await Promise.all(
+      untrackedPaths.map(async (relative) => {
+        const hashed = await runCommand("git", ["hash-object", "--", relative], {
+          cwd: root,
+          timeoutMs: 10_000,
+        }).catch(() => ({ stdout: "" }));
+        return `${relative}\0${hashed.stdout.trim()}`;
+      }),
+    );
+    const nestedFromClean = cleanPreview.stdout.split("\n").flatMap((line) => {
+      const match = /(?:Would skip|Skipping) repository (.+)$/.exec(line.trim());
+      return match?.[1] ? [match[1].replace(/\/$/, "")] : [];
+    });
+    const nestedFromWorktree = (
+      await Promise.all(
+        untrackedPaths.map(async (relative) => {
+          const abs = path.resolve(root, relative);
+          const stat = await fs.lstat(abs).catch(() => null);
+          if (!stat?.isDirectory()) return null;
+          return fs.access(path.join(abs, ".git")).then(
+            () => relative.replace(/\/$/, ""),
+            () => null,
+          );
+        }),
+      )
+    ).filter((item): item is string => Boolean(item));
+    const nestedRepositories = [...new Set([...nestedFromClean, ...nestedFromWorktree])];
+    const dirtyFromStatus = submoduleStatus.stdout.split("\n").flatMap((line) => {
+      const match = /^[+\-U][0-9a-f]+\s+(\S+)/.exec(line);
+      return match?.[1] ? [match[1]] : [];
+    });
+    const dirtyFromWorktrees = (
+      await runCommand(
+        "git",
+        [
+          "submodule",
+          "foreach",
+          "--recursive",
+          "--quiet",
+          'test -z "$(git status --porcelain)" || printf "%s\\n" "$displaypath"',
+        ],
+        { cwd: root, timeoutMs: 20_000 },
+      ).catch(() => ({ stdout: "" }))
+    ).stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const dirtySubmodules = [...new Set([...dirtyFromStatus, ...dirtyFromWorktrees])];
+    const fingerprint = createHash("sha256")
+      .update(status.headCommit ?? "unborn")
+      .update("\0")
+      .update(indexTree.stdout.trim())
+      .update("\0")
+      .update(trackedDiff.stdout)
+      .update("\0")
+      .update(unstagedDiff.stdout)
+      .update("\0")
+      .update(untrackedHashes.join("\n"))
+      .update("\0")
+      .update(nestedRepositories.join("\n"))
+      .update("\0")
+      .update(dirtySubmodules.join("\n"))
+      .update("\0")
+      .update(
+        [
+          status.mergeInProgress ? "merge" : "",
+          status.rebaseInProgress ? "rebase" : "",
+          status.sequencerInProgress ? "sequencer" : "",
+          String(status.conflicts),
+        ].join(","),
+      )
+      .digest("hex");
+    return {
+      fingerprint,
+      untrackedFiles: untrackedPaths.length,
+      nestedRepositories,
+      dirtySubmodules,
+    };
+  }
+
+  private consumeConfirmation(
+    projectId: string,
+    ref: string,
+    token: string | undefined,
+    inspection: CheckoutInspection,
+  ): void {
+    if (!token) {
+      throw new Error("Confirm the current checkout before discarding changes.");
+    }
+    const pending = this.confirmations.get(projectId);
+    this.confirmations.delete(projectId);
+    if (!pending || pending.token !== token) {
+      throw new Error("Confirm the current checkout before discarding changes.");
+    }
+    if (pending.ref !== ref) {
+      throw new Error("The discard confirmation does not match this branch switch.");
+    }
+    if (pending.expiresAt <= Date.now()) {
+      throw new Error(
+        "The discard confirmation expired. Review the current changes and confirm again.",
+      );
+    }
+    if (pending.fingerprint !== inspection.fingerprint) {
+      throw new Error(
+        `The checkout changed after confirmation (${inspection.untrackedFiles} untracked files). Review the updated changes and confirm again.`,
+      );
+    }
+  }
+
   private async readStatus(
     projectId: string,
     root: string,
@@ -208,7 +403,7 @@ export class ProjectGitService {
         timeoutMs: 10_000,
       }).catch(() => ({ stdout: "", stderr: "" })),
       Promise.all(
-        ["MERGE_HEAD", "rebase-merge", "rebase-apply"].map(async (name) => {
+        OPERATION_MARKERS.map(async (name) => {
           const gitPath = (
             await runCommand("git", ["rev-parse", "--git-path", name], {
               cwd: root,
@@ -251,17 +446,20 @@ export class ProjectGitService {
     const remote = upstreamName?.includes("/")
       ? upstreamName.slice(0, upstreamName.indexOf("/"))
       : null;
-    const ongoing = operations.filter((item): item is string => Boolean(item));
+    const ongoing = operations.filter(
+      (item): item is (typeof OPERATION_MARKERS)[number] => item !== null,
+    );
     const mergeInProgress = ongoing.includes("MERGE_HEAD");
     const rebaseInProgress = ongoing.includes("rebase-merge") || ongoing.includes("rebase-apply");
-    const blockedReason =
-      ongoing.length > 0
-        ? `Finish the current ${ongoing[0] === "MERGE_HEAD" ? "merge" : "rebase"} first.`
-        : conflicts > 0
-          ? "Resolve repository conflicts first."
-          : trackedChanges + untrackedChanges > 0
-            ? "Commit or discard local checkout changes before switching or syncing."
-            : null;
+    const sequencerInProgress =
+      ongoing.includes("CHERRY_PICK_HEAD") ||
+      ongoing.includes("REVERT_HEAD") ||
+      ongoing.includes("sequencer");
+    const blockedReason = operationBlockedReason(
+      ongoing,
+      conflicts,
+      trackedChanges + untrackedChanges > 0,
+    );
     return {
       projectId,
       repositoryRoot: root,
@@ -281,6 +479,7 @@ export class ProjectGitService {
       conflicts,
       mergeInProgress,
       rebaseInProgress,
+      sequencerInProgress,
       operationState: "idle",
       repositoryOperationBlockedReason: blockedReason,
       branches,
@@ -445,13 +644,12 @@ export class ProjectGitService {
           (await this.storage.getCoordinatorWorkspace(projectId))?.repositoryStatus,
         );
         const dirty = before.trackedChanges > 0 || before.untrackedChanges > 0;
-        const discardableDirty =
-          dirty && !before.mergeInProgress && !before.rebaseInProgress && before.conflicts === 0;
-        if (before.repositoryOperationBlockedReason && !(options.allowDirty && discardableDirty)) {
+        const discardableDirty = isDiscardableDirty(before);
+        if (before.repositoryOperationBlockedReason && !discardableDirty) {
           throw new Error(before.repositoryOperationBlockedReason);
         }
         if (dirty && !options.allowDirty) {
-          throw new Error("Commit or discard local checkout changes before switching or syncing.");
+          throw new Error("Confirm the current checkout before discarding changes.");
         }
         await this.operationState(projectId, state);
         if (await this.hasActiveCoordinatorTurns(projectId)) {
@@ -503,11 +701,76 @@ export class ProjectGitService {
     });
   }
 
+  async prepareSwitchBranch(
+    projectId: string,
+    ref: string,
+  ): Promise<ProjectGitSwitchConfirmation> {
+    if (this.activeMutations.has(projectId)) {
+      throw new Error("The project checkout is already changing");
+    }
+    if ((this.pendingTurns.get(projectId) ?? 0) > 0) {
+      throw new Error("Wait for the coordinator turn to start before changing the checkout");
+    }
+    const root = await this.root(projectId);
+    return this.serialize(root, async () => {
+      const before = await this.readStatus(
+        projectId,
+        root,
+        (await this.storage.getCoordinatorWorkspace(projectId))?.repositoryStatus,
+      );
+      await this.persist(projectId, before);
+      if (!isDiscardableDirty(before)) {
+        throw new Error(
+          before.repositoryOperationBlockedReason ??
+            "There are no local changes to discard.",
+        );
+      }
+      const branch = before.branches.find((item) => item.ref === ref);
+      if (!branch) throw new Error("The selected branch is no longer available");
+      if (branch.occupiedWorktreePath) {
+        throw new Error("That branch is checked out in another worktree");
+      }
+      if (branch.kind === "remote") {
+        if (!branch.remote) throw new Error("Remote branch identity is invalid");
+        const remoteBranch = branch.name.slice(branch.remote.length + 1);
+        if (before.branches.some((item) => item.kind === "local" && item.name === remoteBranch)) {
+          throw new Error("A local branch with that name already exists");
+        }
+      }
+      const inspection = await this.inspectCheckout(root, before);
+      const token = randomUUID();
+      const expiresAt = Date.now() + CONFIRMATION_TTL_MS;
+      this.confirmations.set(projectId, {
+        token,
+        ref,
+        fingerprint: inspection.fingerprint,
+        expiresAt,
+      });
+      return {
+        token,
+        projectId,
+        ref,
+        expiresAt: new Date(expiresAt).toISOString(),
+        trackedChanges: before.trackedChanges,
+        untrackedFiles: inspection.untrackedFiles,
+        nestedRepositories: inspection.nestedRepositories,
+        dirtySubmodules: inspection.dirtySubmodules,
+        requiresEnhancedConfirmation:
+          inspection.nestedRepositories.length > 0 || inspection.dirtySubmodules.length > 0,
+      };
+    });
+  }
+
   async switchBranch(
     projectId: string,
     ref: string,
-    discardChanges = false,
+    discard: boolean | ProjectGitSwitchOptions = false,
   ): Promise<ProjectGitStatus> {
+    const options: ProjectGitSwitchOptions =
+      typeof discard === "boolean" ? {} : (discard ?? {});
+    const confirmationToken =
+      typeof discard === "boolean" ? undefined : options.confirmationToken;
+    const allowDirty = Boolean(confirmationToken);
     return this.mutation(
       projectId,
       "switching",
@@ -533,24 +796,34 @@ export class ProjectGitService {
 
         const dirty = status.trackedChanges > 0 || status.untrackedChanges > 0;
         if (dirty) {
-          if (status.headCommit) {
-            await runCommand("git", ["reset", "--hard", "HEAD"], {
-              cwd: root,
-              timeoutMs: 30_000,
-            });
-          } else {
-            // An unborn branch has no HEAD for reset --hard. Empty the index so
-            // the clean below can remove files staged for the initial commit.
-            await runCommand("git", ["rm", "-r", "-f", "--cached", "--ignore-unmatch", "."], {
-              cwd: root,
-              timeoutMs: 30_000,
-            });
+          const inspection = await this.inspectCheckout(root, status);
+          this.consumeConfirmation(projectId, ref, confirmationToken, inspection);
+          const enhanced =
+            options.includeNestedRepositories === true &&
+            (inspection.nestedRepositories.length > 0 || inspection.dirtySubmodules.length > 0);
+          if (
+            (inspection.nestedRepositories.length > 0 || inspection.dirtySubmodules.length > 0) &&
+            !enhanced
+          ) {
+            const names = [...inspection.nestedRepositories, ...inspection.dirtySubmodules].join(
+              ", ",
+            );
+            throw new Error(
+              `This checkout has nested repositories or dirty submodules (${names}) that a normal discard will not remove. Confirm deletion of those repositories to continue.`,
+            );
           }
-          await runCommand("git", ["clean", "-f", "-d"], { cwd: root, timeoutMs: 30_000 });
+          if (enhanced) switchArgs.splice(1, 0, "--discard-changes", "--recurse-submodules");
+          else switchArgs.splice(1, 0, "--discard-changes");
+          await runCommand("git", switchArgs, { cwd: root, timeoutMs: 30_000 });
+          await runCommand("git", ["clean", enhanced ? "-ff" : "-f", "-d"], {
+            cwd: root,
+            timeoutMs: 30_000,
+          });
+          return;
         }
         await runCommand("git", switchArgs, { cwd: root, timeoutMs: 30_000 });
       },
-      { allowDirty: discardChanges },
+      { allowDirty },
     );
   }
 }

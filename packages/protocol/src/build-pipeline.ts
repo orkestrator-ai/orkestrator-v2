@@ -294,6 +294,10 @@ export interface PipelineSession {
   sdkSessionId: string;
   status: "running" | "idle" | "error";
   startedAt: string;
+  /** End of this stage attempt, retained for settled runtime presentation. */
+  completedAt?: string;
+  /** Cumulative provider-session usage captured for an independent reviewer. */
+  tokenCount?: number;
   label: string;
   /** Provider transcript snapshot. The backend refreshes it; clients only render it. */
   messages?: unknown[];
@@ -854,6 +858,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     value.sdkSessionId.length > 0 &&
     (value.status === "running" || value.status === "idle" || value.status === "error") &&
     isIsoDate(value.startedAt) &&
+    (value.completedAt === undefined || isIsoDate(value.completedAt)) &&
+    (value.tokenCount === undefined || isNonNegativeInteger(value.tokenCount)) &&
     typeof value.label === "string" &&
     (value.messages === undefined || Array.isArray(value.messages)) &&
     (value.messageRevision === undefined || isNonNegativeInteger(value.messageRevision)) &&

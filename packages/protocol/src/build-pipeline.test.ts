@@ -1633,6 +1633,9 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline(withSession({ structuredResultStatus: "accepted" }))).toBe(true);
     expect(isBuildPipeline(withSession({ structuredResultStatus: "complete" }))).toBe(false);
     expect(isBuildPipeline(withSession({ structuredReportRepairAttempts: 0 }))).toBe(true);
+    expect(
+      isBuildPipeline(withSession({ completedAt: "2026-07-29T00:01:00.000Z", tokenCount: 12_345 })),
+    ).toBe(true);
 
     // A malformed timestamp here is not cosmetic: the supervisor subtracts it
     // from now() to decide whether to fail a stalled turn.
@@ -1642,6 +1645,12 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline(withSession({ turnStartedAt: "March 5 2020" }))).toBe(false);
     expect(isBuildPipeline(withSession({ turnStartedAt: 0 }))).toBe(false);
     expect(isBuildPipeline(withSession({ messagesFingerprint: "" }))).toBe(false);
+    for (const completedAt of ["soon", "March 5 2020", 0, null]) {
+      expect(isBuildPipeline(withSession({ completedAt }))).toBe(false);
+    }
+    for (const tokenCount of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "12", null]) {
+      expect(isBuildPipeline(withSession({ tokenCount }))).toBe(false);
+    }
     // The repair budget is compared against a bound, and the supervisor refuses
     // to persist a snapshot this rejects — so a value that cannot be counted
     // has to fail here rather than strand every later save.

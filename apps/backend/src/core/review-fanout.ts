@@ -619,7 +619,7 @@ export interface ReviewFanoutHost {
   ): Promise<void>;
   /** Best-effort abort of a session the workflow is discarding. */
   abandonSession(selection: ReviewerModelSelection, providerSessionId: string): Promise<void>;
-  /** Multi Review renders reviewer usage; pipeline fanout deliberately does not. */
+  /** Whether this owner persists provider-session usage for reviewer presentation. */
   readonly captureReviewerUsage?: boolean;
   /**
    * Lets an owner mirror a reviewer's transcript into its own read model.

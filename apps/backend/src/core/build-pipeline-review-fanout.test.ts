@@ -112,6 +112,7 @@ class FanoutProvider implements BuildPipelineProvider {
   readonly runningModels = new Set<string>();
   readonly blockedModels = new Set<string>();
   readonly ambiguousModels = new Set<string>();
+  usageFromMessages?: BuildPipelineProvider["usageFromMessages"];
   invalidConsolidationResults = 0;
   unknownSourceConsolidationResults = 0;
   runningConsolidation = false;
@@ -493,6 +494,7 @@ describe("build pipeline multi-model review", () => {
 
   test("fans out to every reviewer, consolidates, then addresses the merged report", async () => {
     await withPipeline(async ({ service, read, provider, packageGeneration }) => {
+      provider.usageFromMessages = () => ({ usedTokens: 12_345, sessionTokens: 12_345 });
       const started = await service.start(
         startInput([
           { agent: "claude", model: "opus" },
@@ -549,6 +551,9 @@ describe("build pipeline multi-model review", () => {
       expect(reviewSessions).toHaveLength(2);
       expect(reviewSessions.every((session) => session.status === "idle")).toBe(true);
       expect(reviewSessions.every((session) => session.reviewReport !== undefined)).toBe(true);
+      expect(reviewSessions.map((session) => session.model)).toEqual(["opus", "sonnet"]);
+      expect(reviewSessions.every((session) => session.completedAt !== undefined)).toBe(true);
+      expect(reviewSessions.map((session) => session.tokenCount)).toEqual([12_345, 12_345]);
       expect(reviewSessions.every((session) => session.structuredResultStatus === "accepted")).toBe(
         true,
       );
@@ -752,6 +757,11 @@ describe("build pipeline multi-model review", () => {
 
       expect(provider.aborted).toEqual(expect.arrayContaining(liveIds));
       expect(cancelled.sessions.every((session) => session.status !== "running")).toBe(true);
+      const cancelledReviews = cancelled.sessions.filter((session) =>
+        /^Review \d+$/.test(session.label),
+      );
+      expect(cancelledReviews.every((session) => session.completedAt !== undefined)).toBe(true);
+      expect(cancelledReviews.map((session) => session.model)).toEqual(["opus", "sonnet"]);
       expect(
         cancelled.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "cancelled"),
       ).toBe(true);

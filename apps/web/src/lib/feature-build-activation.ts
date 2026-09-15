@@ -4,6 +4,7 @@ import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import { isActiveBuildPhase, useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores/uiStore";
+import { armBuildPipelineTabActivation } from "@/lib/pane-layout-authoritative";
 
 interface PendingFeatureBuildActivation {
   projectId: string;
@@ -19,7 +20,8 @@ function stopListeningWhenIdle(): void {
   unsubscribe = null;
 }
 
-function activate(projectId: string, environmentId: string): void {
+function activate(projectId: string, environmentId: string, pipelineId: string): void {
+  armBuildPipelineTabActivation(environmentId, pipelineId);
   const ui = useUIStore.getState();
   ui.setProjectCollapsed(projectId, false);
   ui.selectProjectAndEnvironment(projectId, environmentId);
@@ -72,7 +74,7 @@ function reconcilePendingActivation(pipelineId: string): void {
     );
   } else if (pipeline.environmentId) {
     pendingActivations.delete(pipelineId);
-    activate(pending.projectId, pipeline.environmentId);
+    activate(pending.projectId, pipeline.environmentId, pipelineId);
   } else if (!isActiveBuildPhase(pipeline.phase)) {
     // A terminal pipeline without an environment can never satisfy this intent.
     pendingActivations.delete(pipelineId);
@@ -105,7 +107,7 @@ export function activateFeatureBuildEnvironment(
 ): void {
   if (result.environmentId) {
     pendingActivations.delete(result.pipelineId);
-    activate(projectId, result.environmentId);
+    activate(projectId, result.environmentId, result.pipelineId);
     stopListeningWhenIdle();
     return;
   }

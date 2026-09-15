@@ -13,6 +13,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
 import * as backend from "@/lib/backend";
 import { resolveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
+import { armBuildPipelineTabActivation } from "@/lib/pane-layout-authoritative";
 import { buildPipelineConfiguredDefaults } from "@/lib/build-launch-options";
 import type { DefaultAgent, EnvironmentType } from "@/types";
 import type { KanbanTask } from "@/lib/backend";
@@ -207,6 +208,7 @@ export function useBuildPipeline() {
         const authoritative = await backend.startBuildPipeline(input);
         const pipeline = authoritative as BuildPipeline;
         replacePipeline(pipeline);
+        armBuildPipelineTabActivation(pipeline.environmentId, pipeline.id);
         setProjectCollapsed(ticket.projectId, false);
         selectProjectAndEnvironment(ticket.projectId, pipeline.environmentId);
         toast.success("Build pipeline started");

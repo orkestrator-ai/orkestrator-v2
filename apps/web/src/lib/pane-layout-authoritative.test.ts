@@ -28,9 +28,11 @@ mock.module("@/lib/looped-review-persistence", () => ({ hydrateLoopedReviewWorkf
 mock.module("@/lib/multi-review-persistence", () => ({ hydrateMultiReviewWorkflow }));
 
 const {
+  armBuildPipelineTabActivation,
   armStartupAgentTabActivation,
   beginPaneTabActivationRequest,
   collectPaneDependencyIds,
+  commitBuildPipelineSetupHandoff,
   commitStartupAgentSetupHandoff,
   hydratePaneLayoutDependencies,
   reconcileAuthoritativePaneLayout,
@@ -41,8 +43,11 @@ const { useEnvironmentStore } = await import("@/stores/environmentStore");
 const { useLoopedReviewStore } = await import("@/stores/loopedReviewStore");
 const { useMultiReviewStore } = await import("@/stores/multiReviewStore");
 const { LEGACY_PANE_LAYOUT_VERSION, PANE_LAYOUT_VERSION } = await import("@/types/paneLayout");
-const { consumeWindowStartupAgentActivation, hasWindowStartupAgentActivation } =
-  await import("./pane-selection-storage");
+const {
+  consumeWindowStartupAgentActivation,
+  getWindowBuildPipelineActivation,
+  hasWindowStartupAgentActivation,
+} = await import("./pane-selection-storage");
 
 type PaneNode = import("@/types/paneLayout").PaneNode;
 type PersistedPaneLayout = import("@/types/paneLayout").PersistedPaneLayout;
@@ -346,6 +351,68 @@ describe("reconcileAuthoritativePaneLayout", () => {
       );
 
       expect(restored?.root).toMatchObject({ activeTabId: "tab-2" });
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("hands the launching Electron window from setup to its pipeline tab", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "running", setupScriptsComplete: false })],
+      });
+      useBuildPipelineStore.setState({
+        pipelines: new Map([["pipeline-1", {} as never]]),
+        buildEnvironmentIds: new Set(["env-1"]),
+      });
+      const setupTab = { id: "setup", type: "plain" as const, isSetupTab: true };
+      const buildTab = {
+        id: "build-pipeline-1",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+          isLocal: false,
+        },
+      };
+      const currentRoot = leaf("default", [setupTab, buildTab]);
+      if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+      currentRoot.activeTabId = "setup";
+      const backendRoot = leaf("default", [setupTab, buildTab]);
+      if (backendRoot.kind !== "leaf") throw new Error("expected leaf");
+      backendRoot.activeTabId = "build-pipeline-1";
+
+      armBuildPipelineTabActivation("env-1", "pipeline-1");
+      const beforeSetupCompletes = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        paneState(currentRoot),
+      );
+      expect(beforeSetupCompletes?.root).toMatchObject({ activeTabId: "setup" });
+      expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-1");
+      if (!beforeSetupCompletes) throw new Error("expected a pending layout");
+
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
+      });
+      const handedOff = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        beforeSetupCompletes,
+      );
+
+      expect(handedOff?.root).toMatchObject({ activeTabId: "build-pipeline-1" });
+      expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-1");
+      if (!handedOff) throw new Error("expected a handed-off layout");
+      commitBuildPipelineSetupHandoff("env-1", handedOff);
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;

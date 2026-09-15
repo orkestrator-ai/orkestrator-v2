@@ -17,6 +17,7 @@ import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
 const STORAGE_KEY = "orkestrator.pane-selection.v1";
 const WINDOW_STORAGE_KEY = "orkestrator.window-pane-selection.v1";
 const WINDOW_STARTUP_AGENT_ACTIVATION_KEY = "orkestrator.window-startup-agent-activation.v1";
+const WINDOW_BUILD_PIPELINE_ACTIVATION_KEY = "orkestrator.window-build-pipeline-activation.v1";
 
 /** Bounds on the record, so an app that has opened many environments over its
  * lifetime cannot grow this without limit. Oldest-written entries are evicted
@@ -53,6 +54,46 @@ function writeStartupAgentActivations(environmentIds: string[]): void {
   } catch {
     // Best-effort window presentation state. The backend launch remains
     // authoritative even when this client cannot remember to focus its tab.
+  }
+}
+
+interface BuildPipelineActivation {
+  environmentId: string;
+  pipelineId: string;
+}
+
+function readBuildPipelineActivations(): BuildPipelineActivation[] {
+  const store = storage();
+  if (!store) return [];
+  try {
+    const raw = store.getItem(desktopConnectionStorageKey(WINDOW_BUILD_PIPELINE_ACTIVATION_KEY));
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed) || !Array.isArray(parsed.entries)) return [];
+    return parsed.entries.filter(
+      (entry): entry is BuildPipelineActivation =>
+        isRecord(entry) &&
+        typeof entry.environmentId === "string" &&
+        entry.environmentId.length > 0 &&
+        typeof entry.pipelineId === "string" &&
+        entry.pipelineId.length > 0,
+    );
+  } catch {
+    return [];
+  }
+}
+
+function writeBuildPipelineActivations(entries: BuildPipelineActivation[]): void {
+  const store = storage();
+  if (!store) return;
+  try {
+    store.setItem(
+      desktopConnectionStorageKey(WINDOW_BUILD_PIPELINE_ACTIVATION_KEY),
+      JSON.stringify({ version: 1, entries: entries.slice(-MAX_ENVIRONMENTS) }),
+    );
+  } catch {
+    // Best-effort window presentation state. The pipeline keeps running even
+    // when this client cannot remember to focus its tab after setup.
   }
 }
 
@@ -211,6 +252,52 @@ export function clearWindowStartupAgentActivation(environmentId: string): void {
   const environmentIds = readStartupAgentActivations();
   if (!environmentIds.includes(environmentId)) return;
   writeStartupAgentActivations(environmentIds.filter((candidate) => candidate !== environmentId));
+}
+
+/** Remember the pipeline tab that should replace setup in the launching window. */
+export function armWindowBuildPipelineActivation(environmentId: string, pipelineId: string): void {
+  if (!environmentId || !pipelineId) return;
+  const entries = readBuildPipelineActivations().filter(
+    (candidate) => candidate.environmentId !== environmentId,
+  );
+  entries.push({ environmentId, pipelineId });
+  writeBuildPipelineActivations(entries);
+}
+
+/** Read the one pending pipeline handoff for an environment without retiring it. */
+export function getWindowBuildPipelineActivation(environmentId: string): string | null {
+  return (
+    readBuildPipelineActivations().find((candidate) => candidate.environmentId === environmentId)
+      ?.pipelineId ?? null
+  );
+}
+
+/** Consume a handoff only after the requested pipeline tab is installed and selected. */
+export function consumeWindowBuildPipelineActivation(
+  environmentId: string,
+  pipelineId: string,
+): boolean {
+  const entries = readBuildPipelineActivations();
+  if (
+    !entries.some(
+      (candidate) =>
+        candidate.environmentId === environmentId && candidate.pipelineId === pipelineId,
+    )
+  ) {
+    return false;
+  }
+  writeBuildPipelineActivations(
+    entries.filter((candidate) => candidate.environmentId !== environmentId),
+  );
+  return true;
+}
+
+/** Drop a pipeline handoff when its environment is deleted. */
+export function clearWindowBuildPipelineActivation(environmentId: string): void {
+  const entries = readBuildPipelineActivations();
+  const remaining = entries.filter((candidate) => candidate.environmentId !== environmentId);
+  if (remaining.length === entries.length) return;
+  writeBuildPipelineActivations(remaining);
 }
 
 /**

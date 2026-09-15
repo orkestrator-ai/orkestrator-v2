@@ -8,6 +8,7 @@ import { useConfigStore } from "@/stores/configStore";
 import { usePaneLayoutStore, getAllLeaves } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { KanbanTask } from "@/lib/backend";
+import { getWindowBuildPipelineActivation } from "@/lib/pane-selection-storage";
 import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
@@ -101,6 +102,7 @@ function buildTabs(environmentId: string) {
 describe("useBuildPipeline", () => {
   beforeEach(() => {
     cleanup();
+    localStorage.clear();
     startBuildPipelineMock.mockClear();
     getKanbanImageDataMock.mockClear();
     useBuildPipelineStore.setState({
@@ -141,6 +143,26 @@ describe("useBuildPipeline", () => {
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-new");
     expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
     expect(buildTabs("env-new")).toEqual([]);
+  });
+
+  test("arms the launching Electron window to focus the pipeline after setup", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      const { result } = renderHook(() => useBuildPipeline());
+
+      await act(async () => {
+        await result.current.startBuild(task, "local");
+      });
+
+      expect(getWindowBuildPipelineActivation("env-new")).toBe("pipeline-new");
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
   });
 
   test("converts Linear and GitHub issues into backend-owned task snapshots", async () => {

@@ -20,9 +20,13 @@ import {
 } from "@/types/paneLayout";
 import {
   applyStoredPaneSelection,
+  armWindowBuildPipelineActivation,
   armWindowStartupAgentActivation,
+  clearWindowBuildPipelineActivation,
   clearWindowStartupAgentActivation,
+  consumeWindowBuildPipelineActivation,
   consumeWindowStartupAgentActivation,
+  getWindowBuildPipelineActivation,
   hasWindowStartupAgentActivation,
   readWindowPaneSelection,
 } from "@/lib/pane-selection-storage";
@@ -62,6 +66,10 @@ export interface PaneTabActivationRequest {
 const pendingTabActivations = new Map<string, string>();
 const latestTabActivationRequests = new Map<string, PaneTabActivationRequest>();
 const startupAgentActivationCommits = new WeakMap<EnvironmentPaneState, string>();
+const buildPipelineActivationCommits = new WeakMap<
+  EnvironmentPaneState,
+  { environmentId: string; pipelineId: string }
+>();
 
 function boundActivationMap<T>(map: Map<string, T>): void {
   while (map.size > MAX_PENDING_TAB_ACTIVATIONS) {
@@ -172,6 +180,38 @@ function applyStartupAgentSetupHandoff(
   };
 }
 
+/** Apply a launching Electron window's one-shot setup-to-pipeline handoff. */
+function applyBuildPipelineSetupHandoff(
+  environmentId: string,
+  authoritative: EnvironmentPaneState,
+  selected: EnvironmentPaneState,
+): { state: EnvironmentPaneState; pipelineId: string | null } {
+  const pipelineId = getWindowBuildPipelineActivation(environmentId);
+  if (
+    !pipelineId ||
+    !environmentIsReadyForSetupHandoff(
+      useEnvironmentStore.getState().getEnvironmentById(environmentId),
+    )
+  ) {
+    return { state: selected, pipelineId: null };
+  }
+
+  const authoritativeLeaf = findLeaf(authoritative.root, (leaf) =>
+    leaf.tabs.some(
+      (tab) => tab.type === "claude-build" && tab.buildTabData?.pipelineId === pipelineId,
+    ),
+  );
+  const targetTab = authoritativeLeaf?.tabs.find(
+    (tab) => tab.type === "claude-build" && tab.buildTabData?.pipelineId === pipelineId,
+  );
+  if (!targetTab || authoritativeLeaf?.activeTabId !== targetTab.id) {
+    return { state: selected, pipelineId: null };
+  }
+
+  const activated = activateTabInState(selected, targetTab.id);
+  return activated ? { state: activated, pipelineId } : { state: selected, pipelineId: null };
+}
+
 /** Arm the post-setup focus handoff in the Electron window that created the environment. */
 export function armStartupAgentTabActivation(environmentId: string): void {
   if (!window.orkestrator?.isolatedViewState) return;
@@ -182,6 +222,44 @@ export function armStartupAgentTabActivation(environmentId: string): void {
 export function clearStartupAgentTabActivation(environmentId: string): void {
   if (!window.orkestrator?.isolatedViewState) return;
   clearWindowStartupAgentActivation(environmentId);
+}
+
+/** Arm the post-setup pipeline focus handoff in the Electron window that launched it. */
+export function armBuildPipelineTabActivation(environmentId: string, pipelineId: string): void {
+  if (!window.orkestrator?.isolatedViewState) return;
+  armWindowBuildPipelineActivation(environmentId, pipelineId);
+
+  // The setup-complete event can win the race with the start response for a
+  // no-op or very short setup. If the requested tab is already present in a
+  // ready environment, finish the handoff immediately instead of waiting for
+  // another authoritative frame that may never arrive.
+  if (
+    !environmentIsReadyForSetupHandoff(
+      useEnvironmentStore.getState().getEnvironmentById(environmentId),
+    )
+  ) {
+    return;
+  }
+  const store = usePaneLayoutStore.getState();
+  const state = store.environments.get(environmentId);
+  if (!state) return;
+  const targetLeaf = findLeaf(state.root, (leaf) =>
+    leaf.tabs.some(
+      (tab) => tab.type === "claude-build" && tab.buildTabData?.pipelineId === pipelineId,
+    ),
+  );
+  const targetTab = targetLeaf?.tabs.find(
+    (tab) => tab.type === "claude-build" && tab.buildTabData?.pipelineId === pipelineId,
+  );
+  if (!targetLeaf || !targetTab) return;
+  store.setActiveTab(targetLeaf.id, targetTab.id, environmentId);
+  consumeWindowBuildPipelineActivation(environmentId, pipelineId);
+}
+
+/** Cancel a pipeline handoff whose environment was deleted. */
+export function clearBuildPipelineTabActivation(environmentId: string): void {
+  if (!window.orkestrator?.isolatedViewState) return;
+  clearWindowBuildPipelineActivation(environmentId);
 }
 
 /**
@@ -196,6 +274,17 @@ export function commitStartupAgentSetupHandoff(
   if (startupAgentActivationCommits.get(state) !== environmentId) return;
   startupAgentActivationCommits.delete(state);
   consumeWindowStartupAgentActivation(environmentId);
+}
+
+/** Retire a pipeline handoff only after its activated layout is installed. */
+export function commitBuildPipelineSetupHandoff(
+  environmentId: string,
+  state: EnvironmentPaneState,
+): void {
+  const commit = buildPipelineActivationCommits.get(state);
+  if (!commit || commit.environmentId !== environmentId) return;
+  buildPipelineActivationCommits.delete(state);
+  consumeWindowBuildPipelineActivation(commit.environmentId, commit.pipelineId);
 }
 
 /**
@@ -401,9 +490,20 @@ export function reconcileAuthoritativePaneLayout(
       readWindowPaneSelection(environmentId),
     );
     const startupHandoff = applyStartupAgentSetupHandoff(environmentId, restored, selected);
-    const reconciled = applyPendingTabActivation(environmentId, startupHandoff.state);
+    const buildHandoff = applyBuildPipelineSetupHandoff(
+      environmentId,
+      restored,
+      startupHandoff.state,
+    );
+    const reconciled = applyPendingTabActivation(environmentId, buildHandoff.state);
     if (startupHandoff.retireActivationAfterInstall) {
       startupAgentActivationCommits.set(reconciled, environmentId);
+    }
+    if (buildHandoff.pipelineId) {
+      buildPipelineActivationCommits.set(reconciled, {
+        environmentId,
+        pipelineId: buildHandoff.pipelineId,
+      });
     }
     return reconciled;
   }

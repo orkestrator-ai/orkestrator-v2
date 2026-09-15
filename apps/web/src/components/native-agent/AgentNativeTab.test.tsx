@@ -2525,75 +2525,117 @@ describe("AgentNativeTab", () => {
     );
   });
 
-  test("carries first-prompt mentions and pasted images through the provider lock", async () => {
-    usePaneLayoutStore.setState({
-      environments: new Map([
-        [
-          "env-1",
-          {
-            root: {
-              kind: "leaf",
-              id: "default",
-              tabs: [
-                {
-                  id: "tab-first-prompt",
-                  type: "agent-native",
-                  nativeAgentData: { environmentId: "env-1" },
-                },
-              ],
-              activeTabId: "tab-first-prompt",
+  test.each(["button", "Enter"])(
+    "dispatches the first prompt after %s and immediate unmount, before any projection read",
+    async (trigger) => {
+      let releaseSave!: () => void;
+      flushPaneLayoutNowMock.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseSave = resolve;
+          }),
+      );
+      let releaseDispatch!: () => void;
+      dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+        await new Promise<void>((resolve) => {
+          releaseDispatch = resolve;
+        });
+        return { outcome: "accepted", requestId: input.requestId };
+      });
+      usePaneLayoutStore.setState({
+        environments: new Map([
+          [
+            "env-1",
+            {
+              root: {
+                kind: "leaf",
+                id: "default",
+                tabs: [
+                  {
+                    id: "tab-first-prompt",
+                    type: "agent-native",
+                    nativeAgentData: { environmentId: "env-1" },
+                  },
+                ],
+                activeTabId: "tab-first-prompt",
+              },
+              activePaneId: "default",
+              containerId: null,
             },
-            activePaneId: "default",
-            containerId: null,
+          ],
+        ]),
+        hydration: new Map([["env-1", "done"]]),
+        activeEnvironmentId: "env-1",
+      });
+      useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", "tab-first-prompt"), {
+        text: "Review @widget.ts",
+        mentions: [
+          {
+            id: "mention-1",
+            filename: "widget.ts",
+            relativePath: "src/widget.ts",
           },
         ],
-      ]),
-      hydration: new Map([["env-1", "done"]]),
-      activeEnvironmentId: "env-1",
-    });
-    useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", "tab-first-prompt"), {
-      text: "Review @widget.ts",
-      mentions: [
-        {
-          id: "mention-1",
-          filename: "widget.ts",
-          relativePath: "src/widget.ts",
-        },
-      ],
-      attachments: [
-        {
-          id: "image-1",
-          type: "image",
-          name: "layout.png",
-          path: "/workspace/.orkestrator/clipboard/layout.png",
-          previewUrl: "data:image/png;base64,abc",
-        },
-      ],
-    });
+        attachments: [
+          {
+            id: "image-1",
+            type: "image",
+            name: "layout.png",
+            path: "/workspace/.orkestrator/clipboard/layout.png",
+            previewUrl: "data:image/png;base64,abc",
+          },
+        ],
+      });
 
-    render(<PaneBackedAgentNativeTab tabId="tab-first-prompt" />);
-    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
+      const view = render(<PaneBackedAgentNativeTab tabId="tab-first-prompt" />);
+      if (trigger === "button")
+        fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
+      else fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
 
-    await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));
-    const root = usePaneLayoutStore.getState().environments.get("env-1")?.root;
-    expect(root?.kind).toBe("leaf");
-    if (!root || root.kind !== "leaf") throw new Error("Expected leaf pane");
-    const tab = root.tabs.find((candidate) => candidate.id === "tab-first-prompt");
-    expect(getNativeAgentData(tab!)?.platform).toBe("claude");
-    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
-    expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
-      prompt: expect.stringMatching(
-        /\[@widget\.ts\]\(src\/widget\.ts\)[\s\S]*layout\.png: \/workspace\/\.orkestrator\/clipboard\/layout\.png/,
-      ),
-      attachments: [
-        {
-          type: "image",
-          path: "/workspace/.orkestrator/clipboard/layout.png",
-          filename: "layout.png",
-        },
-      ],
-    });
-  });
+      // Switch away before even the provider-lock save has acknowledged. There
+      // must be no mounted controller left to create the session or send later.
+      view.unmount();
+
+      await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));
+      const root = usePaneLayoutStore.getState().environments.get("env-1")?.root;
+      expect(root?.kind).toBe("leaf");
+      if (!root || root.kind !== "leaf") throw new Error("Expected leaf pane");
+      const tab = root.tabs.find((candidate) => candidate.id === "tab-first-prompt");
+      expect(getNativeAgentData(tab!)?.platform).toBe("claude");
+      expect(tab?.initialPrompt).toBeUndefined();
+      expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+      releaseSave();
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+      expect(ensureNativeAgentSessionMock).not.toHaveBeenCalled();
+      expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
+      expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
+        prompt: expect.stringMatching(
+          /\[@widget\.ts\]\(src\/widget\.ts\)[\s\S]*layout\.png: \/workspace\/\.orkestrator\/clipboard\/layout\.png/,
+        ),
+        attachments: [
+          {
+            type: "image",
+            path: "/workspace/.orkestrator/clipboard/layout.png",
+            filename: "layout.png",
+          },
+        ],
+      });
+      const sessionKey = createSessionKey("env-1", "tab-first-prompt");
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.submissionPending).toBe(true);
+      // Return while dispatch is pending, then leave again. Rehydration must not
+      // send it twice or enable another send before the first acknowledgement.
+      const returned = render(<PaneBackedAgentNativeTab tabId="tab-first-prompt" />);
+      expect(screen.queryByTitle("Send") === null).toBe(true);
+      returned.unmount();
+      releaseDispatch();
+      await waitFor(() =>
+        expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
+      );
+      render(<PaneBackedAgentNativeTab tabId="tab-first-prompt" />);
+      await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+      expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   test("carries a coordinator-staged image through assignment as a structured attachment", async () => {
     seedUnassignedDefaultCatalog();
@@ -7960,7 +8002,7 @@ describe("AgentNativeTab", () => {
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ),
       ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
     });
 
     test("does not offer to load earlier messages when a byte-capped window omits canLoadEarlier", async () => {
@@ -7980,7 +8022,7 @@ describe("AgentNativeTab", () => {
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ),
       ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
     });
 
     test("does not offer to load a count-windowed transcript the server marked unpageable", async () => {
@@ -8000,7 +8042,7 @@ describe("AgentNativeTab", () => {
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ) === null,
       ).toBe(true);
-      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
     });
 
     test("does not offer to load a reasonless truncated window the server marked unpageable", async () => {
@@ -8019,7 +8061,7 @@ describe("AgentNativeTab", () => {
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ) === null,
       ).toBe(true);
-      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
     });
 
     test("does not offer to load a part-truncated window that cannot restore omitted parts", async () => {
@@ -8039,7 +8081,7 @@ describe("AgentNativeTab", () => {
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ),
       ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
     });
 
     test("does not offer to load a truncated window already at the message ceiling", async () => {
@@ -8063,7 +8105,7 @@ describe("AgentNativeTab", () => {
         useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.messageWindow
           ?.canLoadEarlier,
       ).toBe(false);
-      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
     });
 
     test("retires the load-earlier control after a wider read restores no messages", async () => {
@@ -8084,7 +8126,7 @@ describe("AgentNativeTab", () => {
         ).toBe(true),
       );
       await waitFor(() =>
-        expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull(),
+        expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true),
       );
       expect(
         screen.getByText(

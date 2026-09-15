@@ -87,7 +87,8 @@ describe("Coordinator Codex server", () => {
     else process.env.CODEX_HOME = previousCodexHome;
     if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
-    if (previousCursorProjectSettings === undefined) delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
+    if (previousCursorProjectSettings === undefined)
+      delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
     else process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = previousCursorProjectSettings;
     await fs.rm(root, { recursive: true, force: true });
   });

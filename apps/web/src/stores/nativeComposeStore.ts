@@ -15,6 +15,9 @@ export interface NativeComposeDraft {
   reasoningId?: string;
   /** Stable while one prompt may be between rename and provider acknowledgement. */
   requestId?: string;
+  /** In-flight first submission survives tab unmount; never persisted across a restart. */
+  submissionPending?: boolean;
+  submissionError?: string;
   /**
    * Renderer correlation for a dispatch whose acknowledgement may be lost.
    *

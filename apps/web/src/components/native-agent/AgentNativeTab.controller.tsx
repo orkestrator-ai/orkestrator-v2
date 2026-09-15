@@ -326,6 +326,9 @@ export function SharedNativeAgentController({
     },
     [data.environmentId, tabId],
   );
+  const draft = useNativeComposeStore((state) =>
+    nativeComposeDraft(state, createSessionKey(data.environmentId, tabId)),
+  );
   const {
     sessionKey,
     runtimeProjection: projection,
@@ -339,7 +342,7 @@ export function SharedNativeAgentController({
     sessionStateAvailability,
     sessionStateRefreshing,
     sessionStateError,
-    isDispatching,
+    isDispatching: runtimeIsDispatching,
     connect,
     refresh,
     send,
@@ -389,8 +392,9 @@ export function SharedNativeAgentController({
     defaultFastMode: configuredFastMode,
     defaultParameterValues: configuredParameterValues,
     isActive,
-    enabled: !setupPending,
+    enabled: !setupPending && !draft.submissionPending,
   });
+  const isDispatching = runtimeIsDispatching || draft.submissionPending === true;
   const noticeSessionIdentity = `${platform}\u0000${data.environmentId}\u0000${projection?.sessionId ?? data.sessionId ?? sessionKey}`;
   const dismissedNoticeIds = useNativeNoticeDismissalStore(
     (state) =>
@@ -413,7 +417,6 @@ export function SharedNativeAgentController({
     if (!projection || projection.runtimeHealthAuthoritative === false) return;
     reconcileNoticeDismissals(noticeSessionIdentity, activeNoticeIds);
   }, [activeNoticeIds, noticeSessionIdentity, projection, reconcileNoticeDismissals]);
-  const draft = useNativeComposeStore((state) => nativeComposeDraft(state, sessionKey));
   const updateDraft = useNativeComposeStore((state) => state.updateDraft);
   const clearDraft = useNativeComposeStore((state) => state.clearDraft);
   useNativeComposeDraftPersistence(
@@ -1134,6 +1137,7 @@ export function SharedNativeAgentController({
         return false;
       }
       if (!prompt || sendLocked || isDispatching) return false;
+      updateDraft(sessionKey, { submissionError: undefined });
       submitInFlightRef.current = true;
       setIsSubmitting(true);
       const dispatchRequestId = canQueue
@@ -1624,6 +1628,7 @@ export function SharedNativeAgentController({
 
   const errorMessage =
     sendError ??
+    draft.submissionError ??
     transcriptError ??
     sessionStateError ??
     runtimeError ??

@@ -2,7 +2,7 @@
 
 - **ID:** 0023
 - **Status:** open
-- **Date observed:** 2026-08-28; recurred 2026-09-11
+- **Date observed:** 2026-08-28; recurred 2026-09-11 and 2026-09-15
 - **Original command:** `bun run --cwd apps/web test`
 - **Worker configuration:** the web package ran `bun test src --parallel` with
   Bun's default parallel worker pool.
@@ -29,3 +29,25 @@
   cases). The change in flight touches the coordinator caveat's placement in
   `AgentModelPicker` and cannot reach `SkillsSettings`, so this is recorded as a
   recurrence of the aggregate/parallel timing flake rather than a regression.
+
+## Recurrence on 2026-09-15
+
+`mise run test` failed this case after 86.53 ms: the accessible button
+`Skill path copied` was absent at line 743. The web package used one Bun
+worker (`--parallel=1`) while other aggregate groups ran concurrently. Its
+result was 6,638 passed, 11 skipped, 2 failed across 294 files (252.94 s).
+The other failure was the selection-change confirmation case, tracked in 0144.
+
+The owning file passed in isolation (3.0 s, zero failures):
+
+```bash
+mise run test:logged -- --name skills-settings-isolated -- \
+  bun test --cwd apps/web ./src/components/settings/SkillsSettings.test.tsx \
+  --parallel=1 --only-failures
+```
+
+Failure evidence: `/tmp/orkestrator-test-run.OK3NwX/` (workspace log).
+The first-prompt changes under validation do not change SkillsSettings. This
+recurrence points to clipboard confirmation timing or fixture state under the
+aggregate workload; the exact mechanism is still unconfirmed. No assertion or
+timeout was relaxed.

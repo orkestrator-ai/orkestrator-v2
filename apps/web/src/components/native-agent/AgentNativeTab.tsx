@@ -1,8 +1,14 @@
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
+import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { Button } from "@/components/ui/button";
 import { createPersistedPaneLayoutInput, flushPaneLayoutNow } from "@/lib/pane-layout-persistence";
-import { writeCoordinatorAttachment } from "@/lib/backend";
+import { dispatchNativeAgentIntent, writeCoordinatorAttachment } from "@/lib/backend";
+import { resolvedPlatformSettings } from "@/lib/agent-settings";
+import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
+import { useConfigStore } from "@/stores/configStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { createSessionKey } from "@/lib/utils";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -11,6 +17,7 @@ import { UnassignedNativeAgentComposer } from "./AgentNativeTab.helpers";
 import { SharedNativeAgentController } from "./AgentNativeTab.controller";
 
 export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTabProps) {
+  const pendingFirstPrompt = useRef<Parameters<typeof dispatchNativeAgentIntent>[0] | null>(null);
   const [awaitingDurability, setAwaitingDurability] = useState(false);
   const [durabilityError, setDurabilityError] = useState<string | null>(null);
   const [pendingDurabilityOperation, setPendingDurabilityOperation] = useState<
@@ -29,9 +36,17 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
       setDurabilityError(null);
       setPendingDurabilityOperation(operation);
       const environment = usePaneLayoutStore.getState().environments.get(props.data.environmentId);
+      const sessionKey = createSessionKey(props.data.environmentId, props.tabId);
+      const submission = operation === "send" ? pendingFirstPrompt.current : null;
       if (!environment) {
         setDurabilityError("The locked agent tab is no longer available to save.");
         setAwaitingDurability(false);
+        if (submission) {
+          useNativeComposeStore.getState().updateDraft(sessionKey, {
+            submissionPending: false,
+            submissionError: "The locked agent tab is no longer available to save.",
+          });
+        }
         return;
       }
       try {
@@ -39,15 +54,37 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
           props.data.environmentId,
           createPersistedPaneLayoutInput(environment),
         );
-        if (operation === "send") {
-          const sessionKey = createSessionKey(props.data.environmentId, props.tabId);
-          const draft = useNativeComposeStore.getState().drafts.get(sessionKey);
-          // Attachment metadata is not encoded in the persisted initial prompt.
-          // Preserve it until the shared controller has handed the files to the
-          // backend; text-only drafts can be cleared immediately.
-          if ((draft?.attachments.length ?? 0) === 0) {
-            useNativeComposeStore.getState().clearDraft(sessionKey);
+        // Continue in this submission's promise, even if the tab unmounted while
+        // saving. Session creation and dispatch belong to this backend request;
+        // neither waits for the controller or a transcript projection to mount.
+        if (submission) {
+          useNativeComposeStore.getState().updateDraft(sessionKey, {
+            submissionPending: true,
+            submissionError: undefined,
+          });
+          try {
+            const outcome = await dispatchNativeAgentIntent(submission);
+            const store = useNativeComposeStore.getState();
+            if (store.drafts.get(sessionKey)?.requestId === submission.requestId) {
+              if (outcome.outcome === "accepted") {
+                store.clearDraft(sessionKey);
+                void discardComposeDraft(
+                  composeDraftKey("agent-native", props.data.environmentId, sessionKey),
+                ).catch(() => undefined);
+              } else
+                store.updateDraft(sessionKey, {
+                  submissionPending: false,
+                  submissionError: outcome.outcome === "rejected" ? outcome.error : undefined,
+                });
+            }
+          } catch {
+            useNativeComposeStore.getState().updateDraft(sessionKey, {
+              submissionPending: false,
+              submissionError:
+                "The connection dropped before your message was confirmed. Retry with the same message to check its submission.",
+            });
           }
+          pendingFirstPrompt.current = null;
         }
         setPendingDurabilityOperation(null);
         setAwaitingDurability(false);
@@ -55,6 +92,12 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
         console.warn("[AgentNativeTab] Failed to persist provider lock:", error);
         setDurabilityError("The agent choice is locked, but could not be saved.");
         setAwaitingDurability(false);
+        if (submission) {
+          useNativeComposeStore.getState().updateDraft(sessionKey, {
+            submissionPending: false,
+            submissionError: "The agent choice could not be saved. Your message has not been sent.",
+          });
+        }
       }
     },
     [props.data.environmentId, props.tabId],
@@ -73,13 +116,60 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
     ) => {
       setAwaitingDurability(true);
       setDurabilityError(null);
+      const sessionKey = createSessionKey(props.data.environmentId, props.tabId);
+      const composeStore = useNativeComposeStore.getState();
+      const draft = composeStore.drafts.get(sessionKey);
+      if (draft?.submissionPending) return;
+      const requestId = draft?.requestId ?? crypto.randomUUID();
+      const environment = useEnvironmentStore
+        .getState()
+        .environments.find((candidate) => candidate.id === props.data.environmentId);
+      const configured = resolvedPlatformSettings(
+        useConfigStore.getState().config,
+        environment?.projectId,
+        environment,
+        platform,
+      );
+      pendingFirstPrompt.current = {
+        environmentId: props.data.environmentId,
+        agent: platform,
+        logicalSessionKey: sessionKey,
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        title:
+          platform === "cursor"
+            ? "Cursor Agent"
+            : platform === "grok"
+              ? "Grok Build"
+              : "Agent Session",
+        prompt,
+        requestId,
+        model: options.modelId,
+        reasoningEffort: options.reasoningId,
+        fastMode: options.fastMode,
+        mode: options.mode,
+        sessionMode: options.mode,
+        executionProfileId: options.executionProfileId,
+        executionAgent: platform === "opencode" ? options.executionProfileId : undefined,
+        parameterValues:
+          platform === "claude" ? claudeNativeParameterValues(configured) : undefined,
+        attachments: draft?.attachments.map((attachment) => ({
+          type: attachment.type,
+          path: attachment.path,
+          filename: attachment.name,
+        })),
+      };
+      composeStore.updateDraft(sessionKey, {
+        requestId,
+        submissionPending: true,
+        submissionError: undefined,
+      });
       const paneStore = usePaneLayoutStore.getState();
       const lockedPlatform = paneStore.lockTabNativePlatform(
         props.tabId,
         platform,
         props.data.environmentId,
         {
-          initialPrompt: prompt,
           initialAgentModel: options.modelId,
           initialReasoningEffort: options.reasoningId,
           initialConversationMode: options.mode,
@@ -88,6 +178,8 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
         },
       );
       if (!lockedPlatform) {
+        composeStore.updateDraft(sessionKey, { submissionPending: false });
+        pendingFirstPrompt.current = null;
         setDurabilityError("This tab could not be locked to an agent.");
         setPendingDurabilityOperation(null);
         setAwaitingDurability(false);
@@ -236,7 +328,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
   if (awaitingDurability) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Saving agent choice…
+        {pendingFirstPrompt.current ? "Starting agent…" : "Saving agent choice…"}
       </div>
     );
   }

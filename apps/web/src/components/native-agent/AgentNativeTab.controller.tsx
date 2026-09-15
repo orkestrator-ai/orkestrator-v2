@@ -1917,9 +1917,10 @@ export function SharedNativeAgentController({
     ) : null,
   ].filter(Boolean);
 
-  const truncatedWindow = projection?.messageWindow?.truncated
-    ? projection.messageWindow
-    : undefined;
+  const messageWindow = projection?.messageWindow;
+  const showBytesNotice =
+    messageWindow?.truncated === true && messageWindow.truncationReason === "bytes";
+  const showLoadEarlier = messageWindow?.canLoadEarlier === true;
 
   return (
     <NativeChatShell
@@ -1962,32 +1963,34 @@ export function SharedNativeAgentController({
       centerCompose={composerCentered}
       emptyStateMessage={`Ask ${label} to work on this repository.`}
       transcriptHeader={
-        truncatedWindow ? (
+        showBytesNotice || showLoadEarlier ? (
           <div className="mx-auto flex max-w-3xl flex-col items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
-            {truncatedWindow.truncationReason === "bytes" ? (
+            {showBytesNotice ? (
               <span>
-                Earlier messages or tool activity were omitted to stay within the 16 MiB
-                transcript limit.
+                Earlier messages or tool activity were omitted to stay within the 16 MiB transcript
+                limit.
               </span>
             ) : null}
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={loadingEarlier}
-              onClick={() => {
-                setLoadingEarlier(true);
-                void loadEarlierMessages()
-                  .catch((error) =>
-                    toast.error(
-                      error instanceof Error ? error.message : "Failed to load earlier messages",
-                    ),
-                  )
-                  .finally(() => setLoadingEarlier(false));
-              }}
-            >
-              {loadingEarlier ? "Loading…" : "Load earlier messages"}
-            </Button>
+            {showLoadEarlier ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={loadingEarlier}
+                onClick={() => {
+                  setLoadingEarlier(true);
+                  void loadEarlierMessages()
+                    .catch((error) =>
+                      toast.error(
+                        error instanceof Error ? error.message : "Failed to load earlier messages",
+                      ),
+                    )
+                    .finally(() => setLoadingEarlier(false));
+                }}
+              >
+                {loadingEarlier ? "Loading…" : "Load earlier messages"}
+              </Button>
+            ) : null}
           </div>
         ) : null
       }

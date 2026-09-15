@@ -7,6 +7,7 @@ import {
   type NativeMessagePart,
 } from "@/lib/chat/native-message-types";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type {
   NativeAgentAsyncQuestionResponse,
   NativeAgentToolDetails,
@@ -48,6 +49,16 @@ export interface NativeMessageProps {
 
 export const MessageExpansionScopeContext = createContext("native-message");
 export const AgentPlatformContext = createContext<AgentPlatform | undefined>(undefined);
+/**
+ * Durable Multi Review report a Fix tab pins above its opening prompt.
+ *
+ * Absent means the bubble uses whatever framed findings the prompt itself
+ * extracted. Present replaces that extracted payload so address prompts, which
+ * only carry issues and coverage gaps, still render the complete report.
+ */
+export const UserPromptEvidenceContext = createContext<StructuredReviewReport | undefined>(
+  undefined,
+);
 /**
  * Stops a provider-owned background task, resolving `true` once the backend
  * accepted the request.

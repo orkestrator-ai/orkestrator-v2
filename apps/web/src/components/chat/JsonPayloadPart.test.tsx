@@ -6,6 +6,7 @@ import {
   MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
+  wrapSystemInstructions,
   type ReviewEvidenceFrameDisplayContract,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
@@ -477,7 +478,7 @@ describe("NativeMessage find-index alignment", () => {
     expect(searchText).not.toContain("multi-review-reports-json");
   });
 
-  test("a fix-phase prompt renders its structured report beneath the instructions", () => {
+  test("a fix-phase prompt renders its structured report above the instructions", () => {
     const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
     const message = makeMessage(
       customFixPrompt(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT)),
@@ -489,6 +490,9 @@ describe("NativeMessage find-index alignment", () => {
     expect(view.container.textContent).not.toContain(contract.continuationPrefix);
     expect(view.container.textContent).toContain("Structured review report");
     expect(view.container.textContent).toContain("Fix the finding.");
+    expect(view.container.textContent?.indexOf("Structured review report") ?? -1).toBeLessThan(
+      view.container.textContent?.indexOf("Fix the finding.") ?? -1,
+    );
     expect(view.container.textContent).not.toContain(contract.promptPrefix);
     expect(view.container.textContent).not.toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
     expect(view.container.textContent).toContain("Ready: with-fixes");
@@ -512,6 +516,49 @@ describe("NativeMessage find-index alignment", () => {
     expect(view.container.textContent).not.toContain('{"issues":[');
     expect(searchText).toContain("Fix the finding.");
     expect(searchText).toBe(renderedSearchText(view.container));
+  });
+
+  test("a Fix tab pins its durable report above an address prompt", () => {
+    const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
+    const message = {
+      ...makeMessage(contract.continuationPrefix, "user"),
+      promptEvidence: TEST_STRUCTURED_REVIEW_REPORT,
+    };
+    const view = render(<NativeMessage message={message} />);
+    const searchText = getNativeMessageSearchText(message);
+    const text = view.container.textContent ?? "";
+
+    expect(text).toContain("Structured review report");
+    expect(text).toContain(contract.continuationPrefix);
+    expect(text.indexOf("Structured review report")).toBeLessThan(
+      text.indexOf(contract.continuationPrefix),
+    );
+    expect(searchText).toBe(renderedSearchText(view.container));
+    expect(searchText.indexOf("Structured review report")).toBeLessThan(
+      searchText.indexOf(contract.continuationPrefix),
+    );
+  });
+
+  test("a pinned address prompt with framed findings renders exactly one report card", () => {
+    const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
+    const source = `${wrapSystemInstructions(
+      STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
+      `${contract.openMarker}\n{"issues":[{"title":"Extracted finding"}]}\n${contract.closeMarker}`,
+    )}\n\n${contract.continuationPrefix}`;
+    const message = {
+      ...makeMessage(source, "user"),
+      promptEvidence: TEST_STRUCTURED_REVIEW_REPORT,
+    };
+    const view = render(<NativeMessage message={message} />);
+    const reports = screen.getAllByText("Structured review report");
+    const text = view.container.textContent ?? "";
+
+    expect(reports).toHaveLength(1);
+    expect(text).toContain(contract.continuationPrefix);
+    expect(text).not.toContain("Extracted finding");
+    expect(text.indexOf("Structured review report")).toBeLessThan(
+      text.indexOf(contract.continuationPrefix),
+    );
   });
 
   test("a legacy findings-first fix prompt still renders the instruction and report card", () => {

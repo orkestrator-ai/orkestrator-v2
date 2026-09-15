@@ -59,6 +59,8 @@ import {
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { attachFixPromptEvidence } from "@/lib/chat/fix-prompt-evidence";
+import { findMultiReviewFixReport } from "@/lib/multi-review-fix-tab";
 import {
   applyClaudeBackgroundTaskStates,
   normalizeNativeMessages,
@@ -717,10 +719,14 @@ export function SharedNativeAgentController({
    * Only the backend transcript supplies positions: a row this tab synthesised
    * for a rowless task is a card, not a place in the conversation.
    */
-  const messages = useMemo(
-    () => pinNativeAgentParts(transcriptMessages, displayMessages),
-    [displayMessages, transcriptMessages],
+  const fixReport = useMultiReviewStore((state) =>
+    findMultiReviewFixReport(state.workflows.values(), tabId, data.environmentId),
   );
+  const messages = useMemo(() => {
+    const pinned = pinNativeAgentParts(transcriptMessages, displayMessages);
+    if (!fixReport) return pinned;
+    return attachFixPromptEvidence(pinned, fixReport);
+  }, [displayMessages, fixReport, transcriptMessages]);
   const latestAssistantMessage = [...normalizedMessages]
     .reverse()
     .find((message) => message.role === "assistant");

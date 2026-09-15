@@ -8,6 +8,7 @@
 
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 import type { UserPromptPresentationKind } from "@orkestrator/protocol/review-evidence-frames";
+import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
 export interface NativeToolDiffMetadata {
   filePath?: string;
@@ -309,4 +310,12 @@ export interface NativeMessage {
   planReview?: boolean;
   /** Backend-authenticated display treatment for this user message. */
   promptPresentation?: UserPromptPresentationKind;
+  /**
+   * Presentation-only report a Fix tab pins above its opening prompt.
+   *
+   * The provider already received the findings in the address or custom-fix
+   * prompt. This field is the durable Multi Review report so the transcript can
+   * render the same structured object the review tab already owns.
+   */
+  promptEvidence?: StructuredReviewReport;
 }

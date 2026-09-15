@@ -129,6 +129,55 @@ const MOBILE_VIEWS = ["stages", "transcript"] as const;
 
 type MobileView = (typeof MOBILE_VIEWS)[number];
 
+const REVIEW_PACKAGE_SESSION_LABEL = "Package Preparation Session";
+
+type PipelineStageItem =
+  | { kind: "session"; id: string; key: string; session: PipelineSession }
+  | { kind: "validation"; id: string; key: string };
+
+function isReviewPackageSession(session: PipelineSession | undefined): boolean {
+  return session?.label === REVIEW_PACKAGE_SESSION_LABEL;
+}
+
+/**
+ * Validation is backend-owned work rather than an agent session, but it is a
+ * first-class pipeline stage to the reader. Insert it immediately after the
+ * package-preparation turn that discovered the commands, leaving the review
+ * sessions below it in their existing order.
+ */
+function pipelineStageItems(pipeline: BuildPipeline): PipelineStageItem[] {
+  const items: PipelineStageItem[] = pipeline.sessions.map((session) => ({
+    kind: "session",
+    id: session.sdkSessionId,
+    key: session.sessionKey,
+    session,
+  }));
+  if (!pipeline.validationRun) return items;
+
+  const validationItem: PipelineStageItem = {
+    kind: "validation",
+    id: `validation:${pipeline.validationRun.id}`,
+    key: `validation-${pipeline.validationRun.id}`,
+  };
+  let preparationIndex = -1;
+  for (let index = pipeline.sessions.length - 1; index >= 0; index -= 1) {
+    if (isReviewPackageSession(pipeline.sessions[index])) {
+      preparationIndex = index;
+      break;
+    }
+  }
+  if (preparationIndex >= 0) {
+    items.splice(preparationIndex + 1, 0, validationItem);
+    return items;
+  }
+
+  // Old persisted snapshots can have validation evidence without the labelled
+  // preparation session. It still belongs before the first review it supplied.
+  const firstReviewIndex = pipeline.sessions.findIndex((session) => session.phase === "review");
+  items.splice(firstReviewIndex >= 0 ? firstReviewIndex : items.length, 0, validationItem);
+  return items;
+}
+
 /**
  * The stage that owns the structured review report.
  *
@@ -191,6 +240,17 @@ function SessionStateIcon({ session }: { session: PipelineSession }) {
   return <CheckCircle2 className="h-3.5 w-3.5 text-success" />;
 }
 
+function ValidationStateIcon({ pipeline }: { pipeline: BuildPipeline }) {
+  const status = pipeline.validationRun?.status;
+  if (status === "planned" || status === "running") {
+    return <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />;
+  }
+  if (status === "failed" || status === "cancelled") {
+    return <AlertCircle className="h-3.5 w-3.5 text-destructive" />;
+  }
+  return <CheckCircle2 className="h-3.5 w-3.5 text-success" />;
+}
+
 export function BuildChatTab({
   data,
   isActive = false,
@@ -212,6 +272,10 @@ export function BuildChatTab({
   const [draft, setDraft] = useState("");
   const [sendPending, setSendPending] = useState(false);
   const [validationNow, setValidationNow] = useState(() => Date.now());
+  const validationStageId = pipeline?.validationRun
+    ? `validation:${pipeline.validationRun.id}`
+    : null;
+  const validationSelected = validationStageId !== null && selectedSessionId === validationStageId;
   const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
   // The transcript, not the stage list, is what a build tab is opened to read —
   // it runs unattended, so the useful thing on arrival is what the agent is
@@ -228,7 +292,7 @@ export function BuildChatTab({
     // Switching to the stage list on a phone hides the transcript as
     // completely as switching tabs does, so it deactivates the same way —
     // which is also what makes coming back re-lock to the live bottom.
-    isActive: isActive && transcriptVisible,
+    isActive: isActive && transcriptVisible && !validationSelected,
     persistKey: `build-pipeline:${data.pipelineId}`,
     environmentId: data.environmentId,
     // A build runs unattended, so returning to the tab should show what the
@@ -255,8 +319,8 @@ export function BuildChatTab({
     [data.pipelineId, setViewedSessionId],
   );
 
-  const selectSession = (sessionId: string, disappearingTrigger?: HTMLElement) => {
-    pinSession(sessionId);
+  const selectStage = (stageId: string, disappearingTrigger?: HTMLElement) => {
+    pinSession(stageId);
     // Choosing a stage is a request to read it, so on a phone the transcript
     // comes forward with it. Only an explicit choice does this: the effect
     // below re-selects as the pipeline advances, and following the pipeline
@@ -312,15 +376,17 @@ export function BuildChatTab({
     }
     const selectionExists =
       selectedSessionId !== null &&
-      pipeline.sessions.some((session) => session.sdkSessionId === selectedSessionId);
+      (pipeline.sessions.some((session) => session.sdkSessionId === selectedSessionId) ||
+        selectedSessionId === validationStageId);
     // A pinned selection that vanished from the snapshot is no longer a choice
     // the user can hold on to, so release the pin and follow the pipeline again.
     if (!selectionExists) pinnedSessionRef.current = false;
     if (selectionExists && pinnedSessionRef.current) return;
+    const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
     const following =
-      pipeline.sessions[pipeline.currentSessionIndex]?.sdkSessionId ??
-      pipeline.sessions.at(-1)?.sdkSessionId ??
-      null;
+      validationStageId && isReviewPackageSession(currentSession)
+        ? validationStageId
+        : (currentSession?.sdkSessionId ?? pipeline.sessions.at(-1)?.sdkSessionId ?? null);
     if (following !== selectedSessionId) setViewedSessionId(data.pipelineId, following);
   }, [
     data.pipelineId,
@@ -328,6 +394,7 @@ export function BuildChatTab({
     pipeline?.sessions,
     selectedSessionId,
     setViewedSessionId,
+    validationStageId,
   ]);
 
   const selectedSession = pipeline?.sessions.find(
@@ -381,6 +448,9 @@ export function BuildChatTab({
       selectedSession?.startedAt ?? new Date().toISOString(),
       selectedSession?.interactionTranscript,
     );
+    if (selectedSession?.label === REVIEW_PACKAGE_SESSION_LABEL) {
+      return hideMachineOutputText(transcript, { stripTrailingPayload: true });
+    }
     if (selectedSession?.phase === "review") {
       // Two passes, as in the Multi Review reviewer view. The first decides
       // the fate of reports that validate; the second removes what is left —
@@ -412,6 +482,7 @@ export function BuildChatTab({
     selectedSession?.phase,
     selectedSession?.startedAt,
     selectedSession?.interactionTranscript,
+    selectedSession?.label,
     structuredResultAccepted,
   ]);
 
@@ -550,8 +621,9 @@ export function BuildChatTab({
     stages: "Stages",
     // Naming the stage on the tab is the only thing that says which transcript
     // is behind it — the header shows the pipeline's phase, not the selection.
-    transcript: selectedSession?.label ?? "Transcript",
+    transcript: validationSelected ? "Tests" : (selectedSession?.label ?? "Transcript"),
   };
+  const stageItems = pipelineStageItems(pipeline);
 
   /**
    * The pipeline controls, as data rather than markup.
@@ -623,27 +695,25 @@ export function BuildChatTab({
    */
   const moveStageFocus = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const step = STAGE_TAB_KEYS[event.key];
-    if (step === undefined || pipeline.sessions.length === 0) return;
+    if (step === undefined || stageItems.length === 0) return;
     // Consumed even when the selection does not move (a single-stage pipeline,
     // or Home on the first stage): a tablist owns these keys, and letting one
     // fall through to scroll the stage list instead is the inconsistency the
     // pattern exists to remove.
     event.preventDefault();
-    const current = pipeline.sessions.findIndex(
-      (session) => session.sdkSessionId === selectedSessionId,
-    );
+    const current = stageItems.findIndex((stage) => stage.id === selectedSessionId);
     const next =
       step === "first"
         ? 0
         : step === "last"
-          ? pipeline.sessions.length - 1
+          ? stageItems.length - 1
           : // A tablist wraps at both ends, and `current` of -1 (nothing selected
             // yet) must still land on a real stage rather than off the front.
-            (Math.max(current, 0) + step + pipeline.sessions.length) % pipeline.sessions.length;
-    const target = pipeline.sessions[next];
-    if (!target || target.sdkSessionId === selectedSessionId) return;
-    pinSession(target.sdkSessionId);
-    document.getElementById(stageTabId(target.sessionKey))?.focus();
+            (Math.max(current, 0) + step + stageItems.length) % stageItems.length;
+    const target = stageItems[next];
+    if (!target || target.id === selectedSessionId) return;
+    pinSession(target.id);
+    document.getElementById(stageTabId(target.key))?.focus();
   };
 
   /**
@@ -747,22 +817,12 @@ export function BuildChatTab({
         </div>
       )}
       <BuildCompletionStatus pipeline={pipeline} />
-      {pipeline.validationRun && (
-        <div className="max-h-64 overflow-auto px-4 py-2">
-          <ReviewValidationStatus
-            environmentId={data.environmentId}
-            run={pipeline.validationRun}
-            now={validationNow}
-          />
-        </div>
-      )}
-
       {reviewReportHint && (
         <button
           type="button"
           className="flex w-full items-center gap-2 border-b border-cyan-500/20 bg-cyan-500/5 px-4 py-2 text-left text-xs text-cyan-200/90 transition-colors hover:bg-cyan-500/10"
           onClick={(event) =>
-            selectSession(reviewReportHint.session.sdkSessionId, event.currentTarget)
+            selectStage(reviewReportHint.session.sdkSessionId, event.currentTarget)
           }
         >
           <ClipboardCheck className="h-3.5 w-3.5 shrink-0" />
@@ -831,13 +891,51 @@ export function BuildChatTab({
             aria-label="Build stages"
             onKeyDown={moveStageFocus}
           >
-            {pipeline.sessions.length === 0 ? (
+            {stageItems.length === 0 ? (
               <div className="px-2 py-4 text-xs text-muted-foreground">
                 The backend is preparing the first stage.
               </div>
             ) : (
-              pipeline.sessions.map((session, index) => {
-                const isSelected = selectedSessionId === session.sdkSessionId;
+              stageItems.map((stage, index) => {
+                if (stage.kind === "validation") {
+                  const isSelected = selectedSessionId === stage.id;
+                  const commandCount = pipeline.validationRun?.plan.commands.length ?? 0;
+                  return (
+                    <button
+                      key={stage.key}
+                      id={stageTabId(stage.key)}
+                      type="button"
+                      role="tab"
+                      aria-selected={isSelected}
+                      aria-controls={transcriptPanelId}
+                      tabIndex={isSelected || (selectedSessionId === null && index === 0) ? 0 : -1}
+                      className={cn(
+                        "flex w-full items-start gap-2 rounded-lg border px-2 py-2 text-left transition-colors",
+                        isSelected
+                          ? "border-zinc-700/70 bg-zinc-800/85"
+                          : "border-transparent hover:bg-zinc-800/55",
+                      )}
+                      onClick={() => selectStage(stage.id)}
+                    >
+                      <ValidationStateIcon pipeline={pipeline} />
+                      <span className="min-w-0">
+                        <span
+                          className={cn(
+                            "block truncate text-xs font-medium",
+                            isSelected ? "text-foreground" : "text-foreground/80",
+                          )}
+                        >
+                          Tests
+                        </span>
+                        <span className="block text-[11px] text-muted-foreground">
+                          {commandCount} {commandCount === 1 ? "check" : "checks"}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                }
+                const { session } = stage;
+                const isSelected = selectedSessionId === stage.id;
                 const ownsReport = Boolean(
                   reportSession && session.sessionKey === reportSession.sessionKey,
                 );
@@ -863,7 +961,7 @@ export function BuildChatTab({
                         ? "border-zinc-700/70 bg-zinc-800/85"
                         : "border-transparent hover:bg-zinc-800/55",
                     )}
-                    onClick={() => selectSession(session.sdkSessionId)}
+                    onClick={() => selectStage(stage.id)}
                   >
                     <SessionStateIcon session={session} />
                     <span className="min-w-0">
@@ -909,69 +1007,86 @@ export function BuildChatTab({
           // A tabpanel is named by its own tab; only the no-selection case,
           // which has no tab to point at, needs a literal label. On mobile the
           // view switcher's tab already names it after the same stage.
-          {...(selectedSession
-            ? { "aria-labelledby": stageTabId(selectedSession.sessionKey) }
-            : { "aria-label": "Build stage transcript" })}
+          {...(validationSelected && pipeline.validationRun
+            ? {
+                "aria-labelledby": stageTabId(`validation-${pipeline.validationRun.id}`),
+              }
+            : selectedSession
+              ? { "aria-labelledby": stageTabId(selectedSession.sessionKey) }
+              : { "aria-label": "Build stage transcript" })}
         >
-          {/*
-            The transcript list the native agent tabs use: the same message
-            renderer, the same virtualization, the same in-transcript find, and
-            the same follow-the-tail behaviour while a stage streams.
-          */}
-          <VirtualizedMessageList
-            messages={messages}
-            computeItemKey={(_index, message) => message.id}
-            resolvePreviousMessage={findPreviousNativeMessage}
-            renderMessage={(_index, message, previous) => (
-              <NativeMessage
-                message={message}
-                previousMessage={previous}
-                assistantLabel={agentLabel}
-                containerId={containerId}
-                agentExpansionScope={data.environmentId}
-                platform={isAgentPlatform(displayedAgent) ? displayedAgent : undefined}
+          {validationSelected && pipeline.validationRun ? (
+            <div className="h-full overflow-auto px-3 py-3 @sm:px-6">
+              <ReviewValidationStatus
+                environmentId={data.environmentId}
+                run={pipeline.validationRun}
+                now={validationNow}
               />
-            )}
-            emptyState={
-              <div className="py-12 text-center text-sm text-muted-foreground">
-                {!selectedSession
-                  ? "Waiting for the backend to start a build stage."
-                  : selectedSession.status === "running"
-                    ? "This stage is running. Its authoritative transcript will appear here as it is synchronized."
-                    : "No text transcript was produced for this stage."}
-              </div>
-            }
-            footer={
-              showReviewReport && selectedReviewReport ? (
-                <div className="px-3 py-3 @sm:px-6">
-                  <StructuredReviewReportView
-                    className="mx-auto max-w-3xl"
-                    report={selectedReviewReport}
-                    heading={
-                      (pipeline.reviewers?.length ?? 0) > 1
-                        ? ownsCurrentReviewReport
-                          ? "Consolidated Multi Review"
-                          : "Reviewer report"
-                        : undefined
-                    }
-                    collapsibleSections
-                    sectionExpansionKey={`build-pipeline/${pipeline.id}/${selectedSession?.sessionKey ?? "review"}/report-section`}
-                    showRawJson={false}
+            </div>
+          ) : (
+            <>
+              {/*
+                The transcript list the native agent tabs use: the same message
+                renderer, the same virtualization, the same in-transcript find,
+                and the same follow-the-tail behaviour while a stage streams.
+              */}
+              <VirtualizedMessageList
+                messages={messages}
+                computeItemKey={(_index, message) => message.id}
+                resolvePreviousMessage={findPreviousNativeMessage}
+                renderMessage={(_index, message, previous) => (
+                  <NativeMessage
+                    message={message}
+                    previousMessage={previous}
+                    assistantLabel={agentLabel}
+                    containerId={containerId}
+                    agentExpansionScope={data.environmentId}
+                    platform={isAgentPlatform(displayedAgent) ? displayedAgent : undefined}
                   />
-                </div>
-              ) : undefined
-            }
-            scrollProps={scrollProps}
-            virtuosoRef={virtuosoRef}
-            find={{
-              isActive: ownsGlobalShortcuts,
-              getSearchText: getNativeMessageSearchText,
-            }}
-          />
+                )}
+                emptyState={
+                  <div className="py-12 text-center text-sm text-muted-foreground">
+                    {!selectedSession
+                      ? "Waiting for the backend to start a build stage."
+                      : selectedSession.status === "running"
+                        ? "This stage is running. Its authoritative transcript will appear here as it is synchronized."
+                        : "No text transcript was produced for this stage."}
+                  </div>
+                }
+                footer={
+                  showReviewReport && selectedReviewReport ? (
+                    <div className="px-3 py-3 @sm:px-6">
+                      <StructuredReviewReportView
+                        className="mx-auto max-w-3xl"
+                        report={selectedReviewReport}
+                        heading={
+                          (pipeline.reviewers?.length ?? 0) > 1
+                            ? ownsCurrentReviewReport
+                              ? "Consolidated Multi Review"
+                              : "Reviewer report"
+                            : undefined
+                        }
+                        collapsibleSections
+                        sectionExpansionKey={`build-pipeline/${pipeline.id}/${selectedSession?.sessionKey ?? "review"}/report-section`}
+                        showRawJson={false}
+                      />
+                    </div>
+                  ) : undefined
+                }
+                scrollProps={scrollProps}
+                virtuosoRef={virtuosoRef}
+                find={{
+                  isActive: ownsGlobalShortcuts,
+                  getSearchText: getNativeMessageSearchText,
+                }}
+              />
+            </>
+          )}
         </div>
       </div>
 
       {transcriptVisible &&
+        !validationSelected &&
         (canSendMessage || !isAtBottom) && (
           // The native tabs dock their composer as a floating card rather than a
           // bordered footer strip, so this matches that shape instead of drawing

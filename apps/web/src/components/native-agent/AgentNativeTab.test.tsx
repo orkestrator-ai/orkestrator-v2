@@ -7929,10 +7929,10 @@ describe("AgentNativeTab", () => {
         name: "Load earlier messages",
       });
       expect(
-        screen.queryByText(
+        await screen.findByText(
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
-        ) === null,
-      ).toBe(true);
+        ),
+      ).toBeTruthy();
       expect(screen.queryByText("Earlier messages are not shown.") === null).toBe(true);
       fireEvent.click(loadEarlierButton);
       await waitFor(() =>
@@ -7942,7 +7942,7 @@ describe("AgentNativeTab", () => {
       );
     });
 
-    test("does not offer to load earlier messages past the hard transcript byte cap", async () => {
+    test("does not offer to load earlier messages past a hard transcript byte cap", async () => {
       seedProjection({
         messageWindow: {
           limit: 100,
@@ -7958,13 +7958,12 @@ describe("AgentNativeTab", () => {
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ),
       ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
+      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
     });
 
     test("does not offer to load earlier messages when a byte-capped window omits canLoadEarlier", async () => {
-      // The shape a backend that predates `canLoadEarlier` still sends. Raising
-      // the requested limit cannot widen a byte-bound window, so the control
-      // must stay off rather than become inert.
+      // The shape a backend that predates `canLoadEarlier` still sends for a
+      // hard byte cap. Widening the limit cannot restore omitted content.
       seedProjection({
         messageWindow: {
           limit: 100,
@@ -7979,12 +7978,10 @@ describe("AgentNativeTab", () => {
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ),
       ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
+      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
     });
 
-    test("explains a count-windowed transcript without blaming the byte ceiling", async () => {
-      // What the paging hook synthesizes once provider history has aged out:
-      // the server's own count reason survives, but no cursor is left to spend.
+    test("does not offer to load a count-windowed transcript the server marked unpageable", async () => {
       seedProjection({
         messageWindow: {
           limit: 100,
@@ -7995,18 +7992,16 @@ describe("AgentNativeTab", () => {
       });
       render(<AgentNativeTab tabId="tab-count-capped" data={identity("cursor")} isActive />);
 
-      expect(await screen.findByText("Earlier messages are not shown.")).toBeTruthy();
+      expect(screen.queryByText("Earlier messages are not shown.") === null).toBe(true);
       expect(
         screen.queryByText(
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ) === null,
       ).toBe(true);
-      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
+      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
     });
 
-    test("explains a reasonless non-pageable window without blaming the byte ceiling", async () => {
-      // The same synthesis when the server sent no window of its own, so there
-      // is no reason to attribute the missing history to at all.
+    test("does not offer to load a reasonless truncated window the server marked unpageable", async () => {
       seedProjection({
         messageWindow: {
           limit: 100,
@@ -8016,13 +8011,84 @@ describe("AgentNativeTab", () => {
       });
       render(<AgentNativeTab tabId="tab-reasonless-cap" data={identity("cursor")} isActive />);
 
-      expect(await screen.findByText("Earlier messages are not shown.")).toBeTruthy();
+      expect(screen.queryByText("Earlier messages are not shown.") === null).toBe(true);
       expect(
         screen.queryByText(
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ) === null,
       ).toBe(true);
-      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
+      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
+    });
+
+    test("does not offer to load a part-truncated window that cannot restore omitted parts", async () => {
+      seedProjection({
+        messageWindow: {
+          limit: 100,
+          truncated: true,
+          truncationReason: "bytes",
+          omittedParts: 3,
+          canLoadEarlier: false,
+        },
+      });
+      render(<AgentNativeTab tabId="tab-part-cap" data={identity("cursor")} isActive />);
+
+      expect(
+        await screen.findByText(
+          "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
+        ),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
+    });
+
+    test("does not offer to load a truncated window already at the message ceiling", async () => {
+      seedProjection({
+        messageWindow: {
+          limit: 4096,
+          truncated: true,
+          canLoadEarlier: true,
+        },
+      });
+      render(<AgentNativeTab tabId="tab-max-window" data={identity("cursor")} isActive />);
+
+      const sessionKey = createSessionKey("env-1", "tab-max-window");
+      await waitFor(() => {
+        expect(
+          useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.messageWindow
+            ?.limit,
+        ).toBe(4096);
+      });
+      expect(
+        useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.messageWindow
+          ?.canLoadEarlier,
+      ).toBe(false);
+      expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull();
+    });
+
+    test("retires the load-earlier control after a wider read restores no messages", async () => {
+      seedProjection({
+        messageWindow: {
+          limit: 100,
+          truncated: true,
+          truncationReason: "bytes",
+          canLoadEarlier: true,
+        },
+      });
+      render(<AgentNativeTab tabId="tab-byte-no-progress" data={identity("cursor")} isActive />);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
+      await waitFor(() =>
+        expect(
+          getNativeAgentProjectionMock.mock.calls.some((call) => call[0].messageLimit === 200),
+        ).toBe(true),
+      );
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Load earlier messages" })).toBeNull(),
+      );
+      expect(
+        screen.getByText(
+          "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
+        ),
+      ).toBeTruthy();
     });
 
     test("refuses to load a queued prompt over an occupied composer", async () => {

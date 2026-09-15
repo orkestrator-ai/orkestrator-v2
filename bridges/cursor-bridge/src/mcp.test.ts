@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { newSessionState } from "./agent-session.js";
-import { MAX_MESSAGES } from "./config.js";
+import { MAX_MESSAGES, workingDirectory } from "./config.js";
 import {
   cursorMcpServers,
   mcpConnectionKey,
@@ -22,12 +24,15 @@ function callMcpTool(state: SessionState, args: Record<string, unknown>, callId:
 
 const previousUrl = process.env.ORKESTRATOR_AGENT_MCP_URL;
 const previousToken = process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
+const previousProjectSettings = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
 
 afterEach(() => {
   if (previousUrl === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_URL;
   else process.env.ORKESTRATOR_AGENT_MCP_URL = previousUrl;
   if (previousToken === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
   else process.env.ORKESTRATOR_AGENT_MCP_TOKEN = previousToken;
+  if (previousProjectSettings === undefined) delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
+  else process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = previousProjectSettings;
 });
 
 describe("Cursor MCP inventory", () => {
@@ -57,6 +62,38 @@ describe("Cursor MCP inventory", () => {
       },
     ]);
     expect(published).not.toContain("private-test-token");
+  });
+
+  test("a read-only policy returns only the Orkestrator entry when project MCP is present", async () => {
+    process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";
+    const mcpPath = join(workingDirectory, ".cursor", "mcp.json");
+    await mkdir(join(workingDirectory, ".cursor"), { recursive: true });
+    await writeFile(
+      mcpPath,
+      JSON.stringify({
+        mcpServers: {
+          "review-untrusted": { command: "must-not-start" },
+        },
+      }),
+    );
+    const connection = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
+    try {
+      const allowed = await cursorMcpServers(connection, { projectResources: true });
+      expect(Object.keys(allowed).sort()).toEqual(["orkestrator", "review-untrusted"]);
+
+      const denied = await cursorMcpServers(connection, {
+        readOnly: true,
+        projectResources: false,
+      });
+      expect(Object.keys(denied)).toEqual(["orkestrator"]);
+      expect(denied.orkestrator).toEqual({
+        type: "http",
+        url: "http://127.0.0.1:4567/mcp",
+        headers: { Authorization: "Bearer tab-token" },
+      });
+    } finally {
+      await rm(mcpPath, { force: true });
+    }
   });
 
   test("a per-tab agentMcp wins over the process environment", async () => {

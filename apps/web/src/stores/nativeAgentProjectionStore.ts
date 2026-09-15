@@ -32,6 +32,12 @@ export interface NativeAgentSyncCacheEntry {
    * remount can act on the control it paints from this entry.
    */
   historyBootstrap?: boolean;
+  /**
+   * True after a joined-snapshot bootstrap proved this client cannot mint a
+   * cursor or recover more content. Sticky across polls so an incomplete
+   * server window cannot put an inert control back on screen.
+   */
+  historyUnpageable?: boolean;
   historyComplete: boolean;
   historyMessages: unknown[];
   historyBytes: number;

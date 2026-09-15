@@ -135,6 +135,7 @@ const getNativeAgentProjectionUpdateMock = mock(async () => {
   if (!next) throw new Error("Unexpected joined projection request");
   return next();
 });
+const getNativeAgentProjectionMock = mock(async () => null);
 const stopNativeAgentSessionMock = mock(async () => {
   const next = stopResults.shift();
   return next ? next() : null;
@@ -151,7 +152,7 @@ mock.module("@/lib/backend", () => ({
   adoptNativeAgentSession: async () => ({}),
   stopNativeAgentSession: stopNativeAgentSessionMock,
   resumeNativeAgentSession: async () => null,
-  getNativeAgentProjection: async () => null,
+  getNativeAgentProjection: getNativeAgentProjectionMock,
   getNativeAgentProjectionUpdate: getNativeAgentProjectionUpdateMock,
 }));
 
@@ -331,6 +332,7 @@ beforeEach(() => {
   getNativeAgentDiscoveryUpdateMock.mockClear();
   getNativeAgentMessagePageMock.mockClear();
   getNativeAgentProjectionUpdateMock.mockClear();
+  getNativeAgentProjectionMock.mockClear();
   stopNativeAgentSessionMock.mockClear();
   ensureNativeAgentSessionMock.mockClear();
   usePaneLayoutStore.setState({
@@ -1237,6 +1239,47 @@ describe("useNativeAgentSession progressive view", () => {
     expect(result.current.projection?.turn.phase).toBe("idle");
   });
 
+  test("bootstraps a paging cursor when the live tail says earlier messages are not pageable", async () => {
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-1", [message("m3"), message("m4")], {
+          messageWindow: {
+            limit: 2,
+            truncated: true,
+            truncationReason: "count",
+            canLoadEarlier: false,
+          },
+        }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    projectionUpdates = [
+      () =>
+        joinedSnapshot("joined-1", [message("m3"), message("m4")], {
+          historyCursor: "cursor-before-m3",
+          historyComplete: true,
+        }),
+    ];
+    messagePages = [() => historyPage([message("m1"), message("m2")])];
+
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    expect(result.current.projection?.messageWindow?.truncated).toBe(true);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+
+    expect(getNativeAgentProjectionUpdateMock).toHaveBeenCalledTimes(1);
+    expect(messagePageCalls).toEqual([{ before: "cursor-before-m3" }]);
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m1",
+      "m2",
+      "m3",
+      "m4",
+    ]);
+  });
+
   test("keeps the paging cursor across a poll whose transcript epoch differs", async () => {
     transcriptUpdates = [() => truncatedTail("transcript-1", [message("m4")])];
     stateUpdates = [() => stateSnapshot("state-1")];
@@ -1456,5 +1499,104 @@ describe("useNativeAgentSession progressive view", () => {
 
     expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m3", "m4"]);
     expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+  });
+
+  test("preserves a pageable tail's byte-cap reason when bootstrapping", async () => {
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-1", [message("m3"), message("m4")], {
+          messageWindow: {
+            limit: 2,
+            truncated: true,
+            truncationReason: "bytes",
+            omittedMessages: 2,
+            canLoadEarlier: true,
+          },
+        }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+
+    expect(result.current.projection?.messageWindow?.truncationReason).toBe("bytes");
+    expect(result.current.projection?.messageWindow?.omittedMessages).toBe(2);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+  });
+
+  test("retires the control when a forced snapshot mints no cursor", async () => {
+    transcriptUpdates = [() => truncatedTail("transcript-1", [message("m3"), message("m4")])];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    projectionUpdates = [
+      () =>
+        joinedSnapshot("joined-1", [message("m3"), message("m4")], {
+          historyComplete: false,
+        }),
+    ];
+
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+
+    expect(getNativeAgentProjectionUpdateMock).toHaveBeenCalledTimes(1);
+    expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
+    expect(messagePageCalls).toEqual([]);
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m3", "m4"]);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBeFalsy();
+
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+    expect(getNativeAgentProjectionUpdateMock).toHaveBeenCalledTimes(1);
+    expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
+  });
+
+  test("remounts a bootstrap-only cache and still loads earlier messages", async () => {
+    transcriptUpdates = [() => truncatedTail("transcript-1", [message("m3"), message("m4")])];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const first = renderSession();
+    await waitFor(() => expect(first.result.current.sessionStateAvailability).toBe("current"));
+    expect(first.result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+    expect(
+      useNativeAgentProjectionStore.getState().syncCaches.get("env-env-1:tab-1")?.historyBootstrap,
+    ).toBe(true);
+    expect(
+      useNativeAgentProjectionStore.getState().syncCaches.get("env-env-1:tab-1")?.historyCursor,
+    ).toBeUndefined();
+    first.unmount();
+
+    transcriptUpdates = [() => truncatedTail("transcript-2", [message("m3"), message("m4")])];
+    stateUpdates = [() => stateSnapshot("state-2")];
+    projectionUpdates = [
+      () =>
+        joinedSnapshot("joined-1", [message("m3"), message("m4")], {
+          historyCursor: "cursor-before-m3",
+          historyComplete: true,
+        }),
+    ];
+    messagePages = [() => historyPage([message("m1"), message("m2")])];
+
+    const remount = renderSession();
+    await waitFor(() => expect(remount.result.current.sessionStateAvailability).toBe("current"));
+    expect(remount.result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+    expect(remount.result.current.projection?.messages.map(({ id }) => id)).toEqual(["m3", "m4"]);
+
+    await act(async () => {
+      await remount.result.current.loadEarlierMessages();
+    });
+
+    expect(messagePageCalls).toEqual([{ before: "cursor-before-m3" }]);
+    expect(remount.result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m1",
+      "m2",
+      "m3",
+      "m4",
+    ]);
+    expect(remount.result.current.projection?.messageWindow).toBeUndefined();
   });
 });

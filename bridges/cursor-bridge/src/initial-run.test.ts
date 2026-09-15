@@ -1,7 +1,7 @@
 /** Real SDK lifecycle/store; only model lookup and executor startup are stubbed. */
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
 import * as sdk from "@cursor/sdk";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,6 +21,10 @@ const store: sdk.LocalAgentStore = new sdk.JsonlLocalAgentStore(join(root, "curs
 let platform: sdk.CursorAgentPlatform;
 let listedAgents: sdk.SDKAgentInfo[] = [];
 const createdOptions: sdk.AgentOptions[] = [];
+const acquiredExecutorOptions: Array<{
+  settingSources?: readonly string[];
+  mcpServers?: Record<string, unknown>;
+}> = [];
 const testAgent = {
   ...sdk.Agent,
   create: async (options: sdk.AgentOptions) => {
@@ -43,7 +47,11 @@ platform = await sdk.createAgentPlatform({
 });
 platform.resolveLocalModelSelection = async (selection) => selection;
 const executorBoundary = new Error("Reached the test executor");
-platform.acquireLocalExecutor = async () => {
+platform.acquireLocalExecutor = async (options) => {
+  acquiredExecutorOptions.push({
+    settingSources: options.settingSources,
+    mcpServers: options.mcpServers,
+  });
   throw executorBoundary;
 };
 
@@ -66,6 +74,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   createdOptions.length = 0;
+  acquiredExecutorOptions.length = 0;
   listedAgents = [];
   resetPlanAccountWindowsForTests();
 });
@@ -102,6 +111,47 @@ async function reservation(agentId: string) {
 function listedAgent(agentId: string): sdk.SDKAgentInfo {
   return { agentId, name: "Orkestrator", status: "idle" } as unknown as sdk.SDKAgentInfo;
 }
+
+test("settingSources stay empty on the live SDK while the injected Orkestrator MCP remains", async () => {
+  await mkdir(join(root, ".cursor"), { recursive: true });
+  await writeFile(
+    join(root, ".cursor", "mcp.json"),
+    JSON.stringify({
+      mcpServers: {
+        "review-untrusted": { command: "must-not-start" },
+      },
+    }),
+  );
+  const state = session();
+  state.readOnly = true;
+  state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "coord-token" };
+
+  const agent = await ensureAgent(state);
+  expect(createdOptions.at(-1)?.local?.settingSources).toEqual([]);
+  expect(Object.keys(createdOptions.at(-1)?.mcpServers ?? {})).toEqual(["orkestrator"]);
+  expect(createdOptions.at(-1)?.mcpServers?.orkestrator).toMatchObject({
+    type: "http",
+    url: "http://127.0.0.1:4567/mcp",
+    headers: { Authorization: "Bearer coord-token" },
+  });
+
+  // The real SDK maps those AgentOptions onto the local executor. If it
+  // ignored `settingSources: []` it would load the workspace `.cursor/mcp.json`
+  // written above; if it dropped the explicit `mcpServers` map the Orkestrator
+  // entry would be missing. Stop at executor acquisition, before any model call.
+  await expect(agent.send("Review the test fixture")).rejects.toThrow(executorBoundary.message);
+  expect(acquiredExecutorOptions).toHaveLength(1);
+  expect(acquiredExecutorOptions[0]?.settingSources).toEqual([]);
+  expect(Object.keys(acquiredExecutorOptions[0]?.mcpServers ?? {})).toEqual(["orkestrator"]);
+  expect(acquiredExecutorOptions[0]?.mcpServers).toMatchObject({
+    orkestrator: {
+      type: "http",
+      url: "http://127.0.0.1:4567/mcp",
+      headers: { Authorization: "Bearer coord-token" },
+    },
+  });
+  await detachAgent(state);
+});
 
 test("replaces an unused warm agent when a read-only prompt changes its policy", async () => {
   const state = session();

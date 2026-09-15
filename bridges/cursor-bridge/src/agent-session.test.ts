@@ -13,6 +13,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { Agent, type CursorAgentPlatform, type LocalAgentStore } from "@cursor/sdk";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -20,6 +21,7 @@ const previousApiKey = process.env.CURSOR_API_KEY;
 const previousStateDir = process.env.CURSOR_BRIDGE_STATE_DIR;
 const previousCredentialFile = process.env.CURSOR_BRIDGE_AUTH_FILE;
 const previousExecutionPolicy = process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
+const previousProjectSettings = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
 const bridgeStateRoot = join(tmpdir(), `cursor-bridge-sdk-test-${process.pid}`);
 process.env.CURSOR_BRIDGE_STATE_DIR = bridgeStateRoot;
 process.env.CURSOR_BRIDGE_AUTH_FILE = join(bridgeStateRoot, "missing-auth.json");
@@ -196,6 +198,7 @@ beforeEach(() => {
   prewarmFails = false;
   warmWorkspaceReleases = 0;
   delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
+  delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
 });
 
 test("restoring injected runtime dependencies reinstates the prior SDK configure callback", () => {
@@ -280,6 +283,8 @@ afterAll(() => {
   else process.env.CURSOR_BRIDGE_AUTH_FILE = previousCredentialFile;
   if (previousExecutionPolicy === undefined) delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
   else process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = previousExecutionPolicy;
+  if (previousProjectSettings === undefined) delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
+  else process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = previousProjectSettings;
 });
 
 /** A conversation turn in the shape `run.conversation()` returns. */
@@ -288,6 +293,11 @@ function conversationRun(turns: unknown[], supports = true) {
     supports: () => supports,
     conversation: async () => turns,
   };
+}
+
+function mcpServerNames(options: Record<string, unknown> | undefined): string[] {
+  const servers = options?.mcpServers;
+  return servers && typeof servers === "object" ? Object.keys(servers).sort() : [];
 }
 
 /** The container boundary a pipeline session runs behind. */
@@ -471,6 +481,7 @@ describe("ensureAgent", () => {
     expect(created[0]).toMatchObject({
       local: {
         sandboxOptions: { enabled: false },
+        settingSources: [],
       },
       tools: [
         "read",
@@ -482,6 +493,7 @@ describe("ensureAgent", () => {
         "readTodos",
         "askQuestion",
         "await",
+        "mcp",
       ],
     });
     expect(created[0]).not.toHaveProperty("disallowedTools");
@@ -504,8 +516,8 @@ describe("ensureAgent", () => {
       expect(created[0]?.tools).not.toContain(tool);
     }
     expect(created[0]).toMatchObject({
-      local: { sandboxOptions: { enabled: true }, autoReview: false },
-      tools: expect.arrayContaining(["read", "grep", "glob", "ls"]),
+      local: { sandboxOptions: { enabled: true }, autoReview: false, settingSources: [] },
+      tools: expect.arrayContaining(["read", "grep", "glob", "ls", "mcp"]),
     });
   });
 
@@ -523,8 +535,8 @@ describe("ensureAgent", () => {
     await ensureAgent(state);
 
     expect(created[0]).toMatchObject({
-      local: { sandboxOptions: { enabled: false } },
-      tools: expect.arrayContaining(["read", "grep", "glob", "ls"]),
+      local: { sandboxOptions: { enabled: false }, settingSources: [] },
+      tools: expect.arrayContaining(["read", "grep", "glob", "ls", "mcp"]),
     });
   });
 
@@ -535,8 +547,8 @@ describe("ensureAgent", () => {
 
     expect(created).toHaveLength(1);
     expect(created[0]).toMatchObject({
-      local: { sandboxOptions: { enabled: false } },
-      tools: expect.arrayContaining(["read", "grep", "glob", "ls"]),
+      local: { sandboxOptions: { enabled: false }, settingSources: [] },
+      tools: expect.arrayContaining(["read", "grep", "glob", "ls", "mcp"]),
     });
     expect(created[0]).not.toHaveProperty("disallowedTools");
     expect(created[0]?.tools).not.toEqual(expect.arrayContaining(["write", "shell"]));
@@ -557,7 +569,7 @@ describe("ensureAgent", () => {
     // through resume — which has to carry the new boundary just as create does.
     expect(resumed).toEqual(["created-agent"]);
     expect(resumedOptions[0]?.tools).toEqual(
-      expect.arrayContaining(["read", "grep", "glob", "ls"]),
+      expect.arrayContaining(["read", "grep", "glob", "ls", "mcp"]),
     );
     expect(resumedOptions[0]).not.toHaveProperty("disallowedTools");
   });
@@ -576,6 +588,88 @@ describe("ensureAgent", () => {
     await ensureAgent(state);
     expect(resumed).toEqual(["prior-agent"]);
     expect(created).toHaveLength(0);
+  });
+
+  test("a read-only coordinator keeps the MCP capability so Orkestrator tools stay reachable", async () => {
+    const state = newSessionState(undefined, {
+      id: "coordinator-read-only",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: false,
+      networkAccess: "restricted",
+    });
+    state.readOnly = true;
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "coord-token" };
+
+    await ensureAgent(state);
+
+    expect(created[0]).toMatchObject({
+      local: { settingSources: [] },
+      tools: expect.arrayContaining(["mcp"]),
+      mcpServers: {
+        orkestrator: {
+          type: "http",
+          url: "http://127.0.0.1:4567/mcp",
+          headers: { Authorization: "Bearer coord-token" },
+        },
+      },
+    });
+    expect(created[0]?.tools).not.toEqual(expect.arrayContaining(["shell", "edit", "task"]));
+    expect(mcpServerNames(created[0])).toEqual(["orkestrator"]);
+  });
+
+  test("a read-only attach drops repository MCP servers even when project settings are opted in", async () => {
+    process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";
+    const mcpPath = join(workingDirectory, ".cursor", "mcp.json");
+    await mkdir(join(workingDirectory, ".cursor"), { recursive: true });
+    await writeFile(
+      mcpPath,
+      JSON.stringify({
+        mcpServers: {
+          "review-untrusted": { command: "must-not-start", args: ["--steal"] },
+        },
+      }),
+    );
+    const connection = { url: "http://127.0.0.1:4567/mcp", token: "coord-token" };
+    try {
+      const interactive = newSessionState();
+      interactive.agentMcp = connection;
+      await ensureAgent(interactive);
+      expect(mcpServerNames(created[0])).toEqual(["orkestrator", "review-untrusted"]);
+
+      const state = newSessionState(undefined, {
+        id: "coordinator-read-only",
+        sandbox: "provider",
+        approvals: "deny",
+        projectResources: false,
+        networkAccess: "restricted",
+      });
+      state.readOnly = true;
+      state.agentMcp = connection;
+      await ensureAgent(state);
+
+      expect(mcpServerNames(created[1])).toEqual(["orkestrator"]);
+      expect(created[1]?.mcpServers).toEqual({
+        orkestrator: {
+          type: "http",
+          url: "http://127.0.0.1:4567/mcp",
+          headers: { Authorization: "Bearer coord-token" },
+        },
+      });
+
+      await detachAgent(state);
+      await ensureAgent(state);
+      expect(mcpServerNames(resumedOptions[0])).toEqual(["orkestrator"]);
+      expect(resumedOptions[0]?.mcpServers).toEqual({
+        orkestrator: {
+          type: "http",
+          url: "http://127.0.0.1:4567/mcp",
+          headers: { Authorization: "Bearer coord-token" },
+        },
+      });
+    } finally {
+      await rm(mcpPath, { force: true });
+    }
   });
 
   test("a rotated tab MCP token detaches and resumes the same agent", async () => {

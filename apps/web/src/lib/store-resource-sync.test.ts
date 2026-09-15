@@ -74,8 +74,10 @@ const {
   startResourceSync,
 } = await import("./resource-sync");
 const { startStoreResourceSync } = await import("./store-resource-sync");
-const { armStartupAgentTabActivation } = await import("./pane-layout-authoritative");
-const { hasWindowStartupAgentActivation } = await import("./pane-selection-storage");
+const { armBuildPipelineTabActivation, armStartupAgentTabActivation } =
+  await import("./pane-layout-authoritative");
+const { getWindowBuildPipelineActivation, hasWindowStartupAgentActivation } =
+  await import("./pane-selection-storage");
 const { startEnvironmentInBackground } =
   await import("@/components/environments/CreateEnvironmentFlowDialog");
 const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
@@ -771,6 +773,119 @@ describe("pane-layout binding", () => {
     emitSetupComplete!("env-1", false);
     await tick();
     expect(getPaneLayout).toHaveBeenCalledWith("env-1");
+  });
+
+  test("commits a pipeline handoff when setup completion refreshes the layout", async () => {
+    detach?.();
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [
+          {
+            ...environment("env-1"),
+            setupPhase: "running",
+            setupScriptsComplete: false,
+          },
+        ],
+      });
+      useBuildPipelineStore.setState({
+        pipelines: new Map([["pipe-1", pipeline("pipe-1", 1)]]),
+      } as never);
+
+      const paneStore = usePaneLayoutStore.getState();
+      paneStore.initialize(null, "env-1");
+      paneStore.addTab("default", { id: "default", type: "plain", isSetupTab: true }, "env-1");
+      paneStore.addTab(
+        "default",
+        {
+          id: "build-pipe-1",
+          type: "claude-build",
+          buildTabData: {
+            environmentId: "env-1",
+            pipelineId: "pipe-1",
+            taskId: "task-1",
+            isLocal: true,
+          },
+        },
+        "env-1",
+      );
+      paneStore.setActiveTab("default", "default", "env-1");
+      paneStore.beginHydration("env-1");
+      paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+
+      armBuildPipelineTabActivation("env-1", "pipe-1");
+      expect(getWindowBuildPipelineActivation("env-1")).toBe("pipe-1");
+      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
+        "default",
+      );
+
+      useEnvironmentStore.setState({
+        environments: [
+          {
+            ...environment("env-1"),
+            setupPhase: "ready",
+            setupScriptsComplete: true,
+          },
+        ],
+      });
+
+      const getPaneLayout = mock(async () => ({
+        version: PANE_LAYOUT_VERSION,
+        environmentId: "env-1",
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf" as const,
+          id: "default",
+          tabs: [
+            { id: "default", type: "plain" as const, isSetupTab: true },
+            {
+              id: "build-pipe-1",
+              type: "claude-build" as const,
+              buildTabData: {
+                environmentId: "env-1",
+                pipelineId: "pipe-1",
+                taskId: "task-1",
+                isLocal: true,
+              },
+            },
+          ],
+          activeTabId: "build-pipe-1",
+        },
+        updatedAt: "2026-07-29T08:00:00.000Z",
+        revision: 7,
+      }));
+
+      let emitSetupComplete: ((environmentId: string) => void) | null = null;
+      const listen = mock(async (event: string, handler: (e: { payload: unknown }) => void) => {
+        if (event === "environment-setup-complete") {
+          emitSetupComplete = (environmentId) =>
+            handler({ payload: { environment_id: environmentId, success: true } });
+        }
+        return () => {};
+      });
+
+      detach = startTestStoreResourceSync({
+        getPaneLayout: getPaneLayout as never,
+        listen: listen as never,
+      });
+      await tick();
+
+      emitSetupComplete!("env-1");
+      await tick();
+
+      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
+        "build-pipe-1",
+      );
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
   });
 
   test("stops observing setup completion once detached", async () => {

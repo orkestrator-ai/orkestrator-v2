@@ -180,6 +180,19 @@ function applyStartupAgentSetupHandoff(
   };
 }
 
+/** True when this window is still on the setup surface the pipeline should replace. */
+function paneSelectionAllowsSetupHandoff(
+  selected: EnvironmentPaneState,
+  targetLeafId: string,
+): boolean {
+  const targetLeaf = findLeaf(selected.root, (leaf) => leaf.id === targetLeafId);
+  const focusedLeaf = findLeaf(selected.root, (leaf) => leaf.id === selected.activePaneId);
+  return (
+    paneSelectionIsSetupHandoffSource(targetLeaf) &&
+    (focusedLeaf === targetLeaf || paneSelectionIsSetupHandoffSource(focusedLeaf))
+  );
+}
+
 /** Apply a launching Electron window's one-shot setup-to-pipeline handoff. */
 function applyBuildPipelineSetupHandoff(
   environmentId: string,
@@ -206,6 +219,13 @@ function applyBuildPipelineSetupHandoff(
   );
   if (!targetTab || authoritativeLeaf?.activeTabId !== targetTab.id) {
     return { state: selected, pipelineId: null };
+  }
+
+  // Mirror applyStartupAgentSetupHandoff: a published backend selection must
+  // not yank focus from a tab or pane the user chose during a long setup.
+  // Retire the one-shot in that declined case so a later reconcile cannot.
+  if (!paneSelectionAllowsSetupHandoff(selected, authoritativeLeaf.id)) {
+    return { state: selected, pipelineId };
   }
 
   const activated = activateTabInState(selected, targetTab.id);
@@ -252,7 +272,18 @@ export function armBuildPipelineTabActivation(environmentId: string, pipelineId:
     (tab) => tab.type === "claude-build" && tab.buildTabData?.pipelineId === pipelineId,
   );
   if (!targetLeaf || !targetTab) return;
+  if (!paneSelectionAllowsSetupHandoff(state, targetLeaf.id)) {
+    consumeWindowBuildPipelineActivation(environmentId, pipelineId);
+    return;
+  }
   store.setActiveTab(targetLeaf.id, targetTab.id, environmentId);
+  const installed = usePaneLayoutStore.getState().environments.get(environmentId);
+  const installedLeaf = installed
+    ? findLeaf(installed.root, (leaf) => leaf.id === targetLeaf.id)
+    : null;
+  // setActiveTab is a silent no-op for an unknown pane or tab. Leave the
+  // one-shot armed so a later authoritative frame can still finish the handoff.
+  if (installedLeaf?.activeTabId !== targetTab.id) return;
   consumeWindowBuildPipelineActivation(environmentId, pipelineId);
 }
 

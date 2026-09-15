@@ -4,6 +4,7 @@ import {
   coordinatorRuntimeId,
   type CoordinatorSnapshot,
   type ProjectGitStatus,
+  type ProjectGitSwitchConfirmation,
 } from "@orkestrator/protocol/coordinator";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
@@ -52,6 +53,7 @@ const gitStatus: ProjectGitStatus = {
   conflicts: 0,
   mergeInProgress: false,
   rebaseInProgress: false,
+  sequencerInProgress: false,
   operationState: "idle",
   repositoryOperationBlockedReason: null,
   branches: [{ ref: "refs/heads/main", name: "main", kind: "local" }],
@@ -98,6 +100,22 @@ const ensure = mock(async () => {
 });
 const getGit = mock(async () => ensuredGit);
 const switchBranch = mock(async () => ensuredGit);
+const preparedSwitch: ProjectGitSwitchConfirmation = {
+  token: "confirm-token",
+  projectId: "project-1",
+  ref: "refs/heads/feature",
+  expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  trackedChanges: 1,
+  untrackedFiles: 5,
+  nestedRepositories: [],
+  dirtySubmodules: [],
+  requiresEnhancedConfirmation: false,
+};
+let nextPreparedSwitch: ProjectGitSwitchConfirmation = preparedSwitch;
+const prepareSwitch = mock(async (_projectId: string, ref: string) => ({
+  ...nextPreparedSwitch,
+  ref,
+}));
 const syncGit = mock(async () => ensuredGit);
 const getCoordinator = mock(async () => ensuredSnapshot);
 const assignAgent = mock(async () => ensuredSnapshot);
@@ -109,6 +127,7 @@ mock.module("@/lib/backend", () => ({
   getProjectGitStatus: getGit,
   fetchProjectGit: mock(async () => ensuredGit),
   switchProjectGitBranch: switchBranch,
+  prepareProjectGitBranchSwitch: prepareSwitch,
   syncProjectGit: syncGit,
   pauseProjectCoordinator: pause,
   resumeProjectCoordinator: resume,
@@ -171,6 +190,8 @@ describe("CoordinatorPanel", () => {
     ensure.mockClear();
     getGit.mockClear();
     switchBranch.mockClear();
+    prepareSwitch.mockClear();
+    nextPreparedSwitch = preparedSwitch;
     syncGit.mockClear();
     getCoordinator.mockClear();
     assignAgent.mockClear();
@@ -482,10 +503,12 @@ describe("CoordinatorPanel", () => {
     ensuredGit = {
       ...gitStatus,
       trackedChanges: 2,
-      repositoryOperationBlockedReason: "Commit or discard changes.",
+      repositoryOperationBlockedReason:
+        "Commit or discard local checkout changes before switching or syncing.",
     };
     render(<CoordinatorPanel projectId="project-1" />);
     expect(await screen.findByText(/2 tracked/)).toBeTruthy();
+    expect(screen.getByRole("combobox").hasAttribute("disabled")).toBe(false);
   });
 
   test("rehydrates from the backend after remount and shows load failures", async () => {
@@ -550,10 +573,74 @@ describe("CoordinatorPanel", () => {
     fireEvent.click(screen.getByRole("combobox"));
     fireEvent.click(await screen.findByRole("option", { name: "origin/feature" }));
     await waitFor(() =>
-      expect(switchBranch).toHaveBeenCalledWith("project-1", "refs/remotes/origin/feature"),
+      expect(switchBranch).toHaveBeenCalledWith("project-1", "refs/remotes/origin/feature", {}),
     );
     fireEvent.click(screen.getByRole("button", { name: "Sync" }));
     await waitFor(() => expect(syncGit).toHaveBeenCalledWith("project-1"));
+  });
+
+  test("keeps branch switching available without an upstream and confirms dirty discard", async () => {
+    ensuredGit = {
+      ...gitStatus,
+      trackedChanges: 1,
+      untrackedChanges: 2,
+      repositoryOperationBlockedReason:
+        "Commit or discard local checkout changes before switching or syncing.",
+      branches: [
+        ...gitStatus.branches,
+        { ref: "refs/heads/feature", name: "feature", kind: "local" },
+      ],
+    };
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+
+    const branchPicker = screen.getByRole("combobox");
+    expect(branchPicker.hasAttribute("disabled")).toBe(false);
+    expect(screen.getByText("No upstream configured")).toBeTruthy();
+
+    fireEvent.click(branchPicker);
+    fireEvent.click(await screen.findByRole("option", { name: "feature" }));
+    expect(await screen.findByText("Discard changes and switch branch?")).toBeTruthy();
+    await waitFor(() =>
+      expect(prepareSwitch).toHaveBeenCalledWith("project-1", "refs/heads/feature"),
+    );
+    expect(screen.getByRole("alertdialog").textContent).toContain(
+      "1 tracked changes and 5 untracked files",
+    );
+    expect(switchBranch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Keep changes" }));
+    expect(switchBranch).not.toHaveBeenCalled();
+
+    fireEvent.click(branchPicker);
+    fireEvent.click(await screen.findByRole("option", { name: "feature" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard and switch" }));
+    await waitFor(() =>
+      expect(switchBranch).toHaveBeenCalledWith("project-1", "refs/heads/feature", {
+        confirmationToken: "confirm-token",
+        includeNestedRepositories: false,
+      }),
+    );
+  });
+
+  test("does not promise a discard confirmation when switching is blocked by a merge", async () => {
+    ensuredGit = {
+      ...gitStatus,
+      trackedChanges: 2,
+      mergeInProgress: true,
+      repositoryOperationBlockedReason: "Finish the current merge first.",
+      branches: [
+        ...gitStatus.branches,
+        { ref: "refs/heads/feature", name: "feature", kind: "local" },
+      ],
+    };
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    expect(screen.getByRole("combobox").hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText(/2 tracked/)).toBeTruthy();
+    expect(screen.getByText("Finish the current merge first.")).toBeTruthy();
+    expect(screen.queryByText(/switching branches will ask before discarding/) === null).toBe(true);
+    expect(screen.queryByText("Discard changes and switch branch?") === null).toBe(true);
   });
 
   test("disables Git mutations during an active turn and persists dismissed context warnings", async () => {

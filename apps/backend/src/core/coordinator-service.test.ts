@@ -394,7 +394,7 @@ describe("project coordinator", () => {
     expect(workspace.conversations[0]).not.toHaveProperty("codexBridgePort");
   });
 
-  test("Git status blocks dirty mutations and detects external context changes", async () => {
+  test("Git status permits confirmed dirty branch switches and detects external context changes", async () => {
     const project = await storage.addProject(
       createProject("https://example.invalid/repo.git", checkout),
     );
@@ -408,11 +408,9 @@ describe("project coordinator", () => {
     const first = await git.status(project.id);
     expect(first).toMatchObject({ branch: "main", trackedChanges: 0, untrackedChanges: 0 });
     expect(await git.fetch(project.id, true)).toMatchObject({
-      lastError: {
-        operation: "fetch",
-        retryable: false,
-        message: "The current branch has no configured upstream remote.",
-      },
+      upstream: null,
+      remoteState: "unknown",
+      lastError: null,
     });
     const firstStoredRevision = (await storage.getCoordinatorWorkspace(project.id))!
       .repositoryStatus!.revision;
@@ -442,18 +440,36 @@ describe("project coordinator", () => {
     await expect(git.switchBranch(project.id, "refs/heads/occupied")).rejects.toThrow(
       "another worktree",
     );
+    await fs.writeFile(path.join(checkout, "preserved.txt"), "keep me\n");
+    await expect(git.prepareSwitchBranch(project.id, "refs/heads/occupied")).rejects.toThrow(
+      "another worktree",
+    );
+    await expect(
+      git.switchBranch(project.id, "refs/heads/occupied", { confirmationToken: "stale" }),
+    ).rejects.toThrow("another worktree");
+    expect(await fs.readFile(path.join(checkout, "preserved.txt"), "utf8")).toBe("keep me\n");
+    await fs.rm(path.join(checkout, "preserved.txt"));
     await runCommand("git", ["worktree", "remove", occupiedWorktree], { cwd: checkout });
 
     const gitDirectory = (
       await runCommand("git", ["rev-parse", "--git-dir"], { cwd: checkout })
     ).stdout.trim();
+    await fs.writeFile(path.join(checkout, "README.md"), "merge dirty\n");
     await fs.writeFile(
       path.resolve(checkout, gitDirectory, "MERGE_HEAD"),
       `${first.headCommit!}\n`,
     );
     expect(await git.status(project.id)).toMatchObject({ mergeInProgress: true });
     await expect(git.switchBranch(project.id, "refs/heads/main")).rejects.toThrow("current merge");
+    await expect(git.prepareSwitchBranch(project.id, "refs/heads/main")).rejects.toThrow(
+      "current merge",
+    );
+    await expect(
+      git.switchBranch(project.id, "refs/heads/main", { confirmationToken: "ignored" }),
+    ).rejects.toThrow("current merge");
+    expect(await fs.readFile(path.join(checkout, "README.md"), "utf8")).toBe("merge dirty\n");
     await fs.rm(path.resolve(checkout, gitDirectory, "MERGE_HEAD"));
+    await runCommand("git", ["checkout", "--", "README.md"], { cwd: checkout });
 
     const rebaseMarker = path.resolve(checkout, gitDirectory, "rebase-merge");
     await fs.mkdir(rebaseMarker);
@@ -461,19 +477,276 @@ describe("project coordinator", () => {
     await expect(git.switchBranch(project.id, "refs/heads/main")).rejects.toThrow("current rebase");
     await fs.rm(rebaseMarker, { recursive: true });
 
+    await fs.writeFile(path.join(checkout, "README.md"), "changed\n");
     await fs.writeFile(path.join(checkout, "untracked.txt"), "local\n");
     const dirty = await git.status(project.id);
+    expect(dirty.trackedChanges).toBe(1);
     expect(dirty.untrackedChanges).toBe(1);
-    await expect(git.switchBranch(project.id, "refs/heads/main")).rejects.toThrow(
-      "Commit or discard",
+    expect(dirty.repositoryOperationBlockedReason).toContain("Commit or discard");
+    await expect(git.switchBranch(project.id, "refs/heads/occupied")).rejects.toThrow(
+      "Confirm the current checkout",
     );
+    await expect(git.switchBranch(project.id, "refs/heads/occupied", true)).rejects.toThrow(
+      "Confirm the current checkout",
+    );
+    const confirmation = await git.prepareSwitchBranch(project.id, "refs/heads/occupied");
+    expect(confirmation).toMatchObject({
+      ref: "refs/heads/occupied",
+      trackedChanges: 1,
+      untrackedFiles: 1,
+      requiresEnhancedConfirmation: false,
+    });
+    const discarded = await git.switchBranch(project.id, "refs/heads/occupied", {
+      confirmationToken: confirmation.token,
+    });
+    expect(discarded).toMatchObject({
+      branch: "occupied",
+      trackedChanges: 0,
+      untrackedChanges: 0,
+    });
+    expect(await fs.readFile(path.join(checkout, "README.md"), "utf8")).toBe("initial\n");
+    await expect(fs.access(path.join(checkout, "untracked.txt"))).rejects.toThrow();
 
-    await fs.rm(path.join(checkout, "untracked.txt"));
     await runCommand("git", ["switch", "-c", "external"], { cwd: checkout });
     const changed = await git.status(project.id);
     const snapshot = await coordinator.get(project.id);
     expect(changed.branch).toBe("external");
     expect(snapshot!.workspace.repositoryContextRevision).toBeGreaterThan(0);
+  });
+
+  test("bound discard confirmations refuse stale, sequencer, nested, and failed switches", async () => {
+    await runCommand("git", ["branch", "other"], { cwd: checkout });
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const coordinator = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    await coordinator.ensure(project.id);
+    const git = new ProjectGitService(storage);
+    const gitDirectory = (
+      await runCommand("git", ["rev-parse", "--git-dir"], { cwd: checkout })
+    ).stdout.trim();
+
+    await fs.writeFile(path.join(checkout, "README.md"), "stale\n");
+    const staleConfirmation = await git.prepareSwitchBranch(project.id, "refs/heads/other");
+    await fs.writeFile(path.join(checkout, "newer.txt"), "added after prepare\n");
+    await expect(
+      git.switchBranch(project.id, "refs/heads/other", {
+        confirmationToken: staleConfirmation.token,
+      }),
+    ).rejects.toThrow("checkout changed after confirmation");
+    expect(await fs.readFile(path.join(checkout, "README.md"), "utf8")).toBe("stale\n");
+    expect(await fs.readFile(path.join(checkout, "newer.txt"), "utf8")).toBe("added after prepare\n");
+    const boundConfirmation = await git.prepareSwitchBranch(project.id, "refs/heads/other");
+    expect(boundConfirmation.untrackedFiles).toBe(1);
+    const switched = await git.switchBranch(project.id, "refs/heads/other", {
+      confirmationToken: boundConfirmation.token,
+    });
+    expect(switched).toMatchObject({ branch: "other", trackedChanges: 0, untrackedChanges: 0 });
+    await fs.writeFile(path.join(checkout, "README.md"), "reuse\n");
+    await expect(
+      git.switchBranch(project.id, "refs/heads/main", {
+        confirmationToken: boundConfirmation.token,
+      }),
+    ).rejects.toThrow("Confirm the current checkout");
+    expect(await fs.readFile(path.join(checkout, "README.md"), "utf8")).toBe("reuse\n");
+    await runCommand("git", ["checkout", "--", "README.md"], { cwd: checkout });
+
+    await runCommand("git", ["switch", "main"], { cwd: checkout });
+    await fs.writeFile(path.join(checkout, "README.md"), "cherry\n");
+    await runCommand("git", ["add", "README.md"], { cwd: checkout });
+    await fs.writeFile(
+      path.resolve(checkout, gitDirectory, "CHERRY_PICK_HEAD"),
+      `${switched.headCommit!}\n`,
+    );
+    expect(await git.status(project.id)).toMatchObject({ sequencerInProgress: true });
+    await expect(git.prepareSwitchBranch(project.id, "refs/heads/other")).rejects.toThrow(
+      "current cherry-pick",
+    );
+    await expect(
+      git.switchBranch(project.id, "refs/heads/other", { confirmationToken: "ignored" }),
+    ).rejects.toThrow("current cherry-pick");
+    expect(await fs.readFile(path.join(checkout, "README.md"), "utf8")).toBe("cherry\n");
+    await fs.rm(path.resolve(checkout, gitDirectory, "CHERRY_PICK_HEAD"));
+    await runCommand("git", ["reset", "--hard", "HEAD"], { cwd: checkout });
+
+    await fs.writeFile(path.join(checkout, "README.md"), "conflicted\n");
+    await runCommand("git", ["add", "README.md"], { cwd: checkout });
+    await runCommand("git", ["commit", "-m", "conflict side"], { cwd: checkout });
+    await runCommand("git", ["switch", "other"], { cwd: checkout });
+    await fs.writeFile(path.join(checkout, "README.md"), "other side\n");
+    await runCommand("git", ["add", "README.md"], { cwd: checkout });
+    await runCommand("git", ["commit", "-m", "other side"], { cwd: checkout });
+    await runCommand("git", ["merge", "main"], { cwd: checkout }).catch(() => undefined);
+    const conflicted = await git.status(project.id);
+    expect(conflicted.conflicts).toBeGreaterThan(0);
+    await expect(git.prepareSwitchBranch(project.id, "refs/heads/main")).rejects.toThrow(
+      /merge|conflicts/i,
+    );
+    await expect(
+      git.switchBranch(project.id, "refs/heads/main", { confirmationToken: "ignored" }),
+    ).rejects.toThrow(/merge|conflicts/i);
+    await runCommand("git", ["merge", "--abort"], { cwd: checkout });
+
+    await fs.writeFile(path.join(checkout, "README.md"), "before vanish\n");
+    const vanishing = await git.prepareSwitchBranch(project.id, "refs/heads/main");
+    await runCommand("git", ["branch", "-D", "main"], { cwd: checkout });
+    await expect(
+      git.switchBranch(project.id, "refs/heads/main", { confirmationToken: vanishing.token }),
+    ).rejects.toThrow("no longer available");
+    expect(await fs.readFile(path.join(checkout, "README.md"), "utf8")).toBe("before vanish\n");
+    await runCommand("git", ["branch", "main", "HEAD"], { cwd: checkout });
+    await runCommand("git", ["checkout", "--", "README.md"], { cwd: checkout });
+
+    const nested = path.join(checkout, "nested-repo");
+    await fs.mkdir(nested);
+    await runCommand("git", ["init", "-b", "main"], { cwd: nested });
+    await fs.writeFile(path.join(nested, "secret.txt"), "secret\n");
+    await fs.writeFile(path.join(checkout, "README.md"), "nested dirty\n");
+    const nestedConfirmation = await git.prepareSwitchBranch(project.id, "refs/heads/main");
+    expect(nestedConfirmation.requiresEnhancedConfirmation).toBe(true);
+    expect(nestedConfirmation.nestedRepositories.some((item) => item.includes("nested-repo"))).toBe(
+      true,
+    );
+    await expect(
+      git.switchBranch(project.id, "refs/heads/main", {
+        confirmationToken: nestedConfirmation.token,
+      }),
+    ).rejects.toThrow("nested repositories");
+    expect(await fs.readFile(path.join(nested, "secret.txt"), "utf8")).toBe("secret\n");
+    const nestedAuthorized = await git.prepareSwitchBranch(project.id, "refs/heads/main");
+    await git.switchBranch(project.id, "refs/heads/main", {
+      confirmationToken: nestedAuthorized.token,
+      includeNestedRepositories: true,
+    });
+    await expect(fs.access(nested)).rejects.toThrow();
+  });
+
+  test("discards an unborn HEAD and a dirty remote-tracking switch", async () => {
+    const remote = path.join(root, "remote.git");
+    await runCommand("git", ["init", "--bare", "-b", "main", remote], { cwd: root });
+    await runCommand("git", ["remote", "add", "origin", remote], { cwd: checkout });
+    await runCommand("git", ["push", "-u", "origin", "main"], { cwd: checkout });
+    await runCommand("git", ["switch", "-c", "feature"], { cwd: checkout });
+    await fs.writeFile(path.join(checkout, "feature.txt"), "feature\n");
+    await runCommand("git", ["add", "feature.txt"], { cwd: checkout });
+    await runCommand("git", ["commit", "-m", "feature"], { cwd: checkout });
+    await runCommand("git", ["push", "-u", "origin", "feature"], { cwd: checkout });
+    await runCommand("git", ["switch", "main"], { cwd: checkout });
+    await runCommand("git", ["branch", "-D", "feature"], { cwd: checkout });
+
+    const project = await storage.addProject(createProject(remote, checkout));
+    const coordinator = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    await coordinator.ensure(project.id);
+    const git = new ProjectGitService(storage);
+    await git.fetch(project.id, true);
+    await fs.writeFile(path.join(checkout, "README.md"), "remote dirty\n");
+    await fs.writeFile(path.join(checkout, "scratch.txt"), "scratch\n");
+    const remoteConfirmation = await git.prepareSwitchBranch(
+      project.id,
+      "refs/remotes/origin/feature",
+    );
+    expect(await git.switchBranch(project.id, "refs/remotes/origin/feature", {
+      confirmationToken: remoteConfirmation.token,
+    })).toMatchObject({ branch: "feature", trackedChanges: 0, untrackedChanges: 0 });
+    expect(await fs.readFile(path.join(checkout, "feature.txt"), "utf8")).toBe("feature\n");
+    await expect(fs.access(path.join(checkout, "scratch.txt"))).rejects.toThrow();
+
+    const unborn = path.join(root, "unborn");
+    await fs.mkdir(unborn);
+    await runCommand("git", ["init", "-b", "main"], { cwd: unborn });
+    await runCommand("git", ["config", "user.email", "unborn@example.invalid"], { cwd: unborn });
+    await runCommand("git", ["config", "user.name", "Unborn"], { cwd: unborn });
+    await fs.writeFile(path.join(unborn, "staged.txt"), "staged\n");
+    await runCommand("git", ["add", "staged.txt"], { cwd: unborn });
+    await runCommand("git", ["remote", "add", "origin", remote], { cwd: unborn });
+    await runCommand("git", ["fetch", "origin"], { cwd: unborn });
+    const unbornProject = await storage.addProject(
+      createProject("https://example.invalid/unborn.git", unborn),
+    );
+    await coordinator.ensure(unbornProject.id);
+    expect(await git.status(unbornProject.id)).toMatchObject({
+      headCommit: null,
+      trackedChanges: 1,
+    });
+    const unbornConfirmation = await git.prepareSwitchBranch(
+      unbornProject.id,
+      "refs/remotes/origin/main",
+    );
+    expect(
+      await git.switchBranch(unbornProject.id, "refs/remotes/origin/main", {
+        confirmationToken: unbornConfirmation.token,
+      }),
+    ).toMatchObject({ branch: "main", headCommit: expect.any(String), trackedChanges: 0, untrackedChanges: 0 });
+    await expect(fs.access(path.join(unborn, "staged.txt"))).rejects.toThrow();
+  });
+
+  test("fetch covers every configured remote and a dirty submodule needs enhanced confirmation", async () => {
+    const origin = path.join(root, "origin.git");
+    const extra = path.join(root, "extra.git");
+    const broken = path.join(root, "missing.git");
+    await runCommand("git", ["init", "--bare", "-b", "main", origin], { cwd: root });
+    await runCommand("git", ["init", "--bare", "-b", "main", extra], { cwd: root });
+    await runCommand("git", ["remote", "add", "origin", origin], { cwd: checkout });
+    await runCommand("git", ["remote", "add", "extra", extra], { cwd: checkout });
+    await runCommand("git", ["push", "origin", "main"], { cwd: checkout });
+    await runCommand("git", ["push", "extra", "main"], { cwd: checkout });
+    const project = await storage.addProject(createProject(origin, checkout));
+    const coordinator = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    await coordinator.ensure(project.id);
+    const git = new ProjectGitService(storage);
+    expect(await git.fetch(project.id, true)).toMatchObject({
+      remoteState: "fresh",
+      lastError: null,
+    });
+    await runCommand("git", ["remote", "add", "broken", broken], { cwd: checkout });
+    const failed = await git.fetch(project.id, true);
+    expect(failed.remoteState).toBe("stale");
+    expect(failed.lastError).toBeTruthy();
+
+    const subSrc = path.join(root, "sub-src");
+    await fs.mkdir(subSrc);
+    await runCommand("git", ["init", "-b", "main"], { cwd: subSrc });
+    await runCommand("git", ["config", "user.email", "sub@example.invalid"], { cwd: subSrc });
+    await runCommand("git", ["config", "user.name", "Sub"], { cwd: subSrc });
+    await fs.writeFile(path.join(subSrc, "lib.txt"), "lib\n");
+    await runCommand("git", ["add", "lib.txt"], { cwd: subSrc });
+    await runCommand("git", ["commit", "-m", "sub"], { cwd: subSrc });
+    await runCommand("git", ["branch", "other"], { cwd: checkout });
+    await runCommand("git", ["-c", "protocol.file.allow=always", "submodule", "add", subSrc, "vendor"], {
+      cwd: checkout,
+    });
+    await runCommand("git", ["commit", "-m", "add submodule"], { cwd: checkout });
+    await fs.writeFile(path.join(checkout, "vendor", "lib.txt"), "dirty submodule\n");
+    const submoduleConfirmation = await git.prepareSwitchBranch(project.id, "refs/heads/other");
+    expect(submoduleConfirmation.requiresEnhancedConfirmation).toBe(true);
+    expect(submoduleConfirmation.dirtySubmodules.some((item) => item.includes("vendor"))).toBe(true);
+    await expect(
+      git.switchBranch(project.id, "refs/heads/other", {
+        confirmationToken: submoduleConfirmation.token,
+      }),
+    ).rejects.toThrow("dirty submodules");
+    expect(await fs.readFile(path.join(checkout, "vendor", "lib.txt"), "utf8")).toBe(
+      "dirty submodule\n",
+    );
+    const authorized = await git.prepareSwitchBranch(project.id, "refs/heads/other");
+    expect(
+      await git.switchBranch(project.id, "refs/heads/other", {
+        confirmationToken: authorized.token,
+        includeNestedRepositories: true,
+      }),
+    ).toMatchObject({ branch: "other" });
   });
 
   test("fetch force, fast-forward sync, remote switching, and divergence stay safe", async () => {
@@ -490,6 +763,17 @@ describe("project coordinator", () => {
     await coordinator.ensure(project.id);
     const git = new ProjectGitService(storage);
 
+    await runCommand("git", ["branch", "--unset-upstream"], { cwd: checkout });
+    expect(await git.fetch(project.id, true)).toMatchObject({
+      upstream: null,
+      remote: null,
+      remoteState: "fresh",
+      lastError: null,
+    });
+    await runCommand("git", ["branch", "--set-upstream-to", "origin/main", "main"], {
+      cwd: checkout,
+    });
+    await git.status(project.id);
     const baseline = await git.fetch(project.id, true);
     expect((await git.fetch(project.id)).fetchedAt).toBe(baseline.fetchedAt);
     await Bun.sleep(5);

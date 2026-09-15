@@ -1,4 +1,9 @@
-import type { CoordinatorSnapshot, ProjectGitStatus } from "@orkestrator/protocol/coordinator";
+import type {
+  CoordinatorSnapshot,
+  ProjectGitStatus,
+  ProjectGitSwitchConfirmation,
+  ProjectGitSwitchOptions,
+} from "@orkestrator/protocol/coordinator";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { invoke } from "@/lib/native/backend";
 
@@ -47,8 +52,27 @@ export const fetchProjectGit = (projectId: string, force = false): Promise<Proje
 export const syncProjectGit = (projectId: string): Promise<ProjectGitStatus> =>
   invoke("sync_project_git", { projectId });
 
-export const switchProjectGitBranch = (projectId: string, ref: string): Promise<ProjectGitStatus> =>
-  invoke("switch_project_git_branch", { projectId, ref });
+export const prepareProjectGitBranchSwitch = (
+  projectId: string,
+  ref: string,
+): Promise<ProjectGitSwitchConfirmation> =>
+  invoke("prepare_project_git_branch_switch", { projectId, ref });
+
+export const switchProjectGitBranch = (
+  projectId: string,
+  ref: string,
+  options: boolean | ProjectGitSwitchOptions = {},
+): Promise<ProjectGitStatus> =>
+  invoke("switch_project_git_branch", {
+    projectId,
+    ref,
+    ...(typeof options === "boolean"
+      ? {}
+      : {
+          confirmationToken: options.confirmationToken,
+          includeNestedRepositories: options.includeNestedRepositories === true,
+        }),
+  });
 
 export const writeCoordinatorAttachment = (
   environmentId: string,

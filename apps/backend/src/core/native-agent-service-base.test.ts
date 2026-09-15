@@ -3696,6 +3696,7 @@ describe("NativeAgentService", () => {
         conflicts: 0,
         mergeInProgress: false,
         rebaseInProgress: false,
+        sequencerInProgress: false,
         operationState: "idle",
         repositoryOperationBlockedReason: null,
         branches: [],

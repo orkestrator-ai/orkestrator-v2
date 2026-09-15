@@ -175,9 +175,16 @@ const CURSOR_CAPABILITY_TOOLS: Readonly<Record<string, readonly ToolName[]>> = O
 });
 
 /**
- * Built-ins that cannot mutate the checkout, escape through MCP, launch an
- * independently tooled subagent, or access the network. An allowlist is
- * deliberate: a new Cursor writing tool stays unavailable until reviewed.
+ * Built-ins that cannot mutate the checkout, launch an independently tooled
+ * subagent, or access the network. An allowlist is deliberate: a new Cursor
+ * writing tool stays unavailable until reviewed.
+ *
+ * `mcp` has to be in here explicitly. The SDK treats it as a capability group
+ * for the whole MCP family (including Grok's dynamic MCP discovery tools);
+ * omitting it disables every server, including the Orkestrator control server
+ * a coordinator exists to call. User and project MCP stay unloaded on
+ * read-only attaches (`settingSources: []` and a policy-aware
+ * `cursorMcpServers` that returns only the injected Orkestrator entry).
  */
 export const CURSOR_READ_ONLY_TOOLS = [
   "read",
@@ -189,6 +196,7 @@ export const CURSOR_READ_ONLY_TOOLS = [
   "readTodos",
   "askQuestion",
   "await",
+  "mcp",
 ] as const satisfies readonly ToolName[];
 
 const CURSOR_TOOL_ALIASES: Readonly<Record<string, readonly ToolName[]>> = Object.freeze({
@@ -260,7 +268,10 @@ async function attach(state: SessionState): Promise<SDKAgent> {
   if (!apiKey) {
     throw new CredentialError(CURSOR_AUTHENTICATION_REQUIRED_MESSAGE);
   }
-  const mcpServers = await cursorMcpServers(state.agentMcp);
+  const mcpServers = await cursorMcpServers(state.agentMcp, {
+    readOnly,
+    projectResources: policy.projectResources,
+  });
   state.mcpServerNames = Object.keys(mcpServers);
   state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
   const options: AgentOptions = {
@@ -269,7 +280,14 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     mode: state.composer.selectedModeId === "plan" ? ("plan" as const) : ("agent" as const),
     local: {
       cwd: workingDirectory,
-      settingSources: policy.projectResources ? ["user", "project", "team", "plugins"] : ["user"],
+      // Read-only coordinators keep only the injected Orkestrator MCP server.
+      // User settings would otherwise load the host's MCP catalog through the
+      // same `mcp` capability the allowlist has to grant for delegation.
+      settingSources: readOnly
+        ? []
+        : policy.projectResources
+          ? ["user", "project", "team", "plugins"]
+          : ["user"],
       sandboxOptions: { enabled: policy.sandbox === "provider" },
       autoReview: policy.sandbox === "provider" && policy.approvals === "auto-approve",
     },

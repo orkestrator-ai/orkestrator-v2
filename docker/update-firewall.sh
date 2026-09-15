@@ -7,7 +7,8 @@
 #   update-firewall.sh --remove domain1,domain2,...
 #   update-firewall.sh --list
 #
-# Must be run with sudo (sudoers rule allows node user to run this)
+# Must be run as root via `docker exec --user root`. The node sudoers file
+# no longer grants this script; runtime allowlist edits are an operator action.
 
 set -euo pipefail
 IFS=$'\n\t'

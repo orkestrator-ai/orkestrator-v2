@@ -364,13 +364,25 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     if (parsed.event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) return;
     const callbacks = listeners.get(parsed.event);
     if (!callbacks) return;
-    for (const callback of callbacks) callback(parsed.payload);
+    for (const callback of callbacks) {
+      try {
+        callback(parsed.payload);
+      } catch (error) {
+        console.error(`[RemoteGateway] Event listener for ${parsed.event} failed`, error);
+      }
+    }
   };
 
   const announceEventStreamConnected = () => {
     const callbacks = listeners.get(NATIVE_EVENT_STREAM_CONNECTED_EVENT);
     if (!callbacks) return;
-    for (const callback of callbacks) callback(undefined);
+    for (const callback of callbacks) {
+      try {
+        callback(undefined);
+      } catch (error) {
+        console.error("[RemoteGateway] Event-stream listener failed", error);
+      }
+    }
   };
 
   const clearBootMetricsTimers = () => {
@@ -504,23 +516,27 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    while (!controller.signal.aborted) {
-      const { done, value } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      let boundary = /\r?\n\r?\n/.exec(buffer);
-      while (boundary) {
-        const frame = parseEventBlock(buffer.slice(0, boundary.index));
-        buffer = buffer.slice(boundary.index + boundary[0].length);
-        if (frame.data) {
-          dispatchMessage(frame.data, {
-            mainStream,
-            lastEventId: frame.id,
-            terminalFallback,
-          });
+    try {
+      while (!controller.signal.aborted) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        let boundary = /\r?\n\r?\n/.exec(buffer);
+        while (boundary) {
+          const frame = parseEventBlock(buffer.slice(0, boundary.index));
+          buffer = buffer.slice(boundary.index + boundary[0].length);
+          if (frame.data) {
+            dispatchMessage(frame.data, {
+              mainStream,
+              lastEventId: frame.id,
+              terminalFallback,
+            });
+          }
+          boundary = /\r?\n\r?\n/.exec(buffer);
         }
-        boundary = /\r?\n\r?\n/.exec(buffer);
+        if (done) break;
       }
-      if (done) break;
+    } finally {
+      await reader.cancel().catch(() => undefined);
     }
   };
 
@@ -558,8 +574,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           console.warn("[RemoteGateway] Event stream disconnected", error);
         }
       } finally {
+        const shouldReconnect = !controller.signal.aborted;
+        controller.abort();
         if (streamAbortController === controller) streamAbortController = null;
-        if (!controller.signal.aborted) scheduleReconnect();
+        if (shouldReconnect) scheduleReconnect();
       }
     })();
   };
@@ -802,6 +820,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
             console.warn("[RemoteGateway] Terminal event stream disconnected", error);
           }
         } finally {
+          controller.abort();
           if (stream.controller === controller) stream.controller = null;
           if (
             !stream.closed &&

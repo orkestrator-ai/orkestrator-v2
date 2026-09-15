@@ -26,6 +26,8 @@ const result = await Bun.build({
   ],
   outdir: path.join(output, "electron"),
   target: "node",
+  // ESM preloads require sandbox: false on BrowserWindow. A sandboxed
+  // Chromium context evaluates preloads as CommonJS and cannot load these.
   format: "esm",
   external: ["electron"],
   sourcemap: "external",

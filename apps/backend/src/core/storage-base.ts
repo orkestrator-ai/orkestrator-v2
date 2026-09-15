@@ -659,14 +659,27 @@ export abstract class StorageBase {
         )
       : null;
 
+    // Structural writes (makeBackup) fsync so a crash cannot promote an empty
+    // remnant. Volatile activity timestamps already treat a lost refresh as
+    // recoverable, so they skip the disk barrier.
+    const writeDurableTemp = async (targetPath: string) => {
+      const handle = await fs.open(targetPath, "w", mode ?? 0o666);
+      try {
+        await handle.writeFile(contents, "utf8");
+        if (makeBackup) await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    };
+
     await this.enqueueWrite(async () => {
-      await fs.writeFile(tempPath, contents, mode === undefined ? undefined : { mode });
+      await writeDurableTemp(tempPath);
       if (recoveryTempPath) {
         // Volatile environment updates deliberately do not rotate five
         // historical backups, but they still need one current, valid recovery
         // point. Write the same validated snapshot to .bak.1 before publishing
         // the primary so corruption cannot roll structural fields back.
-        await fs.writeFile(recoveryTempPath, contents, mode === undefined ? undefined : { mode });
+        await writeDurableTemp(recoveryTempPath);
       }
       if (mode !== undefined) {
         await fs.chmod(tempPath, mode);
@@ -1036,6 +1049,9 @@ export abstract class StorageBase {
     await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
     while (true) {
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for ${description} lock`);
+      }
       try {
         const handle = await fs.open(lockPath, "wx", 0o600);
         try {
@@ -1060,7 +1076,39 @@ export abstract class StorageBase {
         if (code !== "EEXIST") throw error;
         const stat = await fs.stat(lockPath).catch(() => null);
         if (stat && Date.now() - stat.mtimeMs > staleMs) {
-          await fs.rm(lockPath, { force: true });
+          // Serialise stale reclamation separately from ownership of the real
+          // lock. Otherwise two waiters can both decide it is stale and the
+          // second can delete the fresh lock acquired after the first removal.
+          const reclaimPath = `${lockPath}.reclaim`;
+          let reclaimHandle;
+          try {
+            reclaimHandle = await fs.open(reclaimPath, "wx", 0o600);
+          } catch (reclaimError) {
+            const reclaimCode =
+              reclaimError && typeof reclaimError === "object" && "code" in reclaimError
+                ? reclaimError.code
+                : undefined;
+            if (reclaimCode === "EEXIST") {
+              const reclaimStat = await fs.stat(reclaimPath).catch(() => null);
+              if (reclaimStat && Date.now() - reclaimStat.mtimeMs > staleMs) {
+                // A process that died after creating the sentinel would
+                // otherwise leave every later mutation spinning forever.
+                await fs.rm(reclaimPath, { force: true });
+              }
+              await new Promise((resolve) => setTimeout(resolve, 25));
+              continue;
+            }
+            throw reclaimError;
+          }
+          try {
+            const current = await fs.stat(lockPath).catch(() => null);
+            if (current && Date.now() - current.mtimeMs > staleMs) {
+              await fs.rm(lockPath, { force: true });
+            }
+          } finally {
+            await reclaimHandle.close();
+            await fs.rm(reclaimPath, { force: true });
+          }
           continue;
         }
         if (Date.now() >= deadline) {
@@ -1084,6 +1132,29 @@ export abstract class StorageBase {
   }
 
   protected async rotateBackups(filePath: string, mode?: number): Promise<void> {
+    // Never promote an empty/corrupt crash remnant over a valid recovery
+    // ladder. The replacement write below can publish recovered state while
+    // keeping the newest known-good backup at .bak.1.
+    const cached = this.jsonReadCache.get(filePath);
+    let primaryKnownGood = false;
+    if (cached) {
+      try {
+        const stat = await fs.stat(filePath);
+        const fingerprint = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+        primaryKnownGood = cached.fingerprint === fingerprint;
+      } catch {
+        return;
+      }
+    }
+    if (!primaryKnownGood) {
+      try {
+        const primary = await fs.readFile(filePath, "utf8");
+        if (!primary.trim()) return;
+        JSON.parse(primary);
+      } catch {
+        return;
+      }
+    }
     for (let index = MAX_JSON_BACKUPS - 1; index >= 1; index -= 1) {
       const current = this.backupPath(filePath, index);
       const next = this.backupPath(filePath, index + 1);
@@ -1123,7 +1194,7 @@ export abstract class StorageBase {
 
     try {
       const raw = await fs.readFile(filePath, "utf8");
-      if (!raw.trim()) return fallback();
+      if (!raw.trim()) throw new SyntaxError("Empty JSON store");
       return JSON.parse(raw) as T;
     } catch {
       const recovered = await this.recoverJsonFromBackups<T>(filePath);

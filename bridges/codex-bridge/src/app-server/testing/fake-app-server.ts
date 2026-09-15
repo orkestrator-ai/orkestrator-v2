@@ -100,18 +100,34 @@ export class FakeWritable implements WritableLike {
     return true;
   }
 
+  on(event: "error", listener: Listener): void {
+    const set = this.listeners.get(event) ?? new Set<Listener>();
+    set.add(listener);
+    this.listeners.set(event, set);
+  }
+
   once(event: "drain" | "error" | "close", listener: Listener): void {
     const set = this.listeners.get(event) ?? new Set<Listener>();
-    const wrapped: Listener = (...args) => {
+    const wrapped: Listener & { listener?: Listener } = (...args) => {
       set.delete(wrapped);
       listener(...args);
     };
+    wrapped.listener = listener;
     set.add(wrapped);
     this.listeners.set(event, set);
   }
 
   removeListener(event: string, listener: Listener): void {
-    this.listeners.get(event)?.delete(listener);
+    const listeners = this.listeners.get(event);
+    if (!listeners) return;
+    for (const candidate of Array.from(listeners)) {
+      if (
+        candidate === listener ||
+        (candidate as Listener & { listener?: Listener }).listener === listener
+      ) {
+        listeners.delete(candidate);
+      }
+    }
   }
 
   off(event: string, listener: Listener): void {
@@ -127,6 +143,14 @@ export class FakeWritable implements WritableLike {
 
   isAwaitingDrain(): boolean {
     return this.pendingDrain;
+  }
+
+  listenerCount(event: string): number {
+    return this.listeners.get(event)?.size ?? 0;
+  }
+
+  emitError(error: Error): void {
+    for (const listener of Array.from(this.listeners.get("error") ?? [])) listener(error);
   }
 
   /** Parsed view of everything written, for assertions. */

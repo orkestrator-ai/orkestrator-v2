@@ -624,7 +624,7 @@ describe("files panel views", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "App.tsx" }));
     act(() => useFilesPanelStore.setState({ expandedFolders: [] }));
-    expect(screen.queryByRole("button", { name: "App.tsx" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "App.tsx" }) === null).toBe(true);
 
     const readme = screen.getByRole("button", { name: "README.md" });
     fireEvent.click(readme, { shiftKey: true });
@@ -674,7 +674,7 @@ describe("files panel views", () => {
     fireEvent.click(screen.getByRole("button", { name: "README.md" }), { metaKey: true });
 
     act(() => useFilesPanelStore.setState({ expandedFolders: [] }));
-    expect(screen.queryByRole("button", { name: "App.tsx" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "App.tsx" }) === null).toBe(true);
     expect(screen.getByRole("button", { name: "README.md" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Move 2 files to another folder" }));

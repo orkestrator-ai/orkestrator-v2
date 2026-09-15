@@ -38,9 +38,7 @@ async function withStorage(
   run: (storage: StorageService) => Promise<void>,
   project?: Partial<Project>,
 ): Promise<void> {
-  const dataDir = await fs.mkdtemp(
-    path.join(tmpdir(), "orkestrator-feature-build-"),
-  );
+  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-feature-build-"));
   const storage = new StorageService(dataDir);
   await storage.init();
   await storage.addProject({
@@ -96,9 +94,7 @@ describe("createFeatureBuild", () => {
       // Linking the source is what lets the pipeline move this ticket and
       // attach its environment to it.
       expect(started.source).toEqual({ type: "kanban", taskId: task.id });
-      expect(started.taskSnapshot.acceptanceCriteria).toBe(
-        "The preference survives a reload.",
-      );
+      expect(started.taskSnapshot.acceptanceCriteria).toBe("The preference survives a reload.");
       expect(started.namingPrompt).toContain("Dark mode toggle");
     });
   });
@@ -168,10 +164,7 @@ describe("createFeatureBuild", () => {
       });
       expect(supervisor.started[0]!.taskSnapshot.comments).toEqual([]);
 
-      await storage.addKanbanComment(
-        first.taskId,
-        "Keep the header toggle labelled.",
-      );
+      await storage.addKanbanComment(first.taskId, "Keep the header toggle labelled.");
       const second = await createFeatureBuild(
         {
           ...input,
@@ -205,9 +198,7 @@ describe("createFeatureBuild", () => {
           environmentOptions: {
             name: "feature-dark-mode",
             networkAccessMode: "restricted",
-            portMappings: [
-              { containerPort: 5173, hostPort: 5173, protocol: "tcp" },
-            ],
+            portMappings: [{ containerPort: 5173, hostPort: 5173, protocol: "tcp" }],
           },
         },
         { storage, buildPipelines: supervisor.service },
@@ -273,13 +264,11 @@ describe("createFeatureBuild", () => {
   test("a retry completes only the missing writes after partial image persistence", async () => {
     await withStorage(async (storage) => {
       const supervisor = fakeSupervisor();
-      const persistImage =
-        storage.addNormalizedKanbanImageForRequest.bind(storage);
+      const persistImage = storage.addNormalizedKanbanImageForRequest.bind(storage);
       let attempts = 0;
       storage.addNormalizedKanbanImageForRequest = async (...args) => {
         attempts += 1;
-        if (attempts === 2)
-          throw new Error("injected second image write failure");
+        if (attempts === 2) throw new Error("injected second image write failure");
         return persistImage(...args);
       };
       const request = {
@@ -298,9 +287,7 @@ describe("createFeatureBuild", () => {
         }),
       ).rejects.toThrow("injected second image write failure");
       expect(
-        (await storage.getKanbanTasks("project-1"))[0]!.images.map(
-          ({ filename }) => filename,
-        ),
+        (await storage.getKanbanTasks("project-1"))[0]!.images.map(({ filename }) => filename),
       ).toEqual(["first.png"]);
       expect(supervisor.started).toHaveLength(0);
 
@@ -309,16 +296,12 @@ describe("createFeatureBuild", () => {
         buildPipelines: supervisor.service,
       });
       const task = (await storage.getKanbanTasks("project-1"))[0]!;
-      expect(task.images.map(({ filename }) => filename)).toEqual([
+      expect(task.images.map(({ filename }) => filename)).toEqual(["first.png", "second.png"]);
+      expect(new Set(task.images.map(({ id }) => id)).size).toBe(2);
+      expect(supervisor.started[0]!.taskSnapshot.images.map(({ filename }) => filename)).toEqual([
         "first.png",
         "second.png",
       ]);
-      expect(new Set(task.images.map(({ id }) => id)).size).toBe(2);
-      expect(
-        supervisor.started[0]!.taskSnapshot.images.map(
-          ({ filename }) => filename,
-        ),
-      ).toEqual(["first.png", "second.png"]);
     });
   });
 
@@ -438,9 +421,7 @@ describe("createFeatureBuild", () => {
           { storage, buildPipelines: supervisor.service },
         ),
       ).rejects.toThrow("requestId was already used with different arguments");
-      expect(
-        (await storage.getKanbanTasks("project-1"))[0]!.images,
-      ).toHaveLength(1);
+      expect((await storage.getKanbanTasks("project-1"))[0]!.images).toHaveLength(1);
       expect(supervisor.started).toHaveLength(1);
     });
   });

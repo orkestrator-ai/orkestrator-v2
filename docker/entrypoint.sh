@@ -133,6 +133,64 @@ agent_destination_path_has_symlink() {
     return 1
 }
 
+# Write ~/.claude/.credentials.json as a fresh regular 0600 file. A reused
+# container can replace the destination leaf with a symlink into the
+# workspace; redirection and cp would follow it. mktemp plus rename never
+# writes through that leaf, and a parent-directory symlink is refused.
+publish_claude_credentials() {
+    local destination_root="$HOME/.claude"
+    local relative_path=".credentials.json"
+    local destination_path="$destination_root/$relative_path"
+    local source_path="${1:-}"
+    local contents="${2:-}"
+    local destination_parent
+    local temporary_path
+
+    if ! mkdir -p "$destination_root"; then
+        echo "Failed to create Claude credential directory" >&2
+        return 1
+    fi
+    if [ -L "$destination_root" ]; then
+        echo "Refusing Claude credential write: destination directory is a symlink" >&2
+        return 1
+    fi
+    if [ -L "$destination_path" ]; then
+        rm -f "$destination_path" || return 1
+    fi
+    if [ -n "$source_path" ]; then
+        if agent_source_path_has_symlink "$(dirname "$source_path")" "$(basename "$source_path")"; then
+            echo "Refusing Claude credential copy: source path is a symlink" >&2
+            return 1
+        fi
+        if [ ! -f "$source_path" ]; then
+            echo "Refusing Claude credential copy: source is not a regular file" >&2
+            return 1
+        fi
+    fi
+    destination_parent="$(dirname "$destination_path")"
+    temporary_path="$(mktemp "$destination_parent/.credentials.json.XXXXXX")" || {
+        echo "Failed to create Claude credential tempfile" >&2
+        return 1
+    }
+    if [ -n "$source_path" ]; then
+        if ! cp "$source_path" "$temporary_path"; then
+            rm -f "$temporary_path"
+            echo "Failed to copy Claude credentials" >&2
+            return 1
+        fi
+    elif ! printf '%s\n' "$contents" > "$temporary_path"; then
+        rm -f "$temporary_path"
+        echo "Failed to write Claude credentials" >&2
+        return 1
+    fi
+    if ! chmod 600 "$temporary_path" || ! mv -f "$temporary_path" "$destination_path"; then
+        rm -f "$temporary_path"
+        echo "Failed to publish Claude credentials" >&2
+        return 1
+    fi
+    chmod 600 "$destination_path"
+}
+
 copy_agent_file() {
     local source_root="$1"
     local destination_root="$2"
@@ -416,11 +474,17 @@ copy_agent_directory_entries() {
 
 log_progress "=== Claude Code Environment Initializing ==="
 
-# Initialize firewall if running with NET_ADMIN capability
-# Use sudo -E to preserve environment variables (NETWORK_MODE, ALLOWED_DOMAINS)
+# Initialize the firewall through the one exact privileged command granted to
+# node. The script reads Docker's immutable PID 1 environment, not caller input.
 if [ -x /usr/local/bin/init-firewall.sh ]; then
     log_progress "Initializing network firewall..."
-    sudo -E /usr/local/bin/init-firewall.sh || log_progress "Warning: Firewall initialization failed (may need NET_ADMIN capability)"
+    if ! sudo /usr/local/bin/init-firewall.sh; then
+        if [ "${NETWORK_MODE:-restricted}" != "full" ]; then
+            log_progress "ERROR: Restricted-network firewall initialization failed"
+            exit 1
+        fi
+        log_progress "Warning: Firewall initialization failed in full-network mode"
+    fi
 fi
 
 # Set up Claude Code configuration
@@ -480,25 +544,30 @@ fi
 # This MUST happen AFTER copying host files so a real credential always beats
 # whatever `/claude-config` happened to contain.
 if [ -n "$CLAUDE_OAUTH_CREDENTIALS" ] && [ "$CLAUDE_OAUTH_CREDENTIALS" != "{}" ]; then
-    echo "$CLAUDE_OAUTH_CREDENTIALS" > "$HOME/.claude/.credentials.json"
-    chmod 600 "$HOME/.claude/.credentials.json"
-    log_progress "Injected credentials from CLAUDE_OAUTH_CREDENTIALS"
+    if publish_claude_credentials "" "$CLAUDE_OAUTH_CREDENTIALS"; then
+        log_progress "Injected credentials from CLAUDE_OAUTH_CREDENTIALS"
+    else
+        echo "Failed to inject CLAUDE_OAUTH_CREDENTIALS" >&2
+    fi
 # Nothing orders this block against the backend's sync: it runs concurrently
 # with the entrypoint, and the `/claude-config` copy above can take long enough
 # for the sync to land first. The mounted copy is the weaker source — on macOS
 # the backend prefers the Keychain, so a stale on-disk `.credentials.json` here
 # would replace the fresh token with the expired one and reproduce the exact
 # "Not logged in" symptom this whole path exists to fix. Whoever wrote a
-# non-empty credential first wins, and the sync re-runs on every start anyway.
-elif [ -s "$HOME/.claude/.credentials.json" ]; then
+# non-empty regular credential first wins, and the sync re-runs on every start
+# anyway. A destination symlink is not a credential: treat it as absent.
+elif [ -f "$HOME/.claude/.credentials.json" ] && [ ! -L "$HOME/.claude/.credentials.json" ] && [ -s "$HOME/.claude/.credentials.json" ]; then
     chmod 600 "$HOME/.claude/.credentials.json"
     echo "Credential already present (backend sync); leaving it in place"
 else
     # Linux hosts keep the credential on disk, so the mount can carry it.
-    if [ -f /claude-config/.credentials.json ]; then
-        cp /claude-config/.credentials.json "$HOME/.claude/"
-        chmod 600 "$HOME/.claude/.credentials.json"
-        echo "Copied credentials from host"
+    if [ -f /claude-config/.credentials.json ] && [ ! -L /claude-config/.credentials.json ]; then
+        if publish_claude_credentials /claude-config/.credentials.json; then
+            echo "Copied credentials from host"
+        else
+            echo "No credential on the mount; awaiting the backend credential sync"
+        fi
     else
         echo "No credential on the mount; awaiting the backend credential sync"
     fi

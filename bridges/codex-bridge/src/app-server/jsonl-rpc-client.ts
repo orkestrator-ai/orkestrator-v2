@@ -434,20 +434,29 @@ export class JsonlRpcClient {
         startedAt: this.now(),
       });
     });
+    // The write can sit behind an earlier back-pressured write while the
+    // timeout or process-close path rejects this pending entry. Mark it handled
+    // immediately; the returned request still adopts the same rejection below.
+    void promise.catch(() => undefined);
 
     this.metrics.requestsSent += 1;
     try {
-      await this.writeLine({
-        jsonrpc: "2.0",
-        id,
-        method,
-        ...(params === undefined ? {} : { params }),
-      });
+      const write = this.writeLine(
+        {
+          jsonrpc: "2.0",
+          id,
+          method,
+          ...(params === undefined ? {} : { params }),
+        },
+        () => this.pending.has(id),
+      );
+      await Promise.race([write, promise.then(() => undefined)]);
     } catch (error) {
       const pending = this.pending.get(id);
       if (pending) {
         this.pending.delete(id);
         clearTimeout(pending.timer);
+        pending.reject(error instanceof Error ? error : new Error(String(error)));
       }
       throw error;
     }
@@ -459,7 +468,10 @@ export class JsonlRpcClient {
    * Serialized, back-pressure-aware write. Chaining matters: two concurrent
    * `request` calls must not interleave partial lines on stdin.
    */
-  private writeLine(payload: Record<string, unknown>): Promise<void> {
+  private writeLine(
+    payload: Record<string, unknown>,
+    shouldWrite: () => boolean = () => true,
+  ): Promise<void> {
     const line = `${JSON.stringify(payload)}\n`;
     const byteLength = Buffer.byteLength(line, "utf8");
     if (byteLength > this.maxOutboundLineBytes) {
@@ -470,7 +482,13 @@ export class JsonlRpcClient {
       );
     }
 
-    const attempt = this.writeChain.then(() => this.writeOnce(line));
+    const attempt = this.writeChain.then(() => {
+      // A request can time out or the process can close while this write is
+      // queued behind backpressure. Never dispatch it after its owner has
+      // already been told the operation failed.
+      if (!shouldWrite()) return;
+      return this.writeOnce(line);
+    });
     // Keep the chain alive after a failure so later writes are still ordered.
     this.writeChain = attempt.catch(() => undefined);
     return attempt;
@@ -488,9 +506,18 @@ export class JsonlRpcClient {
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
+      const removeListener = (event: "drain" | "error", listener: (...args: unknown[]) => void) => {
+        if (stdin.off) stdin.off(event, listener);
+        else stdin.removeListener?.(event, listener);
+      };
+      const onDrain = (..._args: unknown[]) => finish(null);
+      const onError = (...args: unknown[]) =>
+        finish(args[0] instanceof Error ? args[0] : new Error("app-server stdin error"));
       const finish = (error?: Error | null) => {
         if (settled) return;
         settled = true;
+        removeListener("drain", onDrain);
+        removeListener("error", onError);
         if (error) reject(error);
         else resolve();
       };
@@ -500,8 +527,8 @@ export class JsonlRpcClient {
         // The kernel buffer is full. Waiting for `drain` is what keeps a large
         // prompt from being silently truncated.
         this.metrics.writeBackpressureEvents += 1;
-        stdin.once("drain", () => finish(null));
-        stdin.once("error", (error) => finish(error as Error));
+        stdin.once("drain", onDrain);
+        stdin.once("error", onError);
       }
     });
   }

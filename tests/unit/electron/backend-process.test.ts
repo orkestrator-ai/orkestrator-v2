@@ -16,6 +16,7 @@ import {
 import {
   BackendHttpClient,
   BackendProcess,
+  MAX_BACKEND_EVENT_FRAME_BYTES,
   agentTestDockerConfigDir,
   agentTestKeychainDir,
   createBackendProcessEnvironment,
@@ -845,8 +846,120 @@ sleep 5
     ) as typeof fetch;
     await expect(client.getWebClientStatus()).rejects.toThrow("lifecycle unavailable");
 
+    globalThis.fetch = mock(
+      async () => new Response("upstream exploded", { status: 503 }),
+    ) as typeof fetch;
+    await expect(client.invoke("fail")).rejects.toThrow("Backend request failed with HTTP 503");
+
     globalThis.fetch = mock(async () => new Response("not json", { status: 200 })) as typeof fetch;
     await expect(client.setWebClientEnabled(true)).rejects.toThrow();
+  });
+
+  test("delivers a legitimate event frame larger than 1 MiB", async () => {
+    useNativeWebPlatform();
+    const payload = "y".repeat(1.5 * 1024 * 1024);
+    const frame = `data: ${JSON.stringify({ event: "large-snapshot", payload })}\n\n`;
+    expect(Buffer.byteLength(frame, "utf8")).toBeGreaterThan(1024 * 1024);
+    expect(Buffer.byteLength(frame, "utf8")).toBeLessThan(MAX_BACKEND_EVENT_FRAME_BYTES);
+    globalThis.fetch = mock(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(frame));
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        ),
+    ) as typeof fetch;
+    const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456");
+    const events: Array<{ event: string; payload: unknown }> = [];
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("large frame was not delivered")), 2_000);
+        client.listen((event, payload) => {
+          events.push({ event, payload });
+          if (event === "large-snapshot") {
+            clearTimeout(timeout);
+            client.stopListening();
+            resolve();
+          }
+        });
+      });
+      expect(events).toEqual([
+        { event: "native-event-stream-connected", payload: undefined },
+        { event: "large-snapshot", payload },
+      ]);
+    } finally {
+      client.stopListening();
+    }
+  });
+
+  test("drops malformed event frames and reconnects after an oversized frame", async () => {
+    useNativeWebPlatform();
+    let attempts = 0;
+    let firstCancelled = false;
+    globalThis.fetch = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  'data: {not-json}\n\ndata: {"event":"kept","payload":1}\n\n',
+                ),
+              );
+              controller.enqueue(
+                new TextEncoder().encode("x".repeat(MAX_BACKEND_EVENT_FRAME_BYTES + 1)),
+              );
+            },
+            cancel() {
+              firstCancelled = true;
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        new ReadableStream({
+          start() {},
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+    const error = mock(() => undefined);
+    const warning = mock(() => undefined);
+    const previousError = console.error;
+    const previousWarning = console.warn;
+    console.error = error;
+    console.warn = warning;
+    const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456");
+    const events: string[] = [];
+    try {
+      await new Promise<void>((resolve) => {
+        client.listen((event) => {
+          events.push(event);
+          if (events.filter((entry) => entry === "native-event-stream-connected").length === 2) {
+            client.stopListening();
+            resolve();
+          }
+        });
+      });
+      expect(events).toEqual([
+        "native-event-stream-connected",
+        "kept",
+        "native-event-stream-connected",
+      ]);
+      expect(firstCancelled).toBe(true);
+      expect(warning).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledTimes(1);
+    } finally {
+      client.stopListening();
+      console.error = previousError;
+      console.warn = previousWarning;
+    }
   });
 
   test("announces each successful event-stream reconnection", async () => {

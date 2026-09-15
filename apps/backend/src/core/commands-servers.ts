@@ -1,6 +1,7 @@
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import {
   existsSync,
+  fs,
   path,
   createHash,
   randomBytes,
@@ -1458,7 +1459,16 @@ export async function deleteEnvironment(
       }
       await stopLocalServersForEnvironmentUnlocked(environmentId, context);
       if (environment?.worktreePath) {
-        await removeLocalWorktree(environment.worktreePath).catch(() => undefined);
+        const project = await storage.getProject(environment.projectId).catch(() => null);
+        if (project?.localPath) {
+          await removeLocalWorktree(project.localPath, environment.worktreePath).catch(
+            () => undefined,
+          );
+        } else {
+          await fs
+            .rm(environment.worktreePath, { recursive: true, force: true })
+            .catch(() => undefined);
+        }
       }
       await storage.removeSessionsByEnvironment(environmentId).catch(() => undefined);
       await storage.deleteLoopedReviewWorkflowsByEnvironment(environmentId);

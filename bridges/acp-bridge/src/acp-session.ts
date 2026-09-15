@@ -181,7 +181,7 @@ export async function resumeSession(
   // caller has to apply its own rather than inherit them silently.
   const pending = sessionResumes.get(acpSessionId);
   if (pending) {
-    const adopted = await pending;
+    const adopted = await (signal ? raceAbort(pending, signal) : pending);
     // The in-flight adoption carries the first caller's MCP credential. A
     // later tab must apply its own rather than keep reading or sending mail as
     // the first identity — same rule as composer controls.
@@ -193,13 +193,16 @@ export async function resumeSession(
   if (alreadyLoaded) return resumeExistingSession(alreadyLoaded, signal, patch, policy, agentMcp);
   if (activeSessionReservations() >= MAX_SESSIONS)
     throw new HttpError(429, "ACP session limit reached");
-  const operation = resumeSessionReserved(acpSessionId, signal, patch, policy, agentMcp);
+  // Adoption is shared by every caller for this vendor session. A single HTTP
+  // client disconnecting may stop waiting, but must not SIGTERM the child and
+  // fail the other callers joined to the same session/load.
+  const operation = resumeSessionReserved(acpSessionId, undefined, patch, policy, agentMcp);
   sessionResumes.set(acpSessionId, operation);
-  try {
-    return await operation;
-  } finally {
+  const clear = (): void => {
     if (sessionResumes.get(acpSessionId) === operation) sessionResumes.delete(acpSessionId);
-  }
+  };
+  operation.then(clear, clear);
+  return signal ? raceAbort(operation, signal) : operation;
 }
 
 export async function resumeExistingSession(
@@ -489,11 +492,15 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
     applyVendorUpdate(state, method, params);
   };
   child.onPermission = (requestId, params) => {
+    if (state.child !== child || sessions.get(state.id) !== state) {
+      child.respond(requestId, { outcome: { outcome: "cancelled" } });
+      return;
+    }
     if (effectiveTurnExecutionPolicy(state)?.approvals === "deny") {
       child.respond(requestId, { outcome: { outcome: "cancelled" } });
       return;
     }
-    parkPermission(state, requestId, params);
+    parkPermission(state, child, requestId, params);
   };
   child.onClose = (error) => {
     // Only the currently attached child owns this session's approvals. A
@@ -642,14 +649,18 @@ export function clearApprovals(state: SessionState): void {
   state.approvals.clear();
 }
 
-export function parkPermission(state: SessionState, requestId: number, params: JsonObject): void {
-  const child = state.child;
+export function parkPermission(
+  state: SessionState,
+  child: AcpProcess,
+  requestId: number,
+  params: JsonObject,
+): void {
   if (
-    !child ||
+    state.child !== child ||
     params.sessionId !== state.acpSessionId ||
     state.approvals.size >= MAX_APPROVALS_PER_SESSION
   ) {
-    child?.respond(requestId, { outcome: { outcome: "cancelled" } });
+    child.respond(requestId, { outcome: { outcome: "cancelled" } });
     return;
   }
   const options = Array.isArray(params.options)

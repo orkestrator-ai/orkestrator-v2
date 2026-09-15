@@ -4271,7 +4271,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       build: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
       review: { agent: "claude", model: "opus[1m]", reasoningEffort: "high" },
       address: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
-      verify: { agent: "claude", model: "sonnet" },
+      verify: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
       pr: { agent: "codex", model: "gpt-5.4", reasoningEffort: "low" },
       "resolve-conflicts": { agent: "claude", model: "haiku" },
     });
@@ -4584,7 +4584,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       build: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
       review: { agent: "claude", model: "opus[1m]", reasoningEffort: "high" },
       address: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
-      verify: { agent: "claude", model: "sonnet" },
+      verify: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
       pr: { agent: "codex", model: "gpt-5.4", reasoningEffort: "low" },
       "resolve-conflicts": { agent: "claude", model: "haiku" },
     });

@@ -169,15 +169,28 @@ export function spawnPty(command: string, args: string[], options: SpawnPtyOptio
       coalescing.push(trailingData);
       coalescingChars += trailingData.length;
     }
-    flushCoalesced();
-    for (const listener of exitListeners) listener(event);
-    if (!terminal.closed) terminal.close();
+    try {
+      flushCoalesced();
+      for (const listener of exitListeners) {
+        try {
+          listener(event);
+        } catch {
+          // One consumer must not prevent descriptor cleanup or the remaining
+          // exit observers from seeing the terminal's final state.
+          console.error("[pty] Exit listener failed");
+        }
+      }
+    } finally {
+      if (!terminal.closed) terminal.close();
+    }
   };
 
-  void spawned.exited.then(
-    (exitCode) => notifyExit({ exitCode }),
-    () => notifyExit({ exitCode: 1 }),
-  );
+  void spawned.exited
+    .then(
+      (exitCode) => notifyExit({ exitCode }),
+      () => notifyExit({ exitCode: 1 }),
+    )
+    .catch(() => console.error("[pty] Exit notification failed"));
 
   return {
     pid: spawned.pid,
@@ -188,7 +201,14 @@ export function spawnPty(command: string, args: string[], options: SpawnPtyOptio
     },
     onExit(callback) {
       exitListeners.add(callback);
-      if (exitEvent) queueMicrotask(() => callback(exitEvent!));
+      if (exitEvent)
+        queueMicrotask(() => {
+          try {
+            callback(exitEvent!);
+          } catch {
+            console.error("[pty] Late exit listener failed");
+          }
+        });
       return { dispose: () => exitListeners.delete(callback) };
     },
     write(data) {

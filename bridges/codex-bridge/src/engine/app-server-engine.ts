@@ -609,6 +609,10 @@ export class AppServerEngine implements CodexEngine {
         }),
       onGenerationReady: (generation, previous) =>
         this.handleGenerationChange(generation, previous),
+      onGenerationExit: (generation) => {
+        this.rejectAllWaiters();
+        this.router.abandonGeneration(generation);
+      },
     });
 
     this.router = new ServerRequestRouter({

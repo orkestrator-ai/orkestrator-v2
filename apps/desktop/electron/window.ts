@@ -65,6 +65,9 @@ export async function createMainWindow(options: CreateMainWindowOptions): Promis
       preload: path.join(options.dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      // Sandboxed Chromium evaluates preloads as CommonJS. These preloads are
+      // bundled as ESM (`import` from "electron"), so sandbox: true fails to
+      // load window.orkestrator. Keep sandbox off until a CJS preload exists.
       sandbox: false,
       ...(options.partition ? { partition: options.partition } : {}),
     },

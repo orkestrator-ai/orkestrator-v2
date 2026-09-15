@@ -4297,8 +4297,8 @@ describe("AgentNativeTab", () => {
     );
     expect(deleteAgentHandoffMock).toHaveBeenCalledWith(snapshot.id, "env-1");
     await waitFor(() => {
-      expect(screen.queryByText("Investigate the layout")).toBeNull();
-      expect(screen.queryByText("I found three concrete gaps")).toBeNull();
+      expect(screen.queryByText("Investigate the layout") === null).toBe(true);
+      expect(screen.queryByText("I found three concrete gaps") === null).toBe(true);
     });
     const tab = usePaneLayoutStore.getState().getAllTabs("env-1")[0];
     expect(tab?.consumedAgentHandoffId).toBe(snapshot.id);
@@ -4407,7 +4407,7 @@ describe("AgentNativeTab", () => {
     );
     expect(deleteAgentHandoffMock).toHaveBeenCalledWith(snapshot.id, "env-1");
     expect(await screen.findByText("Resumed earlier work")).toBeTruthy();
-    expect(screen.queryByText("Investigate the layout")).toBeNull();
+    expect(screen.queryByText("Investigate the layout") === null).toBe(true);
     expect(screen.queryByText((text) => text.includes("orkestrator-handoff")) === null).toBe(true);
     expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.consumedAgentHandoffId).toBe(
       snapshot.id,
@@ -6311,8 +6311,10 @@ describe("AgentNativeTab", () => {
       expect(trigger.textContent).toContain("claude-opus-4-5");
       fireEvent.pointerDown(trigger);
       expect(screen.getByRole("menuitemradio", { name: /claude-opus-4-5/ })).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "opencode models" })).toBeNull();
-      expect(document.querySelector('[data-native-model-row-platform="opencode"]')).toBeNull();
+      expect(screen.queryByRole("button", { name: "opencode models" }) === null).toBe(true);
+      expect(document.querySelector('[data-native-model-row-platform="opencode"]') === null).toBe(
+        true,
+      );
       expect(document.querySelector('[data-native-model-row-platform="pi"]')).toBeTruthy();
     });
 
@@ -8265,7 +8267,9 @@ describe("AgentNativeTab", () => {
       render(<PaneBackedAgentNativeTab tabId={tabId} />);
       fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
       const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
-      expect(within(dialog).queryByRole("button", { name: /Current destination/ })).toBeNull();
+      expect(within(dialog).queryByRole("button", { name: /Current destination/ }) === null).toBe(
+        true,
+      );
       expect(within(dialog).getByText("Earlier work")).toBeTruthy();
       expect(deleteAgentHandoffMock).not.toHaveBeenCalled();
       expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({

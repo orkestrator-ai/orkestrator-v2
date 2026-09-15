@@ -12,6 +12,7 @@ describe("toolchain bootstrap window", () => {
     let ipcListener: ((_event: unknown, channel: string, values: unknown) => void) | undefined;
     let loadedUrl = "";
     let destroyed = false;
+    let windowOptions: BrowserWindowConstructorOptions | undefined;
     class SelectionWindow {
       readonly webContents = {
         on: mock((event: string, listener: (...args: never[]) => void) => {
@@ -28,7 +29,9 @@ describe("toolchain bootstrap window", () => {
       readonly close = mock(() => {
         destroyed = true;
       });
-      constructor(readonly options: BrowserWindowConstructorOptions) {}
+      constructor(readonly options: BrowserWindowConstructorOptions) {
+        windowOptions = options;
+      }
     }
 
     const selecting = chooseAgentPlatforms({
@@ -40,6 +43,11 @@ describe("toolchain bootstrap window", () => {
 
     await expect(selecting).resolves.toEqual(["claude", "grok"]);
     expect(destroyed).toBe(true);
+    expect(windowOptions?.webPreferences).toMatchObject({
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    });
     const loadedHtml = decodeURIComponent(loadedUrl.split(",")[1] ?? "");
     expect(loadedHtml).toContain(
       "body { margin: 0; min-height: 100vh; display: flex; padding: 44px 28px;",
@@ -114,6 +122,7 @@ describe("toolchain bootstrap window", () => {
         preload: "/app/electron/toolchain-bootstrap-preload.js",
         contextIsolation: true,
         nodeIntegration: false,
+        sandbox: false,
       },
     });
     const loadedUrl = window.loadURL.mock.calls[0]?.[0] ?? "";

@@ -50,6 +50,13 @@ export class CredentialError extends Error {
   }
 }
 
+export class SessionConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionConflictError";
+  }
+}
+
 let cursorAgent = Agent;
 
 export function useCursorAgentForTests(agent: typeof Agent): () => void {
@@ -667,22 +674,94 @@ export async function listResumableSessions(): Promise<JsonObject[]> {
  * own context regardless of what this transcript shows — so a failed replay
  * degrades to an empty transcript rather than a failed resume.
  */
+function resumePolicyKey(
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
+): string {
+  const resolved = resolveCursorExecutionPolicy(policy);
+  return JSON.stringify({
+    id: resolved.id,
+    sandbox: resolved.sandbox,
+    approvals: resolved.approvals,
+    projectResources: resolved.projectResources,
+    capabilityPolicy: resolved.capabilityPolicy ?? null,
+    networkAccess: resolved.networkAccess ?? null,
+    toolPolicy: resolved.toolPolicy ?? null,
+  });
+}
+
+function resumeComposerConflicts(state: SessionState, patch: ComposerPatch | undefined): boolean {
+  if (!patch) return false;
+  if (patch.modelId && patch.modelId !== state.composer.selectedModelId) return true;
+  if (patch.modeId && patch.modeId !== state.composer.selectedModeId) return true;
+  if (patch.reasoningId && patch.reasoningId !== state.composer.selectedReasoningId) return true;
+  if (typeof patch.fastMode === "boolean" && patch.fastMode !== state.composer.fastModeEnabled) {
+    return true;
+  }
+  return false;
+}
+
 export async function resumeSession(
   agentId: string,
   patch: ComposerPatch | undefined,
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): Promise<SessionState> {
-  const state = newSessionState(undefined, resolveCursorExecutionPolicy(policy));
-  state.agentId = agentId;
-  applyComposerPatch(state, patch);
-  state.composer = await hydrateComposer(state.composer);
-  await hydrateHistory(state, { skipRunning: true }).catch(() => undefined);
-  sessions.set(state.id, state);
-  // Attach a surviving run before returning so `recoveringRun` is only set when
-  // a live stream is actually being rebuilt — not a permanently settled dummy.
-  await recoverActiveRun(state);
-  return state;
+  const requestedPolicyKey = resumePolicyKey(policy);
+  const existing = Array.from(sessions.values()).find((state) => state.agentId === agentId);
+  if (existing) {
+    if (
+      resumePolicyKey(existing.policy) !== requestedPolicyKey ||
+      resumeComposerConflicts(existing, patch)
+    ) {
+      throw new SessionConflictError(
+        "Cursor session is already adopted under a different execution policy",
+      );
+    }
+    return existing;
+  }
+  const pending = sessionResumesByAgentId.get(agentId);
+  if (pending) {
+    if (
+      pending.policyKey !== requestedPolicyKey ||
+      pending.composerKey !== JSON.stringify(patch ?? {})
+    ) {
+      throw new SessionConflictError(
+        "Cursor session is already being resumed with a different execution policy",
+      );
+    }
+    return pending.promise;
+  }
+
+  const operation = (async () => {
+    const state = newSessionState(undefined, resolveCursorExecutionPolicy(policy));
+    state.agentId = agentId;
+    applyComposerPatch(state, patch);
+    state.composer = await hydrateComposer(state.composer);
+    await hydrateHistory(state, { skipRunning: true }).catch(() => undefined);
+    sessions.set(state.id, state);
+    // Attach a surviving run before returning so `recoveringRun` is only set when
+    // a live stream is actually being rebuilt — not a permanently settled dummy.
+    await recoverActiveRun(state);
+    return state;
+  })();
+  sessionResumesByAgentId.set(agentId, {
+    promise: operation,
+    policyKey: requestedPolicyKey,
+    composerKey: JSON.stringify(patch ?? {}),
+  });
+  try {
+    return await operation;
+  } finally {
+    const current = sessionResumesByAgentId.get(agentId);
+    if (current?.promise === operation) {
+      sessionResumesByAgentId.delete(agentId);
+    }
+  }
 }
+
+const sessionResumesByAgentId = new Map<
+  string,
+  { promise: Promise<SessionState>; policyKey: string; composerKey: string }
+>();
 
 /**
  * Rebuild the transcript from the SDK's own record of past runs.

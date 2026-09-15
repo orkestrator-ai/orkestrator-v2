@@ -98,7 +98,14 @@ export function getCookie(headers: IncomingHttpHeaders, name: string): string | 
   if (!cookieHeader) return null;
   for (const cookie of cookieHeader.split(";")) {
     const [rawKey, ...rawValue] = cookie.trim().split("=");
-    if (rawKey === name) return decodeURIComponent(rawValue.join("="));
+    if (rawKey === name) {
+      try {
+        return decodeURIComponent(rawValue.join("="));
+      } catch {
+        // A malformed cookie is an invalid credential, not a server error.
+        return null;
+      }
+    }
   }
   return null;
 }
@@ -226,8 +233,16 @@ export async function readLoginToken(request: IncomingMessage): Promise<string> 
   const { body } = await readRequestBody(request);
 
   if (contentType.includes("application/json")) {
-    const parsed = JSON.parse(body.toString("utf8")) as { token?: unknown };
-    return typeof parsed.token === "string" ? parsed.token : "";
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body.toString("utf8")) as unknown;
+    } catch {
+      return "";
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "";
+    return typeof (parsed as { token?: unknown }).token === "string"
+      ? (parsed as { token: string }).token
+      : "";
   }
 
   const params = new URLSearchParams(body.toString("utf8"));

@@ -43,15 +43,11 @@ function harness() {
 describe("Cursor stall diagnostics", () => {
   test("the base constructor can emit before the SDK field exists", () => {
     const lines: string[] = [];
-    const diagnostics = new CursorRunDiagnostics(
-      newSessionState(),
-      Date.now,
-      (line) => lines.push(line),
+    const diagnostics = new CursorRunDiagnostics(newSessionState(), Date.now, (line) =>
+      lines.push(line),
     );
     try {
-      const records = lines.map((line) =>
-        JSON.parse(line.slice("[bridge-diagnostics] ".length)),
-      );
+      const records = lines.map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)));
       expect(records[0]).toMatchObject({ event: "send-started" });
       expect(records[0]).not.toHaveProperty("coverage");
       expect(records.some((record) => record.event === "sdk-snapshot")).toBe(true);
@@ -163,9 +159,9 @@ describe("Cursor stall diagnostics", () => {
       expect(h.last().pendingTools).toHaveLength(8);
       expect(h.lines.join("\n")).not.toContain(secret);
       expect(h.last()).not.toHaveProperty("event", "sdk-snapshot");
-      expect(
-        h.lines.findLast((line) => !line.includes('"event":"sdk-'))!.length,
-      ).toBeLessThan(2500);
+      expect(h.lines.findLast((line) => !line.includes('"event":"sdk-'))!.length).toBeLessThan(
+        2500,
+      );
     } finally {
       h.diagnostics.close();
     }
@@ -312,7 +308,9 @@ describe("Cursor stall diagnostics", () => {
       const handle = await dispatchPrompt(state, agent, { prompt: "PRIVATE PROMPT", images: [] });
       await handle.completion;
       expect(lines.some((line) => line.includes('"stage":"partial"'))).toBe(true);
-      expect(lines.findLast((line) => !line.includes('"event":"sdk-'))).toContain('"event":"closed"');
+      expect(lines.findLast((line) => !line.includes('"event":"sdk-'))).toContain(
+        '"event":"closed"',
+      );
       const failing = {
         send: async () => {
           throw new Error("PRIVATE ERROR");

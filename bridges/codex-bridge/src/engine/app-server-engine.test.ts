@@ -1291,6 +1291,36 @@ describe("server requests", () => {
     expect(h.engine.getParkedInteractions()).toHaveLength(1);
   });
 
+  test("withdraws a dead generation's approval before a late answer can approve it", async () => {
+    const h = harness();
+    const resolutions: string[] = [];
+    h.engine.setApprovalHandlers({
+      present: () => true,
+      resolved: (_request, _decision, resolution) => resolutions.push(resolution),
+    });
+    await h.engine.start();
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: "approval-dead",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "t1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "echo never-runs",
+        cwd: "/tmp/ws",
+      },
+    });
+    await settle();
+    const approvalId = h.engine.getParkedApprovals()[0]!.approvalId;
+
+    h.child().exit(1);
+
+    expect(h.engine.resolveApproval(approvalId, "approve")).toBe(false);
+    expect(resolutions).toEqual(["engine-restarted"]);
+    expect(h.engine.getParkedApprovals()).toEqual([]);
+  });
+
   test("unknown server requests are answered with a JSON-RPC method error", async () => {
     const h = harness();
     await h.engine.start();

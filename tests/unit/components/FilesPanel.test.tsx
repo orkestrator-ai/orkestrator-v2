@@ -563,7 +563,7 @@ describe("Files panel components", () => {
     const list = screen.getByText("+42 more").parentElement!;
     expect(list.className).toContain("max-h-32");
     expect(list.className).toContain("overflow-y-auto");
-    expect(screen.queryByText("src/file-49.ts")).toBeNull();
+    expect(screen.queryByText("src/file-49.ts") === null).toBe(true);
     expect(screen.getByRole("button", { name: "Delete files" })).toBeTruthy();
   });
 

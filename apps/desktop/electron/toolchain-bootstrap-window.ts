@@ -111,6 +111,7 @@ export async function chooseAgentPlatforms(options: {
       preload: path.join(options.dirname, "toolchain-bootstrap-preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      // ESM preload bundle; see createMainWindow for why sandbox stays off.
       sandbox: false,
     },
   });
@@ -173,6 +174,7 @@ export async function createToolchainBootstrapWindow(options: {
       preload: path.join(options.dirname, "toolchain-bootstrap-preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      // ESM preload bundle; see createMainWindow for why sandbox stays off.
       sandbox: false,
     },
   });

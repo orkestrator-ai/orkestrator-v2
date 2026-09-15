@@ -58,14 +58,23 @@ export function useEnvironmentDiffStats() {
               // Non-critical: buffered changes still apply below, and the next
               // reconnect will request another authoritative snapshot.
             }
-
-            if (disposed) return;
-            const pending = bufferedEvents;
-            bufferedEvents = [];
-            for (const event of pending) applyChange(event);
           }
+          if (disposed) return;
+          // Yield so a reconnect that lands after the last snapshot can set
+          // `rehydrateRequested` before `rehydrating` is cleared.
+          await Promise.resolve();
+          if (disposed) return;
+          // Keep live changes buffered through every snapshot requested by an
+          // overlapping reconnect. Replaying them after an intermediate pass
+          // lets the next (older-at-request-time) snapshot overwrite them.
+          const pending = bufferedEvents;
+          bufferedEvents = [];
+          for (const event of pending) applyChange(event);
         } finally {
           rehydrating = false;
+          // A reconnect can land after the while-loop condition failed and
+          // before this flag clears. Re-enter so that snapshot is not dropped.
+          if (!disposed && rehydrateRequested) requestRehydrate();
         }
       })();
     };

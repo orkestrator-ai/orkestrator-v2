@@ -75,9 +75,9 @@ must. Two properties are load-bearing:
   is signal worth keeping. Only the guard's own tests pass `force`.
 - **The blast radius is why it exists.** A rejected `reader.cancel()` inside a
   vendored SSE client killed the backend three times on 2026-09-07, and the
-  desktop supervisor answers a backend exit by telling the user the application
-  will close (`apps/desktop/electron/main.ts`). One dropped promise must degrade
-  one feature, not end the session.
+  desktop supervisor answers a backend exit by taking Local offline for the
+  session and asking the user to restart (`apps/desktop/electron/main.ts`). One
+  dropped promise must degrade one feature, not end the session.
 
 So: install it in any new long-lived entrypoint, and when aborting an
 `AbortController` whose signal is shared with in-flight work, check that every
@@ -790,6 +790,11 @@ names at all. Two invariants keep it honest:
 | `apps/desktop/electron/ipc.ts`         | Main-process IPC handlers                                |
 | `apps/desktop/electron/preload-api.ts` | Renderer-facing native API                               |
 
+Desktop `BrowserWindow` preloads are bundled as ESM, so the main window and
+toolchain bootstrap windows keep `sandbox: false`. Sandboxed Chromium evaluates
+preloads as CommonJS and cannot load `import` from `electron`. Browser preview
+views stay sandboxed.
+
 ### Docker
 
 | File                           | Purpose                                                  |
@@ -798,7 +803,7 @@ names at all. Two invariants keep it honest:
 | `docker/entrypoint.sh`         | Container entrypoint                                     |
 | `docker/workspace-setup.sh`    | Repo clone, `.env` files, project config, shown in terminal |
 | `docker/init-firewall.sh`      | Network firewall rules applied at startup                |
-| `docker/update-firewall.sh`    | Adds/removes allowlist domains on a running container    |
+| `docker/update-firewall.sh`    | Operator-only allowlist edits via `docker exec --user root` |
 | `docker/runtime-env.sh`        | PATH/env snapshot so `docker exec` sees setup-time tools |
 | `docker/git-branch-helpers.sh` | Makes a bare `git push` publish and track the branch     |
 | `docker/verify-playwright.cjs` | Launches Chromium; run at build time and on demand        |
@@ -846,12 +851,15 @@ Users and isolation:
   shared hook through `/etc/zsh/zshrc`, reads prompt configuration from
   `/etc/starship.toml` through `STARSHIP_CONFIG`, and retains repository-owned
   Git aliases plus native Zsh completion without Oh My Zsh.
-- `orkroot`, a uid-0 user for root terminal sessions, which `node` may become
-  through a scoped sudoers rule.
+- `orkroot`, a uid-0 user for root terminal sessions. The backend opens those
+  terminals with `docker exec --user orkroot`; `node` has no sudoers path to
+  become `orkroot`.
 - Network firewall (iptables/ipset) for security isolation. `node` has
-  passwordless sudo for exactly two things: the firewall scripts, and becoming
-  `orkroot` — which is root-equivalent, so the container boundary, not the user,
-  is what isolates an agent.
+  passwordless sudo for exactly two things: `/usr/local/bin/init-firewall.sh`
+  and `/usr/local/bin/run-root-setup.sh` (the latter only when PID 1's
+  `NETWORK_MODE` is `full`). The container boundary, not a reusable root
+  shell, is what isolates an agent. Runtime allowlist edits use
+  `docker exec --user root /usr/local/bin/update-firewall.sh`.
 
 ### Playwright
 

@@ -6,6 +6,7 @@ import {
   NATIVE_DISPLAY_TAIL_LEGACY_SCHEMA,
   NATIVE_DISPLAY_TAIL_LEGACY_VERSION,
   stripDisplayTailPayload,
+  type NativeAgentDisplayTail,
 } from "./native-agent-display-tails.js";
 import { normalizeOpenCodeInteractiveMessage } from "./opencode-messages.js";
 
@@ -126,7 +127,7 @@ describe("native agent display tails", () => {
   });
 
   test("still accepts a legacy v1 tail without remainder metadata", () => {
-    const record = {
+    const record: Omit<NativeAgentDisplayTail, "checksum"> = {
       version: NATIVE_DISPLAY_TAIL_LEGACY_VERSION,
       schema: NATIVE_DISPLAY_TAIL_LEGACY_SCHEMA,
       environmentId: "env-1",

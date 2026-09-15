@@ -93,7 +93,13 @@ WORKDIR /workspace
 
 ARG GIT_DELTA_VERSION=0.18.2
 RUN ARCH=$(dpkg --print-architecture) && \
+  case "$ARCH" in \
+    amd64) GIT_DELTA_SHA=1658c7b61825d411b50734f34016101309e4b6e7f5799944cf8e4ac542cebd7f ;; \
+    arm64) GIT_DELTA_SHA=937781aa7788e1510858743fff6c9a8b4a69fe0a22a7c8a69493e633227939a9 ;; \
+    *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
+  esac && \
   wget "https://github.com/dandavison/delta/releases/download/${GIT_DELTA_VERSION}/git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
+  printf '%s  %s\n' "$GIT_DELTA_SHA" "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" | sha256sum -c - && \
   sudo dpkg -i "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
   rm "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb"
 
@@ -135,8 +141,20 @@ ARG PI_CLI_VERSION=0.85.1
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"
 ENV CLAUDE_CLI_PATH=/usr/local/share/npm-global/bin/claude
 
-# Install OpenCode
-RUN curl -fsSL https://opencode.ai/install | bash -s -- --version "$OPENCODE_CLI_VERSION"
+# Install OpenCode from the same pinned, digest-verified release artifacts as
+# the packaged desktop toolchain.
+RUN ARCH="$(dpkg --print-architecture)" && \
+  case "$ARCH" in \
+    amd64) OPENCODE_ARCH=x64; OPENCODE_SHA=ea800b7ff56226b70952126c9fc1e2517ca4c4b5682fd9d3f9e87449697a1194 ;; \
+    arm64) OPENCODE_ARCH=arm64; OPENCODE_SHA=70baf769395ca4e7a68924026530c390eace194f3b7e4919d4efcb2aa2eed3c0 ;; \
+    *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
+  esac && \
+  mkdir -p /home/node/.opencode/bin && \
+  curl -fsSL "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_CLI_VERSION}/opencode-linux-${OPENCODE_ARCH}.tar.gz" -o /tmp/opencode.tar.gz && \
+  printf '%s  %s\n' "$OPENCODE_SHA" /tmp/opencode.tar.gz | sha256sum -c - && \
+  tar -xzf /tmp/opencode.tar.gz -C /home/node/.opencode/bin opencode && \
+  chmod 755 /home/node/.opencode/bin/opencode && \
+  rm /tmp/opencode.tar.gz
 ENV OPENCODE_CLI_PATH=/home/node/.opencode/bin/opencode
 
 # Install Codex CLI
@@ -380,17 +398,18 @@ RUN test "$(/usr/local/bin/bun --version)" = "1.4.2" \
  && rm mise.toml
 
 # Copy and set up firewall scripts
-COPY docker/init-firewall.sh docker/update-firewall.sh /usr/local/bin/
+COPY docker/init-firewall.sh docker/update-firewall.sh docker/run-root-setup.sh /usr/local/bin/
 USER root
-RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/update-firewall.sh && \
-  echo "node ALL=(root) NOPASSWD:SETENV: /usr/local/bin/init-firewall.sh, /usr/local/bin/update-firewall.sh" > /etc/sudoers.d/node-firewall && \
+RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/update-firewall.sh /usr/local/bin/run-root-setup.sh && \
+  printf '%s\n' \
+    'node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh' \
+    'node ALL=(root) NOPASSWD: /usr/local/bin/run-root-setup.sh *' \
+    > /etc/sudoers.d/node-firewall && \
   chmod 0440 /etc/sudoers.d/node-firewall
 
 # Create orkroot user with UID 0 (root-equivalent) for root terminal sessions
 # -o allows non-unique UID, -u 0 -g 0 makes user root-equivalent
-RUN useradd -o -u 0 -g 0 -M -d /root -s /bin/zsh orkroot && \
-  echo "node ALL=(orkroot) NOPASSWD:SETENV: ALL" > /etc/sudoers.d/node-orkroot && \
-  chmod 0440 /etc/sudoers.d/node-orkroot
+RUN useradd -o -u 0 -g 0 -M -d /root -s /bin/zsh orkroot
 
 # Exercise the shell contract as both terminal identities while the image is
 # built. The verifier cleans up its sentinel history before the layer commits.
@@ -398,11 +417,10 @@ COPY docker/verify-container-shell.sh /usr/local/share/verify-container-shell.sh
 RUN chmod 755 /usr/local/share/verify-container-shell.sh \
   && /usr/local/share/verify-container-shell.sh
 
-# Configure SSH for GitHub/GitLab/Bitbucket
+# Configure SSH from provider-published host keys committed with the image.
+COPY docker/known_hosts /usr/local/share/orkestrator-known-hosts
 RUN mkdir -p /home/node/.ssh && \
-  ssh-keyscan github.com >> /home/node/.ssh/known_hosts && \
-  ssh-keyscan gitlab.com >> /home/node/.ssh/known_hosts && \
-  ssh-keyscan bitbucket.org >> /home/node/.ssh/known_hosts && \
+  install -o node -g node -m 0644 /usr/local/share/orkestrator-known-hosts /home/node/.ssh/known_hosts && \
   chown -R node:node /home/node/.ssh && \
   chmod 700 /home/node/.ssh
 

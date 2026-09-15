@@ -182,4 +182,29 @@ describe("Bun PTY adapter", () => {
     expect(events).toEqual(["data:leading", "data:-pending�", "exit:7"]);
     expect(harness.close).toHaveBeenCalledTimes(1);
   });
+
+  test("isolates throwing exit listeners and still closes the terminal", async () => {
+    const error = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const { process: terminal, harness } = spawnFakePty({
+        cols: 80,
+        rows: 24,
+        coalesceMs: 0,
+      });
+      const observed: number[] = [];
+      terminal.onExit(() => {
+        throw new Error("listener failed");
+      });
+      terminal.onExit(({ exitCode }) => observed.push(exitCode));
+
+      harness.exit(9);
+      await Bun.sleep(0);
+
+      expect(observed).toEqual([9]);
+      expect(harness.close).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledWith("[pty] Exit listener failed");
+    } finally {
+      error.mockRestore();
+    }
+  });
 });

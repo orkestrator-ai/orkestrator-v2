@@ -24,7 +24,6 @@ import type {
   NativeAgentSessionActionOutcome,
 } from "@orkestrator/protocol/native-agent";
 import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
-import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import {
   parseLeadingSlashCommand,
   type ParsedSlashCommand,
@@ -73,7 +72,6 @@ import {
   normalizeOpenCodeInteractiveMessage,
   normalizeOpenCodeTerminalState,
   openCodeStructuredPrompt,
-  parseOpenCodeStructuredText,
 } from "./opencode-messages.js";
 import {
   boundedOwnedOpenCodeCollection,
@@ -116,6 +114,8 @@ import {
   waitForOpenCodeRetry,
 } from "./opencode-provider-helpers.js";
 import { OpenCodeReviewSessionPermissions } from "./opencode-review-session-permissions.js";
+import { readOpenCodeStructuredOutput } from "./opencode-structured-output.js";
+import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 const defaultOpenCodeMessageIds = new OpenCodeMessageIdCoordinator();
 export type { OpenCodeProviderDependencies } from "./opencode-provider-helpers.js";
@@ -1416,88 +1416,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     sessionId: string,
     requestId: string,
   ): Promise<StructuredOutputResult<T> | null> {
-    openCodeRequestMarker(requestId);
-    let response;
-    try {
-      response = await this.client.session.messages(
-        { sessionID: sessionId, limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
-        this.requestOptions(),
-      );
-      assertSdkResponse(response, "OpenCode structured-output read");
-    } catch (error) {
-      throw new ProviderUnavailableError("OpenCode structured output is unavailable", {
-        cause: error,
-      });
-    }
-    if (!Array.isArray(response.data)) return null;
-    let entries: readonly unknown[];
-    try {
-      entries = boundedOpenCodeMessageHistory(response.data);
-    } catch (error) {
-      throw new ProviderUnavailableError("OpenCode structured output history is invalid", {
-        cause: error,
-      });
-    }
-    const providerMessageId = findOpenCodeMessageId(entries, requestId);
-    if (!providerMessageId) return null;
-    const assistant = [...entries].reverse().find((entry) => {
-      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
-      const candidate = (entry as { info?: unknown }).info;
-      if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
-        return false;
-      }
-      const info = candidate as { role?: unknown; parentID?: unknown };
-      return info.role === "assistant" && info.parentID === providerMessageId;
-    });
-    if (!assistant) return null;
-    const assistantRecord = assistant as {
-      info: Record<string, unknown>;
-      parts?: unknown;
-    };
-    const info = assistantRecord.info as {
-      error?: unknown;
-      structured?: unknown;
-      time?: { completed?: unknown };
-    };
-    if (!info.time?.completed) return null;
-    if (info.error) {
-      return {
-        ok: false,
-        provider: "opencode",
-        requestId,
-        error: {
-          code: "provider_error",
-          message: "OpenCode did not produce a structured result",
-          provider: "opencode",
-          retryable: true,
-        },
-      };
-    }
-    let value: unknown;
-    try {
-      value =
-        info.structured === undefined
-          ? parseOpenCodeStructuredText(assistantRecord.parts)
-          : info.structured;
-    } catch {
-      return {
-        ok: false,
-        provider: "opencode",
-        requestId,
-        error: {
-          code: "malformed_output",
-          message: "OpenCode did not produce a valid JSON result",
-          provider: "opencode",
-          retryable: true,
-        },
-      };
-    }
-    return {
-      ok: true,
-      provider: "opencode",
-      requestId,
-      value: value as T,
-    };
+    return readOpenCodeStructuredOutput(this.client, sessionId, requestId, this.requestOptions());
   }
 
   async abort(sessionId: string): Promise<void> {

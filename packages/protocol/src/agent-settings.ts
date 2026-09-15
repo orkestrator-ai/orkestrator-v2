@@ -18,27 +18,19 @@
  * user pins a model for one platform and launches another. The `owns` rule
  * below is that second reading, promoted here so both sides share it.
  */
-import {
-  AGENT_PLATFORMS,
-  isAgentPlatform,
-  type AgentPlatform,
-} from "./agent-platforms.js";
+import { AGENT_PLATFORMS, isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 import {
   ACTION_DEFAULT_KEYS,
   normalizeActionDefaults,
   type AgentActionDefault,
   type ActionDefaults,
 } from "./action-defaults.js";
-import {
-  REVIEW_FANOUT_MAX_REVIEWERS,
-  REVIEW_FANOUT_MIN_REVIEWERS,
-} from "./review-fanout.js";
+import { REVIEW_FANOUT_MAX_REVIEWERS, REVIEW_FANOUT_MIN_REVIEWERS } from "./review-fanout.js";
 import type { NativeAgentExecutionPolicyOverride } from "./native-agent.js";
 
 export type AgentLaunchMode = "terminal" | "native";
 export type ClaudeNativeBackend = "sdk" | "tmux";
-export type ClaudeThinkingMode =
-  "adaptive" | "budget-8192" | "budget-16384" | "disabled";
+export type ClaudeThinkingMode = "adaptive" | "budget-8192" | "budget-16384" | "disabled";
 
 /** One platform's settings at one tier. */
 export interface AgentPlatformSettings {
@@ -126,10 +118,7 @@ export const DEFAULT_CLAUDE_CONTEXT_1M = false;
 
 /** Translate persisted Claude defaults to the bridge's generic parameter ids. */
 export function claudeNativeParameterValues(
-  settings: Pick<
-    ResolvedAgentPlatformSettings,
-    "claudeThinkingMode" | "claudeContext1m"
-  >,
+  settings: Pick<ResolvedAgentPlatformSettings, "claudeThinkingMode" | "claudeContext1m">,
 ): Record<string, string | boolean> {
   return {
     thinking: settings.claudeThinkingMode ?? DEFAULT_CLAUDE_THINKING_MODE,
@@ -143,16 +132,15 @@ export function claudeNativeParameterValues(
  * Cursor is SDK-only and therefore always native. Claude also ships native;
  * the remaining CLI-backed platforms default to terminal mode.
  */
-export const SHIPPED_PLATFORM_MODES: Readonly<
-  Record<AgentPlatform, AgentLaunchMode>
-> = Object.freeze({
-  claude: "native",
-  codex: "terminal",
-  cursor: "native",
-  grok: "terminal",
-  opencode: "terminal",
-  pi: "terminal",
-});
+export const SHIPPED_PLATFORM_MODES: Readonly<Record<AgentPlatform, AgentLaunchMode>> =
+  Object.freeze({
+    claude: "native",
+    codex: "terminal",
+    cursor: "native",
+    grok: "terminal",
+    opencode: "terminal",
+    pi: "terminal",
+  });
 
 function tierPlatform(
   tier: AgentSettingsTier | null | undefined,
@@ -190,10 +178,7 @@ export function resolveAgentPlatformSettings(
   const mode =
     platform === "cursor"
       ? "native"
-      : (environment?.mode ??
-        repository?.mode ??
-        global?.mode ??
-        SHIPPED_PLATFORM_MODES[platform]);
+      : (environment?.mode ?? repository?.mode ?? global?.mode ?? SHIPPED_PLATFORM_MODES[platform]);
 
   // A model id belongs to one platform's catalogue, so it only ever travels
   // down its own column. This is the rule the old repository `defaultModel`
@@ -202,13 +187,10 @@ export function resolveAgentPlatformSettings(
   const model = environment?.model ?? repository?.model ?? global?.model;
 
   const reasoningEffort =
-    environment?.reasoningEffort ??
-    repository?.reasoningEffort ??
-    global?.reasoningEffort;
+    environment?.reasoningEffort ?? repository?.reasoningEffort ?? global?.reasoningEffort;
 
   // `false` is a stored Normal choice, so this cannot use truthiness.
-  const fastMode =
-    environment?.fastMode ?? repository?.fastMode ?? global?.fastMode;
+  const fastMode = environment?.fastMode ?? repository?.fastMode ?? global?.fastMode;
 
   const claudeNativeBackend =
     environment?.claudeNativeBackend ??
@@ -217,13 +199,9 @@ export function resolveAgentPlatformSettings(
     DEFAULT_CLAUDE_NATIVE_BACKEND;
 
   const claudeThinkingMode =
-    environment?.claudeThinkingMode ??
-    repository?.claudeThinkingMode ??
-    global?.claudeThinkingMode;
+    environment?.claudeThinkingMode ?? repository?.claudeThinkingMode ?? global?.claudeThinkingMode;
   const claudeContext1m =
-    environment?.claudeContext1m ??
-    repository?.claudeContext1m ??
-    global?.claudeContext1m;
+    environment?.claudeContext1m ?? repository?.claudeContext1m ?? global?.claudeContext1m;
 
   return {
     mode,
@@ -237,9 +215,7 @@ export function resolveAgentPlatformSettings(
 }
 
 /** Action defaults resolved independently, so an unset action keeps inheriting. */
-export function resolveActionDefaults(
-  tiers: AgentSettingsTiers,
-): ActionDefaults {
+export function resolveActionDefaults(tiers: AgentSettingsTiers): ActionDefaults {
   const resolved: ActionDefaults = {};
   for (const key of ACTION_DEFAULT_KEYS) {
     const entry =
@@ -278,24 +254,18 @@ function normalizePlatformSettings(
   value: unknown,
   platform: AgentPlatform,
 ): AgentPlatformSettings | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const mode =
-    platform !== "cursor" &&
-    (record.mode === "terminal" || record.mode === "native")
+    platform !== "cursor" && (record.mode === "terminal" || record.mode === "native")
       ? record.mode
       : undefined;
   const model = typeof record.model === "string" ? record.model.trim() : "";
   const reasoningEffort =
-    typeof record.reasoningEffort === "string"
-      ? record.reasoningEffort.trim()
-      : "";
-  const fastMode =
-    typeof record.fastMode === "boolean" ? record.fastMode : undefined;
+    typeof record.reasoningEffort === "string" ? record.reasoningEffort.trim() : "";
+  const fastMode = typeof record.fastMode === "boolean" ? record.fastMode : undefined;
   const claudeNativeBackend =
-    record.claudeNativeBackend === "sdk" ||
-    record.claudeNativeBackend === "tmux"
+    record.claudeNativeBackend === "sdk" || record.claudeNativeBackend === "tmux"
       ? record.claudeNativeBackend
       : undefined;
   const claudeThinkingMode =
@@ -325,15 +295,10 @@ function normalizePlatformSettings(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function normalizeMultiReviewSettings(
-  value: unknown,
-): MultiReviewAgentSettings | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return undefined;
+function normalizeMultiReviewSettings(value: unknown): MultiReviewAgentSettings | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  const rawAdditional = Array.isArray(record.additionalReviewers)
-    ? record.additionalReviewers
-    : [];
+  const rawAdditional = Array.isArray(record.additionalReviewers) ? record.additionalReviewers : [];
   const storedCount = record.reviewerCount;
   const reviewerCount =
     typeof storedCount === "number" &&
@@ -342,22 +307,15 @@ function normalizeMultiReviewSettings(
     storedCount <= REVIEW_FANOUT_MAX_REVIEWERS
       ? storedCount
       : DEFAULT_MULTI_REVIEW_REVIEWER_COUNT;
-  const additionalCount = Math.max(
-    0,
-    reviewerCount - DEFAULT_MULTI_REVIEW_REVIEWER_COUNT,
-  );
-  const additionalReviewers = rawAdditional
-    .slice(0, additionalCount)
-    .map((entry) => {
-      if (entry === null) return null;
-      return normalizeActionDefaults({ review: entry }).review ?? null;
-    });
+  const additionalCount = Math.max(0, reviewerCount - DEFAULT_MULTI_REVIEW_REVIEWER_COUNT);
+  const additionalReviewers = rawAdditional.slice(0, additionalCount).map((entry) => {
+    if (entry === null) return null;
+    return normalizeActionDefaults({ review: entry }).review ?? null;
+  });
   while (additionalReviewers.at(-1) === null) additionalReviewers.pop();
 
   const normalized: MultiReviewAgentSettings = {
-    ...(reviewerCount !== DEFAULT_MULTI_REVIEW_REVIEWER_COUNT
-      ? { reviewerCount }
-      : {}),
+    ...(reviewerCount !== DEFAULT_MULTI_REVIEW_REVIEWER_COUNT ? { reviewerCount } : {}),
     ...(additionalReviewers.length > 0 ? { additionalReviewers } : {}),
   };
   return Object.keys(normalized).length > 0 ? normalized : undefined;
@@ -371,27 +329,18 @@ function normalizeMultiReviewSettings(
 export function normalizeAgentSettings(value: unknown): AgentSettingsTier {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const record = value as Record<string, unknown>;
-  const defaultAgent = isAgentPlatform(record.defaultAgent)
-    ? record.defaultAgent
-    : undefined;
+  const defaultAgent = isAgentPlatform(record.defaultAgent) ? record.defaultAgent : undefined;
   const actionDefaults = normalizeActionDefaults(record.actionDefaults);
   const multiReview = normalizeMultiReviewSettings(record.multiReview);
-  const executionPolicy = normalizeExecutionPolicyOverride(
-    record.executionPolicy,
-  );
+  const executionPolicy = normalizeExecutionPolicyOverride(record.executionPolicy);
 
   const platforms: Partial<Record<AgentPlatform, AgentPlatformSettings>> = {};
   const rawPlatforms =
-    record.platforms &&
-    typeof record.platforms === "object" &&
-    !Array.isArray(record.platforms)
+    record.platforms && typeof record.platforms === "object" && !Array.isArray(record.platforms)
       ? (record.platforms as Record<string, unknown>)
       : {};
   for (const platform of AGENT_PLATFORMS) {
-    const settings = normalizePlatformSettings(
-      rawPlatforms[platform],
-      platform,
-    );
+    const settings = normalizePlatformSettings(rawPlatforms[platform], platform);
     if (settings) platforms[platform] = settings;
   }
 
@@ -407,19 +356,14 @@ export function normalizeAgentSettings(value: unknown): AgentSettingsTier {
 function normalizeExecutionPolicyOverride(
   value: unknown,
 ): NativeAgentExecutionPolicyOverride | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const sandbox =
-    record.sandbox === "provider" ||
-    record.sandbox === "container" ||
-    record.sandbox === "none"
+    record.sandbox === "provider" || record.sandbox === "container" || record.sandbox === "none"
       ? record.sandbox
       : undefined;
   const approvals =
-    record.approvals === "ask" ||
-    record.approvals === "auto-approve" ||
-    record.approvals === "deny"
+    record.approvals === "ask" || record.approvals === "auto-approve" || record.approvals === "deny"
       ? record.approvals
       : undefined;
   const networkAccess =
@@ -436,9 +380,7 @@ function normalizeExecutionPolicyOverride(
     return values.length > 0 ? [...new Set(values)] : undefined;
   };
   const rawTools =
-    record.toolPolicy &&
-    typeof record.toolPolicy === "object" &&
-    !Array.isArray(record.toolPolicy)
+    record.toolPolicy && typeof record.toolPolicy === "object" && !Array.isArray(record.toolPolicy)
       ? (record.toolPolicy as Record<string, unknown>)
       : undefined;
   const allow = stringList(rawTools?.allow);
@@ -463,9 +405,7 @@ function normalizeExecutionPolicyOverride(
 }
 
 /** True when this tier expresses no opinion at all, i.e. inherits everything. */
-export function isEmptyAgentSettings(
-  tier: AgentSettingsTier | null | undefined,
-): boolean {
+export function isEmptyAgentSettings(tier: AgentSettingsTier | null | undefined): boolean {
   if (!tier) return true;
   return (
     !tier.defaultAgent &&

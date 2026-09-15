@@ -131,6 +131,7 @@ const {
   resolveCursorExecutionPolicy,
   resumeSession,
   rewindSessionHistory,
+  SessionConflictError,
   useCursorAgentForTests,
 } = await import("./agent-session.js");
 const { refreshAgentUsage } = await import("./prompt.js");
@@ -799,6 +800,66 @@ describe("listResumableSessions", () => {
 });
 
 describe("resumeSession", () => {
+  test("deduplicates concurrent and later resumes by Cursor agent id", async () => {
+    const [first, second] = await Promise.all([
+      resumeSession("agent-deduplicated", undefined),
+      resumeSession("agent-deduplicated", undefined),
+    ]);
+    const later = await resumeSession("agent-deduplicated", undefined);
+
+    expect(second).toBe(first);
+    expect(later).toBe(first);
+    expect(
+      Array.from(sessions.values()).filter((state) => state.agentId === first.agentId),
+    ).toEqual([first]);
+  });
+
+  const permissivePolicy = {
+    id: "interactive-host",
+    sandbox: "none",
+    approvals: "auto-approve",
+    projectResources: false,
+    networkAccess: "full",
+  } as const;
+  const denyPolicy = {
+    id: "coordinator-read-only",
+    sandbox: "provider",
+    approvals: "deny",
+    projectResources: false,
+    capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+    networkAccess: "restricted",
+  } as const;
+
+  test("rejects a later resume of the same agent under a tighter policy", async () => {
+    const first = await resumeSession("agent-policy-share", undefined, permissivePolicy);
+    await expect(resumeSession("agent-policy-share", undefined, denyPolicy)).rejects.toBeInstanceOf(
+      SessionConflictError,
+    );
+    expect(sessions.get(first.id)?.policy).toMatchObject(permissivePolicy);
+    expect(
+      Array.from(sessions.values()).filter((state) => state.agentId === first.agentId),
+    ).toEqual([first]);
+  });
+
+  test("rejects overlapping resumes of the same agent under different policies", async () => {
+    const first = resumeSession("agent-policy-race", undefined, permissivePolicy);
+    const second = resumeSession("agent-policy-race", undefined, denyPolicy);
+    await expect(second).rejects.toBeInstanceOf(SessionConflictError);
+    const adopted = await first;
+    expect(adopted.policy).toMatchObject(permissivePolicy);
+    expect(
+      Array.from(sessions.values()).filter((state) => state.agentId === adopted.agentId),
+    ).toEqual([adopted]);
+  });
+
+  test("rejects a later resume that asks for different composer controls", async () => {
+    const first = await resumeSession("agent-composer-share", { modelId: "composer-2" });
+    await expect(
+      resumeSession("agent-composer-share", { modelId: "composer-2.5", modeId: "plan" }),
+    ).rejects.toBeInstanceOf(SessionConflictError);
+    expect(first.composer.selectedModelId).toBe("composer-2");
+  });
+
   test("replays user text, assistant prose, reasoning and tool calls", async () => {
     runs = {
       items: [

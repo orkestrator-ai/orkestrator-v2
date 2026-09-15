@@ -6,9 +6,9 @@
  * evaluating, and every long-lived process here — the backend and each bridge —
  * is exactly that shape. The blast radius is not proportionate: a rejected
  * `reader.cancel()` inside a vendored SSE client took the whole backend down,
- * and the desktop supervisor answers a backend exit by telling the user the app
- * will close. One dropped promise should degrade one feature, not end the
- * session.
+ * and the desktop supervisor answers a backend exit by taking Local offline for
+ * the session and asking the user to restart the app. One dropped promise should
+ * degrade one feature, not end the session.
  *
  * This is deliberately not a general error-swallowing net. It reports loudly and
  * keeps running, so the failure stays visible in the logs while remaining

@@ -417,6 +417,15 @@ export abstract class GatewayBase {
       // the credential must therefore revoke every connection authenticated
       // with the previous value rather than waiting for a reconnect.
       this.terminalWebSocket.revokeConnections();
+      // HTTP streaming and proxy requests also latch authentication when they
+      // start. Revoke them on rotation so possession of the previous durable
+      // token cannot keep an already-open channel alive.
+      for (const client of Array.from(this.clients.keys())) client.destroy();
+      this.clients.clear();
+      for (const proxyRequest of Array.from(this.proxyRequests)) {
+        proxyRequest.destroy(new Error("Gateway credential rotated"));
+      }
+      this.proxyRequests.clear();
       return { token, editable: true, source: "file" };
     });
   }

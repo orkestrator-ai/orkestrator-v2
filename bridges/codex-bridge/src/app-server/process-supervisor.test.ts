@@ -1762,6 +1762,17 @@ describe("request and health plumbing", () => {
     expect(h.supervisor.getState()).toBe("restarting");
   });
 
+  test("a stdin error after readiness retires the failed generation", async () => {
+    const h = harness();
+    await h.supervisor.ensureReady();
+
+    h.children[0]!.stdin.emitError(new Error("stdin EPIPE"));
+
+    expect(h.supervisor.getHealth().lastError).toContain("stdin EPIPE");
+    expect(h.supervisor.isReady()).toBe(false);
+    expect(h.supervisor.getState()).toBe("restarting");
+  });
+
   test("a second environment check joins the drain already in flight", async () => {
     const h = harness({
       behaviours: [{ pid: UNMAPPED_PID }, { pid: UNMAPPED_PID }],

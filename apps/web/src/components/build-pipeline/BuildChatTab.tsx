@@ -1078,10 +1078,7 @@ export function BuildChatTab({
           <div
             hidden={validationSelected}
             aria-hidden={validationSelected}
-            className={cn(
-              "flex min-h-0 min-w-0 flex-1 flex-col",
-              validationSelected && "hidden",
-            )}
+            className={cn("flex min-h-0 min-w-0 flex-1 flex-col", validationSelected && "hidden")}
           >
             {/*
               The transcript list the native agent tabs use: the same message

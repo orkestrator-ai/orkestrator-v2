@@ -42,6 +42,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
@@ -942,23 +943,34 @@ export function BuildChatTab({
               </div>
             }
             footer={
-              showReviewReport && selectedReviewReport ? (
-                <div className="px-3 py-3 @sm:px-6">
-                  <StructuredReviewReportView
-                    className="mx-auto max-w-3xl"
-                    report={selectedReviewReport}
-                    heading={
-                      (pipeline.reviewers?.length ?? 0) > 1
-                        ? ownsCurrentReviewReport
-                          ? "Consolidated Multi Review"
-                          : "Reviewer report"
-                        : undefined
-                    }
-                    collapsibleSections
-                    sectionExpansionKey={`build-pipeline/${pipeline.id}/${selectedSession?.sessionKey ?? "review"}/report-section`}
-                    showRawJson={false}
-                  />
-                </div>
+              showReviewReport || selectedSession?.status === "running" ? (
+                <>
+                  {showReviewReport && selectedReviewReport ? (
+                    <div className="px-3 py-3 @sm:px-6">
+                      <StructuredReviewReportView
+                        className="mx-auto max-w-3xl"
+                        report={selectedReviewReport}
+                        heading={
+                          (pipeline.reviewers?.length ?? 0) > 1
+                            ? ownsCurrentReviewReport
+                              ? "Consolidated Multi Review"
+                              : "Reviewer report"
+                            : undefined
+                        }
+                        collapsibleSections
+                        sectionExpansionKey={`build-pipeline/${pipeline.id}/${selectedSession?.sessionKey ?? "review"}/report-section`}
+                        showRawJson={false}
+                      />
+                    </div>
+                  ) : null}
+                  {selectedSession?.status === "running" ? (
+                    <div className="px-2 @sm:px-4">
+                      <div className="chat-status-row mx-auto max-w-3xl min-w-0">
+                        <AgentThinkingIndicator agentName={agentLabel} />
+                      </div>
+                    </div>
+                  ) : null}
+                </>
               ) : undefined
             }
             scrollProps={scrollProps}

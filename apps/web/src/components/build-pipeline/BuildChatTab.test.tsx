@@ -811,6 +811,51 @@ describe("BuildChatTab presentation", () => {
     expect(screen.queryByText(/"toolArgs"/) === null).toBe(true);
   });
 
+  test.each([
+    ["claude", "Claude"],
+    ["codex", "Codex"],
+  ] as const)("shows the shared thinking footer for a running %s stage", (agent, label) => {
+    renderTab({
+      ...pipeline,
+      agentType: agent,
+      phase: "building",
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          agent,
+          status: "running",
+        },
+      ],
+      currentSessionIndex: 0,
+      backendRevision: 39 + label.length,
+    });
+
+    const indicator = screen.getByRole("status");
+    expect(indicator.textContent).toBe(`${label} is thinking...`);
+    expect(indicator.classList.contains("agent-thinking-shimmer")).toBe(true);
+    expect(indicator.closest(".chat-status-row")).toBeTruthy();
+  });
+
+  test("does not show a thinking footer for the idle stage a user is reading", async () => {
+    renderTab({
+      ...pipeline,
+      phase: "verifying",
+      sessions: [
+        pipeline.sessions[0]!,
+        {
+          ...pipeline.sessions[1]!,
+          status: "running",
+        },
+      ],
+      backendRevision: 47,
+    });
+    expect(screen.getByText("Codex is thinking...")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Build Session"));
+
+    await waitFor(() => expect(screen.queryByText(/is thinking\.\.\./) === null).toBe(true));
+  });
+
   test("shows the structured review report only on the stage that produced it", async () => {
     renderTab(reviewed);
     const reportLabel = "Structured review report";

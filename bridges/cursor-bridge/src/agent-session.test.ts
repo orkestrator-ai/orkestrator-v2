@@ -470,6 +470,7 @@ describe("ensureAgent", () => {
     expect(created[0]).toMatchObject({
       local: {
         sandboxOptions: { enabled: false },
+        settingSources: [],
       },
       tools: [
         "read",
@@ -481,6 +482,7 @@ describe("ensureAgent", () => {
         "readTodos",
         "askQuestion",
         "await",
+        "mcp",
       ],
     });
     expect(created[0]).not.toHaveProperty("disallowedTools");
@@ -503,8 +505,8 @@ describe("ensureAgent", () => {
       expect(created[0]?.tools).not.toContain(tool);
     }
     expect(created[0]).toMatchObject({
-      local: { sandboxOptions: { enabled: true }, autoReview: false },
-      tools: expect.arrayContaining(["read", "grep", "glob", "ls"]),
+      local: { sandboxOptions: { enabled: true }, autoReview: false, settingSources: [] },
+      tools: expect.arrayContaining(["read", "grep", "glob", "ls", "mcp"]),
     });
   });
 
@@ -522,8 +524,8 @@ describe("ensureAgent", () => {
     await ensureAgent(state);
 
     expect(created[0]).toMatchObject({
-      local: { sandboxOptions: { enabled: false } },
-      tools: expect.arrayContaining(["read", "grep", "glob", "ls"]),
+      local: { sandboxOptions: { enabled: false }, settingSources: [] },
+      tools: expect.arrayContaining(["read", "grep", "glob", "ls", "mcp"]),
     });
   });
 
@@ -534,8 +536,8 @@ describe("ensureAgent", () => {
 
     expect(created).toHaveLength(1);
     expect(created[0]).toMatchObject({
-      local: { sandboxOptions: { enabled: false } },
-      tools: expect.arrayContaining(["read", "grep", "glob", "ls"]),
+      local: { sandboxOptions: { enabled: false }, settingSources: [] },
+      tools: expect.arrayContaining(["read", "grep", "glob", "ls", "mcp"]),
     });
     expect(created[0]).not.toHaveProperty("disallowedTools");
     expect(created[0]?.tools).not.toEqual(expect.arrayContaining(["write", "shell"]));
@@ -556,7 +558,7 @@ describe("ensureAgent", () => {
     // through resume — which has to carry the new boundary just as create does.
     expect(resumed).toEqual(["created-agent"]);
     expect(resumedOptions[0]?.tools).toEqual(
-      expect.arrayContaining(["read", "grep", "glob", "ls"]),
+      expect.arrayContaining(["read", "grep", "glob", "ls", "mcp"]),
     );
     expect(resumedOptions[0]).not.toHaveProperty("disallowedTools");
   });
@@ -575,6 +577,33 @@ describe("ensureAgent", () => {
     await ensureAgent(state);
     expect(resumed).toEqual(["prior-agent"]);
     expect(created).toHaveLength(0);
+  });
+
+  test("a read-only coordinator keeps the MCP capability so Orkestrator tools stay reachable", async () => {
+    const state = newSessionState(undefined, {
+      id: "coordinator-read-only",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: false,
+      networkAccess: "restricted",
+    });
+    state.readOnly = true;
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "coord-token" };
+
+    await ensureAgent(state);
+
+    expect(created[0]).toMatchObject({
+      local: { settingSources: [] },
+      tools: expect.arrayContaining(["mcp"]),
+      mcpServers: {
+        orkestrator: {
+          type: "http",
+          url: "http://127.0.0.1:4567/mcp",
+          headers: { Authorization: "Bearer coord-token" },
+        },
+      },
+    });
+    expect(created[0]?.tools).not.toEqual(expect.arrayContaining(["shell", "edit", "task"]));
   });
 
   test("a rotated tab MCP token detaches and resumes the same agent", async () => {

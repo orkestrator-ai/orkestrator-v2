@@ -8,6 +8,9 @@ import {
   isBuildPipeline,
   isBuildStepConfigs,
   isStartBuildPipelineInput,
+  isPipelineIndependentReviewLabel,
+  pipelineIndependentReviewLabel,
+  pipelineIndependentReviewSlot,
   pipelineReviewerConfigs,
   stepKeyForSessionPhase,
   usesReviewFanout,
@@ -1359,6 +1362,14 @@ describe("build pipeline protocol", () => {
     ]);
     expect(usesReviewFanout({ ...base, reviewers })).toBe(true);
     expect(usesReviewFanout({ ...base, reviewers: undefined })).toBe(false);
+    expect(pipelineIndependentReviewLabel(0)).toBe("Review 1");
+    expect(pipelineIndependentReviewLabel(1)).toBe("Review 2");
+    expect(pipelineIndependentReviewSlot("Review 1")).toBe(0);
+    expect(pipelineIndependentReviewSlot("Review 2")).toBe(1);
+    expect(pipelineIndependentReviewSlot("Review Session")).toBeNull();
+    expect(pipelineIndependentReviewSlot("Package Preparation Session")).toBeNull();
+    expect(isPipelineIndependentReviewLabel("Review 32")).toBe(true);
+    expect(isPipelineIndependentReviewLabel("Review Session")).toBe(false);
     for (const malformed of [null, [], "claude", [{ agent: "gemini", model: "x" }]]) {
       expect(isStartBuildPipelineInput({ ...input, reviewers: malformed })).toBe(false);
       expect(isBuildPipeline({ ...base, reviewers: malformed })).toBe(false);
@@ -1638,6 +1649,9 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline(withSession({ producedReviewPackagePlan: "yes" }))).toBe(false);
     expect(isBuildPipeline(withSession({ structuredResultStatus: "complete" }))).toBe(false);
     expect(isBuildPipeline(withSession({ structuredReportRepairAttempts: 0 }))).toBe(true);
+    expect(
+      isBuildPipeline(withSession({ completedAt: "2026-07-29T00:01:00.000Z", tokenCount: 12_345 })),
+    ).toBe(true);
 
     // A malformed timestamp here is not cosmetic: the supervisor subtracts it
     // from now() to decide whether to fail a stalled turn.
@@ -1647,6 +1661,12 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline(withSession({ turnStartedAt: "March 5 2020" }))).toBe(false);
     expect(isBuildPipeline(withSession({ turnStartedAt: 0 }))).toBe(false);
     expect(isBuildPipeline(withSession({ messagesFingerprint: "" }))).toBe(false);
+    for (const completedAt of ["soon", "March 5 2020", 0, null]) {
+      expect(isBuildPipeline(withSession({ completedAt }))).toBe(false);
+    }
+    for (const tokenCount of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "12", null]) {
+      expect(isBuildPipeline(withSession({ tokenCount }))).toBe(false);
+    }
     // The repair budget is compared against a bound, and the supervisor refuses
     // to persist a snapshot this rejects — so a value that cannot be counted
     // has to fail here rather than strand every later save.

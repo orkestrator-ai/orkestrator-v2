@@ -41,7 +41,7 @@ import * as backend from "@/lib/backend";
 import { MultiReviewFixPromptDialog } from "./MultiReviewFixPromptDialog";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { formatElapsed } from "@/lib/format-elapsed";
-import { formatTokenCount } from "@/lib/context-usage";
+import { runtimeSummary } from "@/lib/review/runtime-summary";
 
 interface MultiReviewCommands {
   address: (workflowId: string) => Promise<MultiReviewWorkflow>;
@@ -341,32 +341,6 @@ export function reviewerProgressSummary(reviewers: MultiReviewWorkflow["reviewer
   const completion =
     activePanelSize === 0 ? `${completed} complete` : `${completed}/${activePanelSize} complete`;
   return stopped === 0 ? completion : `${completion} · ${stopped} stopped`;
-}
-
-/**
- * The one runtime line every card shows: elapsed time, then what the turn cost.
- *
- * A turn that never recorded an end is not given one here — an unsettled turn
- * that is no longer running has no honest elapsed time, so only its measured
- * consumption is reported.
- */
-function runtimeSummary(
-  timing: { startedAt?: string; completedAt?: string; tokenCount?: number },
-  running: boolean,
-  now: number,
-): string | null {
-  if (!timing.startedAt) return null;
-  const startedAt = Date.parse(timing.startedAt);
-  if (!Number.isFinite(startedAt)) return null;
-  const tokens =
-    timing.tokenCount === undefined ? null : `${formatTokenCount(timing.tokenCount)} tokens`;
-  const completedAt = timing.completedAt ? Date.parse(timing.completedAt) : Number.NaN;
-  const activelyRunning = running && !Number.isFinite(completedAt);
-  if (!activelyRunning && !Number.isFinite(completedAt)) return tokens;
-  const end = activelyRunning ? now : completedAt;
-  const elapsed = formatElapsed(Math.max(0, Math.floor((end - startedAt) / 1_000)));
-  if (!tokens) return activelyRunning ? `${elapsed} · Tokens pending` : elapsed;
-  return `${elapsed} · ${tokens}`;
 }
 
 export function reviewerRuntimeSummary(

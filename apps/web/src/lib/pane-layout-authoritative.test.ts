@@ -28,9 +28,12 @@ mock.module("@/lib/looped-review-persistence", () => ({ hydrateLoopedReviewWorkf
 mock.module("@/lib/multi-review-persistence", () => ({ hydrateMultiReviewWorkflow }));
 
 const {
+  armBuildPipelineTabActivation,
   armStartupAgentTabActivation,
   beginPaneTabActivationRequest,
+  clearBuildPipelineTabActivation,
   collectPaneDependencyIds,
+  commitBuildPipelineSetupHandoff,
   commitStartupAgentSetupHandoff,
   hydratePaneLayoutDependencies,
   reconcileAuthoritativePaneLayout,
@@ -40,9 +43,13 @@ const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
 const { useLoopedReviewStore } = await import("@/stores/loopedReviewStore");
 const { useMultiReviewStore } = await import("@/stores/multiReviewStore");
+const { usePaneLayoutStore } = await import("@/stores/paneLayoutStore");
 const { LEGACY_PANE_LAYOUT_VERSION, PANE_LAYOUT_VERSION } = await import("@/types/paneLayout");
-const { consumeWindowStartupAgentActivation, hasWindowStartupAgentActivation } =
-  await import("./pane-selection-storage");
+const {
+  consumeWindowStartupAgentActivation,
+  getWindowBuildPipelineActivation,
+  hasWindowStartupAgentActivation,
+} = await import("./pane-selection-storage");
 
 type PaneNode = import("@/types/paneLayout").PaneNode;
 type PersistedPaneLayout = import("@/types/paneLayout").PersistedPaneLayout;
@@ -121,6 +128,11 @@ beforeEach(() => {
   });
   useLoopedReviewStore.setState({ workflows: new Map() });
   useMultiReviewStore.setState({ workflows: new Map() });
+  usePaneLayoutStore.setState({
+    environments: new Map(),
+    hydration: new Map(),
+    activeEnvironmentId: null,
+  });
 });
 
 describe("collectPaneDependencyIds", () => {
@@ -347,6 +359,685 @@ describe("reconcileAuthoritativePaneLayout", () => {
 
       expect(restored?.root).toMatchObject({ activeTabId: "tab-2" });
     } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("hands the launching Electron window from setup to its pipeline tab", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "running", setupScriptsComplete: false })],
+      });
+      useBuildPipelineStore.setState({
+        pipelines: new Map([["pipeline-1", {} as never]]),
+        buildEnvironmentIds: new Set(["env-1"]),
+      });
+      const setupTab = { id: "setup", type: "plain" as const, isSetupTab: true };
+      const buildTab = {
+        id: "build-pipeline-1",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+          isLocal: false,
+        },
+      };
+      const currentRoot = leaf("default", [setupTab, buildTab]);
+      if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+      currentRoot.activeTabId = "setup";
+      const backendRoot = leaf("default", [setupTab, buildTab]);
+      if (backendRoot.kind !== "leaf") throw new Error("expected leaf");
+      backendRoot.activeTabId = "build-pipeline-1";
+
+      armBuildPipelineTabActivation("env-1", "pipeline-1");
+      const beforeSetupCompletes = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        paneState(currentRoot),
+      );
+      expect(beforeSetupCompletes?.root).toMatchObject({ activeTabId: "setup" });
+      expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-1");
+      if (!beforeSetupCompletes) throw new Error("expected a pending layout");
+
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
+      });
+      const handedOff = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        beforeSetupCompletes,
+      );
+
+      expect(handedOff?.root).toMatchObject({ activeTabId: "build-pipeline-1" });
+      expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-1");
+      if (!handedOff) throw new Error("expected a handed-off layout");
+      commitBuildPipelineSetupHandoff("env-1", handedOff);
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("does not arm or apply a renderer-local pipeline handoff in a browser client", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: undefined,
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
+      });
+      useBuildPipelineStore.setState({
+        pipelines: new Map([["pipeline-1", {} as never]]),
+        buildEnvironmentIds: new Set(["env-1"]),
+      });
+      const setupTab = { id: "setup", type: "plain" as const, isSetupTab: true };
+      const buildTab = {
+        id: "build-pipeline-1",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+          isLocal: false,
+        },
+      };
+      const currentRoot = leaf("default", [setupTab, buildTab]);
+      if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+      currentRoot.activeTabId = "setup";
+      const backendRoot = leaf("default", [setupTab, buildTab]);
+      if (backendRoot.kind !== "leaf") throw new Error("expected leaf");
+      backendRoot.activeTabId = "build-pipeline-1";
+
+      armBuildPipelineTabActivation("env-1", "pipeline-1");
+      clearBuildPipelineTabActivation("env-1");
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        paneState(currentRoot),
+      );
+      expect(restored?.root).toMatchObject({ activeTabId: "build-pipeline-1" });
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("does not steal focus from another tab when the pipeline becomes ready", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "running", setupScriptsComplete: false })],
+      });
+      useBuildPipelineStore.setState({
+        pipelines: new Map([["pipeline-1", {} as never]]),
+        buildEnvironmentIds: new Set(["env-1"]),
+      });
+      const setupTab = { id: "setup", type: "plain" as const, isSetupTab: true };
+      const otherTab = { id: "notes", type: "plain" as const };
+      const buildTab = {
+        id: "build-pipeline-1",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+          isLocal: false,
+        },
+      };
+      const setupRoot = leaf("default", [setupTab, otherTab, buildTab]);
+      if (setupRoot.kind !== "leaf") throw new Error("expected leaf");
+      setupRoot.activeTabId = "setup";
+      const notesRoot = leaf("default", [setupTab, otherTab, buildTab]);
+      if (notesRoot.kind !== "leaf") throw new Error("expected leaf");
+      notesRoot.activeTabId = "notes";
+      const backendRoot = leaf("default", [setupTab, otherTab, buildTab]);
+      if (backendRoot.kind !== "leaf") throw new Error("expected leaf");
+      backendRoot.activeTabId = "build-pipeline-1";
+
+      armBuildPipelineTabActivation("env-1", "pipeline-1");
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
+      });
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        paneState(notesRoot),
+      );
+      if (!restored) throw new Error("expected a restored layout");
+
+      expect(restored.root).toMatchObject({ activeTabId: "notes" });
+      commitBuildPipelineSetupHandoff("env-1", restored);
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("activates a rebuild pipeline tab on an already-ready environment", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
+      });
+      useBuildPipelineStore.setState({
+        pipelines: new Map([
+          ["pipeline-old", {} as never],
+          ["pipeline-new", {} as never],
+        ]),
+        buildEnvironmentIds: new Set(["env-1"]),
+      });
+      const previousBuildTab = {
+        id: "build-pipeline-old",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-old",
+          taskId: "task-old",
+          isLocal: false,
+        },
+      };
+      const newBuildTab = {
+        id: "build-pipeline-new",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-new",
+          taskId: "task-new",
+          isLocal: false,
+        },
+      };
+      const currentRoot = leaf("default", [previousBuildTab, newBuildTab]);
+      if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+      currentRoot.activeTabId = "build-pipeline-old";
+      const backendRoot = leaf("default", [previousBuildTab, newBuildTab]);
+      if (backendRoot.kind !== "leaf") throw new Error("expected leaf");
+      backendRoot.activeTabId = "build-pipeline-new";
+
+      armBuildPipelineTabActivation("env-1", "pipeline-new");
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        paneState(currentRoot),
+      );
+      if (!restored) throw new Error("expected a restored layout");
+
+      expect(restored.root).toMatchObject({ activeTabId: "build-pipeline-new" });
+      commitBuildPipelineSetupHandoff("env-1", restored);
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("does not activate a different pipeline's tab while another pipeline is armed", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
+      });
+      useBuildPipelineStore.setState({
+        pipelines: new Map([
+          ["pipeline-1", {} as never],
+          ["pipeline-2", {} as never],
+        ]),
+        buildEnvironmentIds: new Set(["env-1"]),
+      });
+      const setupTab = { id: "setup", type: "plain" as const, isSetupTab: true };
+      const firstBuildTab = {
+        id: "build-pipeline-1",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+          isLocal: false,
+        },
+      };
+      const secondBuildTab = {
+        id: "build-pipeline-2",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-2",
+          taskId: "task-2",
+          isLocal: false,
+        },
+      };
+      const currentRoot = leaf("default", [setupTab, firstBuildTab, secondBuildTab]);
+      if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+      currentRoot.activeTabId = "setup";
+      const backendRoot = leaf("default", [setupTab, firstBuildTab, secondBuildTab]);
+      if (backendRoot.kind !== "leaf") throw new Error("expected leaf");
+      backendRoot.activeTabId = "build-pipeline-2";
+
+      armBuildPipelineTabActivation("env-1", "pipeline-1");
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        paneState(currentRoot),
+      );
+      if (!restored) throw new Error("expected a restored layout");
+
+      expect(restored.root).toMatchObject({ activeTabId: "setup" });
+      commitBuildPipelineSetupHandoff("env-1", restored);
+      expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-1");
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("keeps the pipeline handoff armed until the backend selects that tab", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
+      });
+      useBuildPipelineStore.setState({
+        pipelines: new Map([["pipeline-1", {} as never]]),
+        buildEnvironmentIds: new Set(["env-1"]),
+      });
+      const setupTab = { id: "setup", type: "plain" as const, isSetupTab: true };
+      const buildTab = {
+        id: "build-pipeline-1",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+          isLocal: false,
+        },
+      };
+      const currentRoot = leaf("default", [setupTab, buildTab]);
+      if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+      currentRoot.activeTabId = "setup";
+      const backendRoot = leaf("default", [setupTab, buildTab]);
+      if (backendRoot.kind !== "leaf") throw new Error("expected leaf");
+      backendRoot.activeTabId = "setup";
+
+      armBuildPipelineTabActivation("env-1", "pipeline-1");
+      const awaitingSelection = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        paneState(currentRoot),
+      );
+      if (!awaitingSelection) throw new Error("expected a pending layout");
+      commitBuildPipelineSetupHandoff("env-1", awaitingSelection);
+      expect(awaitingSelection.root).toMatchObject({ activeTabId: "setup" });
+      expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-1");
+
+      const selectedRoot = leaf("default", [setupTab, buildTab]);
+      if (selectedRoot.kind !== "leaf") throw new Error("expected leaf");
+      selectedRoot.activeTabId = "build-pipeline-1";
+      const handedOff = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(selectedRoot),
+        awaitingSelection,
+      );
+      if (!handedOff) throw new Error("expected a handed-off layout");
+      expect(handedOff.root).toMatchObject({ activeTabId: "build-pipeline-1" });
+      commitBuildPipelineSetupHandoff("env-1", handedOff);
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("immediately activates a rebuild pipeline tab from a previous build tab", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
+      });
+      const previousBuildTab = {
+        id: "build-pipeline-old",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-old",
+          taskId: "task-old",
+          isLocal: false,
+        },
+      };
+      const newBuildTab = {
+        id: "build-pipeline-new",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-new",
+          taskId: "task-new",
+          isLocal: false,
+        },
+      };
+      const currentRoot = leaf("default", [previousBuildTab, newBuildTab]);
+      if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+      currentRoot.activeTabId = "build-pipeline-old";
+      usePaneLayoutStore.setState({
+        environments: new Map([["env-1", paneState(currentRoot)]]),
+        hydration: new Map([["env-1", "done"]]),
+        activeEnvironmentId: "env-1",
+      });
+
+      armBuildPipelineTabActivation("env-1", "pipeline-new");
+
+      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
+        "build-pipeline-new",
+      );
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("lets a pipeline start win over the startup-agent handoff in the same frame", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "running", setupScriptsComplete: false })],
+      });
+      useBuildPipelineStore.setState({
+        pipelines: new Map([["pipeline-1", {} as never]]),
+        buildEnvironmentIds: new Set(["env-1"]),
+      });
+      const setupTab = { id: "setup", type: "plain" as const, isSetupTab: true };
+      const agentTab = {
+        id: "startup-agent",
+        type: "agent-native" as const,
+        nativeAgentData: {
+          environmentId: "env-1",
+          platform: "codex" as const,
+          sessionId: "provider-session",
+        },
+      };
+      const buildTab = {
+        id: "build-pipeline-1",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+          isLocal: false,
+        },
+      };
+      const currentRoot = leaf("default", [setupTab, agentTab, buildTab]);
+      if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+      currentRoot.activeTabId = "setup";
+      const backendRoot = leaf("default", [setupTab, agentTab, buildTab]);
+      if (backendRoot.kind !== "leaf") throw new Error("expected leaf");
+      backendRoot.activeTabId = "build-pipeline-1";
+
+      armStartupAgentTabActivation("env-1");
+      armBuildPipelineTabActivation("env-1", "pipeline-1");
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
+      });
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        paneState(currentRoot),
+      );
+      if (!restored) throw new Error("expected a restored layout");
+
+      expect(restored.root).toMatchObject({ activeTabId: "build-pipeline-1" });
+      commitBuildPipelineSetupHandoff("env-1", restored);
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("still activates the pipeline after an automatic startup-agent landing", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "running", setupScriptsComplete: false })],
+      });
+      useBuildPipelineStore.setState({
+        pipelines: new Map([["pipeline-1", {} as never]]),
+        buildEnvironmentIds: new Set(["env-1"]),
+      });
+      const setupTab = { id: "setup", type: "plain" as const, isSetupTab: true };
+      const agentTab = {
+        id: "startup-agent",
+        type: "agent-native" as const,
+        nativeAgentData: {
+          environmentId: "env-1",
+          platform: "codex" as const,
+          sessionId: "provider-session",
+        },
+      };
+      const buildTab = {
+        id: "build-pipeline-1",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+          isLocal: false,
+        },
+      };
+      const setupRoot = leaf("default", [setupTab, agentTab, buildTab]);
+      if (setupRoot.kind !== "leaf") throw new Error("expected leaf");
+      setupRoot.activeTabId = "setup";
+      const agentRoot = leaf("default", [setupTab, agentTab, buildTab]);
+      if (agentRoot.kind !== "leaf") throw new Error("expected leaf");
+      agentRoot.activeTabId = "startup-agent";
+      const pipelineRoot = leaf("default", [setupTab, agentTab, buildTab]);
+      if (pipelineRoot.kind !== "leaf") throw new Error("expected leaf");
+      pipelineRoot.activeTabId = "build-pipeline-1";
+
+      armStartupAgentTabActivation("env-1");
+      armBuildPipelineTabActivation("env-1", "pipeline-1");
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
+      });
+      const afterAgent = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(agentRoot),
+        paneState(setupRoot),
+      );
+      if (!afterAgent) throw new Error("expected a startup-agent layout");
+      expect(afterAgent.root).toMatchObject({ activeTabId: "startup-agent" });
+      expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-1");
+
+      const handedOff = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(pipelineRoot),
+        afterAgent,
+      );
+      if (!handedOff) throw new Error("expected a handed-off layout");
+      expect(handedOff.root).toMatchObject({ activeTabId: "build-pipeline-1" });
+      commitBuildPipelineSetupHandoff("env-1", handedOff);
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("does not steal split-pane focus when the user selected a non-setup pipeline pane", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "running", setupScriptsComplete: false })],
+      });
+      useBuildPipelineStore.setState({
+        pipelines: new Map([["pipeline-1", {} as never]]),
+        buildEnvironmentIds: new Set(["env-1"]),
+      });
+      const setupTab = { id: "setup", type: "plain" as const, isSetupTab: true };
+      const buildTab = {
+        id: "build-pipeline-1",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+          isLocal: false,
+        },
+      };
+      const pipelinePane = leaf("pipeline-pane", [setupTab, buildTab]);
+      const notesPane = leaf("notes-pane", [{ id: "notes", type: "plain" as const }]);
+      if (pipelinePane.kind !== "leaf") throw new Error("expected pipeline leaf");
+      pipelinePane.activeTabId = "setup";
+      const current = paneState(split(pipelinePane, notesPane));
+      current.activePaneId = "notes-pane";
+
+      const authoritativePipelinePane = leaf("pipeline-pane", [setupTab, buildTab]);
+      if (authoritativePipelinePane.kind !== "leaf") throw new Error("expected pipeline leaf");
+      authoritativePipelinePane.activeTabId = "build-pipeline-1";
+      const saved = persisted(split(authoritativePipelinePane, notesPane));
+      saved.activePaneId = "pipeline-pane";
+
+      armBuildPipelineTabActivation("env-1", "pipeline-1");
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
+      });
+      const restored = reconcileAuthoritativePaneLayout("env-1", saved, current);
+      if (!restored) throw new Error("expected a restored layout");
+
+      expect(restored.activePaneId).toBe("notes-pane");
+      const restoredPipelinePane = findLeafForTest(restored.root, "pipeline-pane");
+      expect(restoredPipelinePane?.activeTabId).toBe("setup");
+      commitBuildPipelineSetupHandoff("env-1", restored);
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("immediately activates a pipeline tab when setup is already ready", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
+      });
+      const setupTab = { id: "setup", type: "plain" as const, isSetupTab: true };
+      const buildTab = {
+        id: "build-pipeline-1",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+          isLocal: false,
+        },
+      };
+      const currentRoot = leaf("default", [setupTab, buildTab]);
+      if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+      currentRoot.activeTabId = "setup";
+      usePaneLayoutStore.setState({
+        environments: new Map([["env-1", paneState(currentRoot)]]),
+        hydration: new Map([["env-1", "done"]]),
+        activeEnvironmentId: "env-1",
+      });
+
+      armBuildPipelineTabActivation("env-1", "pipeline-1");
+
+      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
+        "build-pipeline-1",
+      );
+      expect(usePaneLayoutStore.getState().environments.get("env-1")?.activePaneId).toBe("default");
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("leaves the immediate pipeline handoff armed when setActiveTab is a no-op", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    const originalSetActiveTab = usePaneLayoutStore.getState().setActiveTab;
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
+      });
+      const setupTab = { id: "setup", type: "plain" as const, isSetupTab: true };
+      const buildTab = {
+        id: "build-pipeline-1",
+        type: "claude-build" as const,
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+          isLocal: false,
+        },
+      };
+      const currentRoot = leaf("default", [setupTab, buildTab]);
+      if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+      currentRoot.activeTabId = "setup";
+      usePaneLayoutStore.setState({
+        environments: new Map([["env-1", paneState(currentRoot)]]),
+        hydration: new Map([["env-1", "done"]]),
+        activeEnvironmentId: "env-1",
+        setActiveTab: () => {},
+      });
+
+      armBuildPipelineTabActivation("env-1", "pipeline-1");
+
+      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe("setup");
+      expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-1");
+    } finally {
+      usePaneLayoutStore.setState({ setActiveTab: originalSetActiveTab });
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;
     }

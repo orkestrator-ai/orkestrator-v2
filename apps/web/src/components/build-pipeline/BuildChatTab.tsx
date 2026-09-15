@@ -20,6 +20,7 @@ import {
   isReviewPackagePreparationSession,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
   REVIEW_PACKAGE_SESSION_LABEL,
+  pipelineIndependentReviewSlot,
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -40,15 +41,21 @@ import {
   showOnlyFinalVerificationMessage,
 } from "@/lib/structured-review-messages";
 import { useMediaQuery, useVirtuosoScrollState } from "@/hooks";
+import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
+import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
+import { runtimeSummary } from "@/lib/review/runtime-summary";
+import { modelsForAgent } from "@/lib/agent-launch";
+import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { BuildCompletionStatus } from "./BuildCompletionStatus";
 import { toPipelineTranscript } from "./pipeline-transcript";
@@ -80,12 +87,6 @@ const PHASE_LABELS: Record<string, string> = {
   paused: "Paused",
   complete: "Complete",
   failed: "Failed",
-};
-
-const AGENT_LABELS: Record<string, string> = {
-  claude: "Claude",
-  codex: "Codex",
-  opencode: "OpenCode",
 };
 
 const RETRY_STAGE_LABELS: Record<ResumableBuildPhase, string> = {
@@ -275,6 +276,74 @@ function issueCountLabel(count: number): string {
   return `${count} issue${count === 1 ? "" : "s"}`;
 }
 
+/** Fan-out reviewers use this backend label; classic one-model reviews do not. */
+function isIndependentReviewSession(session: PipelineSession): boolean {
+  return session.phase === "review" && pipelineIndependentReviewSlot(session.label) !== null;
+}
+
+/** Spreadsheet-style letters keep the label compact even at the 32-reviewer limit. */
+export function reviewLetter(index: number): string {
+  let value = index + 1;
+  let label = "";
+  while (value > 0) {
+    value -= 1;
+    label = String.fromCharCode(65 + (value % 26)) + label;
+    value = Math.floor(value / 26);
+  }
+  return label;
+}
+
+function liveReviewKeysByIteration(
+  sessions: readonly PipelineSession[],
+  liveSessionKeys: ReadonlySet<string> | undefined,
+): Map<number, ReadonlySet<string>> {
+  const byIteration = new Map<number, Set<string>>();
+  if (!liveSessionKeys || liveSessionKeys.size === 0) return byIteration;
+  for (const session of sessions) {
+    if (!liveSessionKeys.has(session.sessionKey) || !isIndependentReviewSession(session)) continue;
+    const keys = byIteration.get(session.iteration) ?? new Set<string>();
+    keys.add(session.sessionKey);
+    byIteration.set(session.iteration, keys);
+  }
+  return byIteration;
+}
+
+/** User-facing identity for parallel reviews within the same pipeline iteration. */
+export function reviewIterationLabels(
+  sessions: readonly PipelineSession[],
+  liveSessionKeys?: ReadonlySet<string>,
+): Map<string, string> {
+  const latestBySlot = new Map<string, string>();
+  const liveByIteration = liveReviewKeysByIteration(sessions, liveSessionKeys);
+  for (const session of sessions) {
+    if (!isIndependentReviewSession(session)) continue;
+    const slot = pipelineIndependentReviewSlot(session.label);
+    if (slot === null) continue;
+    latestBySlot.set(`${session.iteration}:${slot}`, session.sessionKey);
+  }
+  const labels = new Map<string, string>();
+  for (const session of sessions) {
+    if (!isIndependentReviewSession(session)) continue;
+    const slot = pipelineIndependentReviewSlot(session.label);
+    if (slot === null) continue;
+    const liveForIteration = liveByIteration.get(session.iteration);
+    const current = liveForIteration
+      ? liveForIteration.has(session.sessionKey)
+      : latestBySlot.get(`${session.iteration}:${slot}`) === session.sessionKey;
+    const title = `Review Iteration ${session.iteration + 1} (${reviewLetter(slot)})`;
+    labels.set(session.sessionKey, current ? title : `${title} · previous`);
+  }
+  return labels;
+}
+
+/** Matches the elapsed/token line used by each standalone Multi Review reviewer tile. */
+export function pipelineReviewRuntimeSummary(
+  session: Pick<PipelineSession, "status" | "startedAt" | "completedAt" | "tokenCount">,
+  now = Date.now(),
+): string | null {
+  return runtimeSummary(session, session.status === "running", now);
+}
+
 function SessionStateIcon({ session }: { session: PipelineSession }) {
   if (session.status === "running") {
     return <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />;
@@ -309,6 +378,7 @@ export function BuildChatTab({
 }: BuildChatTabProps) {
   const instanceId = useId();
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(data.pipelineId));
+  const modelCatalog = useReviewModelCatalog(pipeline?.projectId ?? "", Boolean(pipeline));
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   const selectedSessionId = useBuildPipelineStore(
     (state) => state.viewedSessionIds.get(data.pipelineId) ?? null,
@@ -322,7 +392,7 @@ export function BuildChatTab({
   const [controlPending, setControlPending] = useState(false);
   const [draft, setDraft] = useState("");
   const [sendPending, setSendPending] = useState(false);
-  const [validationNow, setValidationNow] = useState(() => Date.now());
+  const [displayNow, setDisplayNow] = useState(() => Date.now());
   const validationStageId = pipeline?.validationRun
     ? `validation:${pipeline.validationRun.id}`
     : null;
@@ -414,12 +484,15 @@ export function BuildChatTab({
 
   const hasRunningValidation =
     pipeline?.validationRun?.status === "planned" || pipeline?.validationRun?.status === "running";
+  const hasRunningReview = pipeline?.sessions.some(
+    (session) => isIndependentReviewSession(session) && session.status === "running",
+  );
   useEffect(() => {
-    if (!isActive || !hasRunningValidation) return;
-    setValidationNow(Date.now());
-    const interval = window.setInterval(() => setValidationNow(Date.now()), 1_000);
+    if (!isActive || (!hasRunningValidation && !hasRunningReview)) return;
+    setDisplayNow(Date.now());
+    const interval = window.setInterval(() => setDisplayNow(Date.now()), 1_000);
     return () => window.clearInterval(interval);
-  }, [hasRunningValidation, isActive]);
+  }, [hasRunningReview, hasRunningValidation, isActive]);
 
   useEffect(() => {
     if (!pipeline?.sessions.length) {
@@ -443,6 +516,7 @@ export function BuildChatTab({
     if (following !== selectedSessionId) setViewedSessionId(data.pipelineId, following);
   }, [
     data.pipelineId,
+    pipeline,
     pipeline?.currentSessionIndex,
     pipeline?.sessions,
     selectedSessionId,
@@ -456,6 +530,20 @@ export function BuildChatTab({
   const selectedSessionIndex =
     pipeline?.sessions.findIndex((session) => session.sdkSessionId === selectedSessionId) ?? -1;
   const reportSession = pipeline ? reviewReportSession(pipeline) : undefined;
+  const fanoutReviewerBySessionKey = useMemo(
+    () =>
+      new Map(
+        (pipeline?.reviewFanout?.reviewers ?? []).flatMap((reviewer) =>
+          reviewer.sessionKey ? [[reviewer.sessionKey, reviewer] as const] : [],
+        ),
+      ),
+    [pipeline?.reviewFanout?.reviewers],
+  );
+  const reviewLabels = useMemo(
+    () =>
+      reviewIterationLabels(pipeline?.sessions ?? [], new Set(fanoutReviewerBySessionKey.keys())),
+    [fanoutReviewerBySessionKey, pipeline?.sessions],
+  );
   const ownsCurrentReviewReport = Boolean(
     pipeline?.structuredReview &&
     selectedSession &&
@@ -668,12 +756,16 @@ export function BuildChatTab({
   // Names the harness of the session on screen, which per-step configuration
   // can make different from the pipeline's build agent.
   const displayedAgent = selectedSession?.agent ?? pipeline.agentType;
-  const agentLabel = AGENT_LABELS[displayedAgent] ?? displayedAgent;
+  const agentLabel = findNativeAgentAdapter(displayedAgent)?.label ?? displayedAgent;
   // The banner asserts the stage "is still running", so it belongs to an active
   // pipeline only. The backend clears the warning on every terminal and paused
   // transition; gating here as well keeps a snapshot written by an older build
   // from making that claim about a stopped one.
   const showStallWarning = active && Boolean(pipeline.stallWarning);
+  // Pause/cancel abort errors can leave a session at "running" after the
+  // pipeline itself has stopped. The footer uses the same active gate so a
+  // cancelled or paused build does not keep shimmering.
+  const showThinking = active && selectedSession?.status === "running";
   const stalledSession = showStallWarning
     ? pipeline.sessions.find((session) => session.sdkSessionId === pipeline.stallWarning?.sessionId)
     : undefined;
@@ -692,7 +784,11 @@ export function BuildChatTab({
     stages: "Stages",
     // Naming the stage on the tab is the only thing that says which transcript
     // is behind it — the header shows the pipeline's phase, not the selection.
-    transcript: validationSelected ? "Tests" : (selectedSession?.label ?? "Transcript"),
+    transcript: validationSelected
+      ? "Tests"
+      : selectedSession
+        ? (reviewLabels.get(selectedSession.sessionKey) ?? selectedSession.label)
+        : "Transcript",
   };
   const stageItems = pipelineStageItems(pipeline);
 
@@ -898,8 +994,10 @@ export function BuildChatTab({
         >
           <ClipboardCheck className="h-3.5 w-3.5 shrink-0" />
           <span className="min-w-0 truncate">
-            The review reported {reviewReportHint.label} — open {reviewReportHint.session.label} to
-            read the report.
+            The review reported {reviewReportHint.label} — open{" "}
+            {reviewLabels.get(reviewReportHint.session.sessionKey) ??
+              reviewReportHint.session.label}{" "}
+            to read the report.
           </span>
         </button>
       )}
@@ -1010,6 +1108,43 @@ export function BuildChatTab({
                 }
                 const { session } = stage;
                 const isSelected = selectedSessionId === stage.id;
+                const reviewLabel = reviewLabels.get(session.sessionKey);
+                const fanoutReviewer = fanoutReviewerBySessionKey.get(session.sessionKey);
+                const reviewerIndex = reviewLabel
+                  ? (pipelineIndependentReviewSlot(session.label) ?? -1)
+                  : -1;
+                const configuredReviewer =
+                  reviewerIndex >= 0 && pipeline.reviewers?.length
+                    ? pipeline.reviewers[reviewerIndex % pipeline.reviewers.length]
+                    : undefined;
+                const reviewerAgent =
+                  session.agent ??
+                  fanoutReviewer?.agent ??
+                  configuredReviewer?.agent ??
+                  pipeline.agentType;
+                const reviewerModel =
+                  session.model ??
+                  (fanoutReviewer?.modelUnpinned ? undefined : fanoutReviewer?.model) ??
+                  configuredReviewer?.model;
+                const reviewerModelLabel =
+                  reviewLabel && reviewerAgent
+                    ? reviewerModel
+                      ? resolveCatalogModelLabel(
+                          reviewerModel,
+                          modelsForAgent(modelCatalog, reviewerAgent),
+                        )
+                      : "Provider default"
+                    : null;
+                const reviewerRuntime = reviewLabel
+                  ? pipelineReviewRuntimeSummary(
+                      {
+                        ...session,
+                        completedAt: session.completedAt ?? fanoutReviewer?.completedAt,
+                        tokenCount: session.tokenCount ?? fanoutReviewer?.tokenCount,
+                      },
+                      displayNow,
+                    )
+                  : null;
                 const ownsReport = Boolean(
                   reportSession && session.sessionKey === reportSession.sessionKey,
                 );
@@ -1038,18 +1173,32 @@ export function BuildChatTab({
                     onClick={() => selectStage(stage.id)}
                   >
                     <SessionStateIcon session={session} />
-                    <span className="min-w-0">
+                    <span className="min-w-0 flex-1">
                       <span
                         className={cn(
                           "block truncate text-xs font-medium",
                           isSelected ? "text-foreground" : "text-foreground/80",
                         )}
                       >
-                        {session.label}
+                        {reviewLabel ?? session.label}
                       </span>
-                      <span className="block text-[11px] text-muted-foreground">
-                        Iteration {session.iteration + 1}
-                      </span>
+                      {reviewerModelLabel ? (
+                        <span className="block truncate text-[11px] text-muted-foreground">
+                          {reviewerModelLabel}
+                        </span>
+                      ) : (
+                        <span className="block text-[11px] text-muted-foreground">
+                          Iteration {session.iteration + 1}
+                        </span>
+                      )}
+                      {reviewerRuntime && (
+                        <span
+                          className="mt-0.5 block truncate font-mono text-[10px] tabular-nums text-muted-foreground"
+                          aria-label={`${reviewLabel} runtime and token usage`}
+                        >
+                          {reviewerRuntime}
+                        </span>
+                      )}
                       {(session.autoDeclineCount ?? 0) > 0 && (
                         <span className="mt-1 block text-[10px] text-muted-foreground">
                           {session.autoDeclineCount} input request
@@ -1094,7 +1243,7 @@ export function BuildChatTab({
               <ReviewValidationStatus
                 environmentId={data.environmentId}
                 run={pipeline.validationRun}
-                now={validationNow}
+                now={displayNow}
               />
             </div>
           )}
@@ -1132,23 +1281,34 @@ export function BuildChatTab({
                 </div>
               }
               footer={
-                showReviewReport && listReviewReport ? (
-                  <div className="px-3 py-3 @sm:px-6">
-                    <StructuredReviewReportView
-                      className="mx-auto max-w-3xl"
-                      report={listReviewReport}
-                      heading={
-                        (pipeline.reviewers?.length ?? 0) > 1
-                          ? ownsCurrentReviewReport
-                            ? "Consolidated Multi Review"
-                            : "Reviewer report"
-                          : undefined
-                      }
-                      collapsibleSections
-                      sectionExpansionKey={`build-pipeline/${pipeline.id}/${selectedSession?.sessionKey ?? "review"}/report-section`}
-                      showRawJson={false}
-                    />
-                  </div>
+                showReviewReport || showThinking ? (
+                  <>
+                    {showReviewReport && listReviewReport ? (
+                      <div className="px-3 py-3 @sm:px-6">
+                        <StructuredReviewReportView
+                          className="mx-auto max-w-3xl"
+                          report={listReviewReport}
+                          heading={
+                            (pipeline.reviewers?.length ?? 0) > 1
+                              ? ownsCurrentReviewReport
+                                ? "Consolidated Multi Review"
+                                : "Reviewer report"
+                              : undefined
+                          }
+                          collapsibleSections
+                          sectionExpansionKey={`build-pipeline/${pipeline.id}/${selectedSession?.sessionKey ?? "review"}/report-section`}
+                          showRawJson={false}
+                        />
+                      </div>
+                    ) : null}
+                    {showThinking ? (
+                      <div className="px-2 @sm:px-4">
+                        <div className="chat-status-row mx-auto max-w-3xl min-w-0">
+                          <AgentThinkingIndicator agentName={agentLabel} />
+                        </div>
+                      </div>
+                    ) : null}
+                  </>
                 ) : undefined
               }
               scrollProps={scrollProps}

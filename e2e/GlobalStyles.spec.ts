@@ -30,7 +30,7 @@ test("agent thinking shimmer respects motion and forced-color preferences", asyn
     true,
   );
   await expect(indicator).toHaveCSS("animation-name", "none");
-  await expect(indicator).toHaveCSS("color", "rgb(161, 161, 170)");
+  await expect(indicator).toHaveCSS("color", "rgb(141, 146, 158)");
   await expect(indicator).toHaveCSS("background-image", "none");
   await expect(page.getByTestId("chat-status-content")).toHaveCSS("animation-name", "none");
 
@@ -297,25 +297,25 @@ test("global dark surfaces, fonts, terminal, and scrollbar rules compile into br
   });
 
   expect(styles.colorScheme).toBe("dark");
-  expect(styles.scrollbarColor).toBe("rgb(63, 63, 70) rgba(0, 0, 0, 0)");
+  expect(styles.scrollbarColor).toBe("rgb(38, 42, 50) rgba(0, 0, 0, 0)");
   expect(styles.theme).toEqual({
-    background: "#000000",
-    foreground: "#e4e4e7",
-    muted: "#27272a",
-    mutedForeground: "#a1a1aa",
-    card: "#18181b",
-    cardForeground: "#e4e4e7",
-    popover: "#27272a",
-    popoverForeground: "#e4e4e7",
-    border: "#3f3f46",
-    input: "#3f3f46",
+    background: "#0e1014",
+    foreground: "#e7e9ee",
+    muted: "#1c1f26",
+    mutedForeground: "#8d929e",
+    card: "#14161b",
+    cardForeground: "#e7e9ee",
+    popover: "#16181e",
+    popoverForeground: "#e7e9ee",
+    border: "#262a32",
+    input: "#262a32",
     primary: "#3b82f6",
     primaryForeground: "#ffffff",
-    secondary: "#3f3f46",
-    secondaryForeground: "#e4e4e7",
-    accent: "#3f3f46",
-    accentForeground: "#e4e4e7",
-    destructive: "#ef4444",
+    secondary: "#23262e",
+    secondaryForeground: "#e7e9ee",
+    accent: "#23262e",
+    accentForeground: "#f2f4f8",
+    destructive: "#e5534b",
     destructiveForeground: "#ffffff",
     ring: "#3b82f6",
     radiusLg: "0.5rem",
@@ -323,23 +323,23 @@ test("global dark surfaces, fonts, terminal, and scrollbar rules compile into br
     radiusSm: "0.25rem",
   });
   expect(styles.fontsReady).toBe(true);
-  expect(styles.sidebarBackground).toBe("rgb(24, 25, 28)");
-  expect(styles.panelBackground).toBe("rgba(24, 24, 27, 0.8)");
+  expect(styles.sidebarBackground).toBe("rgb(16, 19, 25)");
+  expect(styles.panelBackground).toBe("color(srgb 0.0784314 0.0862745 0.105882 / 0.8)");
   expect(styles.dragRegion).toBe("drag");
   expect(styles.userSelect).toBe("none");
-  expect(styles.terminalBackground).toBe("rgb(0, 0, 0)");
+  expect(styles.terminalBackground).toBe("rgb(14, 16, 20)");
   expect(styles.xterm).toEqual({
     display: "block",
     height: "120px",
     width: "220px",
     boxSizing: "border-box",
     padding: "4px",
-    background: "rgb(0, 0, 0)",
+    background: "rgb(14, 16, 20)",
     viewportHeight: "112px",
-    viewportBackground: "rgb(0, 0, 0)",
-    viewportTrackBackground: "rgb(0, 0, 0)",
+    viewportBackground: "rgb(14, 16, 20)",
+    viewportTrackBackground: "rgb(14, 16, 20)",
     screenBackground: "rgba(0, 0, 0, 0)",
-    canvasBackground: "rgb(0, 0, 0)",
+    canvasBackground: "rgb(14, 16, 20)",
     scrollablePointerEvents: "auto",
     scrollableZIndex: "12",
   });
@@ -347,7 +347,7 @@ test("global dark surfaces, fonts, terminal, and scrollbar rules compile into br
     width: "8px",
     height: "8px",
     trackBackground: "rgba(0, 0, 0, 0)",
-    thumbBackground: "rgb(63, 63, 70)",
+    thumbBackground: "rgb(38, 42, 50)",
     thumbRadius: "6px",
     hoverRule: expect.stringContaining("background-color: var(--color-muted-foreground)"),
   });

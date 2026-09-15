@@ -300,6 +300,29 @@ describe("session creation", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "policy is required" });
   });
+
+  test("rejects a second resume of the same agent under a different policy", async () => {
+    const existing = await createSession();
+    existing.agentId = "cursor-shared-agent";
+    const denied = await call("/session/resume", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId: "cursor-shared-agent",
+        policy: {
+          id: "coordinator-read-only",
+          sandbox: "provider",
+          approvals: "deny",
+          projectResources: false,
+          capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+          networkAccess: "restricted",
+        },
+      }),
+    });
+    expect(denied.status).toBe(409);
+    expect(await denied.json()).toEqual({
+      error: "Cursor session is already adopted under a different execution policy",
+    });
+  });
 });
 
 describe("liveness routes", () => {

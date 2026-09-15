@@ -7,7 +7,7 @@ IFS=$'\n\t'       # Stricter word splitting
 # up networking, but it must not be able to widen the policy by replacing its
 # own environment first.
 container_env() {
-    tr '\0' '\n' < /proc/1/environ | sed -n "s/^$1=//p" | head -n 1
+    tr '\0' '\n' < "${ORKESTRATOR_PID1_ENVIRON:-/proc/1/environ}" | sed -n "s/^$1=//p" | head -n 1
 }
 NETWORK_MODE="$(container_env NETWORK_MODE)"
 ALLOWED_DOMAINS="$(container_env ALLOWED_DOMAINS)"

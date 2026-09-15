@@ -659,11 +659,14 @@ export abstract class StorageBase {
         )
       : null;
 
+    // Structural writes (makeBackup) fsync so a crash cannot promote an empty
+    // remnant. Volatile activity timestamps already treat a lost refresh as
+    // recoverable, so they skip the disk barrier.
     const writeDurableTemp = async (targetPath: string) => {
       const handle = await fs.open(targetPath, "w", mode ?? 0o666);
       try {
         await handle.writeFile(contents, "utf8");
-        await handle.sync();
+        if (makeBackup) await handle.sync();
       } finally {
         await handle.close();
       }
@@ -1046,6 +1049,9 @@ export abstract class StorageBase {
     await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
     while (true) {
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for ${description} lock`);
+      }
       try {
         const handle = await fs.open(lockPath, "wx", 0o600);
         try {
@@ -1083,6 +1089,12 @@ export abstract class StorageBase {
                 ? reclaimError.code
                 : undefined;
             if (reclaimCode === "EEXIST") {
+              const reclaimStat = await fs.stat(reclaimPath).catch(() => null);
+              if (reclaimStat && Date.now() - reclaimStat.mtimeMs > staleMs) {
+                // A process that died after creating the sentinel would
+                // otherwise leave every later mutation spinning forever.
+                await fs.rm(reclaimPath, { force: true });
+              }
               await new Promise((resolve) => setTimeout(resolve, 25));
               continue;
             }
@@ -1123,12 +1135,25 @@ export abstract class StorageBase {
     // Never promote an empty/corrupt crash remnant over a valid recovery
     // ladder. The replacement write below can publish recovered state while
     // keeping the newest known-good backup at .bak.1.
-    try {
-      const primary = await fs.readFile(filePath, "utf8");
-      if (!primary.trim()) return;
-      JSON.parse(primary);
-    } catch {
-      return;
+    const cached = this.jsonReadCache.get(filePath);
+    let primaryKnownGood = false;
+    if (cached) {
+      try {
+        const stat = await fs.stat(filePath);
+        const fingerprint = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+        primaryKnownGood = cached.fingerprint === fingerprint;
+      } catch {
+        return;
+      }
+    }
+    if (!primaryKnownGood) {
+      try {
+        const primary = await fs.readFile(filePath, "utf8");
+        if (!primary.trim()) return;
+        JSON.parse(primary);
+      } catch {
+        return;
+      }
     }
     for (let index = MAX_JSON_BACKUPS - 1; index >= 1; index -= 1) {
       const current = this.backupPath(filePath, index);

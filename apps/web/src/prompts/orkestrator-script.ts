@@ -26,6 +26,7 @@ Compatibility requirements (strict):
 2. Use only these top-level keys:
    - \`root\`: string OR array of strings (optional).
      - Runs as root inside container environments before container setup.
+     - Only honored when the container has full network access. Default restricted containers fail setup if this field is present, so omit it unless the environment is created with full networking.
    - \`setupContainer\`: string OR array of strings (optional).
      - Runs for containerized environments during workspace startup.
    - \`setupLocal\`: string OR array of strings (optional).

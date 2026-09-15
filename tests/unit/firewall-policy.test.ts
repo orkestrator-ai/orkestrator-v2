@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "../..");
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
@@ -44,6 +45,54 @@ describe("container firewall policy", () => {
     expect(wrapper).toContain("network_mode:-restricted");
     expect(entrypoint).toContain("if ! sudo /usr/local/bin/init-firewall.sh");
     expect(entrypoint).toContain('if [ "${NETWORK_MODE:-restricted}" != "full" ]');
+    expect(wrapper).toContain("ORKESTRATOR_PID1_ENVIRON");
+    expect(dockerfile).not.toContain("update-firewall.sh *");
+    expect(dockerfile).toContain("NOPASSWD: /usr/local/bin/init-firewall.sh");
+    expect(dockerfile).toContain("NOPASSWD: /usr/local/bin/run-root-setup.sh *");
+  });
+
+  test("bootstraps GitHub metadata through a scoped dig and an ipset", () => {
+    const script = read("docker/init-firewall.sh");
+    expect(script).toContain("container_env NETWORK_MODE");
+    expect(script).toContain("container_env ALLOWED_DOMAINS");
+    expect(script).toContain("dig +short A api.github.com");
+    expect(script).toContain("ipset create allowed-domains hash:net");
+    expect(script).toContain("iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT");
+  });
+
+  test("run-root-setup allows full network and denies restricted", () => {
+    const wrapper = resolve(root, "docker/run-root-setup.sh");
+    const dir = mkdtempSync(join(tmpdir(), "ork-root-setup-"));
+    const environ = join(dir, "environ");
+    mkdirSync(dir, { recursive: true });
+
+    writeFileSync(environ, "NETWORK_MODE=restricted\0OTHER=1");
+    const denied = Bun.spawnSync({
+      cmd: ["bash", wrapper, "echo should-not-run"],
+      env: { ...process.env, ORKESTRATOR_PID1_ENVIRON: environ },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(denied.exitCode).toBe(1);
+    expect(denied.stderr.toString()).toContain("disabled in restricted-network");
+    expect(denied.stdout.toString()).not.toContain("should-not-run");
+
+    writeFileSync(environ, "NETWORK_MODE=full\0");
+    const allowed = Bun.spawnSync({
+      cmd: ["bash", wrapper, "echo ran-ok"],
+      env: { ...process.env, ORKESTRATOR_PID1_ENVIRON: environ },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(allowed.exitCode).toBe(0);
+    expect(allowed.stdout.toString()).toContain("ran-ok");
+  });
+
+  test("workspace setup treats a failed root step as fatal", () => {
+    const setup = read("docker/workspace-setup.sh");
+    expect(setup).toContain("Root setup failed with code");
+    expect(setup).toContain('exit "$ROOT_EXIT"');
+    expect(setup).not.toContain("Root setup exited with code");
   });
 
   test("uses committed host keys instead of build-time trust on first use", () => {

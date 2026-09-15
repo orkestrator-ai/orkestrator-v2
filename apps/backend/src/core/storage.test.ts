@@ -2998,6 +2998,28 @@ describe("hot store read caching", () => {
     });
   });
 
+  test("refuses to rotate an empty config primary over a valid backup", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const config = defaultConfig();
+      await storage.saveConfig(config);
+      const renamed = structuredClone(config);
+      renamed.global.webClientEnabled = false;
+      await storage.saveConfig(renamed);
+
+      const primary = path.join(dataDir, "config.json");
+      const backup = `${primary}.bak.1`;
+      const retained = JSON.parse(await fs.readFile(backup, "utf8")) as AppConfig;
+      await fs.writeFile(primary, "  \n", "utf8");
+
+      const next = structuredClone(renamed);
+      next.global.webClientEnabled = true;
+      await storage.saveConfig(next);
+
+      expect(JSON.parse(await fs.readFile(backup, "utf8"))).toEqual(retained);
+      expect((await storage.loadConfig()).global.webClientEnabled).toBe(true);
+    });
+  });
+
   test("recovers an empty primary from backup without promoting the empty file", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));

@@ -855,6 +855,47 @@ sleep 5
     await expect(client.setWebClientEnabled(true)).rejects.toThrow();
   });
 
+  test("delivers a legitimate event frame larger than 1 MiB", async () => {
+    useNativeWebPlatform();
+    const payload = "y".repeat(1.5 * 1024 * 1024);
+    const frame = `data: ${JSON.stringify({ event: "large-snapshot", payload })}\n\n`;
+    expect(Buffer.byteLength(frame, "utf8")).toBeGreaterThan(1024 * 1024);
+    expect(Buffer.byteLength(frame, "utf8")).toBeLessThan(MAX_BACKEND_EVENT_FRAME_BYTES);
+    globalThis.fetch = mock(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(frame));
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        ),
+    ) as typeof fetch;
+    const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456");
+    const events: Array<{ event: string; payload: unknown }> = [];
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("large frame was not delivered")), 2_000);
+        client.listen((event, payload) => {
+          events.push({ event, payload });
+          if (event === "large-snapshot") {
+            clearTimeout(timeout);
+            client.stopListening();
+            resolve();
+          }
+        });
+      });
+      expect(events).toEqual([
+        { event: "native-event-stream-connected", payload: undefined },
+        { event: "large-snapshot", payload },
+      ]);
+    } finally {
+      client.stopListening();
+    }
+  });
+
   test("drops malformed event frames and reconnects after an oversized frame", async () => {
     useNativeWebPlatform();
     let attempts = 0;

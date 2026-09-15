@@ -61,7 +61,8 @@ const AGENT_HELPER_SED =
   "/^agent_destination_path_has_symlink() {/,/^}$/p; " +
   "/^copy_agent_file() {/,/^}$/p; " +
   "/^copy_agent_directory() {/,/^}$/p; " +
-  "/^copy_agent_directory_entries() {/,/^}$/p";
+  "/^copy_agent_directory_entries() {/,/^}$/p; " +
+  "/^publish_claude_credentials() {/,/^}$/p";
 
 function agentCopyHelperHarness(body: string): string {
   const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
@@ -611,6 +612,7 @@ report_agent_copy_skips OpenCode
       const result = runShell(
         `
 set -e
+eval "$(sed -n '${AGENT_HELPER_SED}' ${shellQuote(entrypointPath)})"
 block="$(sed -n '/^if \\[ -n "\\$CLAUDE_OAUTH_CREDENTIALS" \\]/,/^fi$/p' ${shellQuote(entrypointPath)} | sed "s#/claude-config#\\$AGENT_TEST_MOUNT#g")"
 [ -n "$block" ] || { echo "harness failed to extract the credential block"; exit 9; }
 log_progress() { echo "$1"; }
@@ -698,6 +700,45 @@ eval "$block"
 
         expect(result.exitCode).toBe(0);
         expect(result.credential).toContain("from-env");
+      });
+    });
+
+    test("does not follow a destination credential symlink when injecting OAuth", () => {
+      withTempDir((dir) => {
+        const home = join(dir, "home");
+        const leaked = join(dir, "workspace", "leaked.json");
+        mkdirSync(join(home, ".claude"), { recursive: true });
+        mkdirSync(join(dir, "workspace"), { recursive: true });
+        writeFileSync(leaked, "");
+        symlinkSync(leaked, join(home, ".claude", ".credentials.json"));
+
+        const result = runCredentialBlock(dir, {
+          envValue: '{"claudeAiOauth":{"accessToken":"from-env"}}',
+        });
+
+        expect(result.exitCode).toBe(0);
+        expect(readFileSync(leaked, "utf8")).toBe("");
+        expect(result.credential).toContain("from-env");
+        expect(statSync(join(home, ".claude", ".credentials.json")).isSymbolicLink()).toBe(false);
+        expect(statSync(join(home, ".claude", ".credentials.json")).mode & 0o777).toBe(0o600);
+      });
+    });
+
+    test("does not follow a mounted credential symlink", () => {
+      withTempDir((dir) => {
+        const mount = join(dir, "claude-config");
+        const leaked = join(dir, "workspace", "leaked.json");
+        mkdirSync(mount, { recursive: true });
+        mkdirSync(join(dir, "workspace"), { recursive: true });
+        writeFileSync(leaked, '{"claudeAiOauth":{"accessToken":"via-symlink"}}');
+        symlinkSync(leaked, join(mount, ".credentials.json"));
+
+        const result = runCredentialBlock(dir, {});
+
+        expect(result.exitCode).toBe(0);
+        expect(result.credential).toBeNull();
+        expect(readFileSync(leaked, "utf8")).toContain("via-symlink");
+        expect(result.stdout).toContain("awaiting the backend credential sync");
       });
     });
   });

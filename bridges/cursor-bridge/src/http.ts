@@ -54,6 +54,7 @@ import {
   applyComposerPatch,
   createSession,
   CredentialError,
+  SessionConflictError,
   detachAgent,
   ensureAgent,
   listResumableSessions,
@@ -122,6 +123,9 @@ export async function route(
         error: error.message,
         kind: "authentication-required",
       });
+    }
+    if (error instanceof SessionConflictError) {
+      return json(response, 409, { error: error.message });
     }
     if (error instanceof PromptAttachmentError) {
       return json(response, 400, { error: error.message });

@@ -1654,6 +1654,25 @@ describe("Electron StorageService", () => {
     await expect(fs.access(lockPath)).rejects.toThrow();
   });
 
+  test("recovers an orphaned stale-lock reclaim marker without hanging", async () => {
+    const dataDir = await createTempDir("ork-storage-orphaned-reclaim-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const lockPath = path.join(dataDir, "environments.json.lock");
+    const reclaimPath = `${lockPath}.reclaim`;
+    await fs.writeFile(lockPath, "abandoned");
+    await fs.writeFile(reclaimPath, "orphaned");
+    const staleTime = new Date(Date.now() - 20_000);
+    await fs.utimes(lockPath, staleTime, staleTime);
+    await fs.utimes(reclaimPath, staleTime, staleTime);
+
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+
+    expect((await storage.getEnvironment(environment.id))?.id).toBe(environment.id);
+    await expect(fs.access(lockPath)).rejects.toThrow();
+    await expect(fs.access(reclaimPath)).rejects.toThrow();
+  });
+
   test("serializes concurrent waiters reclaiming the same stale environment lock", async () => {
     const dataDir = await createTempDir("ork-storage-concurrent-stale-lock-");
     const first = new StorageService(dataDir);

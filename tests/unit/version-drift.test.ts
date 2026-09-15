@@ -937,6 +937,10 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       "releases/download/v${OPENCODE_CLI_VERSION}/opencode-linux-${OPENCODE_ARCH}.tar.gz",
     );
     expect(dockerfile).toContain("OPENCODE_SHA=");
+    expect(dockerfile).toMatch(/amd64\) GIT_DELTA_SHA=[a-f0-9]{64}/);
+    expect(dockerfile).toMatch(/arm64\) GIT_DELTA_SHA=[a-f0-9]{64}/);
+    expect(dockerfile).toMatch(/amd64\) OPENCODE_ARCH=x64; OPENCODE_SHA=[a-f0-9]{64}/);
+    expect(dockerfile).toMatch(/arm64\) OPENCODE_ARCH=arm64; OPENCODE_SHA=[a-f0-9]{64}/);
     // The three CLI paths the backend resolves at runtime.
     expect(dockerfile).toContain("ENV CLAUDE_CLI_PATH=/usr/local/share/npm-global/bin/claude");
     expect(dockerfile).toContain("ENV CODEX_CLI_PATH=/usr/local/share/npm-global/bin/codex");

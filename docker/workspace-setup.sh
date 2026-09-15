@@ -609,7 +609,9 @@ if [ -f /workspace/orkestrator-ai.json ]; then
         if [ $ROOT_EXIT -eq 0 ]; then
             echo -e "${GREEN}Root setup completed successfully!${NC}"
         else
-            echo -e "${YELLOW}Root setup exited with code $ROOT_EXIT${NC}"
+            echo -e "${RED}Root setup failed with code $ROOT_EXIT${NC}"
+            echo "Root steps require NETWORK_MODE=full. Recreate the environment with full network access, or remove the root field from orkestrator-ai.json."
+            exit "$ROOT_EXIT"
         fi
     else
         echo "  No root setup defined (root field is empty)"

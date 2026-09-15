@@ -255,7 +255,8 @@ export function createBackendProcessEnvironment(
 }
 
 type ReadyMessage = GatewayStartInfo & { type: "orkestrator-backend-ready" };
-export const MAX_BACKEND_EVENT_FRAME_BYTES = 1024 * 1024;
+/** Match SSE_CLIENT_HARD_BUFFER_BYTES so a legitimate snapshot is not dropped. */
+export const MAX_BACKEND_EVENT_FRAME_BYTES = 8 * 1024 * 1024;
 
 export class BackendHttpClient {
   private abortEvents: AbortController | null = null;

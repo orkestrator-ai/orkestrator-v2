@@ -93,6 +93,35 @@ describe("useEnvironmentDiffStats", () => {
     });
   });
 
+  test("rehydrates again when a reconnect arrives after the snapshot loop exits", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    snapshotSpy
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    renderHook(() => useEnvironmentDiffStats());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      first.resolve({ entries: [] });
+      await Promise.resolve();
+    });
+    // The snapshot loop has exited and yielded; fire reconnect before the
+    // hook clears `rehydrating` so the follow-up snapshot is not dropped.
+    act(() => {
+      callbacks.get(NATIVE_EVENT_STREAM_CONNECTED_EVENT)?.({ payload: undefined });
+    });
+    await act(async () => {
+      await Promise.resolve();
+      second.resolve({ entries: [] });
+      await Promise.resolve();
+    });
+
+    expect(snapshotSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   test("validates live payloads and detaches both listeners on unmount", async () => {
     snapshotSpy.mockResolvedValue({ entries: [] });
     const unlisteners = [mock(() => undefined), mock(() => undefined)];

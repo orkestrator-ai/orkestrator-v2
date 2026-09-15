@@ -1379,7 +1379,13 @@ export function CreateEnvironmentDialog({
 
       try {
         if (buildIntent === "feature") {
-          if (!projectId || !onCreateFeatureBuild || !featureName.trim()) return;
+          if (
+            !projectId ||
+            !onCreateFeatureBuild ||
+            (!featureName.trim() && !featureDescription.trim())
+          ) {
+            return;
+          }
           const requestModels = featureAttemptModelsRef.current ?? effectiveFeatureModels;
           const buildRequest = (requestId: string) =>
             featureBuildRequest({
@@ -2076,9 +2082,10 @@ export function CreateEnvironmentDialog({
               (environmentType === "containerized" &&
                 (!dockerAvailable || !validatePortMappings())) ||
               (environmentType === "local" && !localEnvironmentAvailable) ||
-              // A feature build opens a ticket, so it needs something to call
-              // it. Everything else about the feature form is optional.
-              (buildIntent === "feature" && (!onCreateFeatureBuild || !featureName.trim()))
+              // A blank name is generated from the description by the backend.
+              // At least one must be present so the ticket is identifiable.
+              (buildIntent === "feature" &&
+                (!onCreateFeatureBuild || (!featureName.trim() && !featureDescription.trim())))
             }
             className="h-9 px-5 font-bold shadow-[0_8px_24px_rgba(59,130,246,0.22)]"
           >

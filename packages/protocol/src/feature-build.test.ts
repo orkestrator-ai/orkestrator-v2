@@ -26,8 +26,9 @@ describe("create feature build input", () => {
     ).toBe(true);
   });
 
-  test("rejects a blank title, because the ticket has to be identifiable", () => {
-    expect(isCreateFeatureBuildInput({ ...input, title: "   " })).toBe(false);
+  test("accepts a blank title when a description can be used to generate it", () => {
+    expect(isCreateFeatureBuildInput({ ...input, title: "   " })).toBe(true);
+    expect(isCreateFeatureBuildInput({ ...input, title: "   ", description: "   " })).toBe(false);
     expect(
       isCreateFeatureBuildInput({
         ...input,

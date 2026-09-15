@@ -181,13 +181,13 @@ export function FeatureBuildFields({
         <div className="space-y-3 border-t border-divider px-4 py-3 sm:px-6">
           <div className="space-y-1.5">
             <Label htmlFor="feature-name" className="text-sm">
-              Feature name
+              Feature name <span className="text-muted-foreground">(optional)</span>
             </Label>
             <Input
               id="feature-name"
               value={name}
               onChange={(event) => onNameChange(event.target.value)}
-              placeholder="e.g., Dark mode toggle"
+              placeholder="Generated from the description if left blank"
               disabled={disabled}
             />
           </div>

@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  isReviewPackagePreparationSession,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
@@ -129,14 +130,45 @@ const MOBILE_VIEWS = ["stages", "transcript"] as const;
 
 type MobileView = (typeof MOBILE_VIEWS)[number];
 
-const REVIEW_PACKAGE_SESSION_LABEL = "Package Preparation Session";
-
 type PipelineStageItem =
   | { kind: "session"; id: string; key: string; session: PipelineSession }
   | { kind: "validation"; id: string; key: string };
 
-function isReviewPackageSession(session: PipelineSession | undefined): boolean {
-  return session?.label === REVIEW_PACKAGE_SESSION_LABEL;
+type ValidationRun = NonNullable<BuildPipeline["validationRun"]>;
+type ValidationOutcome = "running" | "failed" | "incomplete" | "passed";
+
+/**
+ * Lifecycle `completed` means every command finished, not that they passed.
+ * Failed is reserved for run-level faults (HEAD moved, runner died), so the
+ * stage icon has to read the per-command results as well.
+ */
+function validationOutcome(run: ValidationRun | undefined): ValidationOutcome {
+  const status = run?.status;
+  if (status === "planned" || status === "running") return "running";
+  if (status === "failed" || status === "cancelled") return "failed";
+  const results = run?.results ?? [];
+  if (results.some((result) => result.status === "failed")) return "failed";
+  if (results.some((result) => result.status === "incomplete")) return "incomplete";
+  return "passed";
+}
+
+function validationStageSummary(run: ValidationRun): string {
+  const commandCount = run.plan.commands.length;
+  const checkWord = commandCount === 1 ? "check" : "checks";
+  const outcome = validationOutcome(run);
+  if (outcome === "failed" && run.status === "completed") {
+    const failed = run.results.filter((result) => result.status === "failed").length;
+    return failed === commandCount
+      ? `${failed} ${checkWord} failed`
+      : `${failed} of ${commandCount} ${checkWord} failed`;
+  }
+  if (outcome === "incomplete") {
+    const incomplete = run.results.filter((result) => result.status === "incomplete").length;
+    return incomplete === commandCount
+      ? `${incomplete} ${checkWord} incomplete`
+      : `${incomplete} of ${commandCount} ${checkWord} incomplete`;
+  }
+  return `${commandCount} ${checkWord}`;
 }
 
 /**
@@ -161,7 +193,7 @@ function pipelineStageItems(pipeline: BuildPipeline): PipelineStageItem[] {
   };
   let preparationIndex = -1;
   for (let index = pipeline.sessions.length - 1; index >= 0; index -= 1) {
-    if (isReviewPackageSession(pipeline.sessions[index])) {
+    if (isReviewPackagePreparationSession(pipeline.sessions[index])) {
       preparationIndex = index;
       break;
     }
@@ -241,12 +273,15 @@ function SessionStateIcon({ session }: { session: PipelineSession }) {
 }
 
 function ValidationStateIcon({ pipeline }: { pipeline: BuildPipeline }) {
-  const status = pipeline.validationRun?.status;
-  if (status === "planned" || status === "running") {
+  const outcome = validationOutcome(pipeline.validationRun);
+  if (outcome === "running") {
     return <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />;
   }
-  if (status === "failed" || status === "cancelled") {
+  if (outcome === "failed") {
     return <AlertCircle className="h-3.5 w-3.5 text-destructive" />;
+  }
+  if (outcome === "incomplete") {
+    return <AlertCircle className="h-3.5 w-3.5 text-muted-foreground" />;
   }
   return <CheckCircle2 className="h-3.5 w-3.5 text-success" />;
 }
@@ -292,7 +327,9 @@ export function BuildChatTab({
     // Switching to the stage list on a phone hides the transcript as
     // completely as switching tabs does, so it deactivates the same way —
     // which is also what makes coming back re-lock to the live bottom.
-    isActive: isActive && transcriptVisible && !validationSelected,
+    // The Tests stage keeps this list mounted and hidden instead, so the
+    // hook stays active and the reader's place in the transcript is kept.
+    isActive: isActive && transcriptVisible,
     persistKey: `build-pipeline:${data.pipelineId}`,
     environmentId: data.environmentId,
     // A build runs unattended, so returning to the tab should show what the
@@ -384,7 +421,7 @@ export function BuildChatTab({
     if (selectionExists && pinnedSessionRef.current) return;
     const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
     const following =
-      validationStageId && isReviewPackageSession(currentSession)
+      validationStageId && isReviewPackagePreparationSession(currentSession)
         ? validationStageId
         : (currentSession?.sdkSessionId ?? pipeline.sessions.at(-1)?.sdkSessionId ?? null);
     if (following !== selectedSessionId) setViewedSessionId(data.pipelineId, following);
@@ -440,6 +477,7 @@ export function BuildChatTab({
   // through the Claude adapter silently drops its subagent and tool-group parts.
   // Snapshots written before per-step harnesses carry no session agent.
   const agentType = selectedSession?.agent ?? pipeline?.agentType;
+  const hidePackagePlan = isReviewPackagePreparationSession(selectedSession);
   const messages = useMemo(() => {
     if (!agentType) return [];
     const transcript = toPipelineTranscript(
@@ -448,7 +486,7 @@ export function BuildChatTab({
       selectedSession?.startedAt ?? new Date().toISOString(),
       selectedSession?.interactionTranscript,
     );
-    if (selectedSession?.label === REVIEW_PACKAGE_SESSION_LABEL) {
+    if (hidePackagePlan) {
       return hideMachineOutputText(transcript, { stripTrailingPayload: true });
     }
     if (selectedSession?.phase === "review") {
@@ -482,9 +520,21 @@ export function BuildChatTab({
     selectedSession?.phase,
     selectedSession?.startedAt,
     selectedSession?.interactionTranscript,
-    selectedSession?.label,
+    hidePackagePlan,
     structuredResultAccepted,
   ]);
+
+  // Tests replaces the visible pane but must not remount or empty the
+  // virtualized list — that would lose the reader's place and, with
+  // stickToBottomOnActivation, jump them to the bottom on return.
+  const lastListMessagesRef = useRef(messages);
+  const lastListReportRef = useRef(selectedReviewReport);
+  if (!validationSelected) {
+    lastListMessagesRef.current = messages;
+    lastListReportRef.current = selectedReviewReport;
+  }
+  const listMessages = validationSelected ? lastListMessagesRef.current : messages;
+  const listReviewReport = validationSelected ? lastListReportRef.current : selectedReviewReport;
 
   const runControl = async (action: "pause" | "resume" | "cancel"): Promise<void> => {
     if (!pipeline || controlPending) return;
@@ -606,7 +656,7 @@ export function BuildChatTab({
   const stalledSession = showStallWarning
     ? pipeline.sessions.find((session) => session.sdkSessionId === pipeline.stallWarning?.sessionId)
     : undefined;
-  const showReviewReport = selectedReviewReport !== undefined;
+  const showReviewReport = listReviewReport !== undefined;
   // The report lives on the stage that produced it, but the tab follows the
   // pipeline past review, so by the time a build finishes nothing on screen
   // would say a review had happened at all.
@@ -899,7 +949,6 @@ export function BuildChatTab({
               stageItems.map((stage, index) => {
                 if (stage.kind === "validation") {
                   const isSelected = selectedSessionId === stage.id;
-                  const commandCount = pipeline.validationRun?.plan.commands.length ?? 0;
                   return (
                     <button
                       key={stage.key}
@@ -928,7 +977,9 @@ export function BuildChatTab({
                           Tests
                         </span>
                         <span className="block text-[11px] text-muted-foreground">
-                          {commandCount} {commandCount === 1 ? "check" : "checks"}
+                          {pipeline.validationRun
+                            ? validationStageSummary(pipeline.validationRun)
+                            : "0 checks"}
                         </span>
                       </span>
                     </button>
@@ -1015,7 +1066,7 @@ export function BuildChatTab({
               ? { "aria-labelledby": stageTabId(selectedSession.sessionKey) }
               : { "aria-label": "Build stage transcript" })}
         >
-          {validationSelected && pipeline.validationRun ? (
+          {validationSelected && pipeline.validationRun && (
             <div className="h-full overflow-auto px-3 py-3 @sm:px-6">
               <ReviewValidationStatus
                 environmentId={data.environmentId}
@@ -1023,65 +1074,71 @@ export function BuildChatTab({
                 now={validationNow}
               />
             </div>
-          ) : (
-            <>
-              {/*
-                The transcript list the native agent tabs use: the same message
-                renderer, the same virtualization, the same in-transcript find,
-                and the same follow-the-tail behaviour while a stage streams.
-              */}
-              <VirtualizedMessageList
-                messages={messages}
-                computeItemKey={(_index, message) => message.id}
-                resolvePreviousMessage={findPreviousNativeMessage}
-                renderMessage={(_index, message, previous) => (
-                  <NativeMessage
-                    message={message}
-                    previousMessage={previous}
-                    assistantLabel={agentLabel}
-                    containerId={containerId}
-                    agentExpansionScope={data.environmentId}
-                    platform={isAgentPlatform(displayedAgent) ? displayedAgent : undefined}
-                  />
-                )}
-                emptyState={
-                  <div className="py-12 text-center text-sm text-muted-foreground">
-                    {!selectedSession
-                      ? "Waiting for the backend to start a build stage."
-                      : selectedSession.status === "running"
-                        ? "This stage is running. Its authoritative transcript will appear here as it is synchronized."
-                        : "No text transcript was produced for this stage."}
-                  </div>
-                }
-                footer={
-                  showReviewReport && selectedReviewReport ? (
-                    <div className="px-3 py-3 @sm:px-6">
-                      <StructuredReviewReportView
-                        className="mx-auto max-w-3xl"
-                        report={selectedReviewReport}
-                        heading={
-                          (pipeline.reviewers?.length ?? 0) > 1
-                            ? ownsCurrentReviewReport
-                              ? "Consolidated Multi Review"
-                              : "Reviewer report"
-                            : undefined
-                        }
-                        collapsibleSections
-                        sectionExpansionKey={`build-pipeline/${pipeline.id}/${selectedSession?.sessionKey ?? "review"}/report-section`}
-                        showRawJson={false}
-                      />
-                    </div>
-                  ) : undefined
-                }
-                scrollProps={scrollProps}
-                virtuosoRef={virtuosoRef}
-                find={{
-                  isActive: ownsGlobalShortcuts,
-                  getSearchText: getNativeMessageSearchText,
-                }}
-              />
-            </>
           )}
+          <div
+            hidden={validationSelected}
+            aria-hidden={validationSelected}
+            className={cn(
+              "flex min-h-0 min-w-0 flex-1 flex-col",
+              validationSelected && "hidden",
+            )}
+          >
+            {/*
+              The transcript list the native agent tabs use: the same message
+              renderer, the same virtualization, the same in-transcript find,
+              and the same follow-the-tail behaviour while a stage streams.
+            */}
+            <VirtualizedMessageList
+              messages={listMessages}
+              computeItemKey={(_index, message) => message.id}
+              resolvePreviousMessage={findPreviousNativeMessage}
+              renderMessage={(_index, message, previous) => (
+                <NativeMessage
+                  message={message}
+                  previousMessage={previous}
+                  assistantLabel={agentLabel}
+                  containerId={containerId}
+                  agentExpansionScope={data.environmentId}
+                  platform={isAgentPlatform(displayedAgent) ? displayedAgent : undefined}
+                />
+              )}
+              emptyState={
+                <div className="py-12 text-center text-sm text-muted-foreground">
+                  {!selectedSession
+                    ? "Waiting for the backend to start a build stage."
+                    : selectedSession.status === "running"
+                      ? "This stage is running. Its authoritative transcript will appear here as it is synchronized."
+                      : "No text transcript was produced for this stage."}
+                </div>
+              }
+              footer={
+                showReviewReport && listReviewReport ? (
+                  <div className="px-3 py-3 @sm:px-6">
+                    <StructuredReviewReportView
+                      className="mx-auto max-w-3xl"
+                      report={listReviewReport}
+                      heading={
+                        (pipeline.reviewers?.length ?? 0) > 1
+                          ? ownsCurrentReviewReport
+                            ? "Consolidated Multi Review"
+                            : "Reviewer report"
+                          : undefined
+                      }
+                      collapsibleSections
+                      sectionExpansionKey={`build-pipeline/${pipeline.id}/${selectedSession?.sessionKey ?? "review"}/report-section`}
+                      showRawJson={false}
+                    />
+                  </div>
+                ) : undefined
+              }
+              scrollProps={scrollProps}
+              virtuosoRef={virtuosoRef}
+              find={{
+                isActive: ownsGlobalShortcuts && !validationSelected,
+                getSearchText: getNativeMessageSearchText,
+              }}
+            />
+          </div>
         </div>
       </div>
 

@@ -20,6 +20,7 @@ import {
   executionModeForSessionPhase,
   isBuildPipeline,
   isActiveBuildPhase,
+  REVIEW_PACKAGE_SESSION_LABEL,
   usesReviewFanout,
 } from "@orkestrator/protocol/build-pipeline";
 import {
@@ -502,7 +503,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       case "fixing":
         if (
           (usesReviewFanout(pipeline) || pipeline.reviewPreparation) &&
-          session.label !== "Package Preparation Session"
+          session.label !== REVIEW_PACKAGE_SESSION_LABEL
         ) {
           await this.startReviewPackagePreparation(pipeline);
           return;
@@ -962,7 +963,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       prompt: reviewValidationDiscoveryPrompt(targetBranch),
       images: [],
       schema: REVIEW_VALIDATION_PLAN_SCHEMA,
-      label: "Package Preparation Session",
+      label: REVIEW_PACKAGE_SESSION_LABEL,
       settings: pipeline.reviewPreparation
         ? {
             agent: pipeline.reviewPreparation.agent,

@@ -14,6 +14,8 @@ import {
   MAX_BUILD_PIPELINE_ITERATIONS,
   MAX_PIPELINE_USER_MESSAGES,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
+  REVIEW_PACKAGE_SESSION_LABEL,
+  isReviewPackagePreparationSession,
   isVerificationVerdict,
   VERIFICATION_VERDICT_SCHEMA,
   type BuildPipeline,
@@ -1978,6 +1980,56 @@ describe("execution mode policy", () => {
     for (const agent of BUILD_PIPELINE_AGENTS) {
       expect(isBuildStepConfigs({ build: { agent } })).toBe(true);
     }
+  });
+});
+
+describe("review package preparation session", () => {
+  test("publishes the dedicated session label the backend writes", () => {
+    expect(REVIEW_PACKAGE_SESSION_LABEL).toBe("Package Preparation Session");
+  });
+
+  test("recognizes the labelled session and reused structured turns", () => {
+    expect(
+      isReviewPackagePreparationSession({
+        label: REVIEW_PACKAGE_SESSION_LABEL,
+        phase: "fix",
+      }),
+    ).toBe(true);
+    expect(
+      isReviewPackagePreparationSession({
+        label: "Build Session",
+        phase: "build",
+        structuredRequestId: "prep-1",
+      }),
+    ).toBe(true);
+    expect(
+      isReviewPackagePreparationSession({
+        label: "Fix Session",
+        phase: "fix",
+        structuredResultStatus: "accepted",
+      }),
+    ).toBe(true);
+    expect(
+      isReviewPackagePreparationSession({
+        label: "Review Session",
+        phase: "review",
+        structuredRequestId: "review-1",
+      }),
+    ).toBe(false);
+    expect(
+      isReviewPackagePreparationSession({
+        label: "Verification Session",
+        phase: "verify",
+        structuredResultStatus: "accepted",
+      }),
+    ).toBe(false);
+    expect(
+      isReviewPackagePreparationSession({
+        label: "Build Session",
+        phase: "build",
+      }),
+    ).toBe(false);
+    expect(isReviewPackagePreparationSession(undefined)).toBe(false);
   });
 });
 

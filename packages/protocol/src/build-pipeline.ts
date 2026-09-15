@@ -270,6 +270,16 @@ export function isVerificationVerdict(value: unknown): value is VerificationVerd
   return VERIFICATION_VERDICT_FIELD_ENTRIES.every(([field, type]) => typeof record[field] === type);
 }
 
+/**
+ * Display label the backend assigns to the dedicated review-package session.
+ *
+ * Fan-out and review-preparation pipelines create a session with this label.
+ * Single-review pipelines reuse the build or fix session instead, so callers
+ * that need to recognize every preparation turn should use
+ * {@link isReviewPackagePreparationSession}.
+ */
+export const REVIEW_PACKAGE_SESSION_LABEL = "Package Preparation Session";
+
 export interface PipelineSession {
   phase: PipelineSessionPhase;
   /**
@@ -369,6 +379,25 @@ export interface PipelineSession {
   autoDeclineCount?: number;
   /** Reviewer-visible history owned by the workflow, not by provider cards. */
   interactionTranscript?: PipelineInteractionTranscriptEntry[];
+}
+
+/**
+ * Whether this session is the turn that produced the review-package plan.
+ *
+ * The dedicated session is labelled {@link REVIEW_PACKAGE_SESSION_LABEL}. The
+ * default single-review path and recovered in-flight sessions reuse a build or
+ * fix session and record that with `structuredRequestId` / `structuredResultStatus`
+ * instead, so matching only the display label misses the common case.
+ */
+export function isReviewPackagePreparationSession(
+  session:
+    | Pick<PipelineSession, "label" | "phase" | "structuredRequestId" | "structuredResultStatus">
+    | undefined,
+): boolean {
+  if (!session) return false;
+  if (session.label === REVIEW_PACKAGE_SESSION_LABEL) return true;
+  if (session.phase === "review" || session.phase === "verify") return false;
+  return session.structuredRequestId !== undefined || session.structuredResultStatus !== undefined;
 }
 
 export interface PipelineInteractionTranscriptQuestion {

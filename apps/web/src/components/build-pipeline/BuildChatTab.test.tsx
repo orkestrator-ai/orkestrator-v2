@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
+  REVIEW_PACKAGE_SESSION_LABEL,
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
@@ -177,6 +178,75 @@ const pipeline: BuildPipeline = {
   controller: "backend",
 };
 
+type ValidationRun = NonNullable<BuildPipeline["validationRun"]>;
+
+function validationRun(overrides: Partial<ValidationRun> = {}): ValidationRun {
+  const command = {
+    id: "test",
+    command: "mise run test",
+    cwd: ".",
+    dependsOn: [] as string[],
+    resources: ["turbo"],
+    weight: 2 as const,
+    timeoutMs: 1_200_000,
+  };
+  return {
+    id: "validation-1",
+    status: "completed",
+    startedAt: "2026-09-08T20:00:04.000Z",
+    completedAt: "2026-09-08T20:00:07.000Z",
+    plan: {
+      headRef: "a".repeat(40),
+      commands: [command],
+      limitations: [],
+    },
+    results: [
+      {
+        id: "test",
+        command: "mise run test",
+        status: "passed",
+        exitCode: 0,
+        stdoutPath: ".orkestrator/test.stdout",
+        stderrPath: ".orkestrator/test.stderr",
+        stdoutBytes: 24,
+        stderrBytes: 0,
+        durationMs: 3_000,
+        limitation: null,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function validationResult(
+  status: ValidationRun["results"][number]["status"],
+  exitCode: number | null = status === "passed" || status === "skipped" ? 0 : 1,
+): ValidationRun["results"][number] {
+  return {
+    id: "test",
+    command: "mise run test",
+    status,
+    exitCode,
+    stdoutPath: ".orkestrator/test.stdout",
+    stderrPath: ".orkestrator/test.stderr",
+    stdoutBytes: 24,
+    stderrBytes: 0,
+    durationMs: 3_000,
+    limitation: null,
+  };
+}
+
+function testsTabIconClass(): string {
+  const tab = screen.getByRole("tab", { name: /Tests/ });
+  return tab.querySelector("svg")?.getAttribute("class") ?? "";
+}
+
+function stageTabLabels(): string[] {
+  return Array.from(
+    screen.getByRole("tablist", { name: "Build stages" }).querySelectorAll('[role="tab"]'),
+  ).map((tab) => tab.textContent ?? "");
+}
+
 describe("BuildChatTab backend projection", () => {
   beforeEach(() => {
     cleanup();
@@ -339,7 +409,7 @@ describe("BuildChatTab backend projection", () => {
       phase: "fix",
       sessionKey: "package-key",
       sdkSessionId: "package-session",
-      label: "Package Preparation Session",
+      label: REVIEW_PACKAGE_SESSION_LABEL,
     };
     const reviewOne: BuildPipeline["sessions"][number] = {
       ...pipeline.sessions[0]!,
@@ -424,7 +494,324 @@ describe("BuildChatTab backend projection", () => {
 
     expect(screen.getByLabelText("Review validation")).toBeTruthy();
     expect(screen.getByText("mise run test")).toBeTruthy();
-    expect(screen.queryByText("Implementation complete") === null).toBe(true);
+    expect(screen.getByText("Implementation complete").closest("[hidden]")).toBeTruthy();
+    expect(testsTabIconClass()).toContain("text-success");
+    expect(screen.getByText("1 check")).toBeTruthy();
+  });
+
+  test("shows a failure icon when a completed validation run has failed commands", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      validationRun: validationRun({
+        results: [validationResult("failed", 1)],
+      }),
+      backendRevision: 9,
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    expect(testsTabIconClass()).toContain("text-destructive");
+    expect(testsTabIconClass()).not.toContain("text-success");
+    expect(screen.getByText("1 check failed")).toBeTruthy();
+  });
+
+  test("shows a muted icon when a completed validation run has incomplete commands", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      validationRun: validationRun({
+        plan: {
+          headRef: "a".repeat(40),
+          commands: [
+            {
+              id: "test",
+              command: "mise run test",
+              cwd: ".",
+              dependsOn: [],
+              resources: ["turbo"],
+              weight: 2,
+              timeoutMs: 1_200_000,
+            },
+            {
+              id: "lint",
+              command: "mise run lint",
+              cwd: ".",
+              dependsOn: [],
+              resources: ["turbo"],
+              weight: 1,
+              timeoutMs: 1_200_000,
+            },
+          ],
+          limitations: [],
+        },
+        results: [
+          { ...validationResult("passed", 0), id: "test" },
+          {
+            ...validationResult("incomplete", null),
+            id: "lint",
+            command: "mise run lint",
+            limitation: "Host capacity wait timed out",
+          },
+        ],
+      }),
+      backendRevision: 9,
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    expect(testsTabIconClass()).toContain("text-muted-foreground");
+    expect(testsTabIconClass()).not.toContain("text-success");
+    expect(screen.getByText("1 of 2 checks incomplete")).toBeTruthy();
+  });
+
+  test("treats skipped commands as success when nothing failed", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      validationRun: validationRun({
+        results: [validationResult("skipped", 0)],
+      }),
+      backendRevision: 9,
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    expect(testsTabIconClass()).toContain("text-success");
+    expect(screen.getByText("1 check")).toBeTruthy();
+  });
+
+  test("inserts Tests before the first review when no preparation session exists", () => {
+    const reviewOne: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      phase: "review",
+      sessionKey: "review-1-key",
+      sdkSessionId: "review-1-session",
+      label: "Review 1",
+    };
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      phase: "reviewing",
+      sessions: [pipeline.sessions[0]!, reviewOne, pipeline.sessions[1]!],
+      currentSessionIndex: 2,
+      validationRun: validationRun({ id: "validation-fallback" }),
+      backendRevision: 9,
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    expect(stageTabLabels()).toEqual([
+      expect.stringContaining("Build Session"),
+      expect.stringContaining("Tests"),
+      expect.stringContaining("Review 1"),
+      expect.stringContaining("Verification Session"),
+    ]);
+  });
+
+  test("inserts Tests after a reused build session that produced the package plan", () => {
+    const preparedBuild: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      structuredRequestId: "prep-request",
+      structuredResultStatus: "accepted",
+    };
+    const reviewOne: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      phase: "review",
+      sessionKey: "review-1-key",
+      sdkSessionId: "review-1-session",
+      label: "Review 1",
+    };
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      phase: "reviewing",
+      sessions: [preparedBuild, reviewOne],
+      currentSessionIndex: 1,
+      validationRun: validationRun({ id: "validation-reused" }),
+      backendRevision: 9,
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    expect(stageTabLabels()).toEqual([
+      expect.stringContaining("Build Session"),
+      expect.stringContaining("Tests"),
+      expect.stringContaining("Review 1"),
+    ]);
+  });
+
+  test("auto-follows Tests while the current session is package preparation", () => {
+    const packageSession: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      phase: "fix",
+      sessionKey: "package-key",
+      sdkSessionId: "package-session",
+      label: REVIEW_PACKAGE_SESSION_LABEL,
+    };
+    useBuildPipelineStore.setState({
+      pipelines: new Map([
+        [
+          pipeline.id,
+          {
+            ...pipeline,
+            phase: "fixing",
+            sessions: [pipeline.sessions[0]!, packageSession],
+            currentSessionIndex: 1,
+            validationRun: validationRun({ id: "validation-follow" }),
+            backendRevision: 9,
+          },
+        ],
+      ]),
+      viewedSessionIds: new Map(),
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    const selected = screen
+      .getAllByRole("tab")
+      .find((tab) => tab.getAttribute("aria-selected") === "true");
+    expect(selected?.textContent).toContain("Tests");
+    expect(screen.getByLabelText("Review validation")).toBeTruthy();
+  });
+
+  test("releases a pinned Tests selection when the validation run is removed", async () => {
+    const packageSession: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      phase: "fix",
+      sessionKey: "package-key",
+      sdkSessionId: "package-session",
+      label: REVIEW_PACKAGE_SESSION_LABEL,
+    };
+    const withRun: BuildPipeline = {
+      ...pipeline,
+      phase: "reviewing",
+      sessions: [pipeline.sessions[0]!, packageSession, pipeline.sessions[1]!],
+      currentSessionIndex: 2,
+      validationRun: validationRun({ id: "validation-pin" }),
+      backendRevision: 9,
+    };
+    useBuildPipelineStore.getState().replacePipeline(withRun);
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Tests"));
+    expect(screen.getByLabelText("Review validation")).toBeTruthy();
+
+    act(() => {
+      const next = { ...withRun, validationRun: undefined, backendRevision: 10 };
+      delete next.validationRun;
+      useBuildPipelineStore.getState().replacePipeline(next);
+    });
+
+    await waitFor(() => expect(screen.queryByText("Tests") === null).toBe(true));
+    const selected = screen
+      .getAllByRole("tab")
+      .find((tab) => tab.getAttribute("aria-selected") === "true");
+    expect(selected?.textContent).toContain("Verification Session");
+  });
+
+  test("rehydrates onto the replacement Tests tab after the run id changes", async () => {
+    const packageSession: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      phase: "fix",
+      sessionKey: "package-key",
+      sdkSessionId: "package-session",
+      label: REVIEW_PACKAGE_SESSION_LABEL,
+    };
+    const firstRun = validationRun({ id: "validation-old" });
+    const withRun: BuildPipeline = {
+      ...pipeline,
+      phase: "fixing",
+      sessions: [pipeline.sessions[0]!, packageSession],
+      currentSessionIndex: 1,
+      validationRun: firstRun,
+      backendRevision: 9,
+    };
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[pipeline.id, withRun]]),
+      viewedSessionIds: new Map(),
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Build Session"));
+    fireEvent.click(screen.getByText("Tests"));
+    const previousTab = screen.getByRole("tab", { name: /Tests/ });
+    expect(previousTab.id).toContain("stage-validation-validation-old");
+
+    act(() => {
+      useBuildPipelineStore.getState().replacePipeline({
+        ...withRun,
+        validationRun: validationRun({ id: "validation-new" }),
+        backendRevision: 10,
+      });
+    });
+
+    await waitFor(() => {
+      const tab = screen.getByRole("tab", { name: /Tests/ });
+      expect(tab.id).toContain("stage-validation-validation-new");
+      expect(tab.getAttribute("aria-selected")).toBe("true");
+    });
   });
 
   test("ignores malformed transcript entries and renders terminal errors", () => {
@@ -917,7 +1304,7 @@ describe("BuildChatTab presentation", () => {
       phase: "fix",
       sessionKey: "package-key",
       sdkSessionId: "package-session",
-      label: "Package Preparation Session",
+      label: REVIEW_PACKAGE_SESSION_LABEL,
       messages: [
         {
           id: "package-answer",
@@ -948,6 +1335,122 @@ describe("BuildChatTab presentation", () => {
     expect(visibleToolInvocations()).toEqual(["mise tasks validate"]);
     expect(JSON.stringify(listProps.messages)).not.toContain('"headRef"');
     expect(screen.queryByText(plan) === null).toBe(true);
+  });
+
+  test("hides package JSON on a single-review Build Session that ran the schema", () => {
+    const plan = JSON.stringify({
+      headRef: "a".repeat(40),
+      commands: [{ id: "test", command: "mise run test" }],
+      limitations: [],
+    });
+    renderTab({
+      ...reviewed,
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          structuredRequestId: "prep-request",
+          structuredResultStatus: "accepted",
+          messages: [
+            {
+              id: "build-answer",
+              role: "assistant",
+              content: `I found the repository checks.\n${plan}`,
+              parts: [
+                { type: "text", content: "I found the repository checks." },
+                {
+                  type: "tool-invocation",
+                  content: "mise tasks validate",
+                  toolName: "shell",
+                  toolState: "success",
+                },
+                { type: "text", content: plan },
+              ],
+            },
+          ],
+        },
+        reviewSession,
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 2,
+    });
+
+    fireEvent.click(screen.getByText("Build Session"));
+
+    expect(visibleTextContents()).toEqual(["I found the repository checks."]);
+    expect(visibleToolInvocations()).toEqual(["mise tasks validate"]);
+    expect(JSON.stringify(listProps.messages)).not.toContain('"headRef"');
+    expect(screen.queryByText(plan) === null).toBe(true);
+  });
+
+  test("hides package JSON on a legacy reused Fix Session", () => {
+    const plan = JSON.stringify({
+      headRef: "a".repeat(40),
+      commands: [{ id: "test", command: "mise run test" }],
+      limitations: [],
+    });
+    renderTab({
+      ...reviewed,
+      sessions: [
+        pipeline.sessions[0]!,
+        {
+          ...pipeline.sessions[0]!,
+          phase: "fix",
+          sessionKey: "legacy-fix-key",
+          sdkSessionId: "legacy-fix-session",
+          label: "Fix Session",
+          structuredRequestId: "legacy-prep",
+          structuredResultStatus: "accepted",
+          messages: [
+            {
+              id: "fix-answer",
+              role: "assistant",
+              content: `I found the repository checks.\n${plan}`,
+              parts: [
+                { type: "text", content: "I found the repository checks." },
+                {
+                  type: "tool-invocation",
+                  content: "mise tasks validate",
+                  toolName: "shell",
+                  toolState: "success",
+                },
+                { type: "text", content: plan },
+              ],
+            },
+          ],
+        },
+        reviewSession,
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 3,
+    });
+
+    fireEvent.click(screen.getByText("Fix Session"));
+
+    expect(visibleTextContents()).toEqual(["I found the repository checks."]);
+    expect(visibleToolInvocations()).toEqual(["mise tasks validate"]);
+    expect(JSON.stringify(listProps.messages)).not.toContain('"headRef"');
+    expect(screen.queryByText(plan) === null).toBe(true);
+  });
+
+  test("keeps the transcript list mounted when visiting Tests and returning", () => {
+    renderTab({
+      ...reviewed,
+      validationRun: validationRun({ id: "validation-scroll" }),
+      currentSessionIndex: 2,
+    });
+
+    fireEvent.click(screen.getByText("Build Session"));
+    const before = JSON.stringify(listProps.messages);
+    expect(before).toContain("Implementation complete");
+
+    fireEvent.click(screen.getByText("Tests"));
+    expect(screen.getByLabelText("Review validation")).toBeTruthy();
+    expect(JSON.stringify(listProps.messages)).toBe(before);
+
+    fireEvent.click(screen.getByText("Build Session"));
+    expect(screen.queryByLabelText("Review validation") === null).toBe(true);
+    expect(JSON.stringify(listProps.messages)).toBe(before);
+    expect(screen.getByText("Implementation complete")).toBeTruthy();
   });
 
   test("shows the structured review report only on the stage that produced it", async () => {
@@ -1720,6 +2223,65 @@ describe("BuildChatTab presentation", () => {
     // A tablist wraps rather than stopping at its ends.
     fireEvent.keyDown(tablist, { key: "ArrowDown" });
     await waitFor(() => expect(selected()).toContain("Build Session"));
+  });
+
+  test("moves onto and past the Tests tab with the arrow keys", async () => {
+    const packageSession: BuildPipeline["sessions"][number] = {
+      ...pipeline.sessions[0]!,
+      phase: "fix",
+      sessionKey: "package-key",
+      sdkSessionId: "package-session",
+      label: REVIEW_PACKAGE_SESSION_LABEL,
+    };
+    renderTab({
+      ...reviewed,
+      sessions: [pipeline.sessions[0]!, packageSession, reviewSession, pipeline.sessions[1]!],
+      currentSessionIndex: 3,
+      validationRun: validationRun({ id: "validation-keys" }),
+    });
+    const tablist = screen.getByRole("tablist", { name: "Build stages" });
+    const selected = () =>
+      screen.getAllByRole("tab").find((tab) => tab.getAttribute("aria-selected") === "true")
+        ?.textContent ?? null;
+
+    expect(selected()).toContain("Verification Session");
+
+    fireEvent.keyDown(tablist, { key: "ArrowUp" });
+    await waitFor(() => expect(selected()).toContain("Review Session"));
+    fireEvent.keyDown(tablist, { key: "ArrowUp" });
+    await waitFor(() => expect(selected()).toContain("Tests"));
+
+    const testsTab = screen.getByRole("tab", { name: /Tests/ });
+    expect(document.activeElement).toBe(testsTab);
+    expect(testsTab.id).toContain("stage-validation-validation-keys");
+    expect(testsTab.id).not.toContain("validation:");
+    expect(screen.getByLabelText("Review validation")).toBeTruthy();
+
+    fireEvent.keyDown(tablist, { key: "ArrowUp" });
+    await waitFor(() => expect(selected()).toContain(REVIEW_PACKAGE_SESSION_LABEL));
+    fireEvent.keyDown(tablist, { key: "Home" });
+    await waitFor(() => expect(selected()).toContain("Build Session"));
+    fireEvent.keyDown(tablist, { key: "End" });
+    await waitFor(() => expect(selected()).toContain("Verification Session"));
+  });
+
+  test("reaches the Tests tab from the mobile stage list", () => {
+    setMobileViewport(true);
+    try {
+      renderTab({
+        ...reviewed,
+        validationRun: validationRun({ id: "validation-mobile" }),
+        currentSessionIndex: 2,
+      });
+
+      fireEvent.click(screen.getByRole("tab", { name: "Stages" }));
+      fireEvent.click(screen.getByText("Tests"));
+
+      expect(screen.getByLabelText("Review validation")).toBeTruthy();
+      expect(screen.getByRole("tab", { name: "Tests" })).toBeTruthy();
+    } finally {
+      setMobileViewport(false);
+    }
   });
 
   test("holds the arrow-key stage the same way it holds a clicked one", async () => {
@@ -2731,6 +3293,20 @@ describe("BuildChatTab agent messaging", () => {
     });
     expect(button.disabled).toBe(true);
     expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  test("hides the compose box while the Tests stage is selected", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...running,
+      validationRun: validationRun({ id: "validation-composer" }),
+      backendRevision: 9,
+    });
+    renderTab();
+
+    expect(screen.getByLabelText("Send a message to the agent")).toBeTruthy();
+    fireEvent.click(screen.getByText("Tests"));
+    expect(screen.queryByLabelText("Send a message to the agent") === null).toBe(true);
+    expect(screen.getByLabelText("Review validation")).toBeTruthy();
   });
 
   test("hides the compose box once the build has finished", () => {

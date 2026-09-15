@@ -2364,10 +2364,10 @@ describe("pane layout persistence", () => {
 
       const save = mock(async (environmentId: string, input: LayoutInput) => {
         const saved = createSaved(environmentId, input);
-        if (saved.root.kind !== "leaf") return saved;
+        if (input.root.kind !== "leaf") return saved;
         return {
           ...saved,
-          root: { ...saved.root, activeTabId: "build-pipeline-1" },
+          root: { ...input.root, activeTabId: "build-pipeline-1" },
         };
       });
       const stop = startPaneLayoutPersistence({

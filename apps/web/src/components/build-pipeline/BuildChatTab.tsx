@@ -46,6 +46,7 @@ import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
+import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { BuildCompletionStatus } from "./BuildCompletionStatus";
 import { toPipelineTranscript } from "./pipeline-transcript";
@@ -77,12 +78,6 @@ const PHASE_LABELS: Record<string, string> = {
   paused: "Paused",
   complete: "Complete",
   failed: "Failed",
-};
-
-const AGENT_LABELS: Record<string, string> = {
-  claude: "Claude",
-  codex: "Codex",
-  opencode: "OpenCode",
 };
 
 const RETRY_STAGE_LABELS: Record<ResumableBuildPhase, string> = {
@@ -527,12 +522,16 @@ export function BuildChatTab({
   // Names the harness of the session on screen, which per-step configuration
   // can make different from the pipeline's build agent.
   const displayedAgent = selectedSession?.agent ?? pipeline.agentType;
-  const agentLabel = AGENT_LABELS[displayedAgent] ?? displayedAgent;
+  const agentLabel = findNativeAgentAdapter(displayedAgent)?.label ?? displayedAgent;
   // The banner asserts the stage "is still running", so it belongs to an active
   // pipeline only. The backend clears the warning on every terminal and paused
   // transition; gating here as well keeps a snapshot written by an older build
   // from making that claim about a stopped one.
   const showStallWarning = active && Boolean(pipeline.stallWarning);
+  // Pause/cancel abort errors can leave a session at "running" after the
+  // pipeline itself has stopped. The footer uses the same active gate so a
+  // cancelled or paused build does not keep shimmering.
+  const showThinking = active && selectedSession?.status === "running";
   const stalledSession = showStallWarning
     ? pipeline.sessions.find((session) => session.sdkSessionId === pipeline.stallWarning?.sessionId)
     : undefined;
@@ -943,7 +942,7 @@ export function BuildChatTab({
               </div>
             }
             footer={
-              showReviewReport || selectedSession?.status === "running" ? (
+              showReviewReport || showThinking ? (
                 <>
                   {showReviewReport && selectedReviewReport ? (
                     <div className="px-3 py-3 @sm:px-6">
@@ -963,7 +962,7 @@ export function BuildChatTab({
                       />
                     </div>
                   ) : null}
-                  {selectedSession?.status === "running" ? (
+                  {showThinking ? (
                     <div className="px-2 @sm:px-4">
                       <div className="chat-status-row mx-auto max-w-3xl min-w-0">
                         <AgentThinkingIndicator agentName={agentLabel} />

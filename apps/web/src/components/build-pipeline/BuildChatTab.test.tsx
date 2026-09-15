@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
+  BUILD_PIPELINE_AGENTS,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
@@ -8,6 +9,7 @@ import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelin
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
+import { nativeAgentAdapters } from "@/components/native-agent/adapter";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { restoreMatchMedia, setMobileViewport } from "../../../../../tests/mocks/match-media";
@@ -811,30 +813,31 @@ describe("BuildChatTab presentation", () => {
     expect(screen.queryByText(/"toolArgs"/) === null).toBe(true);
   });
 
-  test.each([
-    ["claude", "Claude"],
-    ["codex", "Codex"],
-  ] as const)("shows the shared thinking footer for a running %s stage", (agent, label) => {
-    renderTab({
-      ...pipeline,
-      agentType: agent,
-      phase: "building",
-      sessions: [
-        {
-          ...pipeline.sessions[0]!,
-          agent,
-          status: "running",
-        },
-      ],
-      currentSessionIndex: 0,
-      backendRevision: 39 + label.length,
-    });
+  test.each(BUILD_PIPELINE_AGENTS)(
+    "shows the shared thinking footer for a running %s stage",
+    (agent) => {
+      const label = nativeAgentAdapters[agent].label;
+      renderTab({
+        ...pipeline,
+        agentType: agent,
+        phase: "building",
+        sessions: [
+          {
+            ...pipeline.sessions[0]!,
+            agent,
+            status: "running",
+          },
+        ],
+        currentSessionIndex: 0,
+        backendRevision: 39 + label.length,
+      });
 
-    const indicator = screen.getByRole("status");
-    expect(indicator.textContent).toBe(`${label} is thinking...`);
-    expect(indicator.classList.contains("agent-thinking-shimmer")).toBe(true);
-    expect(indicator.closest(".chat-status-row")).toBeTruthy();
-  });
+      const indicator = screen.getByRole("status");
+      expect(indicator.textContent).toBe(`${label} is thinking...`);
+      expect(indicator.classList.contains("agent-thinking-shimmer")).toBe(true);
+      expect(indicator.closest(".chat-status-row")).toBeTruthy();
+    },
+  );
 
   test("does not show a thinking footer for the idle stage a user is reading", async () => {
     renderTab({
@@ -854,6 +857,50 @@ describe("BuildChatTab presentation", () => {
     fireEvent.click(screen.getByText("Build Session"));
 
     await waitFor(() => expect(screen.queryByText(/is thinking\.\.\./) === null).toBe(true));
+  });
+
+  test.each(["failed", "paused"] as const)(
+    "does not show a thinking footer when the pipeline is %s with a stale running session",
+    (phase) => {
+      renderTab({
+        ...pipeline,
+        phase,
+        sessions: [
+          {
+            ...pipeline.sessions[0]!,
+            status: "running",
+          },
+        ],
+        currentSessionIndex: 0,
+        backendRevision: 51,
+      });
+
+      expect(screen.queryByRole("status") === null).toBe(true);
+      expect(screen.queryByText(/is thinking\.\.\./) === null).toBe(true);
+    },
+  );
+
+  test("stacks the thinking footer under a structured review report while that stage is running", () => {
+    renderTab({
+      ...reviewed,
+      phase: "reviewing",
+      currentSessionIndex: 1,
+      sessions: [
+        reviewed.sessions[0]!,
+        {
+          ...reviewSession,
+          status: "running",
+        },
+        reviewed.sessions[2]!,
+      ],
+      backendRevision: 52,
+    });
+
+    expect(screen.getByLabelText("Structured review report")).toBeTruthy();
+    const indicator = screen.getByRole("status");
+    expect(indicator.textContent).toBe("Codex is thinking...");
+    expect(indicator.classList.contains("agent-thinking-shimmer")).toBe(true);
+    expect(indicator.closest(".chat-status-row")).toBeTruthy();
   });
 
   test("shows the structured review report only on the stage that produced it", async () => {

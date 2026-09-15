@@ -1920,15 +1920,6 @@ export function SharedNativeAgentController({
   const truncatedWindow = projection?.messageWindow?.truncated
     ? projection.messageWindow
     : undefined;
-  /*
-   * Whether asking for more would actually produce more. The server answers
-   * this directly where it can; a window that predates that field is read the
-   * way it always was, so a backend still emitting only `truncationReason`
-   * keeps its byte-capped transcript free of a control that cannot act.
-   */
-  const canLoadEarlier =
-    truncatedWindow &&
-    (truncatedWindow.canLoadEarlier ?? truncatedWindow.truncationReason !== "bytes");
 
   return (
     <NativeChatShell
@@ -1972,40 +1963,31 @@ export function SharedNativeAgentController({
       emptyStateMessage={`Ask ${label} to work on this repository.`}
       transcriptHeader={
         truncatedWindow ? (
-          <div className="mx-auto flex max-w-3xl items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
-            {!canLoadEarlier ? (
+          <div className="mx-auto flex max-w-3xl flex-col items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
+            {truncatedWindow.truncationReason === "bytes" ? (
               <span>
-                {/*
-                 * Only the byte ceiling can be named as the cause. A window the
-                 * client marked non-pageable because history aged out carries
-                 * either the server's count reason or none at all, and blaming
-                 * the 16 MiB cap for it would state a trim that never happened.
-                 */}
-                {truncatedWindow.truncationReason === "bytes"
-                  ? "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit."
-                  : "Earlier messages are not shown."}
+                Earlier messages or tool activity were omitted to stay within the 16 MiB
+                transcript limit.
               </span>
             ) : null}
-            {canLoadEarlier ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={loadingEarlier}
-                onClick={() => {
-                  setLoadingEarlier(true);
-                  void loadEarlierMessages()
-                    .catch((error) =>
-                      toast.error(
-                        error instanceof Error ? error.message : "Failed to load earlier messages",
-                      ),
-                    )
-                    .finally(() => setLoadingEarlier(false));
-                }}
-              >
-                {loadingEarlier ? "Loading…" : "Load earlier messages"}
-              </Button>
-            ) : null}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={loadingEarlier}
+              onClick={() => {
+                setLoadingEarlier(true);
+                void loadEarlierMessages()
+                  .catch((error) =>
+                    toast.error(
+                      error instanceof Error ? error.message : "Failed to load earlier messages",
+                    ),
+                  )
+                  .finally(() => setLoadingEarlier(false));
+              }}
+            >
+              {loadingEarlier ? "Loading…" : "Load earlier messages"}
+            </Button>
           </div>
         ) : null
       }

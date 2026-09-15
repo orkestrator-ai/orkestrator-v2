@@ -7929,10 +7929,10 @@ describe("AgentNativeTab", () => {
         name: "Load earlier messages",
       });
       expect(
-        screen.queryByText(
+        await screen.findByText(
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
-        ) === null,
-      ).toBe(true);
+        ),
+      ).toBeTruthy();
       expect(screen.queryByText("Earlier messages are not shown.") === null).toBe(true);
       fireEvent.click(loadEarlierButton);
       await waitFor(() =>
@@ -7942,7 +7942,7 @@ describe("AgentNativeTab", () => {
       );
     });
 
-    test("does not offer to load earlier messages past the hard transcript byte cap", async () => {
+    test("offers to load earlier messages past the hard transcript byte cap", async () => {
       seedProjection({
         messageWindow: {
           limit: 100,
@@ -7958,13 +7958,20 @@ describe("AgentNativeTab", () => {
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ),
       ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
+      const loadEarlierButton = await screen.findByRole("button", {
+        name: "Load earlier messages",
+      });
+      fireEvent.click(loadEarlierButton);
+      await waitFor(() =>
+        expect(
+          getNativeAgentProjectionMock.mock.calls.some((call) => call[0].messageLimit === 200),
+        ).toBe(true),
+      );
     });
 
-    test("does not offer to load earlier messages when a byte-capped window omits canLoadEarlier", async () => {
-      // The shape a backend that predates `canLoadEarlier` still sends. Raising
-      // the requested limit cannot widen a byte-bound window, so the control
-      // must stay off rather than become inert.
+    test("offers to load earlier messages when a byte-capped window omits canLoadEarlier", async () => {
+      // The shape a backend that predates `canLoadEarlier` still sends. A click
+      // still has to attempt a wider read rather than leave a dead-end notice.
       seedProjection({
         messageWindow: {
           limit: 100,
@@ -7979,12 +7986,12 @@ describe("AgentNativeTab", () => {
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ),
       ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
+      expect(await screen.findByRole("button", { name: "Load earlier messages" })).toBeTruthy();
     });
 
-    test("explains a count-windowed transcript without blaming the byte ceiling", async () => {
-      // What the paging hook synthesizes once provider history has aged out:
-      // the server's own count reason survives, but no cursor is left to spend.
+    test("offers to load a count-windowed transcript without blaming the byte ceiling", async () => {
+      // What the paging hook used to synthesize once provider history aged out:
+      // the server's own count reason survives, and the control must still act.
       seedProjection({
         messageWindow: {
           limit: 100,
@@ -7995,18 +8002,26 @@ describe("AgentNativeTab", () => {
       });
       render(<AgentNativeTab tabId="tab-count-capped" data={identity("cursor")} isActive />);
 
-      expect(await screen.findByText("Earlier messages are not shown.")).toBeTruthy();
+      expect(screen.queryByText("Earlier messages are not shown.") === null).toBe(true);
       expect(
         screen.queryByText(
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ) === null,
       ).toBe(true);
-      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
+      const loadEarlierButton = await screen.findByRole("button", {
+        name: "Load earlier messages",
+      });
+      fireEvent.click(loadEarlierButton);
+      await waitFor(() =>
+        expect(
+          getNativeAgentProjectionMock.mock.calls.some((call) => call[0].messageLimit === 200),
+        ).toBe(true),
+      );
     });
 
-    test("explains a reasonless non-pageable window without blaming the byte ceiling", async () => {
-      // The same synthesis when the server sent no window of its own, so there
-      // is no reason to attribute the missing history to at all.
+    test("offers to load a reasonless truncated window without blaming the byte ceiling", async () => {
+      // The same window when the server sent no reason of its own. Earlier
+      // rows stay reachable; the notice must not become a dead end.
       seedProjection({
         messageWindow: {
           limit: 100,
@@ -8016,13 +8031,13 @@ describe("AgentNativeTab", () => {
       });
       render(<AgentNativeTab tabId="tab-reasonless-cap" data={identity("cursor")} isActive />);
 
-      expect(await screen.findByText("Earlier messages are not shown.")).toBeTruthy();
+      expect(screen.queryByText("Earlier messages are not shown.") === null).toBe(true);
       expect(
         screen.queryByText(
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ) === null,
       ).toBe(true);
-      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
+      expect(await screen.findByRole("button", { name: "Load earlier messages" })).toBeTruthy();
     });
 
     test("refuses to load a queued prompt over an occupied composer", async () => {

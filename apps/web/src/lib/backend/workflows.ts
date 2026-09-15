@@ -672,6 +672,9 @@ export async function dispatchNativeAgentIntent(input: {
   executionAgent?: string;
   includeLocalSettings?: boolean;
   promptSuggestions?: boolean;
+  sessionMode?: "plan" | "build";
+  executionProfileId?: string;
+  parameterValues?: Record<string, string | boolean>;
 }): Promise<NativeAgentDispatchOutcome> {
   return invoke<NativeAgentDispatchOutcome>("dispatch_native_agent_intent", input);
 }

@@ -148,6 +148,7 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
   environmentId: string,
   sessionKey: string,
   store: NativeComposeDraftStore<TMention, TAttachment>,
+  fallbackNamespace?: NativeDraftNamespace,
 ): void {
   useEffect(() => {
     let disposed = false;
@@ -157,6 +158,9 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
     let applyingHydration = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const key = composeDraftKey(namespace, environmentId, sessionKey);
+    const fallbackKey = fallbackNamespace
+      ? composeDraftKey(fallbackNamespace, environmentId, sessionKey)
+      : undefined;
 
     const reportPersistenceError = (error: unknown): void => {
       if (!(error instanceof DraftRevisionConflictError)) {
@@ -227,7 +231,11 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
     });
 
     void loadComposeDraft<PersistedNativeComposeDraft>(key)
-      .then((persisted) => {
+      .then(async (primary) => {
+        let persisted = primary;
+        if (!persisted && fallbackKey) {
+          persisted = await loadComposeDraft<PersistedNativeComposeDraft>(fallbackKey);
+        }
         readSucceeded = true;
         if (disposed || locallyChanged || !persisted) return;
         const state = store.getState();
@@ -294,5 +302,5 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
         });
       }
     };
-  }, [environmentId, namespace, sessionKey, store]);
+  }, [environmentId, fallbackNamespace, namespace, sessionKey, store]);
 }

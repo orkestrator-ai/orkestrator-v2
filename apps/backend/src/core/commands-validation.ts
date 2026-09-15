@@ -359,6 +359,16 @@ export function asDispatchNativeAgentPromptInput(args: JsonRecord): DispatchNati
         : undefined,
     prompt: asNonBlankString(args.prompt, "prompt"),
     requestId: asNonBlankString(args.requestId, "requestId"),
+    sessionMode:
+      args.sessionMode === "plan" || args.sessionMode === "build" ? args.sessionMode : undefined,
+    executionProfileId:
+      args.executionProfileId === undefined
+        ? undefined
+        : asBoundedNonBlankString(
+            args.executionProfileId,
+            "executionProfileId",
+            MAX_EXECUTION_PROFILE_ID_LENGTH,
+          ),
     images: Array.isArray(args.images) ? assertValidPromptImages(args.images) : undefined,
     attachments: Array.isArray(args.attachments)
       ? assertValidPromptAttachments(args.attachments)

@@ -6,6 +6,27 @@ import {
 } from "./commands-validation.js";
 
 describe("asDispatchNativeAgentPromptInput", () => {
+  test("carries first-session controls on the dispatch request and bounds the profile id", () => {
+    const input = {
+      environmentId: "env-1",
+      agent: "opencode",
+      logicalSessionKey: "env-env-1:tab-1",
+      prompt: "hello",
+      requestId: "request-1",
+      sessionMode: "build",
+      executionProfileId: "plan",
+    };
+    expect(asDispatchNativeAgentPromptInput(input)).toMatchObject({
+      sessionMode: "build",
+      executionProfileId: "plan",
+    });
+    expect(() =>
+      asDispatchNativeAgentPromptInput({
+        ...input,
+        executionProfileId: "a".repeat(MAX_EXECUTION_PROFILE_ID_LENGTH + 1),
+      }),
+    ).toThrow();
+  });
   test("retains bounded provider parameter defaults", () => {
     expect(
       asDispatchNativeAgentPromptInput({

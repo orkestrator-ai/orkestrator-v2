@@ -328,6 +328,9 @@ export function SharedNativeAgentController({
     },
     [data.environmentId, tabId],
   );
+  const draft = useNativeComposeStore((state) =>
+    nativeComposeDraft(state, createSessionKey(data.environmentId, tabId)),
+  );
   const {
     sessionKey,
     runtimeProjection: projection,
@@ -341,7 +344,7 @@ export function SharedNativeAgentController({
     sessionStateAvailability,
     sessionStateRefreshing,
     sessionStateError,
-    isDispatching,
+    isDispatching: runtimeIsDispatching,
     connect,
     refresh,
     send,
@@ -391,8 +394,9 @@ export function SharedNativeAgentController({
     defaultFastMode: configuredFastMode,
     defaultParameterValues: configuredParameterValues,
     isActive,
-    enabled: !setupPending,
+    enabled: !setupPending && !draft.submissionPending,
   });
+  const isDispatching = runtimeIsDispatching || draft.submissionPending === true;
   const noticeSessionIdentity = `${platform}\u0000${data.environmentId}\u0000${projection?.sessionId ?? data.sessionId ?? sessionKey}`;
   const dismissedNoticeIds = useNativeNoticeDismissalStore(
     (state) =>
@@ -415,7 +419,6 @@ export function SharedNativeAgentController({
     if (!projection || projection.runtimeHealthAuthoritative === false) return;
     reconcileNoticeDismissals(noticeSessionIdentity, activeNoticeIds);
   }, [activeNoticeIds, noticeSessionIdentity, projection, reconcileNoticeDismissals]);
-  const draft = useNativeComposeStore((state) => nativeComposeDraft(state, sessionKey));
   const updateDraft = useNativeComposeStore((state) => state.updateDraft);
   const clearDraft = useNativeComposeStore((state) => state.clearDraft);
   useNativeComposeDraftPersistence(
@@ -423,6 +426,7 @@ export function SharedNativeAgentController({
     data.environmentId,
     sessionKey,
     nativeComposePersistenceStore,
+    "agent-native",
   );
   const addTranscriptAnnotation = useCallback(
     (selectedText: string): TranscriptAnnotation | null => {
@@ -919,12 +923,15 @@ export function SharedNativeAgentController({
     ],
   );
   const discardProvisionalDraft = useCallback(() => {
-    void discardComposeDraft(composeDraftKey("agent-native", data.environmentId, sessionKey)).catch(
-      (error) => {
-        console.warn("[AgentNativeTab] Failed to discard provisional compose draft:", error);
-      },
-    );
-  }, [data.environmentId, sessionKey]);
+    const discard = (namespace: "agent-native" | typeof platform) =>
+      discardComposeDraft(composeDraftKey(namespace, data.environmentId, sessionKey)).catch(
+        (error) => {
+          console.warn("[AgentNativeTab] Failed to discard compose draft:", error);
+        },
+      );
+    void discard("agent-native");
+    void discard(platform);
+  }, [data.environmentId, platform, sessionKey]);
 
   const clearConfirmedDraft = useCallback(
     (requestId: string | undefined): boolean => {
@@ -944,6 +951,17 @@ export function SharedNativeAgentController({
   useEffect(() => {
     if (authenticationRequired) setSendError(null);
   }, [authenticationRequired]);
+
+  useEffect(() => {
+    const confirmation = draft.pendingTranscriptConfirmation;
+    if (!confirmation || confirmation.sessionId || !projection?.sessionId) return;
+    updateDraft(sessionKey, {
+      pendingTranscriptConfirmation: {
+        ...confirmation,
+        sessionId: projection.sessionId,
+      },
+    });
+  }, [draft.pendingTranscriptConfirmation, projection?.sessionId, sessionKey, updateDraft]);
 
   useEffect(() => {
     if (!transcriptEchoedOptimistic) return;
@@ -1140,6 +1158,7 @@ export function SharedNativeAgentController({
         return false;
       }
       if (!prompt || sendLocked || isDispatching) return false;
+      updateDraft(sessionKey, { submissionError: undefined });
       submitInFlightRef.current = true;
       setIsSubmitting(true);
       const dispatchRequestId = canQueue
@@ -1630,6 +1649,7 @@ export function SharedNativeAgentController({
 
   const errorMessage =
     sendError ??
+    draft.submissionError ??
     transcriptError ??
     sessionStateError ??
     runtimeError ??
@@ -2122,18 +2142,23 @@ export function SharedNativeAgentController({
           testId="shared-native-compose-bar"
           layout={composerCentered ? "centered" : "bottom"}
           attachments={draft.attachments}
-          onRemoveAttachment={(attachmentId) =>
+          onRemoveAttachment={(attachmentId) => {
+            if (draft.submissionPending) return;
             updateDraft(sessionKey, {
               attachments: draft.attachments.filter((candidate) => candidate.id !== attachmentId),
-            })
-          }
+            });
+          }}
           annotations={draft.annotations}
-          onClearAnnotations={() => updateDraft(sessionKey, { annotations: [] })}
+          onClearAnnotations={() => {
+            if (draft.submissionPending) return;
+            updateDraft(sessionKey, { annotations: [] });
+          }}
           inputRef={inputRef}
           inputContainerRef={inputContainerRef}
           text={draft.text}
           mentions={draft.mentions}
           onTextAndMentionsChange={(text, mentions) => {
+            if (draft.submissionPending) return;
             updateDraft(sessionKey, { text, mentions });
           }}
           onCursorPositionChange={detectFileMention}
@@ -2154,7 +2179,7 @@ export function SharedNativeAgentController({
             void submit(draft.text);
           }}
           placeholder={`Message ${label}`}
-          disabled={isSubmitting}
+          disabled={isSubmitting || draft.submissionPending === true}
           isSending={isDispatching || isSubmitting}
           isLoading={isTurnActive}
           menus={

@@ -322,6 +322,7 @@ function renderSemSearch(rendered: RenderedToolCall, args: JsonObject, result: T
 
 function renderMcp(rendered: RenderedToolCall, args: JsonObject, result: ToolResult): void {
   const provider = readString(args.providerIdentifier);
+  const publishedProvider = provider === "custom-user-tools" ? "orkestrator" : provider;
   const tool = readString(args.toolName);
   // Name the card after the MCP tool rather than "mcp": a session with several
   // servers attached is otherwise a column of identical cards. The qualified
@@ -329,8 +330,12 @@ function renderMcp(rendered: RenderedToolCall, args: JsonObject, result: ToolRes
   // which servers a run reached, so a call whose `providerIdentifier` the SDK
   // left out — it is optional — must not borrow that shape. A placeholder
   // segment there published an MCP server literally named "server".
-  rendered.toolName = tool ? (provider ? `mcp__${provider}__${tool}` : `mcp:${tool}`) : "mcp";
-  rendered.toolTitle = tool ? `${provider ? `${provider}: ` : ""}${tool}` : "mcp";
+  rendered.toolName = tool
+    ? publishedProvider
+      ? `mcp__${publishedProvider}__${tool}`
+      : `mcp:${tool}`
+    : "mcp";
+  rendered.toolTitle = tool ? `${publishedProvider ? `${publishedProvider}: ` : ""}${tool}` : "mcp";
   rendered.toolArgs = isObject(args.args) ? boundArgs(args.args) : undefined;
   const value = successValue(result);
   if (!value) return;

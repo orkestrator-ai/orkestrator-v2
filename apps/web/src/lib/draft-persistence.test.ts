@@ -8,8 +8,9 @@ const realBackendSnapshot = { ...realBackend };
 const saveComposeDraft = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
 const deleteComposeDraft = mock(async (..._args: unknown[]): Promise<void> => undefined);
 const getComposeDraft = mock(
-  async (..._args: unknown[]): Promise<Awaited<ReturnType<typeof realBackend.getComposeDraft>>> =>
-    null,
+  async (
+    ..._args: Parameters<typeof realBackend.getComposeDraft>
+  ): Promise<Awaited<ReturnType<typeof realBackend.getComposeDraft>>> => null,
 );
 const saveFileDraft = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
 const deleteFileDraft = mock(async (..._args: unknown[]): Promise<void> => undefined);

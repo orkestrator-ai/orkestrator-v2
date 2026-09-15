@@ -164,7 +164,9 @@ const updateNativeAgentControlsMock = mock(async (_input: { update: Record<strin
   getNativeAgentProjectionMock({ agent: "codex", environmentId: "env-1" }),
 );
 const dispatchNativeAgentIntentMock = mock(
-  async (input: { requestId: string }): Promise<NativeAgentDispatchOutcome> => ({
+  async (
+    input: Parameters<typeof realBackend.dispatchNativeAgentIntent>[0],
+  ): Promise<NativeAgentDispatchOutcome> => ({
     outcome: "accepted" as const,
     requestId: input.requestId,
   }),
@@ -251,7 +253,9 @@ type StoredComposeDraft = {
   revision: number;
 };
 const composeDraftRecords = new Map<string, StoredComposeDraft>();
-const getComposeDraftMock = mock(async (draftKey: string) => composeDraftRecords.get(draftKey) ?? null);
+const getComposeDraftMock = mock(
+  async (draftKey: string) => composeDraftRecords.get(draftKey) ?? null,
+);
 const saveComposeDraftMock = mock(
   async (
     draftKey: string,

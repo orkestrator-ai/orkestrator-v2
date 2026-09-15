@@ -3801,6 +3801,43 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(onCreateFeatureBuild.mock.calls[0]![0].description).toBe("Add sign in with passkeys.");
   });
 
+  test("keeps Create disabled when the feature has neither a name nor a description", () => {
+    const onCreateFeatureBuild = mock(async () => true);
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    chooseFeature({});
+    const createButton = screen.getByRole("button", { name: "Create Environment" });
+    expect((createButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(createButton);
+    expect(onCreateFeatureBuild).not.toHaveBeenCalled();
+  });
+
+  test("labels the feature name as optional and explains a blank name is generated", () => {
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={mock(async () => true)}
+      />,
+    );
+
+    chooseFeature({});
+    expect(screen.getByLabelText(/Feature name \(optional\)/i)).toBeTruthy();
+    expect(
+      screen.getByPlaceholderText("Generated from the description if left blank"),
+    ).toBeTruthy();
+  });
+
   test("shows a pasted feature image and includes it in the build request", async () => {
     mockReadImage.mockImplementation(async () => ({
       rgba: async () => new Uint8Array([255, 0, 0, 255]),

@@ -1,10 +1,15 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import { StorageService } from "./storage.js";
-import { createFeatureBuild, featureTitleFromGeneratedName } from "./feature-build.js";
+import {
+  createFeatureBuild,
+  fallbackFeatureTitle,
+  featureTitleFromGeneratedName,
+  waitForPendingFeatureTitleRefinements,
+} from "./feature-build.js";
 import type { Project } from "./models.js";
 import { mimeTypeForImageData } from "./prompt-attachments.js";
 
@@ -74,11 +79,32 @@ describe("createFeatureBuild", () => {
     expect(featureTitleFromGeneratedName("dark-mode_toggle")).toBe("Dark Mode Toggle");
   });
 
-  test("generates a ticket title from the description when the title is blank", async () => {
+  test("derives a readable local fallback from story-style and non-Latin descriptions", () => {
+    expect(fallbackFeatureTitle("When I select a feature as the environment creation path")).toBe(
+      "Select a feature as the environment creation path",
+    );
+    expect(fallbackFeatureTitle("I would like the dashboard to refresh automatically")).toBe(
+      "Dashboard to refresh automatically",
+    );
+    expect(fallbackFeatureTitle("the app crashes on startup")).toBe("App crashes on startup");
+    expect(fallbackFeatureTitle("ダークモードを追加する")).toBe("ダークモードを追加する");
+    expect(fallbackFeatureTitle("___")).toBe("New Feature");
+    expect(fallbackFeatureTitle("_")).toBe("New Feature");
+    expect(fallbackFeatureTitle("__ __")).toBe("New Feature");
+    expect(fallbackFeatureTitle("!!!")).toBe("New Feature");
+    expect(fallbackFeatureTitle("Add account export controls")).toBe("Add account export controls");
+  });
+
+  test("creates immediately with a local title and refines it after naming", async () => {
     await withStorage(async (storage) => {
       const supervisor = fakeSupervisor();
       const prompts: string[] = [];
-      await createFeatureBuild(
+      let releaseNaming: ((name: string) => void) | undefined;
+      const naming = new Promise<string>((resolve) => {
+        releaseNaming = resolve;
+      });
+
+      const created = createFeatureBuild(
         {
           ...input,
           title: "   ",
@@ -89,41 +115,232 @@ describe("createFeatureBuild", () => {
           buildPipelines: supervisor.service,
           generateEnvironmentName: async (description) => {
             prompts.push(description);
-            return "passkey-sign-in";
+            return naming;
           },
         },
       );
 
+      const result = await created;
+      expect(result.taskId).toBeTruthy();
+      expect(result.pipelineId).toBe("pipeline-1");
       expect(prompts).toEqual(["Add sign in with passkeys."]);
-      expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe("Passkey Sign In");
-      expect(supervisor.started[0]!.taskTitle).toBe("Passkey Sign In");
-      expect(supervisor.started[0]!.namingPrompt).toBe(
-        "Passkey Sign In\n\nAdd sign in with passkeys.",
+      expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe(
+        "Add sign in with passkeys.",
       );
+      expect(supervisor.started).toHaveLength(1);
+      expect(supervisor.started[0]!.taskTitle).toBe("Add sign in with passkeys.");
+      expect(supervisor.started[0]!.namingPrompt).toBe(
+        "Add sign in with passkeys.\n\nAdd sign in with passkeys.",
+      );
+
+      releaseNaming!("passkey-sign-in");
+      await waitForPendingFeatureTitleRefinements();
+      expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe("Passkey Sign In");
     });
   });
 
   test("falls back to a local title when automatic naming is unavailable", async () => {
     await withStorage(async (storage) => {
       const supervisor = fakeSupervisor();
-      await createFeatureBuild(
-        {
-          ...input,
-          title: "",
-          description: "Add account export controls",
-        },
-        {
-          storage,
-          buildPipelines: supervisor.service,
-          generateEnvironmentName: async () => {
-            throw new Error("offline");
+      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        await createFeatureBuild(
+          {
+            ...input,
+            title: "",
+            description: "Add account export controls",
           },
-        },
-      );
+          {
+            storage,
+            buildPipelines: supervisor.service,
+            generateEnvironmentName: async () => {
+              throw new Error("offline");
+            },
+          },
+        );
+        await waitForPendingFeatureTitleRefinements();
 
-      expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe("Add Account Export");
+        expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe(
+          "Add account export controls",
+        );
+        expect(warn).toHaveBeenCalledWith(
+          "[FeatureBuild] Automatic naming failed; using a local fallback",
+          "Error",
+        );
+        expect(
+          warn.mock.calls.every((args) => args.every((arg) => !String(arg).includes("offline"))),
+        ).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
     });
   });
+
+  test("uses New Feature when the description slugifies to separators only", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        await createFeatureBuild(
+          {
+            ...input,
+            title: "",
+            description: "___",
+          },
+          {
+            storage,
+            buildPipelines: supervisor.service,
+            generateEnvironmentName: async () => {
+              throw new Error("offline");
+            },
+          },
+        );
+        await waitForPendingFeatureTitleRefinements();
+        expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe("New Feature");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
+  test("does not invoke naming again on a sequential blank-title retry", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      let namingCalls = 0;
+      const request = {
+        ...input,
+        title: "",
+        description: "Add sign in with passkeys.",
+        requestId: "request-blank-retry",
+      };
+      const context = {
+        storage,
+        buildPipelines: supervisor.service,
+        generateEnvironmentName: async () => {
+          namingCalls += 1;
+          return "passkey-sign-in";
+        },
+      };
+
+      const first = await createFeatureBuild(request, context);
+      await waitForPendingFeatureTitleRefinements();
+      expect(namingCalls).toBe(1);
+      expect((await storage.getKanbanTask(first.taskId))?.title).toBe("Passkey Sign In");
+
+      const second = await createFeatureBuild(request, context);
+      await waitForPendingFeatureTitleRefinements();
+      expect(second.taskId).toBe(first.taskId);
+      expect(namingCalls).toBe(1);
+      expect(await storage.getKanbanTasks("project-1")).toHaveLength(1);
+    });
+  });
+
+  test("overlapping blank-title retries share one ticket despite different generated names", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      const request = {
+        ...input,
+        title: "",
+        description: "Add sign in with passkeys.",
+        requestId: "request-blank-concurrent",
+      };
+      let releaseFirst: ((name: string) => void) | undefined;
+      let releaseSecond: ((name: string) => void) | undefined;
+      const firstNaming = new Promise<string>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const secondNaming = new Promise<string>((resolve) => {
+        releaseSecond = resolve;
+      });
+
+      const [first, second] = await Promise.all([
+        createFeatureBuild(request, {
+          storage,
+          buildPipelines: supervisor.service,
+          generateEnvironmentName: async () => firstNaming,
+        }),
+        createFeatureBuild(request, {
+          storage,
+          buildPipelines: supervisor.service,
+          generateEnvironmentName: async () => secondNaming,
+        }),
+      ]);
+
+      expect(first.taskId).toBe(second.taskId);
+      expect(await storage.getKanbanTasks("project-1")).toHaveLength(1);
+      expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe(
+        "Add sign in with passkeys.",
+      );
+
+      releaseFirst!("alpha-one");
+      releaseSecond!("beta-two");
+      await waitForPendingFeatureTitleRefinements();
+      expect(["Alpha One", "Beta Two"]).toContain(
+        (await storage.getKanbanTasks("project-1"))[0]!.title,
+      );
+    });
+  });
+
+  test("refines the ticket through the Codex exec wiring without blocking create", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      const root = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-feature-codex-"));
+      const toolchainBinDir = path.join(root, "bin");
+      await fs.mkdir(toolchainBinDir, { recursive: true });
+      const gatePath = path.join(root, "release-codex");
+      const codexPath = path.join(toolchainBinDir, "codex");
+      await fs.writeFile(
+        codexPath,
+        `#!/bin/sh
+out=""
+previous=""
+for argument in "$@"; do
+  if [ "$previous" = "--output-last-message" ]; then out="$argument"; fi
+  previous="$argument"
+done
+[ -n "$out" ] || exit 2
+i=0
+while [ ! -f "${gatePath}" ]; do
+  i=$((i+1))
+  if [ "$i" -gt 100 ]; then exit 3; fi
+  sleep 0.05
+done
+printf '%s\\n' '{"slug":"from-codex-exec"}' > "$out"
+`,
+        { mode: 0o755 },
+      );
+
+      try {
+        const created = await createFeatureBuild(
+          {
+            ...input,
+            title: "",
+            description: "Add sign in with passkeys.",
+          },
+          {
+            storage,
+            buildPipelines: supervisor.service,
+            appRoot: path.join(root, "app"),
+            resourceRoot: path.join(root, "resources"),
+            toolchainBinDir,
+          },
+        );
+
+        expect(created.taskId).toBeTruthy();
+        expect(created.pipelineId).toBe("pipeline-1");
+        expect(supervisor.started).toHaveLength(1);
+        expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe(
+          "Add sign in with passkeys.",
+        );
+
+        await fs.writeFile(gatePath, "go");
+        await waitForPendingFeatureTitleRefinements();
+        expect((await storage.getKanbanTasks("project-1"))[0]!.title).toBe("From Codex Exec");
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  }, 15_000);
 
   test("creates one in-progress ticket and starts the build that implements it", async () => {
     await withStorage(async (storage) => {

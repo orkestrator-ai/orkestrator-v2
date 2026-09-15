@@ -31,6 +31,7 @@ import type { StructuredReviewReport } from "@orkestrator/protocol/structured-re
 import { MAX_JSON_PAYLOAD_LENGTH } from "./json-payload";
 import {
   USER_PROMPT_RENDER_CHARACTER_LIMIT,
+  isFixOpeningPrompt,
   userPromptDisplayText,
   userPromptPresentation,
 } from "./user-prompt-display";
@@ -468,5 +469,24 @@ Please also rewrite the README and quote ${REVIEW_VALIDATION_DISCOVERY_PROMPT_SI
       STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.omissionText,
     );
     expect(presentation.evidencePayload).toBeNull();
+  });
+});
+
+describe("isFixOpeningPrompt", () => {
+  test("recognizes address and custom-fix openings, not review-stage or follow-up text", () => {
+    expect(isFixOpeningPrompt(STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.continuationPrefix)).toBe(
+      true,
+    );
+    expect(isFixOpeningPrompt(MULTI_REVIEW_ADDRESS_USER_INSTRUCTION)).toBe(true);
+    expect(isFixOpeningPrompt(customFixPrompt('{"issues":[{"title":"Fix finding"}]}'))).toBe(true);
+    expect(
+      isFixOpeningPrompt(legacyCustomFixPrompt('{"issues":[{"title":"Legacy finding"}]}')),
+    ).toBe(true);
+    expect(
+      isFixOpeningPrompt(
+        `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read`,
+      ),
+    ).toBe(false);
+    expect(isFixOpeningPrompt("Please also fix the tests.")).toBe(false);
   });
 });

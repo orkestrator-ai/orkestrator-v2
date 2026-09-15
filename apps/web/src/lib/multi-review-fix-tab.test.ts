@@ -3,9 +3,7 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 import { findMultiReviewFixReport, isMultiReviewFixTabId } from "./multi-review-fix-tab";
 
-function workflow(
-  overrides: Partial<MultiReviewWorkflow> = {},
-): MultiReviewWorkflow {
+function workflow(overrides: Partial<MultiReviewWorkflow> = {}): MultiReviewWorkflow {
   return {
     version: 1,
     controller: "backend",
@@ -28,9 +26,7 @@ describe("isMultiReviewFixTabId", () => {
   test("matches the default, launch, and recorded fix tab identities", () => {
     expect(isMultiReviewFixTabId("multi-review-fix:multi-1", "multi-1")).toBe(true);
     expect(isMultiReviewFixTabId("multi-review-fix:multi-1:launch-1", "multi-1")).toBe(true);
-    expect(
-      isMultiReviewFixTabId("fix-tab-launch-1", "multi-1", "fix-tab-launch-1"),
-    ).toBe(true);
+    expect(isMultiReviewFixTabId("fix-tab-launch-1", "multi-1", "fix-tab-launch-1")).toBe(true);
   });
 
   test("does not treat a longer sibling workflow id as a prefix match", () => {
@@ -42,11 +38,7 @@ describe("isMultiReviewFixTabId", () => {
 describe("findMultiReviewFixReport", () => {
   test("returns the consolidated report for a Fix tab in the same environment", () => {
     expect(
-      findMultiReviewFixReport(
-        [workflow()],
-        "multi-review-fix:multi-1:launch-1",
-        "env-1",
-      ),
+      findMultiReviewFixReport([workflow()], "multi-review-fix:multi-1:launch-1", "env-1"),
     ).toBe(TEST_STRUCTURED_REVIEW_REPORT);
   });
 
@@ -69,5 +61,15 @@ describe("findMultiReviewFixReport", () => {
 
   test("ignores ordinary agent tabs", () => {
     expect(findMultiReviewFixReport([workflow()], "tab-review", "env-1")).toBeUndefined();
+  });
+
+  test("returns the consolidated report for a recorded fixTabId without the default prefix", () => {
+    expect(
+      findMultiReviewFixReport(
+        [workflow({ fixTabId: "fix-tab-launch-1" })],
+        "fix-tab-launch-1",
+        "env-1",
+      ),
+    ).toBe(TEST_STRUCTURED_REVIEW_REPORT);
   });
 });

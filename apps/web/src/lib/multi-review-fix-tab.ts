@@ -25,7 +25,6 @@ export function findMultiReviewFixReport(
   tabId: string,
   environmentId: string,
 ): StructuredReviewReport | undefined {
-  if (!tabId.startsWith("multi-review-fix:")) return undefined;
   for (const workflow of workflows) {
     if (workflow.environmentId !== environmentId) continue;
     if (!isMultiReviewFixTabId(tabId, workflow.id, workflow.fixTabId)) continue;

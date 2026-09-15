@@ -29,7 +29,13 @@ import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionSto
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
-import { STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION } from "@orkestrator/protocol/review-evidence-frames";
+import {
+  REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
+  REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE,
+  REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX,
+  REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE,
+  STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
+} from "@orkestrator/protocol/review-evidence-frames";
 import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
 import {
@@ -5396,7 +5402,9 @@ describe("AgentNativeTab", () => {
           id: "fix-address-prompt",
           role: "user" as const,
           content: STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
-          parts: [{ type: "text" as const, content: STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION }],
+          parts: [
+            { type: "text" as const, content: STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION },
+          ],
           createdAt: "2026-09-15T14:00:00.000Z",
         },
       ],
@@ -5406,9 +5414,146 @@ describe("AgentNativeTab", () => {
 
     const report = await screen.findByText("Structured review report");
     const prompt = screen.getByText(STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION);
+    expect(report.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test("pins the report to the address prompt in a legacy multi-message Fix transcript", async () => {
+    renderVirtualizedMessages = true;
+    const tabId = "multi-review-fix:multi-1:legacy";
+    const preparation = `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read`;
+    useMultiReviewStore.getState().replaceWorkflow({
+      id: "multi-1",
+      environmentId: "env-1",
+      consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
+      backendRevision: 2,
+    } as never);
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      messages: [
+        {
+          id: "prep-prompt",
+          role: "user" as const,
+          content: preparation,
+          parts: [{ type: "text" as const, content: preparation }],
+          createdAt: "2026-09-15T13:00:00.000Z",
+        },
+        {
+          id: "prep-reply",
+          role: "assistant" as const,
+          content: "Inventory ready.",
+          parts: [{ type: "text" as const, content: "Inventory ready." }],
+          createdAt: "2026-09-15T13:01:00.000Z",
+        },
+        {
+          id: "fix-address-prompt",
+          role: "user" as const,
+          content: STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
+          parts: [
+            { type: "text" as const, content: STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION },
+          ],
+          createdAt: "2026-09-15T14:00:00.000Z",
+        },
+      ],
+    }));
+
+    render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+
+    const reports = await screen.findAllByText("Structured review report");
+    expect(reports).toHaveLength(1);
+    const prompt = screen.getByText(STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION);
     expect(
-      report.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING,
+      reports[0]!.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    const preparationText = screen.getByText(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+    expect(
+      preparationText.compareDocumentPosition(reports[0]!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  test("keeps the report on the opening prompt when a later follow-up is present", async () => {
+    renderVirtualizedMessages = true;
+    const tabId = "multi-review-fix:multi-1:follow-up";
+    useMultiReviewStore.getState().replaceWorkflow({
+      id: "multi-1",
+      environmentId: "env-1",
+      consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
+      backendRevision: 2,
+    } as never);
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      messages: [
+        {
+          id: "fix-address-prompt",
+          role: "user" as const,
+          content: STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
+          parts: [
+            { type: "text" as const, content: STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION },
+          ],
+          createdAt: "2026-09-15T14:00:00.000Z",
+        },
+        {
+          id: "fix-reply",
+          role: "assistant" as const,
+          content: "Working on it.",
+          parts: [{ type: "text" as const, content: "Working on it." }],
+          createdAt: "2026-09-15T14:01:00.000Z",
+        },
+        {
+          id: "follow-up",
+          role: "user" as const,
+          content: "Please also fix the tests.",
+          parts: [{ type: "text" as const, content: "Please also fix the tests." }],
+          createdAt: "2026-09-15T14:02:00.000Z",
+        },
+      ],
+    }));
+
+    render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+
+    const reports = await screen.findAllByText("Structured review report");
+    expect(reports).toHaveLength(1);
+    const prompt = screen.getByText(STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION);
+    const followUp = screen.getByText("Please also fix the tests.");
+    expect(
+      reports[0]!.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      prompt.compareDocumentPosition(followUp) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  test("does not pin the report above a later follow-up when earlier turns are still unloaded", async () => {
+    renderVirtualizedMessages = true;
+    const tabId = "multi-review-fix:multi-1:windowed";
+    useMultiReviewStore.getState().replaceWorkflow({
+      id: "multi-1",
+      environmentId: "env-1",
+      consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
+      backendRevision: 2,
+    } as never);
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      messageWindow: {
+        limit: 32,
+        truncated: true,
+        canLoadEarlier: true,
+        omittedMessages: 4,
+      },
+      messages: [
+        {
+          id: "follow-up",
+          role: "user" as const,
+          content: "Please also fix the tests.",
+          parts: [{ type: "text" as const, content: "Please also fix the tests." }],
+          createdAt: "2026-09-15T14:02:00.000Z",
+        },
+      ],
+    }));
+
+    render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+
+    expect(await screen.findByText("Please also fix the tests.")).toBeTruthy();
+    expect(screen.queryByText("Structured review report")).toBeNull();
   });
 
   test("reconciles and explains a replacement Multi Review Fix session", async () => {

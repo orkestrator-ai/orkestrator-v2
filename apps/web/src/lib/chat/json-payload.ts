@@ -80,7 +80,9 @@ export function jsonPayloadSource(content: string): JsonPayloadSource | null {
 }
 
 /** Build the transcript payload a Fix tab pins above its opening prompt. */
-export function structuredReviewJsonPayload(report: StructuredReviewReport): JsonPayload {
+export function structuredReviewJsonPayload(
+  report: StructuredReviewReport,
+): Extract<JsonPayload, { kind: "structured-review" }> {
   return {
     kind: "structured-review",
     report,

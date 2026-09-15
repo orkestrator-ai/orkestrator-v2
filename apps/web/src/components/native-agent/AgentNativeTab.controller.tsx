@@ -59,6 +59,7 @@ import {
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { attachFixPromptEvidence } from "@/lib/chat/fix-prompt-evidence";
 import { findMultiReviewFixReport } from "@/lib/multi-review-fix-tab";
 import {
   applyClaudeBackgroundTaskStates,
@@ -724,11 +725,7 @@ export function SharedNativeAgentController({
   const messages = useMemo(() => {
     const pinned = pinNativeAgentParts(transcriptMessages, displayMessages);
     if (!fixReport) return pinned;
-    const firstUserIndex = pinned.findIndex((message) => message.role === "user");
-    if (firstUserIndex < 0) return pinned;
-    return pinned.map((message, index) =>
-      index === firstUserIndex ? { ...message, promptEvidence: fixReport } : message,
-    );
+    return attachFixPromptEvidence(pinned, fixReport);
   }, [displayMessages, fixReport, transcriptMessages]);
   const latestAssistantMessage = [...normalizedMessages]
     .reverse()

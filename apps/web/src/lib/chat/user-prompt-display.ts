@@ -204,6 +204,41 @@ function isAddressInstructionDisplay(displayText: string): boolean {
   );
 }
 
+function promptDisplaySource(
+  source: string,
+  promptPresentation?: UserPromptPresentationKind,
+): string {
+  const delegation =
+    promptPresentation === COORDINATOR_DELEGATION_PRESENTATION
+      ? parseCoordinatorDelegatedPrompt(source)
+      : null;
+  return delegation?.source ?? source;
+}
+
+/**
+ * True when this user row is the Fix tab's address or custom-fix opening prompt.
+ *
+ * Used to pin the durable Multi Review report to the handoff bubble rather than
+ * to an earlier review-stage prompt or a later follow-up in a windowed
+ * transcript.
+ */
+export function isFixOpeningPrompt(
+  source: string,
+  promptPresentation?: UserPromptPresentationKind,
+): boolean {
+  const displaySource = promptDisplaySource(source, promptPresentation);
+  if (customFixPresentation(displaySource) !== null) return true;
+  if (generatedReviewInstructionPresentation(displaySource) !== null) return true;
+  const presentation = userPromptPresentation(source, promptPresentation);
+  if (presentation.evidencePayload !== null) return true;
+  if (isAddressInstructionDisplay(presentation.displayText)) return true;
+  const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
+  const stripped = stripSystemInstructions(displaySource);
+  return stripped.includes(
+    `${contract.continuationPrefix}\n\n${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n`,
+  );
+}
+
 /** Recover a framed findings document from an address prompt before frames are stripped. */
 function extractStructuredReviewFindings(source: string): JsonPayload | null {
   const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
@@ -235,11 +270,11 @@ export function userPromptPresentation(
   source: string,
   promptPresentation?: UserPromptPresentationKind,
 ): UserPromptPresentation {
+  const displaySource = promptDisplaySource(source, promptPresentation);
   const delegation =
     promptPresentation === COORDINATOR_DELEGATION_PRESENTATION
       ? parseCoordinatorDelegatedPrompt(source)
       : null;
-  const displaySource = delegation?.source ?? source;
   const finish = (presentation: UserPromptPresentation): UserPromptPresentation => {
     const withFindings = attachAddressFindings(displaySource, presentation);
     return delegation ? withCoordinatorDelegationNotice(withFindings) : withFindings;

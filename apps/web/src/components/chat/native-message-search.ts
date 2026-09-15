@@ -204,11 +204,7 @@ export function getNativeMessageSearchText(message: NativeMessage): string {
     const payload = foldJsonPayload ? parseJsonPayload(message.content) : null;
     if (payload) return jsonPayloadSearchText(payload);
     return message.role === "user"
-      ? userTextPartSearchText(
-          message.content,
-          message.promptPresentation,
-          message.promptEvidence,
-        )
+      ? userTextPartSearchText(message.content, message.promptPresentation, message.promptEvidence)
       : message.content;
   }
 

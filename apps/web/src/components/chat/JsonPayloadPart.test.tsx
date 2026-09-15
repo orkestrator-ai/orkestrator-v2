@@ -6,6 +6,7 @@ import {
   MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
+  wrapSystemInstructions,
   type ReviewEvidenceFrameDisplayContract,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
@@ -535,6 +536,28 @@ describe("NativeMessage find-index alignment", () => {
     expect(searchText).toBe(renderedSearchText(view.container));
     expect(searchText.indexOf("Structured review report")).toBeLessThan(
       searchText.indexOf(contract.continuationPrefix),
+    );
+  });
+
+  test("a pinned address prompt with framed findings renders exactly one report card", () => {
+    const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
+    const source = `${wrapSystemInstructions(
+      STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
+      `${contract.openMarker}\n{"issues":[{"title":"Extracted finding"}]}\n${contract.closeMarker}`,
+    )}\n\n${contract.continuationPrefix}`;
+    const message = {
+      ...makeMessage(source, "user"),
+      promptEvidence: TEST_STRUCTURED_REVIEW_REPORT,
+    };
+    const view = render(<NativeMessage message={message} />);
+    const reports = screen.getAllByText("Structured review report");
+    const text = view.container.textContent ?? "";
+
+    expect(reports).toHaveLength(1);
+    expect(text).toContain(contract.continuationPrefix);
+    expect(text).not.toContain("Extracted finding");
+    expect(text.indexOf("Structured review report")).toBeLessThan(
+      text.indexOf(contract.continuationPrefix),
     );
   });
 

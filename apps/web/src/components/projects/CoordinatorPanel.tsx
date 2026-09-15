@@ -307,11 +307,11 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const dirty = Boolean(git && (git.trackedChanges > 0 || git.untrackedChanges > 0));
   const discardableDirty = Boolean(
     dirty &&
-      git &&
-      !git.mergeInProgress &&
-      !git.rebaseInProgress &&
-      !git.sequencerInProgress &&
-      git.conflicts === 0,
+    git &&
+    !git.mergeInProgress &&
+    !git.rebaseInProgress &&
+    !git.sequencerInProgress &&
+    git.conflicts === 0,
   );
   const switchBlocked = Boolean(blocked && !discardableDirty);
   const pendingSwitchBranch = git?.branches.find((branch) => branch.ref === pendingSwitch?.ref);

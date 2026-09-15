@@ -539,7 +539,9 @@ describe("project coordinator", () => {
       }),
     ).rejects.toThrow("checkout changed after confirmation");
     expect(await fs.readFile(path.join(checkout, "README.md"), "utf8")).toBe("stale\n");
-    expect(await fs.readFile(path.join(checkout, "newer.txt"), "utf8")).toBe("added after prepare\n");
+    expect(await fs.readFile(path.join(checkout, "newer.txt"), "utf8")).toBe(
+      "added after prepare\n",
+    );
     const boundConfirmation = await git.prepareSwitchBranch(project.id, "refs/heads/other");
     expect(boundConfirmation.untrackedFiles).toBe(1);
     const switched = await git.switchBranch(project.id, "refs/heads/other", {
@@ -653,9 +655,11 @@ describe("project coordinator", () => {
       project.id,
       "refs/remotes/origin/feature",
     );
-    expect(await git.switchBranch(project.id, "refs/remotes/origin/feature", {
-      confirmationToken: remoteConfirmation.token,
-    })).toMatchObject({ branch: "feature", trackedChanges: 0, untrackedChanges: 0 });
+    expect(
+      await git.switchBranch(project.id, "refs/remotes/origin/feature", {
+        confirmationToken: remoteConfirmation.token,
+      }),
+    ).toMatchObject({ branch: "feature", trackedChanges: 0, untrackedChanges: 0 });
     expect(await fs.readFile(path.join(checkout, "feature.txt"), "utf8")).toBe("feature\n");
     await expect(fs.access(path.join(checkout, "scratch.txt"))).rejects.toThrow();
 
@@ -684,7 +688,12 @@ describe("project coordinator", () => {
       await git.switchBranch(unbornProject.id, "refs/remotes/origin/main", {
         confirmationToken: unbornConfirmation.token,
       }),
-    ).toMatchObject({ branch: "main", headCommit: expect.any(String), trackedChanges: 0, untrackedChanges: 0 });
+    ).toMatchObject({
+      branch: "main",
+      headCommit: expect.any(String),
+      trackedChanges: 0,
+      untrackedChanges: 0,
+    });
     await expect(fs.access(path.join(unborn, "staged.txt"))).rejects.toThrow();
   });
 
@@ -724,14 +733,20 @@ describe("project coordinator", () => {
     await runCommand("git", ["add", "lib.txt"], { cwd: subSrc });
     await runCommand("git", ["commit", "-m", "sub"], { cwd: subSrc });
     await runCommand("git", ["branch", "other"], { cwd: checkout });
-    await runCommand("git", ["-c", "protocol.file.allow=always", "submodule", "add", subSrc, "vendor"], {
-      cwd: checkout,
-    });
+    await runCommand(
+      "git",
+      ["-c", "protocol.file.allow=always", "submodule", "add", subSrc, "vendor"],
+      {
+        cwd: checkout,
+      },
+    );
     await runCommand("git", ["commit", "-m", "add submodule"], { cwd: checkout });
     await fs.writeFile(path.join(checkout, "vendor", "lib.txt"), "dirty submodule\n");
     const submoduleConfirmation = await git.prepareSwitchBranch(project.id, "refs/heads/other");
     expect(submoduleConfirmation.requiresEnhancedConfirmation).toBe(true);
-    expect(submoduleConfirmation.dirtySubmodules.some((item) => item.includes("vendor"))).toBe(true);
+    expect(submoduleConfirmation.dirtySubmodules.some((item) => item.includes("vendor"))).toBe(
+      true,
+    );
     await expect(
       git.switchBranch(project.id, "refs/heads/other", {
         confirmationToken: submoduleConfirmation.token,

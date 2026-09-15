@@ -245,7 +245,10 @@ export class ProjectGitService {
       .slice(0, 2_000);
   }
 
-  private async inspectCheckout(root: string, status: ProjectGitStatus): Promise<CheckoutInspection> {
+  private async inspectCheckout(
+    root: string,
+    status: ProjectGitStatus,
+  ): Promise<CheckoutInspection> {
     const [indexTree, trackedDiff, unstagedDiff, untrackedList, cleanPreview, submoduleStatus] =
       await Promise.all([
         runCommand("git", ["write-tree"], { cwd: root, timeoutMs: 10_000 }).catch(() => ({
@@ -701,10 +704,7 @@ export class ProjectGitService {
     });
   }
 
-  async prepareSwitchBranch(
-    projectId: string,
-    ref: string,
-  ): Promise<ProjectGitSwitchConfirmation> {
+  async prepareSwitchBranch(projectId: string, ref: string): Promise<ProjectGitSwitchConfirmation> {
     if (this.activeMutations.has(projectId)) {
       throw new Error("The project checkout is already changing");
     }
@@ -721,8 +721,7 @@ export class ProjectGitService {
       await this.persist(projectId, before);
       if (!isDiscardableDirty(before)) {
         throw new Error(
-          before.repositoryOperationBlockedReason ??
-            "There are no local changes to discard.",
+          before.repositoryOperationBlockedReason ?? "There are no local changes to discard.",
         );
       }
       const branch = before.branches.find((item) => item.ref === ref);
@@ -766,10 +765,8 @@ export class ProjectGitService {
     ref: string,
     discard: boolean | ProjectGitSwitchOptions = false,
   ): Promise<ProjectGitStatus> {
-    const options: ProjectGitSwitchOptions =
-      typeof discard === "boolean" ? {} : (discard ?? {});
-    const confirmationToken =
-      typeof discard === "boolean" ? undefined : options.confirmationToken;
+    const options: ProjectGitSwitchOptions = typeof discard === "boolean" ? {} : (discard ?? {});
+    const confirmationToken = typeof discard === "boolean" ? undefined : options.confirmationToken;
     const allowDirty = Boolean(confirmationToken);
     return this.mutation(
       projectId,

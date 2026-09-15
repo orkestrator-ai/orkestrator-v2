@@ -127,11 +127,11 @@ function persistedDraftMetadata(draft: NativeComposeDraft): Readonly<Record<stri
 function hasPersistableDraftMetadata(draft: NativeComposeDraft): boolean {
   return Boolean(
     draft.platform ||
-      draft.modelId ||
-      draft.reasoningId ||
-      draft.requestId ||
-      draft.pendingTranscriptConfirmation ||
-      draft.executionProfileId,
+    draft.modelId ||
+    draft.reasoningId ||
+    draft.requestId ||
+    draft.pendingTranscriptConfirmation ||
+    draft.executionProfileId,
   );
 }
 

@@ -281,13 +281,17 @@ async function attach(state: SessionState): Promise<SDKAgent> {
   });
   // A provider-sandbox coordinator cannot call HTTP MCP: the SDK's approval
   // path fails closed with no callback. Host those tools in-process instead.
-  // If the control server is down, keep the HTTP map so a later unsandboxed
-  // or container attach can still try the vendor client.
+  // If hosting fails, omit HTTP mcpServers on that attach — the model would
+  // otherwise see tools that fail closed. Container attaches disable the
+  // provider sandbox, so they may still take the vendor HTTP client.
+  const allowHttpMcp = !readOnly || policy.sandbox === "container";
   const hosted = readOnly
-    ? await hostOrkestratorCustomTools(state.agentMcp, state.health)
+    ? await hostOrkestratorCustomTools(state.agentMcp, state.health, {
+        httpFallback: policy.sandbox === "container",
+      })
     : undefined;
   state.hostedMcpClose = hosted?.close;
-  state.mcpServerNames = hosted ? ["orkestrator"] : Object.keys(mcpServers);
+  state.mcpServerNames = hosted ? ["orkestrator"] : allowHttpMcp ? Object.keys(mcpServers) : [];
   state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
   const options: AgentOptions = {
     apiKey,
@@ -319,7 +323,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
           return denied.length > 0 ? { disallowedTools: denied } : {};
         })()
       : {}),
-    ...(!hosted && state.mcpServerNames.length > 0 ? { mcpServers } : {}),
+    ...(!hosted && allowHttpMcp && state.mcpServerNames.length > 0 ? { mcpServers } : {}),
   };
   const releaseWarmWorkspace = await prewarmCursorWorkspace(options, policy.sandbox);
   state.workspaceWarmRelease = releaseWarmWorkspace;

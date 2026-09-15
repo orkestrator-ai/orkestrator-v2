@@ -146,7 +146,7 @@ const { resetPlanAccountWindowsForTests } = await import("./plan-usage.js");
 const { useCursorModelsForTests } = await import("./models.js");
 const { useCursorCredentialRuntimeForTests } = await import("./credentials.js");
 const { clientSessionKeys, sessions } = await import("./state.js");
-const { setCursorMcpTransportForTests } = await import("./mcp.js");
+const { setCursorMcpTimeoutsForTests, setCursorMcpTransportForTests } = await import("./mcp.js");
 
 const testStore = new FakeJsonlLocalAgentStore(
   join(bridgeStateRoot, "cursor-sdk"),
@@ -205,6 +205,7 @@ beforeEach(() => {
   delete process.env.ORKESTRATOR_AGENT_MCP_URL;
   delete process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
   setCursorMcpTransportForTests();
+  setCursorMcpTimeoutsForTests();
 });
 
 test("restoring injected runtime dependencies reinstates the prior SDK configure callback", () => {
@@ -601,6 +602,11 @@ describe("ensureAgent", () => {
   });
 
   test("a read-only coordinator keeps the MCP capability so Orkestrator tools stay reachable", async () => {
+    setCursorMcpTransportForTests({
+      async connect() {
+        throw new Error("offline");
+      },
+    });
     const state = newSessionState(undefined, {
       id: "coordinator-read-only",
       sandbox: "provider",
@@ -616,16 +622,14 @@ describe("ensureAgent", () => {
     expect(created[0]).toMatchObject({
       local: { settingSources: [] },
       tools: expect.arrayContaining(["mcp"]),
-      mcpServers: {
-        orkestrator: {
-          type: "http",
-          url: "http://127.0.0.1:4567/mcp",
-          headers: { Authorization: "Bearer coord-token" },
-        },
-      },
     });
+    expect(created[0]?.mcpServers).toBeUndefined();
+    expect(created[0]?.local).not.toHaveProperty("customTools");
     expect(created[0]?.tools).not.toEqual(expect.arrayContaining(["shell", "edit", "task"]));
-    expect(mcpServerNames(created[0])).toEqual(["orkestrator"]);
+    expect(state.mcpServerNames).toEqual([]);
+    expect(JSON.stringify(state.health.snapshot())).toContain(
+      "this coordinator session will continue without delegation tools",
+    );
   });
 
   test("a read-only coordinator hosts Orkestrator tools in-process instead of HTTP MCP", async () => {
@@ -671,6 +675,17 @@ describe("ensureAgent", () => {
 
   test("a read-only attach drops repository MCP servers even when project settings are opted in", async () => {
     process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";
+    setCursorMcpTransportForTests({
+      async connect() {
+        return {
+          tools: [{ name: "launch_environment", description: "Create a worker" }],
+          async call() {
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+          async close() {},
+        };
+      },
+    });
     const mcpPath = join(workingDirectory, ".cursor", "mcp.json");
     await mkdir(join(workingDirectory, ".cursor"), { recursive: true });
     await writeFile(
@@ -699,27 +714,166 @@ describe("ensureAgent", () => {
       state.agentMcp = connection;
       await ensureAgent(state);
 
-      expect(mcpServerNames(created[1])).toEqual(["orkestrator"]);
-      expect(created[1]?.mcpServers).toEqual({
-        orkestrator: {
-          type: "http",
-          url: "http://127.0.0.1:4567/mcp",
-          headers: { Authorization: "Bearer coord-token" },
+      expect(created[1]?.mcpServers).toBeUndefined();
+      expect(created[1]).toMatchObject({
+        local: {
+          customTools: {
+            launch_environment: expect.objectContaining({
+              description: expect.stringContaining("Orkestrator"),
+            }),
+          },
         },
       });
+      expect(state.mcpServerNames).toEqual(["orkestrator"]);
 
       await detachAgent(state);
       await ensureAgent(state);
-      expect(mcpServerNames(resumedOptions[0])).toEqual(["orkestrator"]);
-      expect(resumedOptions[0]?.mcpServers).toEqual({
-        orkestrator: {
-          type: "http",
-          url: "http://127.0.0.1:4567/mcp",
-          headers: { Authorization: "Bearer coord-token" },
+      expect(resumedOptions[0]?.mcpServers).toBeUndefined();
+      expect(resumedOptions[0]).toMatchObject({
+        local: {
+          customTools: {
+            launch_environment: expect.objectContaining({
+              description: expect.stringContaining("Orkestrator"),
+            }),
+          },
         },
       });
     } finally {
       await rm(mcpPath, { force: true });
+    }
+  });
+
+  test("a provider read-only attach omits HTTP MCP when hosting fails", async () => {
+    setCursorMcpTransportForTests({
+      async connect() {
+        throw new Error("offline");
+      },
+    });
+    const state = newSessionState(undefined, {
+      id: "coordinator-read-only",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: false,
+      networkAccess: "restricted",
+    });
+    state.readOnly = true;
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "coord-token" };
+
+    await ensureAgent(state);
+
+    expect(created[0]?.mcpServers).toBeUndefined();
+    expect(created[0]?.local).not.toHaveProperty("customTools");
+    expect(state.mcpServerNames).toEqual([]);
+    expect(state.hostedMcpClose).toBeUndefined();
+  });
+
+  test("a container read-only attach keeps HTTP MCP when hosting fails", async () => {
+    setCursorMcpTransportForTests({
+      async connect() {
+        throw new Error("offline");
+      },
+    });
+    const state = newSessionState(undefined, {
+      id: "pipeline",
+      sandbox: "container",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "restricted",
+    });
+    state.readOnly = true;
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "coord-token" };
+
+    await ensureAgent(state);
+
+    expect(created[0]?.mcpServers).toEqual({
+      orkestrator: {
+        type: "http",
+        url: "http://127.0.0.1:4567/mcp",
+        headers: { Authorization: "Bearer coord-token" },
+      },
+    });
+    expect(created[0]?.local).not.toHaveProperty("customTools");
+    expect(state.mcpServerNames).toEqual(["orkestrator"]);
+    expect(JSON.stringify(state.health.snapshot())).toContain(
+      "this session will try the HTTP MCP client",
+    );
+  });
+
+  test("a container read-only attach hosts Orkestrator tools in-process when connect succeeds", async () => {
+    setCursorMcpTransportForTests({
+      async connect() {
+        return {
+          tools: [{ name: "launch_environment", description: "Create a worker" }],
+          async call() {
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+          async close() {},
+        };
+      },
+    });
+    const state = newSessionState(undefined, {
+      id: "pipeline",
+      sandbox: "container",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "restricted",
+    });
+    state.readOnly = true;
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "coord-token" };
+
+    await ensureAgent(state);
+
+    expect(created[0]?.mcpServers).toBeUndefined();
+    expect(created[0]).toMatchObject({
+      local: {
+        sandboxOptions: { enabled: false },
+        customTools: {
+          launch_environment: expect.objectContaining({
+            description: expect.stringContaining("Orkestrator"),
+          }),
+        },
+      },
+    });
+    expect(state.mcpServerNames).toEqual(["orkestrator"]);
+  });
+
+  test("a failed create after hosting closes the MCP connection", async () => {
+    let closed = 0;
+    setCursorMcpTransportForTests({
+      async connect() {
+        return {
+          tools: [{ name: "launch_environment", description: "Create a worker" }],
+          async call() {
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+          async close() {
+            closed += 1;
+          },
+        };
+      },
+    });
+    const restore = useCursorAgentForTests({
+      ...testAgent,
+      create: async () => {
+        throw new Error("SDK create failed");
+      },
+    } as typeof Agent);
+    const state = newSessionState(undefined, {
+      id: "coordinator-read-only",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: false,
+      networkAccess: "restricted",
+    });
+    state.readOnly = true;
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "coord-token" };
+    try {
+      await expect(ensureAgent(state)).rejects.toThrow("SDK create failed");
+      expect(state.hostedMcpClose).toBeUndefined();
+      expect(state.agent).toBeNull();
+      expect(closed).toBe(1);
+    } finally {
+      restore();
     }
   });
 

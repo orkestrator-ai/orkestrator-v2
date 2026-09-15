@@ -5,6 +5,7 @@ import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontex
 import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
 import { resolveCursorSettingSources, workingDirectory } from "./config.js";
 import { isObject, nonBlank, type JsonObject, type SessionState } from "./state.js";
+import { sliceToBytes } from "./transcript.js";
 
 /** SDK name for in-process custom tools. Remapped to Orkestrator in inventory. */
 export const CURSOR_CUSTOM_USER_TOOLS_SERVER = "custom-user-tools";
@@ -92,7 +93,8 @@ export async function cursorMcpServers(
 
 const MAX_MCP_DESCRIPTION_BYTES = 4_000;
 const MAX_MCP_SCHEMA_BYTES = 20_000;
-const MAX_MCP_RESULT_BYTES = 50_000;
+/** Model-facing MCP tool result budget, measured in UTF-8 bytes. */
+export const MAX_MCP_RESULT_BYTES = 50_000;
 const CONNECT_TIMEOUT_MS = 3_000;
 const TOOL_CALL_TIMEOUT_MS = 120_000;
 
@@ -113,7 +115,7 @@ export interface CursorMcpConnection {
 }
 
 export interface CursorMcpTransport {
-  connect(url: string, token: string): Promise<CursorMcpConnection>;
+  connect(url: string, token: string, signal?: AbortSignal): Promise<CursorMcpConnection>;
 }
 
 export interface HostedOrkestratorTools {
@@ -145,6 +147,7 @@ export function setCursorMcpTimeoutsForTests(options?: {
 export async function hostOrkestratorCustomTools(
   agentMcp?: AgentMcpConnection,
   health?: SessionState["health"],
+  options?: { httpFallback?: boolean },
 ): Promise<HostedOrkestratorTools | undefined> {
   const url = agentMcp?.url.trim() || process.env.ORKESTRATOR_AGENT_MCP_URL?.trim();
   const token = agentMcp?.token.trim() || process.env.ORKESTRATOR_AGENT_MCP_TOKEN?.trim();
@@ -154,8 +157,9 @@ export async function hostOrkestratorCustomTools(
     connection = await connectWithTimeout(testTransport ?? defaultTransport, url, token);
   } catch (error) {
     health?.recordNotice({
-      message:
-        "Orkestrator MCP failed to connect; this coordinator session will continue without delegation tools",
+      message: options?.httpFallback
+        ? "Orkestrator MCP failed to connect in-process; this session will try the HTTP MCP client"
+        : "Orkestrator MCP failed to connect; this coordinator session will continue without delegation tools",
       method: "mcp/connect",
       severity: "warning",
       source: "bridge",
@@ -171,10 +175,7 @@ export async function hostOrkestratorCustomTools(
     const remoteName = name;
     const inputSchema = toolInputSchema(listed.inputSchema);
     customTools[name] = {
-      description: boundedDescription(
-        listed.description,
-        `Orkestrator Control MCP tool ${name}`,
-      ),
+      description: boundedDescription(listed.description, `Orkestrator Control MCP tool ${name}`),
       ...(inputSchema ? { inputSchema } : {}),
       execute: async (args) => {
         const result = await connection.call(remoteName, isObject(args) ? args : {});
@@ -202,12 +203,14 @@ async function connectWithTimeout(
   url: string,
   token: string,
 ): Promise<CursorMcpConnection> {
-  const attempt = transport.connect(url, token);
+  const controller = new AbortController();
+  const attempt = transport.connect(url, token, controller.signal);
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       timedOut = true;
+      controller.abort();
       reject(new Error("Orkestrator MCP timed out"));
     }, connectTimeoutMs);
     timer.unref();
@@ -215,6 +218,7 @@ async function connectWithTimeout(
   try {
     return await Promise.race([attempt, deadline]);
   } catch (error) {
+    if (!controller.signal.aborted) controller.abort();
     if (timedOut) {
       void attempt.then(
         (late) => late.close().catch(() => undefined),
@@ -228,17 +232,35 @@ async function connectWithTimeout(
 }
 
 const defaultTransport: CursorMcpTransport = {
-  async connect(url, token) {
+  async connect(url, token, signal) {
     const client = new McpClient(
       { name: "orkestrator-cursor-bridge", version: "1.0.0" },
       { versionNegotiation: { mode: "auto" } },
     );
-    const transport = new StreamableHTTPClientTransport(new URL(url), {
+    const lifetime = new AbortController();
+    let transport: StreamableHTTPClientTransport | undefined;
+    const closeClient = async () => {
+      if (!lifetime.signal.aborted) lifetime.abort();
+      await Promise.allSettled([client.close(), transport?.close() ?? Promise.resolve()]);
+    };
+    if (signal?.aborted) {
+      await closeClient();
+      throw new Error("Orkestrator MCP timed out");
+    }
+    const onAbort = () => {
+      void closeClient();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    transport = new StreamableHTTPClientTransport(new URL(url), {
       requestInit: { headers: { Authorization: `Bearer ${token}` } },
+      fetch: globalThis.fetch,
     });
     try {
-      await client.connect(transport);
-      const listed = await client.listTools();
+      await client.connect(transport, { signal: lifetime.signal, timeout: connectTimeoutMs });
+      const listed = await client.listTools(undefined, {
+        signal: lifetime.signal,
+        timeout: connectTimeoutMs,
+      });
       return {
         tools: (listed.tools ?? []).map((tool) => ({
           name: tool.name,
@@ -247,12 +269,15 @@ const defaultTransport: CursorMcpTransport = {
         })),
         call: async (name, args) => {
           const controller = new AbortController();
+          const abortCall = () => controller.abort();
+          if (lifetime.signal.aborted) abortCall();
+          lifetime.signal.addEventListener("abort", abortCall, { once: true });
           const timer = setTimeout(() => controller.abort(), toolCallTimeoutMs);
           timer.unref();
           try {
             const result = await client.callTool(
               { name, arguments: args },
-              { signal: controller.signal },
+              { signal: controller.signal, timeout: toolCallTimeoutMs },
             );
             return {
               content: result.content,
@@ -260,13 +285,16 @@ const defaultTransport: CursorMcpTransport = {
             };
           } finally {
             clearTimeout(timer);
+            lifetime.signal.removeEventListener("abort", abortCall);
           }
         },
-        close: () => client.close(),
+        close: closeClient,
       };
     } catch (error) {
-      await client.close().catch(() => undefined);
+      await closeClient();
       throw error;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
     }
   },
 };
@@ -289,18 +317,44 @@ function toolInputSchema(schema: unknown): Record<string, SDKJsonValue> | undefi
   return schema as Record<string, SDKJsonValue>;
 }
 
-function formatMcpContent(result: { content?: unknown }): string {
+/**
+ * Format an MCP tool result for the model, stopping once the UTF-8 budget is
+ * spent so remaining content blocks are never joined or encoded.
+ */
+export function formatMcpContent(result: { content?: unknown }): string {
   if (Array.isArray(result.content)) {
-    const parts = result.content.flatMap((item) =>
-      isObject(item) && typeof item.text === "string" ? [item.text] : [],
-    );
-    if (parts.length > 0) return parts.join("\n").slice(0, MAX_MCP_RESULT_BYTES);
+    let out = "";
+    let bytes = 0;
+    let hadText = false;
+    for (const item of result.content) {
+      if (!isObject(item) || typeof item.text !== "string") continue;
+      hadText = true;
+      const remaining = MAX_MCP_RESULT_BYTES - bytes;
+      if (remaining <= 0) break;
+      const addition = out.length > 0 ? `\n${item.text}` : item.text;
+      const additionBytes = Buffer.byteLength(addition, "utf8");
+      if (additionBytes <= remaining) {
+        out += addition;
+        bytes += additionBytes;
+        continue;
+      }
+      out += sliceToUtf8Budget(addition, remaining);
+      break;
+    }
+    if (hadText) return out;
   }
   try {
-    return JSON.stringify(result).slice(0, MAX_MCP_RESULT_BYTES);
+    return sliceToUtf8Budget(JSON.stringify(result), MAX_MCP_RESULT_BYTES);
   } catch {
     return "(empty MCP result)";
   }
+}
+
+/** Cap UTF-16 units first so a multi-megabyte block never becomes a Buffer. */
+function sliceToUtf8Budget(value: string, limit: number): string {
+  if (limit <= 0) return "";
+  const capped = value.length > limit ? value.slice(0, limit) : value;
+  return sliceToBytes(capped, limit);
 }
 
 function publicMcpError(error: unknown): string {

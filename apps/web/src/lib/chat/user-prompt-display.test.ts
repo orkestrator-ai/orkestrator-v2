@@ -190,7 +190,7 @@ describe("userPromptDisplayText", () => {
     expect(displayed).not.toContain("secret");
   });
 
-  test("extracts the structured findings frame for rendering beneath the fix prompt", () => {
+  test("extracts the structured findings frame for rendering above the fix prompt", () => {
     const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
     const prompt = customFixPrompt('{"issues":[{"title":"Duplicated finding"}]}');
     const presentation = userPromptPresentation(prompt);
@@ -202,6 +202,22 @@ describe("userPromptDisplayText", () => {
     expect(presentation.evidencePayload).toMatchObject({
       kind: "json",
       value: { issues: [{ title: "Duplicated finding" }] },
+    });
+  });
+
+  test("extracts framed findings from an address prompt whose report is inside a system frame", () => {
+    const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
+    const source = `${wrapSystemInstructions(
+      STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
+      `${contract.openMarker}\n{"issues":[{"title":"Address finding"}]}\n${contract.closeMarker}`,
+    )}\n\n${contract.continuationPrefix}`;
+    const presentation = userPromptPresentation(source);
+
+    expect(presentation.displayText).toBe(contract.continuationPrefix);
+    expect(presentation.displayText).not.toContain("Address finding");
+    expect(presentation.evidencePayload).toMatchObject({
+      kind: "json",
+      value: { issues: [{ title: "Address finding" }] },
     });
   });
 

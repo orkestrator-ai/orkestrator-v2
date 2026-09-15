@@ -79,6 +79,15 @@ export function jsonPayloadSource(content: string): JsonPayloadSource | null {
   return { source: candidate, fenced: fencedBody !== undefined };
 }
 
+/** Build the transcript payload a Fix tab pins above its opening prompt. */
+export function structuredReviewJsonPayload(report: StructuredReviewReport): JsonPayload {
+  return {
+    kind: "structured-review",
+    report,
+    source: JSON.stringify(report, null, 2),
+  };
+}
+
 export function parseJsonPayload(content: string): JsonPayload | null {
   const detected = jsonPayloadSource(content);
   if (detected === null) return null;

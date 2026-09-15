@@ -1,6 +1,11 @@
 import { marked, Renderer, type Tokens } from "marked";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
-import { jsonPayloadSearchText, parseJsonPayload } from "@/lib/chat/json-payload";
+import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import {
+  jsonPayloadSearchText,
+  parseJsonPayload,
+  structuredReviewJsonPayload,
+} from "@/lib/chat/json-payload";
 import { userPromptPresentation } from "@/lib/chat/user-prompt-display";
 
 class SearchTextRenderer extends Renderer {
@@ -160,11 +165,15 @@ function textPartSearchText(source: string, foldJsonPayload: boolean): string {
 function userTextPartSearchText(
   source: string,
   promptPresentation?: NativeMessage["promptPresentation"],
+  promptEvidence?: StructuredReviewReport,
 ): string {
   const presentation = userPromptPresentation(source, promptPresentation);
+  const evidence = promptEvidence
+    ? structuredReviewJsonPayload(promptEvidence)
+    : presentation.evidencePayload;
   return [
+    evidence ? jsonPayloadSearchText(evidence) : "",
     textPartSearchText(presentation.displayText, false),
-    presentation.evidencePayload ? jsonPayloadSearchText(presentation.evidencePayload) : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -195,17 +204,24 @@ export function getNativeMessageSearchText(message: NativeMessage): string {
     const payload = foldJsonPayload ? parseJsonPayload(message.content) : null;
     if (payload) return jsonPayloadSearchText(payload);
     return message.role === "user"
-      ? userTextPartSearchText(message.content, message.promptPresentation)
+      ? userTextPartSearchText(
+          message.content,
+          message.promptPresentation,
+          message.promptEvidence,
+        )
       : message.content;
   }
 
   let promptPresentationAvailable = message.promptPresentation;
+  let promptEvidenceAvailable = message.promptEvidence;
   return sources
     .map((source) => {
       if (message.role !== "user") return textPartSearchText(source, foldJsonPayload);
       const promptPresentation = promptPresentationAvailable;
+      const promptEvidence = promptEvidenceAvailable;
       promptPresentationAvailable = undefined;
-      return userTextPartSearchText(source, promptPresentation);
+      promptEvidenceAvailable = undefined;
+      return userTextPartSearchText(source, promptPresentation, promptEvidence);
     })
     .filter(Boolean)
     .join("\n\n");

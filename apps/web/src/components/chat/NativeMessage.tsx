@@ -25,10 +25,13 @@ import {
   MessageExpansionScopeContext,
   NativeMessagePartRendererContext,
   ToolDetailLoaderContext,
+  UserPromptEvidenceContext,
   type NativeMessageProps,
 } from "./NativeMessage.shared";
 import { MessagePart } from "./NativeMessage.renderer";
+import { JsonPayloadPart } from "./JsonPayloadPart";
 import { TextPart } from "./NativeMessage.file-parts";
+import { structuredReviewJsonPayload } from "@/lib/chat/json-payload";
 
 export const NativeMessage = memo(function NativeMessage({
   message,
@@ -206,7 +209,8 @@ export const NativeMessage = memo(function NativeMessage({
         >
           <AgentPlatformContext.Provider value={platform}>
             <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
-              <NativeMessagePartRendererContext.Provider
+              <UserPromptEvidenceContext.Provider value={message.promptEvidence}>
+                <NativeMessagePartRendererContext.Provider
                 value={(props) => (
                   <MessagePart
                     {...props}
@@ -244,6 +248,14 @@ export const NativeMessage = memo(function NativeMessage({
                     ) : undefined
                   }
                 >
+                  {isUser && message.promptEvidence ? (
+                    <div className="pb-2">
+                      <JsonPayloadPart
+                        payload={structuredReviewJsonPayload(message.promptEvidence)}
+                        expansionKey={`${message.id}-content/json/prompt-evidence`}
+                      />
+                    </div>
+                  ) : null}
                   {renderMessageParts(message, {
                     showTextCopy: false,
                     containerId,
@@ -261,7 +273,8 @@ export const NativeMessage = memo(function NativeMessage({
                     />
                   )}
                 </MessageShell>
-              </NativeMessagePartRendererContext.Provider>
+                </NativeMessagePartRendererContext.Provider>
+              </UserPromptEvidenceContext.Provider>
             </MessageExpansionScopeContext.Provider>
           </AgentPlatformContext.Provider>
         </AsyncQuestionResponseContext.Provider>

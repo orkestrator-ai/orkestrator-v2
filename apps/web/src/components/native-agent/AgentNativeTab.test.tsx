@@ -27,6 +27,9 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
+import { STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION } from "@orkestrator/protocol/review-evidence-frames";
 import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
 import {
@@ -372,6 +375,7 @@ afterEach(() => {
   useNativeComposeStore.setState({ drafts: new Map() });
   useNativeAgentProjectionStore.getState().reset();
   useNativeNoticeDismissalStore.getState().clear();
+  useMultiReviewStore.setState({ workflows: new Map() });
 });
 
 afterAll(() => {
@@ -5374,6 +5378,37 @@ describe("AgentNativeTab", () => {
 
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
     expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+  });
+
+  test("pins the consolidated review report above a Fix tab's opening prompt", async () => {
+    renderVirtualizedMessages = true;
+    const tabId = "multi-review-fix:multi-1:launch-1";
+    useMultiReviewStore.getState().replaceWorkflow({
+      id: "multi-1",
+      environmentId: "env-1",
+      consolidatedReport: TEST_STRUCTURED_REVIEW_REPORT,
+      backendRevision: 2,
+    } as never);
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      messages: [
+        {
+          id: "fix-address-prompt",
+          role: "user" as const,
+          content: STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
+          parts: [{ type: "text" as const, content: STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION }],
+          createdAt: "2026-09-15T14:00:00.000Z",
+        },
+      ],
+    }));
+
+    render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+
+    const report = await screen.findByText("Structured review report");
+    const prompt = screen.getByText(STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION);
+    expect(
+      report.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   test("reconciles and explains a replacement Multi Review Fix session", async () => {

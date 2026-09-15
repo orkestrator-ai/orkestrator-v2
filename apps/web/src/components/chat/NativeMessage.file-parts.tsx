@@ -32,6 +32,7 @@ import {
   markdownComponents,
   ToolDetailLoaderContext,
   USER_PROMPT_COLLAPSED_LINE_COUNT,
+  UserPromptEvidenceContext,
 } from "./NativeMessage.shared";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 
@@ -495,6 +496,7 @@ export function TextPart({
   expansionKey: string;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const promptEvidence = useContext(UserPromptEvidenceContext);
   const presentedPrompt = useMemo(
     () =>
       truncateUserPrompt
@@ -502,6 +504,7 @@ export function TextPart({
         : { displayText: content, evidencePayload: null },
     [content, promptPresentation, truncateUserPrompt],
   );
+  const evidencePayload = promptEvidence ? null : presentedPrompt.evidencePayload;
   const displayContent = presentedPrompt.displayText;
   const lineCount = useMemo(() => displayContent.split(/\r\n|\r|\n/).length, [displayContent]);
   const shouldTruncate = truncateUserPrompt && lineCount > USER_PROMPT_COLLAPSED_LINE_COUNT;
@@ -536,6 +539,14 @@ export function TextPart({
 
   return (
     <div className={cn("group", !truncateUserPrompt && "py-1.5")}>
+      {evidencePayload ? (
+        <div className="pb-2">
+          <JsonPayloadPart
+            payload={evidencePayload}
+            expansionKey={`${expansionKey}/prompt-evidence`}
+          />
+        </div>
+      ) : null}
       <div
         data-agent-chat-search-content="true"
         className={cn(
@@ -561,14 +572,6 @@ export function TextPart({
         >
           {isExpanded ? "show less" : "show more"}
         </button>
-      ) : null}
-      {presentedPrompt.evidencePayload ? (
-        <div className="pt-2">
-          <JsonPayloadPart
-            payload={presentedPrompt.evidencePayload}
-            expansionKey={`${expansionKey}/prompt-evidence`}
-          />
-        </div>
       ) : null}
       {showCopy ? (
         <MessageCopyButton

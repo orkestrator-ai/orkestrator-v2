@@ -119,26 +119,41 @@ describe("backend prompt display contract", () => {
 
   test("filters the exact fix-phase address prompt", () => {
     const source = addressPrompt(report);
-    const displayed = userPromptDisplayText(source);
+    const presentation = userPromptPresentation(source);
 
-    expect(displayed).toBe(STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION);
-    expect(displayed).not.toContain(STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.omissionText);
-    expect(displayed).not.toContain("Producer-owned finding");
-    expect(displayed).not.toContain(STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.openMarker);
-    expect(displayed).not.toContain(STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION);
+    expect(presentation.displayText).toBe(STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION);
+    expect(presentation.displayText).not.toContain(
+      STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.omissionText,
+    );
+    expect(presentation.displayText).not.toContain("Producer-owned finding");
+    expect(presentation.displayText).not.toContain(
+      STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.openMarker,
+    );
+    expect(presentation.displayText).not.toContain(STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION);
+    expect(presentation.evidencePayload).toMatchObject({
+      kind: "json",
+      value: {
+        issues: [expect.objectContaining({ title: "Producer-owned finding" })],
+      },
+    });
   });
 
-  test("filters the replacement Fix-session prompt without leaking report evidence", () => {
+  test("filters the replacement Fix-session prompt without leaking report evidence into the instruction", () => {
     const source = `${addressPrompt(report)}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`;
     const presentation = userPromptPresentation(source);
 
-    expect(presentation.evidencePayload).toBeNull();
     expect(presentation.displayText).toBe(STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION);
     expect(presentation.displayText).not.toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
     expect(presentation.displayText).not.toContain("Producer-owned finding");
     expect(presentation.displayText).not.toContain(
       STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.openMarker,
     );
+    expect(presentation.evidencePayload).toMatchObject({
+      kind: "json",
+      value: {
+        issues: [expect.objectContaining({ title: "Producer-owned finding" })],
+      },
+    });
   });
 
   test("renders evidence from the exact custom-fix prompt producer", () => {
@@ -254,6 +269,11 @@ describe("backend prompt display contract", () => {
     expect(presentation.displayText).toBe(STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION);
     expect(presentation.displayText).not.toContain("Review the range boundary.");
     expect(presentation.displayText).not.toContain("orkestrator-handoff");
-    expect(presentation.evidencePayload).toBeNull();
+    expect(presentation.evidencePayload).toMatchObject({
+      kind: "json",
+      value: {
+        issues: [expect.objectContaining({ title: "Producer-owned finding" })],
+      },
+    });
   });
 });

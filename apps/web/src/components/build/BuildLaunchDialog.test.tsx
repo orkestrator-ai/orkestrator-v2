@@ -85,6 +85,11 @@ const STEP_LABELS = [
   "Resolve conflicts",
 ] as const;
 
+type PickerLabel =
+  | (typeof STEP_LABELS)[number]
+  | `Reviewer ${number}`
+  | "Review preparation & consolidation";
+
 function setFavorites(favoriteModels: AgentModelRef[]) {
   const config = useConfigStore.getState().config;
   useConfigStore.setState({
@@ -124,15 +129,15 @@ function renderDialog(
   return { onConfirm, ...render(<BuildLaunchDialog {...props} />) };
 }
 
-function picker(step: (typeof STEP_LABELS)[number]) {
+function picker(step: PickerLabel) {
   return screen.getByRole("combobox", { name: `${step} step model` });
 }
 
-function openPicker(step: (typeof STEP_LABELS)[number]) {
+function openPicker(step: PickerLabel) {
   fireEvent.pointerDown(picker(step), { button: 0, ctrlKey: false });
 }
 
-function chooseVisibleModel(step: (typeof STEP_LABELS)[number], name: RegExp) {
+function chooseVisibleModel(step: PickerLabel, name: RegExp) {
   openPicker(step);
   const modelGroup = screen.getByRole("group", { name: "Models" });
   if (!within(modelGroup).queryByRole("menuitemradio", { name })) {
@@ -141,7 +146,7 @@ function chooseVisibleModel(step: (typeof STEP_LABELS)[number], name: RegExp) {
   fireEvent.click(within(modelGroup).getByRole("menuitemradio", { name }));
 }
 
-function chooseFavorite(step: (typeof STEP_LABELS)[number], name: RegExp) {
+function chooseFavorite(step: PickerLabel, name: RegExp) {
   openPicker(step);
   fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
   fireEvent.click(
@@ -152,7 +157,7 @@ function chooseFavorite(step: (typeof STEP_LABELS)[number], name: RegExp) {
   );
 }
 
-function chooseReasoning(step: (typeof STEP_LABELS)[number], name: RegExp) {
+function chooseReasoning(step: PickerLabel, name: RegExp) {
   openPicker(step);
   fireEvent.click(
     within(screen.getByRole("group", { name: "Reasoning" })).getByRole(
@@ -162,13 +167,13 @@ function chooseReasoning(step: (typeof STEP_LABELS)[number], name: RegExp) {
   );
 }
 
-function choosePlatform(step: (typeof STEP_LABELS)[number], platform: string) {
+function choosePlatform(step: PickerLabel, platform: string) {
   openPicker(step);
   fireEvent.click(screen.getByRole("button", { name: `${platform} models` }));
   fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
 }
 
-function chooseSpeed(step: (typeof STEP_LABELS)[number], name: RegExp) {
+function chooseSpeed(step: PickerLabel, name: RegExp) {
   openPicker(step);
   fireEvent.click(
     within(screen.getByRole("group", { name: "Speed mode" })).getByRole(

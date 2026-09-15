@@ -1105,11 +1105,10 @@ export function BuildLaunchDialog({
                   reviewers.length,
                   Boolean(reviewPreparation),
                 ).map((card, index) => {
-                  if (
-                    card.kind === "reviewPreparation" &&
-                    reviewPreparation &&
-                    resolvedReviewPreparation
-                  ) {
+                  if (card.kind === "reviewPreparation") {
+                    if (!reviewPreparation || !resolvedReviewPreparation) {
+                      return null;
+                    }
                     return (
                       <BuildStepCard
                         key="reviewPreparation"

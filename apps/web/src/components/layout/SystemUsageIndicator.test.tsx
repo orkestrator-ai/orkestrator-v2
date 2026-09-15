@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { EnvironmentProcessGroup } from "@/lib/backend";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { useProjectStore } from "@/stores";
 import { SYSTEM_USAGE_STALE_AFTER_MS } from "./AgentInfoButton.panels";
@@ -306,6 +307,29 @@ describe("SystemUsageIndicator", () => {
     expect(within(section).getByText("8%")).toBeTruthy();
     expect(within(section).getByText("78 MB")).toBeTruthy();
     expect(within(section).getByText("39 MB")).toBeTruthy();
+  });
+
+  test("paints environment names and totals in the PR-button blue at process metric size", async () => {
+    render(
+      <>
+        <Button aria-label="Create PR">PR</Button>
+        <SystemUsageIndicator />
+      </>,
+    );
+    openPanel();
+    const section = await waitFor(() => screen.getByLabelText("title-bar-layout processes"));
+    const heading = within(section).getByRole("heading", { name: "title-bar-layout" });
+    const totals = within(section).getByRole("group", {
+      name: "title-bar-layout total usage: 18% CPU, 117 MB RAM",
+    });
+    const processRow = within(section).getByText("node").closest("li");
+    const createPr = screen.getByRole("button", { name: "Create PR" });
+    expect(heading.className).toContain("text-primary");
+    expect(totals.className).toContain("text-primary");
+    expect(totals.className).toContain("text-xs");
+    expect(processRow?.className).toContain("text-xs");
+    expect(createPr.className).toContain("bg-primary");
+    expect(buttonVariants({ variant: "default" })).toContain("bg-primary");
   });
 
   test("repeats host CPU, RAM, GPU and disk readings under the process panel title", async () => {

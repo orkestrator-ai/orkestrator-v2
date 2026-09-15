@@ -22,6 +22,9 @@ import {
 import { DiffViewerTab } from "../../apps/web/src/components/terminal/DiffViewerTab";
 import { ChangedFileItem } from "../../apps/web/src/components/files-panel/ChangedFileItem";
 import { MobileAppShellLayout } from "../../apps/web/src/components/layout/MobileAppShellLayout";
+import { SystemUsageIndicator } from "../../apps/web/src/components/layout/SystemUsageIndicator";
+import { Button } from "../../apps/web/src/components/ui/button";
+import { useProjectStore } from "../../apps/web/src/stores";
 import {
   ReviewLaunchDialog,
   type ReviewLaunchSelection,
@@ -986,6 +989,91 @@ function NativeRefreshShimmerFixture() {
   );
 }
 
+function systemUsageFixtureSnapshot() {
+  return {
+    cpuPercent: 12.4,
+    ramPercent: 47.6,
+    gpuPercent: null,
+    diskPercent: 63.2,
+    sampledAt: new Date().toISOString(),
+  };
+}
+
+function systemUsageProcessSnapshot() {
+  return {
+    sampledAt: new Date().toISOString(),
+    truncated: false,
+    environments: [
+      {
+        environmentId: "env-local",
+        environmentName: "title-bar-layout",
+        projectId: "project-1",
+        environmentType: "local" as const,
+        processes: [
+          {
+            pid: 11,
+            name: "node",
+            command: "/usr/local/bin/node server.js",
+            cpuPercent: 18.2,
+            ramPercent: 4.4,
+            rssKb: 120_000,
+          },
+        ],
+        totalCpuPercent: 18.2,
+        totalRssKb: 120_000,
+        processCount: 1,
+      },
+    ],
+  };
+}
+
+/**
+ * Title-bar meters plus the default Create PR button, so the process panel's
+ * environment names and totals can be compared to the compiled primary fill.
+ */
+function SystemUsageFixture() {
+  useEffect(() => {
+    useProjectStore.getState().setProjects([
+      {
+        id: "project-1",
+        name: "orkestrator-v2",
+        gitUrl: "git@example.com:org/repo.git",
+        localPath: null,
+        addedAt: "2026-09-13T00:00:00.000Z",
+        order: 0,
+      },
+    ]);
+    return () => useProjectStore.getState().setProjects([]);
+  }, []);
+
+  window.orkestrator = {
+    invoke: async <T,>(command: string) => {
+      switch (command) {
+        case "get_system_usage":
+          return systemUsageFixtureSnapshot() as T;
+        case "get_environment_process_usage":
+          return systemUsageProcessSnapshot() as T;
+        default:
+          throw new Error(`Unexpected fixture command: ${command}`);
+      }
+    },
+  } as Window["orkestrator"];
+
+  return (
+    <main className="min-h-screen bg-background text-foreground">
+      <header
+        data-testid="system-usage-title-bar"
+        className="flex items-center justify-end gap-3 border-b border-border px-3 py-2"
+      >
+        <SystemUsageIndicator />
+        <Button size="sm" className="gap-2" aria-label="Create PR">
+          PR
+        </Button>
+      </header>
+    </main>
+  );
+}
+
 function fixtureForPath() {
   if (window.location.pathname === "/browser") return <BrowserFixture />;
   if (window.location.pathname === "/build-pipeline-header") {
@@ -1013,6 +1101,7 @@ function fixtureForPath() {
     return <NativeRefreshShimmerFixture />;
   }
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
+  if (window.location.pathname === "/system-usage") return <SystemUsageFixture />;
   return <CreateEnvironmentFixture />;
 }
 

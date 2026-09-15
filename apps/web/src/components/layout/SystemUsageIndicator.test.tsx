@@ -308,6 +308,21 @@ describe("SystemUsageIndicator", () => {
     expect(within(section).getByText("39 MB")).toBeTruthy();
   });
 
+  test("paints environment names and totals in the PR-button blue at process metric size", async () => {
+    render(<SystemUsageIndicator />);
+    openPanel();
+    const section = await waitFor(() => screen.getByLabelText("title-bar-layout processes"));
+    const heading = within(section).getByRole("heading", { name: "title-bar-layout" });
+    const totals = within(section).getByRole("group", {
+      name: "title-bar-layout total usage: 18% CPU, 117 MB RAM",
+    });
+    const processRow = within(section).getByText("node").closest("li");
+    expect(heading.className).toContain("text-primary");
+    expect(totals.className).toContain("text-primary");
+    expect(totals.className).toContain("text-xs");
+    expect(processRow?.className).toContain("text-xs");
+  });
+
   test("repeats host CPU, RAM, GPU and disk readings under the process panel title", async () => {
     render(<SystemUsageIndicator />);
     await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());

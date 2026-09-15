@@ -451,11 +451,11 @@ function EnvironmentProcessGroupList({
   return (
     <section aria-label={`${group.environmentName} processes`}>
       <div className="flex items-baseline justify-between gap-2">
-        <h3 className="truncate text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+        <h3 className="truncate text-[10px] font-medium uppercase tracking-[0.16em] text-primary">
           {group.environmentName}
         </h3>
         <div
-          className="flex shrink-0 items-baseline gap-2 font-mono text-[10px] tabular-nums text-muted-foreground/70"
+          className="flex shrink-0 items-baseline gap-2 font-mono text-xs tabular-nums text-primary"
           role="group"
           aria-label={`${group.environmentName} total usage: ${totalCpu} CPU, ${totalRam} RAM`}
         >

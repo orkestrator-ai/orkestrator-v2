@@ -20,11 +20,16 @@ import {
 } from "@/types/paneLayout";
 import {
   applyStoredPaneSelection,
+  armWindowBuildPipelineActivation,
   armWindowStartupAgentActivation,
+  clearWindowBuildPipelineActivation,
   clearWindowStartupAgentActivation,
+  consumeWindowBuildPipelineActivation,
   consumeWindowStartupAgentActivation,
+  getWindowBuildPipelineActivation,
   hasWindowStartupAgentActivation,
   readWindowPaneSelection,
+  wasWindowBuildPipelineSetupReadyAtArm,
 } from "@/lib/pane-selection-storage";
 import {
   environmentIsReadyForSetupHandoff,
@@ -62,6 +67,10 @@ export interface PaneTabActivationRequest {
 const pendingTabActivations = new Map<string, string>();
 const latestTabActivationRequests = new Map<string, PaneTabActivationRequest>();
 const startupAgentActivationCommits = new WeakMap<EnvironmentPaneState, string>();
+const buildPipelineActivationCommits = new WeakMap<
+  EnvironmentPaneState,
+  { environmentId: string; pipelineId: string }
+>();
 
 function boundActivationMap<T>(map: Map<string, T>): void {
   while (map.size > MAX_PENDING_TAB_ACTIVATIONS) {
@@ -172,6 +181,87 @@ function applyStartupAgentSetupHandoff(
   };
 }
 
+/** True when a leaf is still on the automatic startup-agent setup destination. */
+function paneSelectionIsStartupAgentHandoffSource(leaf: PaneLeaf | null): boolean {
+  return leaf?.activeTabId === STARTUP_AGENT_TAB_ID;
+}
+
+/** True when this window is still on the setup surface the pipeline should replace. */
+function paneSelectionAllowsSetupHandoff(
+  selected: EnvironmentPaneState,
+  targetLeafId: string,
+): boolean {
+  const targetLeaf = findLeaf(selected.root, (leaf) => leaf.id === targetLeafId);
+  const focusedLeaf = findLeaf(selected.root, (leaf) => leaf.id === selected.activePaneId);
+  return (
+    paneSelectionIsSetupHandoffSource(targetLeaf) &&
+    (focusedLeaf === targetLeaf || paneSelectionIsSetupHandoffSource(focusedLeaf))
+  );
+}
+
+/**
+ * True when the pipeline tab may take focus.
+ *
+ * A rebuild into an already-ready environment has no long setup to protect, so
+ * Start Build activates unconditionally. During a live setup, stay on the
+ * setup surface — or the startup-agent tab the automatic setup handoff just
+ * chose — and decline a later steal from a tab the user picked.
+ */
+function paneSelectionAllowsPipelineHandoff(
+  selected: EnvironmentPaneState,
+  targetLeafId: string,
+  environmentId: string,
+): boolean {
+  if (wasWindowBuildPipelineSetupReadyAtArm(environmentId)) return true;
+  if (paneSelectionAllowsSetupHandoff(selected, targetLeafId)) return true;
+  const targetLeaf = findLeaf(selected.root, (leaf) => leaf.id === targetLeafId);
+  const focusedLeaf = findLeaf(selected.root, (leaf) => leaf.id === selected.activePaneId);
+  return (
+    paneSelectionIsStartupAgentHandoffSource(targetLeaf) &&
+    (focusedLeaf === targetLeaf || paneSelectionIsStartupAgentHandoffSource(focusedLeaf))
+  );
+}
+
+/** Apply a launching Electron window's one-shot setup-to-pipeline handoff. */
+function applyBuildPipelineSetupHandoff(
+  environmentId: string,
+  authoritative: EnvironmentPaneState,
+  selected: EnvironmentPaneState,
+): { state: EnvironmentPaneState; pipelineId: string | null } {
+  const pipelineId = getWindowBuildPipelineActivation(environmentId);
+  if (
+    !pipelineId ||
+    !environmentIsReadyForSetupHandoff(
+      useEnvironmentStore.getState().getEnvironmentById(environmentId),
+    )
+  ) {
+    return { state: selected, pipelineId: null };
+  }
+
+  const authoritativeLeaf = findLeaf(authoritative.root, (leaf) =>
+    leaf.tabs.some(
+      (tab) => tab.type === "claude-build" && tab.buildTabData?.pipelineId === pipelineId,
+    ),
+  );
+  const targetTab = authoritativeLeaf?.tabs.find(
+    (tab) => tab.type === "claude-build" && tab.buildTabData?.pipelineId === pipelineId,
+  );
+  if (!targetTab || authoritativeLeaf?.activeTabId !== targetTab.id) {
+    return { state: selected, pipelineId: null };
+  }
+
+  // A published backend selection must not yank focus from a tab or pane the
+  // user chose during a long setup. Retire the one-shot in that declined case
+  // so a later reconcile cannot. Rebuilds and the automatic startup-agent
+  // landing are not user choices and still activate.
+  if (!paneSelectionAllowsPipelineHandoff(selected, authoritativeLeaf.id, environmentId)) {
+    return { state: selected, pipelineId };
+  }
+
+  const activated = activateTabInState(selected, targetTab.id);
+  return activated ? { state: activated, pipelineId } : { state: selected, pipelineId: null };
+}
+
 /** Arm the post-setup focus handoff in the Electron window that created the environment. */
 export function armStartupAgentTabActivation(environmentId: string): void {
   if (!window.orkestrator?.isolatedViewState) return;
@@ -182,6 +272,50 @@ export function armStartupAgentTabActivation(environmentId: string): void {
 export function clearStartupAgentTabActivation(environmentId: string): void {
   if (!window.orkestrator?.isolatedViewState) return;
   clearWindowStartupAgentActivation(environmentId);
+}
+
+/** Arm the post-setup pipeline focus handoff in the Electron window that launched it. */
+export function armBuildPipelineTabActivation(environmentId: string, pipelineId: string): void {
+  if (!window.orkestrator?.isolatedViewState) return;
+  const setupReadyAtArm = environmentIsReadyForSetupHandoff(
+    useEnvironmentStore.getState().getEnvironmentById(environmentId),
+  );
+  armWindowBuildPipelineActivation(environmentId, pipelineId, setupReadyAtArm);
+
+  // The setup-complete event can win the race with the start response for a
+  // no-op or very short setup. If the requested tab is already present in a
+  // ready environment, finish the handoff immediately instead of waiting for
+  // another authoritative frame that may never arrive. Rebuilds into an
+  // already-ready environment also take this path and must activate even when
+  // the window is still on a previous build or agent tab.
+  if (!setupReadyAtArm) return;
+  const store = usePaneLayoutStore.getState();
+  const state = store.environments.get(environmentId);
+  if (!state) return;
+  const targetLeaf = findLeaf(state.root, (leaf) =>
+    leaf.tabs.some(
+      (tab) => tab.type === "claude-build" && tab.buildTabData?.pipelineId === pipelineId,
+    ),
+  );
+  const targetTab = targetLeaf?.tabs.find(
+    (tab) => tab.type === "claude-build" && tab.buildTabData?.pipelineId === pipelineId,
+  );
+  if (!targetLeaf || !targetTab) return;
+  store.setActiveTab(targetLeaf.id, targetTab.id, environmentId);
+  const installed = usePaneLayoutStore.getState().environments.get(environmentId);
+  const installedLeaf = installed
+    ? findLeaf(installed.root, (leaf) => leaf.id === targetLeaf.id)
+    : null;
+  // setActiveTab is a silent no-op for an unknown pane or tab. Leave the
+  // one-shot armed so a later authoritative frame can still finish the handoff.
+  if (installedLeaf?.activeTabId !== targetTab.id) return;
+  consumeWindowBuildPipelineActivation(environmentId, pipelineId);
+}
+
+/** Cancel a pipeline handoff whose environment was deleted. */
+export function clearBuildPipelineTabActivation(environmentId: string): void {
+  if (!window.orkestrator?.isolatedViewState) return;
+  clearWindowBuildPipelineActivation(environmentId);
 }
 
 /**
@@ -196,6 +330,17 @@ export function commitStartupAgentSetupHandoff(
   if (startupAgentActivationCommits.get(state) !== environmentId) return;
   startupAgentActivationCommits.delete(state);
   consumeWindowStartupAgentActivation(environmentId);
+}
+
+/** Retire a pipeline handoff only after its activated layout is installed. */
+export function commitBuildPipelineSetupHandoff(
+  environmentId: string,
+  state: EnvironmentPaneState,
+): void {
+  const commit = buildPipelineActivationCommits.get(state);
+  if (!commit || commit.environmentId !== environmentId) return;
+  buildPipelineActivationCommits.delete(state);
+  consumeWindowBuildPipelineActivation(commit.environmentId, commit.pipelineId);
 }
 
 /**
@@ -400,10 +545,23 @@ export function reconcileAuthoritativePaneLayout(
       environmentId,
       readWindowPaneSelection(environmentId),
     );
-    const startupHandoff = applyStartupAgentSetupHandoff(environmentId, restored, selected);
+    // Apply the pipeline handoff first so a Start Build during setup wins over
+    // the automatic startup-agent landing in the same reconcile frame.
+    const buildHandoff = applyBuildPipelineSetupHandoff(environmentId, restored, selected);
+    const startupHandoff = applyStartupAgentSetupHandoff(
+      environmentId,
+      restored,
+      buildHandoff.state,
+    );
     const reconciled = applyPendingTabActivation(environmentId, startupHandoff.state);
     if (startupHandoff.retireActivationAfterInstall) {
       startupAgentActivationCommits.set(reconciled, environmentId);
+    }
+    if (buildHandoff.pipelineId) {
+      buildPipelineActivationCommits.set(reconciled, {
+        environmentId,
+        pipelineId: buildHandoff.pipelineId,
+      });
     }
     return reconciled;
   }

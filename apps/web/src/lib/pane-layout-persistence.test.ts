@@ -6,6 +6,10 @@ import { type EnvironmentPaneState, usePaneLayoutStore } from "@/stores/paneLayo
 import type { Environment } from "@/types";
 import type { PaneLeaf, PersistedPaneLayout, TabInfo } from "@/types/paneLayout";
 import {
+  armWindowBuildPipelineActivation,
+  getWindowBuildPipelineActivation,
+} from "./pane-selection-storage";
+import {
   adoptPersistedPaneLayout,
   createPersistedPaneLayoutInput,
   flushPaneLayoutNow,
@@ -2311,6 +2315,82 @@ describe("pane layout persistence", () => {
       stop();
       applyIntent.mockRestore();
       errorLog.mockRestore();
+    }
+  });
+
+  test("retires a pipeline handoff after the local-write installer activates it", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [
+          {
+            ...(useEnvironmentStore.getState().environments[0] as Environment),
+            setupPhase: "ready",
+            setupScriptsComplete: true,
+          },
+        ],
+      });
+      useBuildPipelineStore.setState({
+        pipelines: new Map([["pipeline-1", {} as never]]),
+        buildEnvironmentIds: new Set(["env-1"]),
+      });
+      const store = usePaneLayoutStore.getState();
+      store.initialize("container-1", "env-1");
+      store.addTab("default", { id: "setup", type: "plain", isSetupTab: true }, "env-1");
+      store.addTab(
+        "default",
+        {
+          id: "build-pipeline-1",
+          type: "claude-build",
+          buildTabData: {
+            environmentId: "env-1",
+            pipelineId: "pipeline-1",
+            taskId: "task-1",
+            isLocal: false,
+          },
+        },
+        "env-1",
+      );
+      store.setActiveTab("default", "setup", "env-1");
+      store.beginHydration("env-1");
+      store.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+
+      armWindowBuildPipelineActivation("env-1", "pipeline-1");
+      expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-1");
+
+      const save = mock(async (environmentId: string, input: LayoutInput) => {
+        const saved = createSaved(environmentId, input);
+        if (input.root.kind !== "leaf") return saved;
+        return {
+          ...saved,
+          root: { ...input.root, activeTabId: "build-pipeline-1" },
+        };
+      });
+      const stop = startPaneLayoutPersistence({
+        save,
+        debounceMs: 5,
+        hydrateDependencies: async () => undefined,
+      });
+      try {
+        usePaneLayoutStore.getState().reorderTabs("default", 0, 1, "env-1");
+        await waitForTimers();
+        await waitForTimers();
+
+        expect(save).toHaveBeenCalled();
+        expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
+          "build-pipeline-1",
+        );
+        expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+      } finally {
+        stop();
+      }
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
     }
   });
 });

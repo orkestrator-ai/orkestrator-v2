@@ -31,7 +31,10 @@ import type {
   PrState,
 } from "@/types";
 import { rendererDebugLog } from "@/lib/debug-log";
-import { clearStartupAgentTabActivation } from "@/lib/pane-layout-authoritative";
+import {
+  clearBuildPipelineTabActivation,
+  clearStartupAgentTabActivation,
+} from "@/lib/pane-layout-authoritative";
 import {
   activateProjectForEnvironmentCleanup,
   startEnvironmentCleanupSelectionSync,
@@ -179,6 +182,7 @@ function bindSetupTerminalSession(environment: Environment, sessionId: string): 
 export function cleanupDeletedEnvironmentSubscriptions(environmentId: string): void {
   useClaudeStore.getState().closeEventSubscription(environmentId);
   useOpenCodeStore.getState().closeEventSubscription(environmentId);
+  clearBuildPipelineTabActivation(environmentId);
   clearStartupAgentTabActivation(environmentId);
 }
 
@@ -339,6 +343,7 @@ export function reconcileEnvironmentLifecycleErrors(): void {
     // and the transient renderer-side one, or a launch that can never happen
     // auto-dispatches the original prompt the next time this env is started.
     store.updateEnvironment(environment.id, { pendingAgentLaunch: false });
+    clearBuildPipelineTabActivation(environment.id);
     clearStartupAgentTabActivation(environment.id);
     const claudeOptions = useClaudeOptionsStore.getState();
     if (claudeOptions.pendingNativeLaunches[environment.id]) {
@@ -468,6 +473,7 @@ export function applyEnvironmentSetupComplete(payload: EnvironmentSetupCompleteP
     // payload omitted the environment, so a failed setup cannot leave this
     // renderer holding a launch it will never be able to perform.
     store.updateEnvironment(environment_id, { pendingAgentLaunch: false });
+    clearBuildPipelineTabActivation(environment_id);
     clearStartupAgentTabActivation(environment_id);
   }
 }

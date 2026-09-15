@@ -10,8 +10,10 @@ import {
   reconcileEnvironmentLifecycleErrors,
 } from "./useEnvironments";
 import {
+  armWindowBuildPipelineActivation,
   armWindowStartupAgentActivation,
   consumeWindowStartupAgentActivation,
+  getWindowBuildPipelineActivation,
 } from "@/lib/pane-selection-storage";
 
 const originalClaudeClose = useClaudeStore.getState().closeEventSubscription;
@@ -68,6 +70,24 @@ describe("cleanupDeletedEnvironmentSubscriptions", () => {
       cleanupDeletedEnvironmentSubscriptions("env-deleted");
 
       expect(consumeWindowStartupAgentActivation("env-deleted")).toBe(false);
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("retires the launching window's pipeline handoff on deletion", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      armWindowBuildPipelineActivation("env-deleted", "pipeline-1");
+
+      cleanupDeletedEnvironmentSubscriptions("env-deleted");
+
+      expect(getWindowBuildPipelineActivation("env-deleted")).toBeNull();
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;
@@ -138,6 +158,77 @@ describe("startup-agent handoff failure cleanup", () => {
 
       expect(consumeWindowStartupAgentActivation("env-1")).toBe(false);
       expect(useEnvironmentStore.getState().environments[0]?.pendingAgentLaunch).toBe(false);
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+});
+
+describe("pipeline handoff failure cleanup", () => {
+  test("retires the handoff after a durable lifecycle failure", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [
+          {
+            ...environment("env-1", "project-1"),
+            pendingAgentLaunch: true,
+            lifecycleError: "setup failed",
+          },
+        ],
+      });
+      armWindowBuildPipelineActivation("env-1", "pipeline-1");
+
+      reconcileEnvironmentLifecycleErrors();
+
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("retires the handoff after an unsuccessful setup completion event", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [{ ...environment("env-1", "project-1"), pendingAgentLaunch: true }],
+      });
+      armWindowBuildPipelineActivation("env-1", "pipeline-1");
+
+      applyEnvironmentSetupComplete({ environment_id: "env-1", success: false });
+
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("keeps the handoff armed after a successful setup completion event", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [{ ...environment("env-1", "project-1"), pendingAgentLaunch: true }],
+      });
+      armWindowBuildPipelineActivation("env-1", "pipeline-1");
+
+      applyEnvironmentSetupComplete({ environment_id: "env-1", success: true });
+
+      expect(getWindowBuildPipelineActivation("env-1")).toBe("pipeline-1");
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;

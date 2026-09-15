@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import * as backend from "@/lib/backend";
 import { clearStoredPaneSelection, writeWindowPaneSelection } from "@/lib/pane-selection-storage";
 import {
+  commitBuildPipelineSetupHandoff,
   commitStartupAgentSetupHandoff,
   hydratePaneLayoutDependencies,
   reconcileAuthoritativePaneLayout,
@@ -451,6 +452,7 @@ export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions
       revision: saved.revision,
     });
     paneStore.applyAuthoritativeLayout(environmentId, restored);
+    commitBuildPipelineSetupHandoff(environmentId, restored);
     commitStartupAgentSetupHandoff(environmentId, restored);
   };
 

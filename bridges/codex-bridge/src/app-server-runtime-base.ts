@@ -662,6 +662,14 @@ export abstract class AppServerRuntimeBase {
   protected readonly pendingInteractions = new Map<string, { request: InteractionRequest }>();
   protected readonly usageByThread = new Map<string, EngineUsageSnapshot>();
   /**
+   * In-flight rollout reads keyed by thread id.
+   *
+   * `attach()` publishes the thread before `hydrateMessagesFromPersistedSession`
+   * resolves. Concurrent `ensureAttached` callers must wait for that assignment
+   * instead of fast-returning an empty context as the exact transcript.
+   */
+  protected readonly transcriptHydrateInFlight = new Map<string, Promise<void>>();
+  /**
    * Bounded, process-local steering idempotency state.
    *
    * app-server persists `clientUserMessageId` on every steered userMessage, so

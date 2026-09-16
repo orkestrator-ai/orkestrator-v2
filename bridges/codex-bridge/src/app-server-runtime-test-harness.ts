@@ -56,7 +56,10 @@ import { DispatchJournal } from "./sessions/dispatch-journal.js";
 
 import { persistSessionTitle } from "./session-titles.js";
 
-import { getTranscriptCatalogInvalidationCountForTesting } from "./history/rollout.js";
+import {
+  getTranscriptCatalogInvalidationCountForTesting,
+  setHydrateMessagesFromPersistedSessionGateForTesting,
+} from "./history/rollout.js";
 
 import { AppServerProcessExitError, AppServerTimeoutError } from "./app-server/errors.js";
 
@@ -281,6 +284,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setHydrateMessagesFromPersistedSessionGateForTesting();
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousCwd === undefined) delete process.env.CWD;

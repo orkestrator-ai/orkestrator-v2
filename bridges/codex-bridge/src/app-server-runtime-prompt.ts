@@ -362,6 +362,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         engineGeneration: this.options.engine.info().generation,
         cwd: thread.cwd,
         modelId: thread.model,
+        transcriptHydrated: true,
       });
       await this.persistSession(session);
     }
@@ -587,6 +588,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
             engineGeneration: this.options.engine.info().generation,
             cwd: thread.cwd,
             modelId: thread.model,
+            transcriptHydrated: true,
           });
           if (thread.model) {
             assistantMessage.modelId = thread.model;

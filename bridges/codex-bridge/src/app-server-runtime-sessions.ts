@@ -251,6 +251,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       session.title = existing?.title ?? thread.name ?? undefined;
       session.titleSource = existing?.titleSource;
     }
+    context.transcriptHydrated = true;
 
     await this.synchronizeAttachedModelOverrides(context, modelsBeforeAttach);
     await this.persistSession(session);
@@ -345,6 +346,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         this.bumpMessageRevision(context);
         this.registry.bumpContentEpoch(child);
       }
+      context.transcriptHydrated = true;
       await this.persistSession(child);
       return {
         outcome: "created",
@@ -1113,7 +1115,12 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // return, so it is current; only the detached fallback to the retained
     // local tail is a cache. Reporting the difference is what lets the backend
     // decide whether the tail is worth persisting for the next cold start.
-    if (context)
+    //
+    // Attach happens before the rollout body is read. Until that assignment
+    // finishes — or when recovery attached an empty placeholder — treat the
+    // thread like the detached preview: cached and incomplete. Otherwise a
+    // concurrent poll can persist `{ current, complete, [] }` over the tail.
+    if (context?.transcriptHydrated)
       return {
         messages: this.messagesForSession(session, context),
         freshness: "current",
@@ -1137,17 +1144,18 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
 
     /*
      * A durable session is restored with its thread id but without the rollout
-     * body. Until `ensureAttached` has resumed that thread, `localMessages` is
-     * only an empty preview -- it is not evidence that the conversation is
-     * empty. Reporting it complete prevents the backend's progressive reader
-     * from falling through to the exact `/messages` recovery surface, so its
-     * persisted display tail is replaced by an authoritative-looking empty
-     * transcript after an app restart.
+     * body. Until `ensureAttached` has finished reading that body — and not
+     * merely attached an empty context or recovery placeholder — `localMessages`
+     * is only an empty preview. Reporting it complete prevents the backend's
+     * progressive reader from falling through to the exact `/messages` recovery
+     * surface, so its persisted display tail is replaced by an
+     * authoritative-looking empty transcript after an app restart.
      *
      * Threadless sessions are different: their local ring is the authoritative
      * transcript (for example recovered context whose rollout is gone).
      */
-    return session.threadId === null || this.registry.getThreadForSession(sessionId) !== undefined;
+    if (session.threadId === null) return true;
+    return this.registry.getThreadForSession(sessionId)?.transcriptHydrated === true;
   }
 
   async getUsage(sessionId: string): Promise<EngineUsageSnapshot | undefined | null> {

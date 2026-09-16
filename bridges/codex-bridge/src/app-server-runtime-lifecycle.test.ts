@@ -5,7 +5,10 @@ import {
   MAX_RECOVERED_CONTEXT_CHARS,
 } from "./app-server-runtime.js";
 import type { EngineEvent } from "./engine/types.js";
-import { getTranscriptCatalogInvalidationCountForTesting } from "./history/rollout.js";
+import {
+  getTranscriptCatalogInvalidationCountForTesting,
+  setHydrateMessagesFromPersistedSessionGateForTesting,
+} from "./history/rollout.js";
 import { DispatchJournal } from "./sessions/dispatch-journal.js";
 import {
   BRIDGE_SESSION_REGISTRY_VERSION,
@@ -20,6 +23,7 @@ import {
   NO_RESPONSE,
   captureConsoleErrors,
   codexHome,
+  deferredSignal,
   harness,
   threadPayload,
   waitUntil,
@@ -99,9 +103,102 @@ describe("session lifecycle", () => {
       title: "Restored",
     });
     expect(h.child().requests.some((request) => request.method === "thread/resume")).toBe(false);
+    // The cold-start preview has not loaded the rollout yet. Marking this empty
+    // cache complete would stop the progressive reader from asking the exact
+    // messages surface to re-attach and hydrate the restored thread.
+    expect(h.runtime.getCachedMessages("session-restored")).toEqual({
+      messages: [],
+      freshness: "cached",
+      complete: false,
+    });
 
     expect(await h.runtime.getMessages("session-restored")).toEqual([]);
     expect(h.child().requests.some((request) => request.method === "thread/resume")).toBe(true);
+    expect(h.runtime.getCachedMessages("session-restored")?.complete).toBe(true);
+  });
+
+  test("an attached thread stays cached and incomplete until hydrate finishes", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-hydrating",
+        threadId: "thread-hydrating",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+        title: "Hydrating",
+        titleSource: "explicit",
+      }),
+    );
+
+    const gate = deferredSignal();
+    setHydrateMessagesFromPersistedSessionGateForTesting(() => gate.promise);
+    const h = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-hydrating") }),
+    });
+
+    const pending = h.runtime.getMessages("session-hydrating");
+    await waitUntil(
+      () => h.runtime.getRegistry().getThread("thread-hydrating") !== undefined,
+      "thread should attach before hydrate finishes",
+    );
+    expect(h.runtime.getCachedMessages("session-hydrating")).toEqual({
+      messages: [],
+      freshness: "cached",
+      complete: false,
+    });
+    expect(h.runtime.transcriptComplete("session-hydrating")).toBe(false);
+
+    gate.resolve();
+    expect(await pending).toEqual([]);
+    expect(h.runtime.getCachedMessages("session-hydrating")).toEqual({
+      messages: [],
+      freshness: "current",
+      complete: true,
+    });
+  });
+
+  test("a dispatch-recovery placeholder is not a complete empty transcript", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-placeholder",
+        threadId: "thread-placeholder",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+        title: "Placeholder",
+        titleSource: "prompt",
+        lastAcceptedRequestId: "req-placeholder",
+      }),
+    );
+    const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+    await journal.load();
+    await journal.markPrepared({
+      requestId: "req-placeholder",
+      bridgeSessionId: "session-placeholder",
+      threadId: "thread-placeholder",
+    });
+    await journal.markAccepted("req-placeholder", {
+      threadId: "thread-placeholder",
+      turnId: "turn-placeholder",
+    });
+
+    const h = await harness({
+      "thread/resume": () => {
+        throw new Error("temporary transport failure");
+      },
+    });
+
+    expect(h.runtime.getRegistry().getThread("thread-placeholder")).toMatchObject({
+      messages: [],
+      unsubscribed: true,
+      transcriptHydrated: false,
+    });
+    expect(h.runtime.getCachedMessages("session-placeholder")).toEqual({
+      messages: [],
+      freshness: "cached",
+      complete: false,
+    });
+    expect(h.runtime.transcriptComplete("session-placeholder")).toBe(false);
   });
 
   test("restores structured transcript visibility from the durable ledger after restart", async () => {
@@ -3170,6 +3267,18 @@ describe("idle detach and transparent re-attach", () => {
     expect(h.child().requests.some((r) => r.method === "thread/unsubscribe")).toBe(true);
     expect(h.runtime.getRegistry().listThreads()).toHaveLength(0);
     expect(h.runtime.getStorageStats()).toMatchObject({ threads: 0, detachedThreads: 1 });
+    const detached = h.runtime.getRegistry().getSession(sessionId)!;
+    expect(detached.threadId).toBe("thread-1");
+    expect(detached.localMessagesTrimmed).toBe(false);
+    // The local ring is untrimmed, but the rollout is still on disk and the
+    // thread context was freed. Completeness used to follow registry presence
+    // only after a later attach; the detached preview must stay incomplete.
+    expect(h.runtime.transcriptComplete(sessionId)).toBe(false);
+    expect(h.runtime.getCachedMessages(sessionId)).toEqual({
+      messages: [],
+      freshness: "cached",
+      complete: false,
+    });
   });
 
   test("structured transcript visibility survives idle detach and rollout rehydration", async () => {

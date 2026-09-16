@@ -45,6 +45,7 @@ export function bridgeTranscriptToken(
     digest(String(options.generation)),
     digest(String(options.contentEpoch)),
     contentRevision,
+    options.complete ? "1" : "0",
     boundedInteger(options.limit, BRIDGE_TRANSCRIPT_MAX_MESSAGES, BRIDGE_TRANSCRIPT_MAX_MESSAGES),
     boundedInteger(
       options.targetBytes,

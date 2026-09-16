@@ -203,6 +203,16 @@ export interface ThreadContext {
   modelId?: string;
   /** Turn-scoped confirmations take precedence over thread settings. */
   confirmedModelsByTurn: Map<string, string>;
+  /**
+   * True once this process has finished reading the rollout body, or confirmed
+   * there is none to read (a freshly started thread).
+   *
+   * Registry presence is not enough: `attach()` happens before the hydrate
+   * await, and dispatch-recovery can attach an empty placeholder. Reporting
+   * either as a complete current transcript lets a progressive poll persist a
+   * wipe over the display tail this flag is here to protect.
+   */
+  transcriptHydrated: boolean;
 }
 
 /**
@@ -415,6 +425,7 @@ export class ThreadRegistry {
       cwd?: string;
       name?: string | null;
       modelId?: string;
+      transcriptHydrated?: boolean;
     },
   ): ThreadContext {
     const session = this.sessions.get(sessionId);
@@ -439,6 +450,7 @@ export class ThreadRegistry {
         confirmedModelsByTurn: new Map(Object.entries(session?.confirmedModelsByTurn ?? {})),
         cwd: options.cwd,
         name: options.name ?? null,
+        transcriptHydrated: options.transcriptHydrated === true,
       };
       this.threads.set(threadId, context);
     } else {
@@ -449,6 +461,7 @@ export class ThreadRegistry {
       }
       context.unsubscribed = false;
       if (options.modelId) context.modelId = options.modelId;
+      if (options.transcriptHydrated) context.transcriptHydrated = true;
       for (const [turnId, modelId] of Object.entries(session?.confirmedModelsByTurn ?? {})) {
         // The loaded context is canonical. A restored tab can carry an older
         // copy of the same turn overlay, so joining it must never overwrite a

@@ -125,8 +125,8 @@ describe("storage-backed command delegation", () => {
     const repositoryConfig = { defaultBranch: "develop", prBaseBranch: "develop" };
     const storage = {
       getDataDir: () => worktree,
-      withProjectCreationLock: mock(
-        async (_key: string, operation: () => Promise<unknown>) => operation(),
+      withProjectCreationLock: mock(async (_key: string, operation: () => Promise<unknown>) =>
+        operation(),
       ),
       loadProjects: mock(async () => [project]),
       addProject: mock(async (value: Record<string, unknown>) => value),
@@ -227,6 +227,7 @@ describe("storage-backed command delegation", () => {
     expect(storage.withProjectCreationLock).toHaveBeenCalledWith(
       "git-url:https://github.com/acme/repo.git",
       expect.any(Function),
+      expect.objectContaining({ acquireTimeoutMs: expect.any(Number) }),
     );
     await expect(
       commands.get("remove_project")?.({ projectId: "project-1" }, context),

@@ -300,6 +300,21 @@ export async function rollbackScratchRepository(options: {
 }
 
 export const PROJECT_CLONE_TIMEOUT_MS = 600_000;
+/** Path-key budget: one 600s clone plus a short waiter buffer. */
+export const PROJECT_CREATION_PATH_LOCK_TIMEOUT_MS = 660_000;
+/**
+ * URL-key budget: a nested path-lock wait plus one clone, plus a short buffer.
+ * A shared timeout cannot cover this composition — raising both budgets
+ * together just lengthens the inner wait.
+ */
+export const PROJECT_CREATION_URL_LOCK_TIMEOUT_MS =
+  PROJECT_CREATION_PATH_LOCK_TIMEOUT_MS + PROJECT_CLONE_TIMEOUT_MS + 60_000;
+
+export type AddExistingProjectLockTimeouts = {
+  urlLockTimeoutMs?: number;
+  pathLockTimeoutMs?: number;
+};
+
 const DUPLICATE_PROJECT_URL_PREFIX = "Duplicate project URL:";
 
 /**
@@ -309,10 +324,6 @@ const DUPLICATE_PROJECT_URL_PREFIX = "Duplicate project URL:";
  */
 function projectGitUrlLockKey(gitUrl: string): string {
   return `git-url:${gitUrl}`;
-}
-
-function isDuplicateProjectUrlError(error: unknown): boolean {
-  return error instanceof Error && error.message.startsWith(DUPLICATE_PROJECT_URL_PREFIX);
 }
 
 function cloneCommandFailureDetail(error: unknown): string {
@@ -344,7 +355,7 @@ async function inspectProjectPath(projectPath: string): Promise<ProjectPathInspe
   }
 
   if (stats.isSymbolicLink() || !stats.isDirectory()) {
-    return { kind: "existing" };
+    throw new Error(PROJECT_PATH_NOT_A_DIRECTORY);
   }
 
   let entries: string[];
@@ -370,39 +381,6 @@ async function inspectProjectPath(projectPath: string): Promise<ProjectPathInspe
   }
 }
 
-async function recordProjectDirectoryIdentity(
-  projectPath: string,
-): Promise<ProjectDirectoryIdentity> {
-  const stats = await fs.lstat(projectPath);
-  return {
-    dev: stats.dev,
-    ino: stats.ino,
-    realPath: await fs.realpath(projectPath),
-  };
-}
-
-async function removeCloneCreatedByThisRequest(options: {
-  projectPath: string;
-  parentPath: string;
-  createdRoot: string | null;
-  identity: ProjectDirectoryIdentity | null;
-  restoreEmptyDirectory: boolean;
-}): Promise<void> {
-  const { projectPath, parentPath, createdRoot, identity, restoreEmptyDirectory } = options;
-  try {
-    if (identity && (await projectDirectoryStillMatches(projectPath, identity))) {
-      await fs.rm(projectPath, { recursive: true, force: true });
-    }
-    if (restoreEmptyDirectory) {
-      await fs.mkdir(projectPath, { recursive: true });
-      return;
-    }
-    if (createdRoot) await removeCreatedDirectoryChain(parentPath, createdRoot);
-  } catch {
-    // Best effort: a leftover clone is better than deleting a swapped path.
-  }
-}
-
 /**
  * Adds a remote-only project, adopts an existing local checkout, or clones the
  * remote when the requested local path is missing or an empty directory.
@@ -412,9 +390,15 @@ export async function addExistingProject(
   requestedPath: string | undefined,
   storage: StorageService,
   run: typeof runCommand,
+  lockTimeouts?: AddExistingProjectLockTimeouts,
 ): Promise<Project> {
+  const urlLockTimeoutMs = lockTimeouts?.urlLockTimeoutMs ?? PROJECT_CREATION_URL_LOCK_TIMEOUT_MS;
+  const pathLockTimeoutMs =
+    lockTimeouts?.pathLockTimeoutMs ?? PROJECT_CREATION_PATH_LOCK_TIMEOUT_MS;
   const withGitUrlLock = <T>(operation: () => Promise<T>): Promise<T> =>
-    storage.withProjectCreationLock(projectGitUrlLockKey(gitUrl), operation);
+    storage.withProjectCreationLock(projectGitUrlLockKey(gitUrl), operation, {
+      acquireTimeoutMs: urlLockTimeoutMs,
+    });
 
   if (requestedPath === undefined) {
     return withGitUrlLock(async () => {
@@ -443,100 +427,90 @@ export async function addExistingProject(
   }
 
   return withGitUrlLock(() =>
-    storage.withProjectCreationLock(targetKey, async () => {
-      const projects = await storage.loadProjects();
-      if (projects.some((project) => project.gitUrl === gitUrl)) {
-        throw new Error(`${DUPLICATE_PROJECT_URL_PREFIX} ${gitUrl}`);
-      }
-      await assertPathIsFree(projects);
+    storage.withProjectCreationLock(
+      targetKey,
+      async () => {
+        const projects = await storage.loadProjects();
+        if (projects.some((project) => project.gitUrl === gitUrl)) {
+          throw new Error(`${DUPLICATE_PROJECT_URL_PREFIX} ${gitUrl}`);
+        }
+        await assertPathIsFree(projects);
 
-      const targetAfterLock = await inspectProjectPath(projectPath);
-      if (targetAfterLock.kind === "existing") {
-        return storage.addProject(createProject(gitUrl, projectPath), assertPathIsFree);
-      }
-
-      const parentPath = path.dirname(projectPath);
-      const reusedEmptyDirectory = targetAfterLock.kind === "empty-directory";
-      const emptyIdentity =
-        targetAfterLock.kind === "empty-directory" ? targetAfterLock.identity : null;
-      let createdRoot: string | null = null;
-      let temporaryPath: string | null = null;
-      let cloned = false;
-      let cloneIdentity: ProjectDirectoryIdentity | null = null;
-
-      try {
-        try {
-          createdRoot = (await fs.mkdir(parentPath, { recursive: true })) ?? null;
-          temporaryPath = await fs.mkdtemp(path.join(parentPath, ".orkestrator-clone-"));
-        } catch (error) {
-          throw new Error(`Could not create the local repository path: ${conciseError(error)}`);
+        const targetAfterLock = await inspectProjectPath(projectPath);
+        if (targetAfterLock.kind === "existing") {
+          return storage.addProject(createProject(gitUrl, projectPath), assertPathIsFree);
         }
 
-        try {
-          await run("git", ["clone", "--", gitUrl, "."], {
-            cwd: temporaryPath,
-            timeoutMs: PROJECT_CLONE_TIMEOUT_MS,
-            redactValues: [gitUrl],
-          });
-        } catch (error) {
-          throw new Error(
-            `Could not clone the Git repository: ${cloneCommandFailureDetail(error)}`,
-          );
-        }
+        const parentPath = path.dirname(projectPath);
+        const emptyIdentity =
+          targetAfterLock.kind === "empty-directory" ? targetAfterLock.identity : null;
+        let createdRoot: string | null = null;
+        let temporaryPath: string | null = null;
+        let cloned = false;
 
         try {
-          if (emptyIdentity) {
-            if (!(await projectDirectoryStillMatches(projectPath, emptyIdentity))) {
-              throw new Error("the destination directory changed during the clone");
-            }
-            if ((await fs.readdir(projectPath)).length > 0) {
-              throw new Error("the destination directory is no longer empty");
-            }
-            await fs.rmdir(projectPath);
-          }
           try {
-            await fs.rename(temporaryPath, projectPath);
-            temporaryPath = null;
+            createdRoot = (await fs.mkdir(parentPath, { recursive: true })) ?? null;
+            temporaryPath = await fs.mkdtemp(path.join(parentPath, ".orkestrator-clone-"));
           } catch (error) {
-            if (emptyIdentity) {
-              await fs.mkdir(projectPath, { recursive: true }).catch(() => undefined);
-            }
-            throw error;
+            throw new Error(`Could not create the local repository path: ${conciseError(error)}`);
           }
-          cloned = true;
-          cloneIdentity = await recordProjectDirectoryIdentity(projectPath);
-        } catch (error) {
-          throw new Error(`Could not create the local repository path: ${conciseError(error)}`);
-        }
 
-        try {
-          return await storage.addProject(createProject(gitUrl, projectPath), assertPathIsFree);
-        } catch (error) {
-          if (isDuplicateProjectUrlError(error)) {
-            await removeCloneCreatedByThisRequest({
-              projectPath,
-              parentPath,
-              createdRoot,
-              identity: cloneIdentity,
-              restoreEmptyDirectory: reusedEmptyDirectory,
+          try {
+            await run("git", ["clone", "--", gitUrl, "."], {
+              cwd: temporaryPath,
+              timeoutMs: PROJECT_CLONE_TIMEOUT_MS,
+              redactValues: [gitUrl],
             });
-            cloned = false;
-            throw error;
+          } catch (error) {
+            throw new Error(
+              `Could not clone the Git repository: ${cloneCommandFailureDetail(error)}`,
+            );
           }
-          throw new Error(
-            "The repository was cloned, but Orkestrator could not finish adding the project. " +
-              `Retry using the existing local path. ${conciseError(error)}`,
-          );
+
+          try {
+            if (emptyIdentity) {
+              if (!(await projectDirectoryStillMatches(projectPath, emptyIdentity))) {
+                throw new Error("the destination directory changed during the clone");
+              }
+              if ((await fs.readdir(projectPath)).length > 0) {
+                throw new Error("the destination directory is no longer empty");
+              }
+              await fs.rmdir(projectPath);
+            }
+            try {
+              await fs.rename(temporaryPath, projectPath);
+              temporaryPath = null;
+            } catch (error) {
+              if (emptyIdentity) {
+                await fs.mkdir(projectPath, { recursive: true }).catch(() => undefined);
+              }
+              throw error;
+            }
+            cloned = true;
+          } catch (error) {
+            throw new Error(`Could not create the local repository path: ${conciseError(error)}`);
+          }
+
+          try {
+            return await storage.addProject(createProject(gitUrl, projectPath), assertPathIsFree);
+          } catch (error) {
+            throw new Error(
+              "The repository was cloned, but Orkestrator could not finish adding the project. " +
+                `Retry using the existing local path. ${conciseError(error)}`,
+            );
+          }
+        } finally {
+          if (temporaryPath) {
+            await fs.rm(temporaryPath, { recursive: true, force: true }).catch(() => undefined);
+          }
+          if (!cloned && createdRoot) {
+            await removeCreatedDirectoryChain(parentPath, createdRoot);
+          }
         }
-      } finally {
-        if (temporaryPath) {
-          await fs.rm(temporaryPath, { recursive: true, force: true }).catch(() => undefined);
-        }
-        if (!cloned && createdRoot) {
-          await removeCreatedDirectoryChain(parentPath, createdRoot);
-        }
-      }
-    }),
+      },
+      { acquireTimeoutMs: pathLockTimeoutMs },
+    ),
   );
 }
 

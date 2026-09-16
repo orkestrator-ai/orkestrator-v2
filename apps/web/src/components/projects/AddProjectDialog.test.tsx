@@ -76,6 +76,26 @@ describe("AddProjectDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  test("keeps the dialog open when adding a typed missing path fails", async () => {
+    const onAdd = mock(async () => {
+      throw new Error("Could not clone the Git repository: authentication failed");
+    });
+    const { onOpenChange } = renderDialog({ onAdd });
+
+    fireEvent.change(screen.getByLabelText(/Git URL/), {
+      target: { value: "https://github.com/acme/project.git" },
+    });
+    fireEvent.change(screen.getByLabelText(/Local path/), {
+      target: { value: "/Users/dev/Projects/missing-copy" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add project" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Could not clone the Git repository: authentication failed",
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
   test("creates a new private project from the selected target path", async () => {
     const { onCreate, onAdd, onOpenChange } = renderDialog();
 

@@ -781,12 +781,13 @@ export abstract class StorageBase {
    * transaction. The hashed lock filename avoids putting user paths in storage
    * or logs while still coordinating backend processes that share dataDir.
    *
-   * The timings are sized for the critical section rather than for a JSON
-   * write: scratch creation spans `git init`, a commit, `gh repo create` and a
-   * push (310s), and `add_project` may hold the same lock across a 600s clone.
-   * A waiter must therefore outlast a legitimate holder, and the stale
-   * threshold must survive a holder whose event loop stalls — otherwise two
-   * backends enter and one rolls back the other's work.
+   * The default acquire timeout covers one critical section: scratch creation
+   * spans `git init`, a commit, `gh repo create` and a push (310s), and a path
+   * key may be held across a 600s clone. Callers that nest a path-key wait
+   * inside a Git-URL lock must pass a larger `acquireTimeoutMs` so a waiter
+   * can outlast that composed hold. The stale threshold must survive a holder
+   * whose event loop stalls — otherwise two backends enter and one rolls back
+   * the other's work.
    */
   protected static readonly PROJECT_CREATION_LOCK_STALE_MS = 90_000;
   protected static readonly PROJECT_CREATION_LOCK_TIMEOUT_MS = 660_000;
@@ -794,6 +795,7 @@ export abstract class StorageBase {
   async withProjectCreationLock<T>(
     canonicalProjectPath: string,
     operation: () => Promise<T>,
+    options?: { acquireTimeoutMs?: number },
   ): Promise<T> {
     const key = createHash("sha256").update(canonicalProjectPath).digest("hex");
     const target = this.file(path.join("project-creation-locks", key));
@@ -801,7 +803,7 @@ export abstract class StorageBase {
     const run = async () => {
       const release = await this.acquireMutationLock(target, "project creation", {
         staleMs: StorageBase.PROJECT_CREATION_LOCK_STALE_MS,
-        acquireTimeoutMs: StorageBase.PROJECT_CREATION_LOCK_TIMEOUT_MS,
+        acquireTimeoutMs: options?.acquireTimeoutMs ?? StorageBase.PROJECT_CREATION_LOCK_TIMEOUT_MS,
       });
       try {
         return await operation();

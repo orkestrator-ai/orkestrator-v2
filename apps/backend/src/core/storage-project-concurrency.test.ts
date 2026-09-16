@@ -202,6 +202,51 @@ describe("StorageService project mutation serialization", () => {
     });
   });
 
+  test("a longer acquire timeout lets a waiter outlast a nested path-wait-plus-clone interval", async () => {
+    await withSharedStorage(async (first, second) => {
+      let releaseFirst!: () => void;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let markFirstEntered!: () => void;
+      const firstEntered = new Promise<void>((resolve) => {
+        markFirstEntered = resolve;
+      });
+
+      const holder = first.withProjectCreationLock("git-url:https://example.invalid/a.git", () =>
+        first.withProjectCreationLock("/canonical/busy-path", async () => {
+          markFirstEntered();
+          await firstGate;
+        }),
+      );
+      await firstEntered;
+
+      let waiterEntered = false;
+      const waiter = second.withProjectCreationLock(
+        "git-url:https://example.invalid/a.git",
+        async () => {
+          waiterEntered = true;
+        },
+        { acquireTimeoutMs: 400 },
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(waiterEntered).toBe(false);
+      const stillWaiting = await Promise.race([
+        waiter.then(
+          () => false,
+          () => false,
+        ),
+        new Promise<true>((resolve) => setTimeout(() => resolve(true), 20)),
+      ]);
+      expect(stillWaiting).toBe(true);
+
+      releaseFirst();
+      await Promise.all([holder, waiter]);
+      expect(waiterEntered).toBe(true);
+    });
+  });
+
   test("times out rather than entering a creation lock another backend holds", async () => {
     await withSharedStorage(async (first, _second, dataDir) => {
       const key = createHash("sha256").update("/canonical/busy").digest("hex");
@@ -218,7 +263,7 @@ describe("StorageService project mutation serialization", () => {
       let calls = 0;
       Date.now = () => {
         calls += 1;
-        return calls === 1 ? startedAt : startedAt + 360_001;
+        return calls === 1 ? startedAt : startedAt + 660_001;
       };
       try {
         await expect(

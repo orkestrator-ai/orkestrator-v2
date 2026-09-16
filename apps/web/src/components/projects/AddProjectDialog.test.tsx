@@ -45,11 +45,55 @@ describe("AddProjectDialog", () => {
 
     expect(existingTab.getAttribute("data-state")).toBe("active");
     expect(createTab.getAttribute("data-state")).toBe("inactive");
+    expect(
+      screen.getByText("Select a local clone, or enter a new path to clone this repository there."),
+    ).toBeTruthy();
 
     fireEvent.mouseDown(createTab, { button: 0 });
 
     expect(existingTab.getAttribute("data-state")).toBe("inactive");
     expect(createTab.getAttribute("data-state")).toBe("active");
+  });
+
+  test("submits a typed destination path with the Git URL", async () => {
+    const { onAdd, onCreate, onOpenChange } = renderDialog();
+
+    fireEvent.change(screen.getByLabelText(/Git URL/), {
+      target: { value: "https://github.com/acme/project.git" },
+    });
+    fireEvent.change(screen.getByLabelText(/Local path/), {
+      target: { value: "/Users/dev/Projects/missing-copy" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add project" }));
+
+    await waitFor(() => {
+      expect(onAdd).toHaveBeenCalledWith(
+        "https://github.com/acme/project.git",
+        "/Users/dev/Projects/missing-copy",
+      );
+    });
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  test("keeps the dialog open when adding a typed missing path fails", async () => {
+    const onAdd = mock(async () => {
+      throw new Error("Could not clone the Git repository: authentication failed");
+    });
+    const { onOpenChange } = renderDialog({ onAdd });
+
+    fireEvent.change(screen.getByLabelText(/Git URL/), {
+      target: { value: "https://github.com/acme/project.git" },
+    });
+    fireEvent.change(screen.getByLabelText(/Local path/), {
+      target: { value: "/Users/dev/Projects/missing-copy" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add project" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Could not clone the Git repository: authentication failed",
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 
   test("creates a new private project from the selected target path", async () => {

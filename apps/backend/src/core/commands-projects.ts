@@ -299,6 +299,221 @@ export async function rollbackScratchRepository(options: {
   }
 }
 
+export const PROJECT_CLONE_TIMEOUT_MS = 600_000;
+/** Path-key budget: one 600s clone plus a short waiter buffer. */
+export const PROJECT_CREATION_PATH_LOCK_TIMEOUT_MS = 660_000;
+/**
+ * URL-key budget: a nested path-lock wait plus one clone, plus a short buffer.
+ * A shared timeout cannot cover this composition — raising both budgets
+ * together just lengthens the inner wait.
+ */
+export const PROJECT_CREATION_URL_LOCK_TIMEOUT_MS =
+  PROJECT_CREATION_PATH_LOCK_TIMEOUT_MS + PROJECT_CLONE_TIMEOUT_MS + 60_000;
+
+export type AddExistingProjectLockTimeouts = {
+  urlLockTimeoutMs?: number;
+  pathLockTimeoutMs?: number;
+};
+
+const DUPLICATE_PROJECT_URL_PREFIX = "Duplicate project URL:";
+
+/**
+ * Creation locks are hashed, so this prefix only has to stay distinct from a
+ * canonical local path. Two adds of one remote then share a lock even when
+ * they chose different destinations.
+ */
+function projectGitUrlLockKey(gitUrl: string): string {
+  return `git-url:${gitUrl}`;
+}
+
+function cloneCommandFailureDetail(error: unknown): string {
+  if (error instanceof CommandFailedError && error.executableMissing) {
+    return "Git is not installed or available on PATH";
+  }
+  if (error instanceof CommandFailedError && error.timedOut) {
+    return "the clone timed out";
+  }
+  return conciseError(error);
+}
+
+type ProjectPathInspection =
+  | { kind: "missing" }
+  | { kind: "empty-directory"; identity: ProjectDirectoryIdentity }
+  | { kind: "existing" };
+
+async function inspectProjectPath(projectPath: string): Promise<ProjectPathInspection> {
+  let stats;
+  try {
+    stats = await fs.lstat(projectPath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOTDIR") throw new Error(PROJECT_PATH_NOT_A_DIRECTORY);
+    if (code !== "ENOENT") {
+      throw new Error(`Could not inspect the project path: ${conciseError(error)}`);
+    }
+    return { kind: "missing" };
+  }
+
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new Error(PROJECT_PATH_NOT_A_DIRECTORY);
+  }
+
+  let entries: string[];
+  try {
+    entries = await fs.readdir(projectPath);
+  } catch (error) {
+    throw new Error(`Could not inspect the project path: ${conciseError(error)}`);
+  }
+
+  if (entries.length > 0) return { kind: "existing" };
+
+  try {
+    return {
+      kind: "empty-directory",
+      identity: {
+        dev: stats.dev,
+        ino: stats.ino,
+        realPath: await fs.realpath(projectPath),
+      },
+    };
+  } catch (error) {
+    throw new Error(`Could not resolve the project path: ${conciseError(error)}`);
+  }
+}
+
+/**
+ * Adds a remote-only project, adopts an existing local checkout, or clones the
+ * remote when the requested local path is missing or an empty directory.
+ */
+export async function addExistingProject(
+  gitUrl: string,
+  requestedPath: string | undefined,
+  storage: StorageService,
+  run: typeof runCommand,
+  lockTimeouts?: AddExistingProjectLockTimeouts,
+): Promise<Project> {
+  const urlLockTimeoutMs = lockTimeouts?.urlLockTimeoutMs ?? PROJECT_CREATION_URL_LOCK_TIMEOUT_MS;
+  const pathLockTimeoutMs =
+    lockTimeouts?.pathLockTimeoutMs ?? PROJECT_CREATION_PATH_LOCK_TIMEOUT_MS;
+  const withGitUrlLock = <T>(operation: () => Promise<T>): Promise<T> =>
+    storage.withProjectCreationLock(projectGitUrlLockKey(gitUrl), operation, {
+      acquireTimeoutMs: urlLockTimeoutMs,
+    });
+
+  if (requestedPath === undefined) {
+    return withGitUrlLock(async () => {
+      const projects = await storage.loadProjects();
+      if (projects.some((project) => project.gitUrl === gitUrl)) {
+        throw new Error(`${DUPLICATE_PROJECT_URL_PREFIX} ${gitUrl}`);
+      }
+      return storage.addProject(createProject(gitUrl));
+    });
+  }
+
+  const projectPath = resolveNewProjectPath(requestedPath);
+  const targetKey = comparableProjectPath(await canonicalProjectPath(projectPath));
+  const assertPathIsFree = duplicateLocalPathGuard(targetKey, projectPath);
+  const target = await inspectProjectPath(projectPath);
+
+  if (target.kind === "existing") {
+    return withGitUrlLock(async () => {
+      const projects = await storage.loadProjects();
+      if (projects.some((project) => project.gitUrl === gitUrl)) {
+        throw new Error(`${DUPLICATE_PROJECT_URL_PREFIX} ${gitUrl}`);
+      }
+      await assertPathIsFree(projects);
+      return storage.addProject(createProject(gitUrl, projectPath), assertPathIsFree);
+    });
+  }
+
+  return withGitUrlLock(() =>
+    storage.withProjectCreationLock(
+      targetKey,
+      async () => {
+        const projects = await storage.loadProjects();
+        if (projects.some((project) => project.gitUrl === gitUrl)) {
+          throw new Error(`${DUPLICATE_PROJECT_URL_PREFIX} ${gitUrl}`);
+        }
+        await assertPathIsFree(projects);
+
+        const targetAfterLock = await inspectProjectPath(projectPath);
+        if (targetAfterLock.kind === "existing") {
+          return storage.addProject(createProject(gitUrl, projectPath), assertPathIsFree);
+        }
+
+        const parentPath = path.dirname(projectPath);
+        const emptyIdentity =
+          targetAfterLock.kind === "empty-directory" ? targetAfterLock.identity : null;
+        let createdRoot: string | null = null;
+        let temporaryPath: string | null = null;
+        let cloned = false;
+
+        try {
+          try {
+            createdRoot = (await fs.mkdir(parentPath, { recursive: true })) ?? null;
+            temporaryPath = await fs.mkdtemp(path.join(parentPath, ".orkestrator-clone-"));
+          } catch (error) {
+            throw new Error(`Could not create the local repository path: ${conciseError(error)}`);
+          }
+
+          try {
+            await run("git", ["clone", "--", gitUrl, "."], {
+              cwd: temporaryPath,
+              timeoutMs: PROJECT_CLONE_TIMEOUT_MS,
+              redactValues: [gitUrl],
+            });
+          } catch (error) {
+            throw new Error(
+              `Could not clone the Git repository: ${cloneCommandFailureDetail(error)}`,
+            );
+          }
+
+          try {
+            if (emptyIdentity) {
+              if (!(await projectDirectoryStillMatches(projectPath, emptyIdentity))) {
+                throw new Error("the destination directory changed during the clone");
+              }
+              if ((await fs.readdir(projectPath)).length > 0) {
+                throw new Error("the destination directory is no longer empty");
+              }
+              await fs.rmdir(projectPath);
+            }
+            try {
+              await fs.rename(temporaryPath, projectPath);
+              temporaryPath = null;
+            } catch (error) {
+              if (emptyIdentity) {
+                await fs.mkdir(projectPath, { recursive: true }).catch(() => undefined);
+              }
+              throw error;
+            }
+            cloned = true;
+          } catch (error) {
+            throw new Error(`Could not create the local repository path: ${conciseError(error)}`);
+          }
+
+          try {
+            return await storage.addProject(createProject(gitUrl, projectPath), assertPathIsFree);
+          } catch (error) {
+            throw new Error(
+              "The repository was cloned, but Orkestrator could not finish adding the project. " +
+                `Retry using the existing local path. ${conciseError(error)}`,
+            );
+          }
+        } finally {
+          if (temporaryPath) {
+            await fs.rm(temporaryPath, { recursive: true, force: true }).catch(() => undefined);
+          }
+          if (!cloned && createdRoot) {
+            await removeCreatedDirectoryChain(parentPath, createdRoot);
+          }
+        }
+      },
+      { acquireTimeoutMs: pathLockTimeoutMs },
+    ),
+  );
+}
+
 export async function createProjectFromScratch(
   requestedPath: string,
   storage: StorageService,

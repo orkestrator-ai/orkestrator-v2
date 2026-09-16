@@ -148,6 +148,38 @@ describe("AddProjectDialog", () => {
     expect(getGitRemoteUrlMock).not.toHaveBeenCalled();
   });
 
+  test("submits a browse-selected empty folder with the typed Git URL", async () => {
+    const onAdd = mock(async () => undefined);
+    openDialogMock.mockResolvedValue("/Users/alice/empty-folder");
+    getGitRemoteUrlMock.mockResolvedValue(null);
+    renderDialog({ onAdd });
+    fireEvent.change(screen.getByLabelText(/Git URL/), {
+      target: { value: "https://github.com/acme/project.git" },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Select or detect repository directory",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(getGitRemoteUrlMock).toHaveBeenCalledWith("/Users/alice/empty-folder");
+    });
+    expect((screen.getByLabelText(/Local path/i) as HTMLInputElement).value).toBe(
+      "/Users/alice/empty-folder",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add project" }));
+
+    await waitFor(() =>
+      expect(onAdd).toHaveBeenCalledWith(
+        "https://github.com/acme/project.git",
+        "/Users/alice/empty-folder",
+      ),
+    );
+  });
+
   test("keeps the current Git URL when the selected directory has no remote", async () => {
     const validateGitUrl = mock(async () => true);
     openDialogMock.mockResolvedValue("/Users/alice/no-remote");

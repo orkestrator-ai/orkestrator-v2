@@ -1328,7 +1328,13 @@ export function useNativeAgentSession<TMessage = unknown>({
         // of the children: removing these makes pinned agents disappear (or
         // fall back to their launch rows) until the state read catches up.
         // Only fresh state or a different runtime identity can replace them.
-        ...(!identityChanged && current?.backgroundTasks
+        // A remount after the progressive cache was trimmed has no identity
+        // ref, so `identityChanged` stays false; compare generations so a
+        // retained projection cannot donate the previous runtime's cards.
+        ...(!identityChanged &&
+        current?.backgroundTasks &&
+        (progressiveIdentityRef.current !== undefined ||
+          current.generation === value.identity.sourceGeneration)
           ? { backgroundTasks: current.backgroundTasks }
           : {}),
         ...(hasAuthoritativeState && current.suggestedPrompt

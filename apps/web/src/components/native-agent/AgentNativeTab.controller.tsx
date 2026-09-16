@@ -1978,7 +1978,9 @@ export function SharedNativeAgentController({
       resolveModelLabel={resolveModelLabel}
       loadToolDetails={loadToolDetails}
       stopBackgroundTask={
-        adapter.capabilities.backgroundTasks ? stopBackgroundTaskFromCard : undefined
+        adapter.capabilities.backgroundTasks && sessionStateAuthoritative
+          ? stopBackgroundTaskFromCard
+          : undefined
       }
       asyncQuestionResponses={projection?.asyncQuestionResponses}
       respondToAsyncQuestion={platform === "codex" ? respondToAsyncQuestion : undefined}

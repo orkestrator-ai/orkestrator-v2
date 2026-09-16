@@ -85,10 +85,15 @@ const identity: NativeAgentViewIdentity = {
 let transcriptUpdates: Array<() => Promise<NativeAgentTranscriptUpdate<TestMessage>>> = [];
 let stateUpdates: Array<() => Promise<NativeAgentSessionStateUpdate>> = [];
 let dispatched: string[] = [];
+let backgroundTaskStops: string[] = [];
 
 const dispatchNativeAgentIntentMock = mock(async (input: { prompt?: string }) => {
   dispatched.push(input.prompt ?? "");
   return { outcome: "accepted" as const, requestId: "request-1" };
+});
+const stopNativeAgentBackgroundTaskMock = mock(async (input: { taskId: string }) => {
+  backgroundTaskStops.push(input.taskId);
+  return null;
 });
 
 mock.module("@/lib/backend", () => ({
@@ -138,6 +143,7 @@ mock.module("@/lib/backend", () => ({
     }) satisfies NativeAgentDiscoveryUpdate,
   getAgentHandoff: async () => null,
   dispatchNativeAgentIntent: dispatchNativeAgentIntentMock,
+  stopNativeAgentBackgroundTask: stopNativeAgentBackgroundTaskMock,
   getNativeAgentModelCatalog: async () => [],
   listNativeAgentResumableSessions: async () => [],
   getFileTree: async () => [],
@@ -176,13 +182,14 @@ function message(id: string, content: string): TestMessage {
 function transcriptSnapshot(
   token: string,
   messages: TestMessage[],
+  extras: { identity?: NativeAgentViewIdentity } = {},
 ): NativeAgentTranscriptUpdate<TestMessage> {
   return {
     viewVersion: 1,
     status: "snapshot",
     token,
     value: {
-      identity,
+      identity: extras.identity ?? identity,
       freshness: messages.length === 0 ? "empty" : "current",
       messages,
       historyEpoch: "epoch-1",
@@ -270,11 +277,14 @@ const pendingApproval: NativeAgentSessionStateView["interactions"] = [
 
 beforeEach(() => {
   identity.platform = "codex";
+  identity.sourceGeneration = "generation-1";
   resetNativeAgentSyncCapabilityForTests();
   transcriptUpdates = [];
   stateUpdates = [];
   dispatched = [];
+  backgroundTaskStops = [];
   dispatchNativeAgentIntentMock.mockClear();
+  stopNativeAgentBackgroundTaskMock.mockClear();
   useEnvironmentStore.setState({
     environments: [
       {
@@ -335,6 +345,7 @@ describe("AgentNativeTab progressive controller", () => {
         screen.getByRole("button", { name: /Agent Investigate rendering Running/ }),
       ).toBeTruthy(),
     );
+    expect(screen.getByRole("button", { name: "Stop Investigate rendering" })).toBeTruthy();
     first.unmount();
 
     let releaseState!: () => void;
@@ -352,11 +363,16 @@ describe("AgentNativeTab progressive controller", () => {
       // The launch result is already successful; losing its task snapshot
       // falsely finishes the agent and moves it above the newer work.
       expect(screen.getByText("Newer work").compareDocumentPosition(agent) & 4).toBe(4);
+      // Cached cards stay visible, but Stop is an action and waits for authority.
+      expect(screen.queryByRole("button", { name: "Stop Investigate rendering" }) === null).toBe(
+        true,
+      );
       const composer = screen.getByRole("textbox");
       fireEvent.input(composer, { target: { textContent: "too early" } });
       fireEvent.keyDown(composer, { key: "Enter" });
       await waitFor(() => expect(screen.getByText(/Still reading the .* session/)).toBeTruthy());
       expect(dispatched).toEqual([]);
+      expect(backgroundTaskStops).toEqual([]);
     } finally {
       await act(async () => {
         releaseState();
@@ -366,7 +382,133 @@ describe("AgentNativeTab progressive controller", () => {
     expect(
       screen.getByRole("button", { name: /Agent Investigate rendering Running/ }),
     ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Stop Investigate rendering" })).toBeTruthy();
   });
+
+  test.each(["failed-read", "unavailable-state", "runtime-restart"] as const)(
+    "keeps Claude agent-card position through %s until authority returns",
+    async (transition) => {
+      identity.platform = "claude";
+      const launch: TestMessage = {
+        ...message("launch", ""),
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Investigate rendering",
+            toolName: "Agent",
+            toolUseId: "launch-1",
+            toolState: "success",
+            toolArgs: { description: "Investigate rendering", run_in_background: true },
+          },
+        ],
+      };
+      const backgroundTasks = [
+        {
+          id: "agent-1",
+          toolUseId: "launch-1",
+          description: "Investigate rendering",
+          status: "running" as const,
+        },
+      ];
+      transcriptUpdates = [async () => transcriptSnapshot("transcript-1", [launch])];
+      stateUpdates = [
+        async () =>
+          stateSnapshot("state-1", {
+            backgroundTasks,
+            turn: { phase: "running" },
+          }),
+      ];
+      renderTab();
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: /Agent Investigate rendering Running/ }),
+        ).toBeTruthy(),
+      );
+      expect(screen.getByRole("button", { name: "Stop Investigate rendering" })).toBeTruthy();
+
+      if (transition !== "runtime-restart") {
+        transcriptUpdates = [];
+        stateUpdates = [
+          async () =>
+            transition === "failed-read"
+              ? Promise.reject(new Error("status endpoint timed out"))
+              : {
+                  viewVersion: 1,
+                  status: "unavailable",
+                  retryable: true,
+                  error: "status endpoint timed out",
+                },
+        ];
+        await waitFor(
+          () =>
+            expect(
+              screen.queryByRole("button", { name: "Stop Investigate rendering" }) === null,
+            ).toBe(true),
+          { timeout: 5_000 },
+        );
+        expect(
+          screen.getByRole("button", { name: /Agent Investigate rendering Running/ }),
+        ).toBeTruthy();
+      }
+
+      const restarted =
+        transition === "runtime-restart"
+          ? { ...identity, sourceGeneration: "generation-2" }
+          : identity;
+      let releaseState!: () => void;
+      const heldState = new Promise<NativeAgentSessionStateUpdate>((resolve) => {
+        releaseState = () =>
+          resolve(
+            stateSnapshot("state-2", {
+              ...(transition === "runtime-restart" ? { identity: restarted } : { backgroundTasks }),
+            }),
+          );
+      });
+      transcriptUpdates = [
+        async () =>
+          transcriptSnapshot("transcript-2", [launch, message("newer", "Newer work")], {
+            identity: restarted,
+          }),
+      ];
+      stateUpdates = [() => heldState];
+      try {
+        await waitFor(() => expect(screen.getByText("Newer work")).toBeTruthy(), {
+          timeout: 5_000,
+        });
+        expect(screen.queryByRole("button", { name: "Stop Investigate rendering" }) === null).toBe(
+          true,
+        );
+        expect(backgroundTaskStops).toEqual([]);
+        const running = screen.queryByRole("button", {
+          name: /Agent Investigate rendering Running/,
+        });
+        if (transition === "runtime-restart") {
+          // A new runtime must not inherit the previous generation's pin.
+          expect(running === null).toBe(true);
+        } else {
+          expect(running).toBeTruthy();
+          expect(screen.getByText("Newer work").compareDocumentPosition(running!) & 4).toBe(4);
+        }
+      } finally {
+        await act(async () => {
+          releaseState();
+          await heldState;
+        });
+      }
+      if (transition === "runtime-restart") {
+        await waitFor(() =>
+          expect(
+            screen.queryByRole("button", { name: /Agent Investigate rendering Running/ }) === null,
+          ).toBe(true),
+        );
+      } else {
+        expect(
+          screen.getByRole("button", { name: /Agent Investigate rendering Running/ }),
+        ).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Stop Investigate rendering" })).toBeTruthy();
+      }
+    },
+  );
 
   test("shows the transcript but withholds actions until session state lands", async () => {
     let releaseState!: () => void;

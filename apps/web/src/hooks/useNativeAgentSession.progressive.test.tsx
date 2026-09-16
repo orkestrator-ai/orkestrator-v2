@@ -927,6 +927,171 @@ describe("useNativeAgentSession progressive view", () => {
     },
   );
 
+  test("clears cached agent tasks when a fresh snapshot omits backgroundTasks", async () => {
+    const backgroundTasks = [
+      {
+        id: "agent-1",
+        toolUseId: "launch-1",
+        description: "Investigate rendering",
+        status: "running" as const,
+      },
+    ];
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+    stateUpdates = [() => stateSnapshot("state-1", { backgroundTasks })];
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    expect(result.current.projection?.backgroundTasks).toEqual(backgroundTasks);
+
+    // Rebuilds the projection from the snapshot. Inheriting current tasks
+    // when this field is absent would pin stale cards with no way to clear them.
+    transcriptUpdates = [];
+    stateUpdates = [() => stateSnapshot("state-2")];
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.sessionStateAvailability).toBe("current");
+    expect(result.current.projection?.backgroundTasks ?? []).toEqual([]);
+  });
+
+  test("does not donate previous-runtime task cards after the progressive cache is trimmed", async () => {
+    const backgroundTasks = [
+      {
+        id: "agent-1",
+        toolUseId: "launch-1",
+        description: "Investigate rendering",
+        status: "running" as const,
+      },
+    ];
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+    stateUpdates = [() => stateSnapshot("state-1", { backgroundTasks })];
+    const first = renderSession();
+    await waitFor(() => expect(first.result.current.projection?.backgroundTasks).toEqual(backgroundTasks));
+    first.unmount();
+
+    expect(
+      useNativeAgentProjectionStore.getState().projections.get("env-env-1:tab-1")?.backgroundTasks,
+    ).toEqual(backgroundTasks);
+
+    // Progressive-cache eviction is independent of the projection ceiling.
+    // Filling it drops this session's identity while the task snapshot stays.
+    const store = useNativeAgentProjectionStore.getState();
+    for (let index = 0; index < 128; index += 1) {
+      store.setProgressiveCache(`filler-${index}`, {
+        identity: { ...identity, logicalSessionKey: `filler-${index}` },
+        transcriptAvailability: "current",
+        transcriptRefreshing: false,
+        stateAvailability: "unavailable",
+      });
+    }
+    expect(
+      useNativeAgentProjectionStore.getState().progressiveCaches.has("env-env-1:tab-1"),
+    ).toBe(false);
+    expect(
+      useNativeAgentProjectionStore.getState().projections.get("env-env-1:tab-1")?.backgroundTasks,
+    ).toEqual(backgroundTasks);
+
+    const restarted = { ...identity, sourceGeneration: "generation-2" };
+    transcriptUpdates = [
+      () =>
+        transcriptSnapshot("transcript-2", [message("m1"), message("m2")], {
+          identity: restarted,
+        }),
+    ];
+    stateUpdates = [
+      () =>
+        new Promise<NativeAgentSessionStateUpdate>(() => {
+          // Hold state: the transcript path is what would donate stale cards.
+        }),
+    ];
+    const remount = renderSession();
+    await waitFor(() => expect(remount.result.current.projection?.messages).toHaveLength(2));
+    expect(remount.result.current.sessionStateAvailability).not.toBe("current");
+    expect(remount.result.current.projection?.generation).toBe("generation-2");
+    expect(remount.result.current.projection?.backgroundTasks).toBeUndefined();
+  });
+
+  test("a missing state read clears its token so recovery can reinstall approvals", async () => {
+    const interactions = [
+      {
+        id: "approval-1",
+        kind: "command-approval",
+        createdAt: "2026-09-09T00:00:00.000Z",
+      },
+    ] as unknown as NativeAgentSessionStateView["interactions"];
+    const composerControls = [
+      { id: "stop", label: "Stop", kind: "stop" },
+    ] as unknown as NativeAgentSessionStateView["composerControls"];
+    const backgroundTasks = [
+      {
+        id: "agent-1",
+        toolUseId: "launch-1",
+        description: "Investigate rendering",
+        status: "running" as const,
+      },
+    ];
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+    stateUpdates = [() => stateSnapshot("state-1", { interactions, composerControls, backgroundTasks })];
+
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    expect(result.current.projection?.interactions).toHaveLength(1);
+    expect(result.current.projection?.composerControls).toHaveLength(1);
+    expect(
+      useNativeAgentProjectionStore.getState().progressiveCaches.get("env-env-1:tab-1")
+        ?.stateToken,
+    ).toBe("state-1");
+
+    transcriptUpdates = [];
+    stateUpdates = [() => ({ viewVersion: 1, status: "missing" })];
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.sessionStateAvailability).toBe("unavailable");
+    expect(
+      useNativeAgentProjectionStore.getState().progressiveCaches.get("env-env-1:tab-1")
+        ?.stateToken,
+    ).toBeUndefined();
+
+    /*
+     * A later transcript read rebuilds the projection without action authority,
+     * which drops approvals and composer controls. Keeping the old token would
+     * let the next state poll answer `unchanged` and leave those fields gone.
+     */
+    let releaseState!: () => void;
+    const heldState = new Promise<NativeAgentSessionStateUpdate>((resolve) => {
+      releaseState = () =>
+        resolve(stateSnapshot("state-2", { interactions, composerControls, backgroundTasks }));
+    });
+    transcriptUpdates = [() => transcriptSnapshot("transcript-2", [message("m1"), message("m2")])];
+    stateUpdates = [() => heldState];
+    stateCalls = [];
+
+    let refreshed!: Promise<unknown>;
+    await act(async () => {
+      refreshed = result.current.refresh();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1", "m2"]),
+    );
+    expect(result.current.sessionStateAvailability).not.toBe("current");
+    expect(result.current.projection?.interactions).toEqual([]);
+    expect(result.current.projection?.composerControls).toEqual([]);
+    expect(result.current.projection?.backgroundTasks).toEqual(backgroundTasks);
+    expect(stateCalls[0]?.knownToken).toBeUndefined();
+
+    await act(async () => {
+      releaseState();
+      await refreshed;
+    });
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    expect(result.current.projection?.interactions).toHaveLength(1);
+    expect(result.current.projection?.composerControls).toHaveLength(1);
+    expect(result.current.projection?.backgroundTasks).toEqual(backgroundTasks);
+  });
+
   test("a remount keeps messages that a later live snapshot omits", async () => {
     transcriptUpdates = [
       () => transcriptSnapshot("transcript-1", [message("m1"), message("m2"), message("m3")]),

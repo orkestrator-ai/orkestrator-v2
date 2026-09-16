@@ -354,6 +354,93 @@ describe("native agent progressive remainder", () => {
     );
   });
 
+  test("keeps a persisted tail while a restored Codex thread hydrates", async () => {
+    let coldPreview = false;
+    let releaseExact!: () => void;
+    const exactGate = new Promise<void>((resolve) => {
+      releaseExact = resolve;
+    });
+    const transcriptSnapshot = mock(async () =>
+      coldPreview
+        ? {
+            messages: [],
+            complete: false,
+            sourceToken: "source-restored-empty",
+            freshness: "cached" as const,
+          }
+        : {
+            messages: [progressiveMessage("m1", "persisted conversation")],
+            complete: true,
+            sourceToken: "source-before-restart",
+            freshness: "current" as const,
+          },
+    );
+    const messages = mock(async () => {
+      await exactGate;
+      return [progressiveMessage("m1", "persisted conversation")];
+    });
+    const stub = createProviderStub("codex", { transcriptSnapshot, messages });
+    await withService(
+      { prefix: "orkestrator-progressive-codex-restored-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:progressive-codex-restored",
+        };
+        await service.ensureSession(identity);
+        const first = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(first.status).toBe("snapshot");
+        const sessionKey = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        await internals(service).flushDisplayTailPersist(sessionKey);
+        internals(service).progressiveTranscriptCache.clear();
+        coldPreview = true;
+
+        const restored = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(restored.status).toBe("snapshot");
+        if (restored.status !== "snapshot") throw new Error("expected snapshot");
+        expect(restored.value.messages).toMatchObject([
+          { id: "m1", content: "persisted conversation" },
+        ]);
+
+        await waitForCondition(() => messages.mock.calls.length === 1);
+        const whileHydrating = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(whileHydrating.status).toBe("snapshot");
+        if (whileHydrating.status !== "snapshot") throw new Error("expected snapshot");
+        expect(whileHydrating.value.messages).toMatchObject([
+          { id: "m1", content: "persisted conversation" },
+        ]);
+
+        releaseExact();
+        await waitForCondition(async () => {
+          const hydrated = await service.getTranscriptUpdate({
+            ...identity,
+            viewVersion: 1,
+            liveWindow,
+            forceSnapshot: true,
+          });
+          return hydrated.status === "snapshot" && hydrated.value.freshness === "current";
+        });
+      },
+    );
+  });
+
   test("returns a transcript delta when only an older message changes", async () => {
     let revision = 1;
     const transcriptSnapshot = mock(async () => ({

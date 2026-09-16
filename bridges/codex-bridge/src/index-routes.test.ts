@@ -409,14 +409,19 @@ describe("session detail route outcomes", () => {
     await withRuntimeMethod(
       "getMessages",
       async () => messages,
-      async () => {
-        const response = await app.request("/session/session-1/messages");
-        expect(response.status).toBe(200);
-        expect(await response.json()).toEqual({
-          messages,
-          messageWindow: { truncated: false },
-        });
-      },
+      () =>
+        withRuntimeMethod(
+          "transcriptComplete",
+          () => true,
+          async () => {
+            const response = await app.request("/session/session-1/messages");
+            expect(response.status).toBe(200);
+            expect(await response.json()).toEqual({
+              messages,
+              messageWindow: { truncated: false },
+            });
+          },
+        ),
     );
 
     await withRuntimeMethod(

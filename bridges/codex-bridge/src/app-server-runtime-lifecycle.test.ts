@@ -99,9 +99,18 @@ describe("session lifecycle", () => {
       title: "Restored",
     });
     expect(h.child().requests.some((request) => request.method === "thread/resume")).toBe(false);
+    // The cold-start preview has not loaded the rollout yet. Marking this empty
+    // cache complete would stop the progressive reader from asking the exact
+    // messages surface to re-attach and hydrate the restored thread.
+    expect(h.runtime.getCachedMessages("session-restored")).toEqual({
+      messages: [],
+      freshness: "cached",
+      complete: false,
+    });
 
     expect(await h.runtime.getMessages("session-restored")).toEqual([]);
     expect(h.child().requests.some((request) => request.method === "thread/resume")).toBe(true);
+    expect(h.runtime.getCachedMessages("session-restored")?.complete).toBe(true);
   });
 
   test("restores structured transcript visibility from the durable ledger after restart", async () => {

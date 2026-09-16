@@ -1132,7 +1132,22 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
    * are genuinely gone, so this is a notice rather than a paging cursor.
    */
   transcriptComplete(sessionId: string): boolean {
-    return this.registry.getSession(sessionId)?.localMessagesTrimmed !== true;
+    const session = this.registry.getSession(sessionId);
+    if (!session || session.localMessagesTrimmed) return false;
+
+    /*
+     * A durable session is restored with its thread id but without the rollout
+     * body. Until `ensureAttached` has resumed that thread, `localMessages` is
+     * only an empty preview -- it is not evidence that the conversation is
+     * empty. Reporting it complete prevents the backend's progressive reader
+     * from falling through to the exact `/messages` recovery surface, so its
+     * persisted display tail is replaced by an authoritative-looking empty
+     * transcript after an app restart.
+     *
+     * Threadless sessions are different: their local ring is the authoritative
+     * transcript (for example recovered context whose rollout is gone).
+     */
+    return session.threadId === null || this.registry.getThreadForSession(sessionId) !== undefined;
   }
 
   async getUsage(sessionId: string): Promise<EngineUsageSnapshot | undefined | null> {

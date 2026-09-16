@@ -1323,7 +1323,18 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(hasAuthoritativeState && current.recoverableDispatch
           ? { recoverableDispatch: current.recoverableDispatch }
           : {}),
-        ...(hasAuthoritativeState && current.backgroundTasks
+        // Task cards are cached presentation, like the transcript itself. A
+        // failed state read or remount revokes action authority, not knowledge
+        // of the children: removing these makes pinned agents disappear (or
+        // fall back to their launch rows) until the state read catches up.
+        // Only fresh state or a different runtime identity can replace them.
+        // A remount after the progressive cache was trimmed has no identity
+        // ref, so `identityChanged` stays false; compare generations so a
+        // retained projection cannot donate the previous runtime's cards.
+        ...(!identityChanged &&
+        current?.backgroundTasks &&
+        (progressiveIdentityRef.current !== undefined ||
+          current.generation === value.identity.sourceGeneration)
           ? { backgroundTasks: current.backgroundTasks }
           : {}),
         ...(hasAuthoritativeState && current.suggestedPrompt
@@ -1815,21 +1826,35 @@ export function useNativeAgentSession<TMessage = unknown>({
                 });
               } else if (update.status === "missing") {
                 stateMissing = true;
+                progressiveStateTokenRef.current = undefined;
                 markSessionStateAvailability("unavailable");
-                updateProgressiveCache({ stateAvailability: "unavailable" });
+                updateProgressiveCache({ stateToken: undefined, stateAvailability: "unavailable" });
               } else {
                 const message = update.error ?? "Session state is temporarily unavailable";
+                // Transcript reads may discard action-critical fields while
+                // state is unavailable. Recovery must reinstall those fields,
+                // not accept an `unchanged` reply against the old token.
+                progressiveStateTokenRef.current = undefined;
                 markSessionStateAvailability("unavailable");
                 setSessionStateError(message);
-                updateProgressiveCache({ stateAvailability: "unavailable", stateError: message });
+                updateProgressiveCache({
+                  stateToken: undefined,
+                  stateAvailability: "unavailable",
+                  stateError: message,
+                });
               }
             })
             .catch((error) => {
               if (!stillCurrent()) return;
               const message = error instanceof Error ? error.message : String(error);
+              progressiveStateTokenRef.current = undefined;
               markSessionStateAvailability("unavailable");
               setSessionStateError(message);
-              updateProgressiveCache({ stateAvailability: "unavailable", stateError: message });
+              updateProgressiveCache({
+                stateToken: undefined,
+                stateAvailability: "unavailable",
+                stateError: message,
+              });
             });
 
           void getNativeAgentDiscoveryUpdate({

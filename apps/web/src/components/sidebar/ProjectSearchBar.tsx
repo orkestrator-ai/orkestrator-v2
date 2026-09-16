@@ -12,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { StatusIndicator } from "@/components/environments/StatusIndicator";
+import { WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
 import { useConfigStore } from "@/stores/configStore";
 import { useUIStore } from "@/stores/uiStore";
 import { formatCompactRelativeTime } from "@/lib/format-relative-time";
@@ -291,13 +292,19 @@ export function ProjectSearchBar({
   const environmentHeading = hasQuery ? "Environments" : "Recent environments";
 
   return (
-    <div className="border-b border-border/80 bg-chrome px-2 py-2">
+    <div
+      data-testid="project-search-bar"
+      className={cn(
+        "flex shrink-0 items-center border-b border-border/80 bg-chrome px-2",
+        WORKSPACE_BAR_HEIGHT_CLASS,
+      )}
+    >
       <button
         type="button"
         data-testid="project-search-trigger"
         aria-label="Search projects and environments"
         onClick={() => setOpen(true)}
-        className="flex h-8 w-full items-center gap-2 rounded-lg border border-border/70 bg-input-surface px-2.5 text-left text-sm text-muted-foreground transition-colors hover:bg-elevated hover:text-foreground"
+        className="flex h-8 w-full items-center gap-2 rounded-lg border border-border/70 bg-input-surface px-2.5 text-left text-sm text-muted-foreground transition-colors hover:bg-elevated hover:text-foreground md:h-7"
       >
         <Search className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         <span className="min-w-0 truncate">Search projects, environments...</span>

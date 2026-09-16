@@ -1256,6 +1256,60 @@ describe("build pipeline multi-model review", () => {
     });
   });
 
+  test("retries only consolidation after consolidation fails", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      provider.invalidConsolidationResults = 10;
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+          { agent: "claude", model: "haiku" },
+          { agent: "claude", model: "compact" },
+        ]),
+      );
+
+      const failed = await advanceUntil(service, read, started.id, "failed", 60);
+      const firstReviewerSessions = failed.reviewFanout!.reviewers.map(
+        (reviewer) => reviewer.providerSessionId,
+      );
+      const firstReviewerReports = failed.reviewFanout!.reviewers.map(
+        (reviewer) => reviewer.report,
+      );
+      const firstConsolidation = failed.reviewFanout!.consolidation!;
+
+      provider.invalidConsolidationResults = 0;
+      provider.runningConsolidation = true;
+      const retried = await service.retryStage(started.id);
+
+      expect(retried.phase).toBe("reviewing");
+      expect(retried.error).toBeUndefined();
+      expect(retried.failureContext).toBeUndefined();
+      expect(retried.stageRetryRequested).toBeUndefined();
+      expect(retried.reviewFanout?.reviewers.map((reviewer) => reviewer.providerSessionId)).toEqual(
+        firstReviewerSessions,
+      );
+      expect(retried.reviewFanout?.reviewers.map((reviewer) => reviewer.report)).toEqual(
+        firstReviewerReports,
+      );
+      expect(retried.reviewFanout?.consolidation?.providerSessionId).not.toBe(
+        firstConsolidation.providerSessionId,
+      );
+      expect(
+        provider.created.filter(
+          (entry) => entry.label.startsWith("Review ") && entry.label !== "Review · Consolidation",
+        ),
+      ).toHaveLength(4);
+      expect(
+        provider.created.filter((entry) => entry.label === "Review · Consolidation"),
+      ).toHaveLength(2);
+      expect(provider.aborted).toContain(firstConsolidation.providerSessionId);
+
+      provider.runningConsolidation = false;
+      const addressing = await advanceUntil(service, read, started.id, "addressing", 10);
+      expect(addressing.phase).toBe("addressing");
+    });
+  });
+
   test("continues from the immutable package when the live worktree HEAD moves", async () => {
     await withPipeline(async ({ service, read, provider, worktree }) => {
       provider.ambiguousModels.add("opus");

@@ -782,13 +782,14 @@ export abstract class StorageBase {
    * or logs while still coordinating backend processes that share dataDir.
    *
    * The timings are sized for the critical section rather than for a JSON
-   * write: creation spans `git init`, a commit, `gh repo create` and a push,
-   * whose timeouts total 310s. A waiter must therefore outlast a legitimate
-   * holder, and the stale threshold must survive a holder whose event loop
-   * stalls — otherwise two backends enter and one rolls back the other's work.
+   * write: scratch creation spans `git init`, a commit, `gh repo create` and a
+   * push (310s), and `add_project` may hold the same lock across a 600s clone.
+   * A waiter must therefore outlast a legitimate holder, and the stale
+   * threshold must survive a holder whose event loop stalls — otherwise two
+   * backends enter and one rolls back the other's work.
    */
   protected static readonly PROJECT_CREATION_LOCK_STALE_MS = 90_000;
-  protected static readonly PROJECT_CREATION_LOCK_TIMEOUT_MS = 360_000;
+  protected static readonly PROJECT_CREATION_LOCK_TIMEOUT_MS = 660_000;
 
   async withProjectCreationLock<T>(
     canonicalProjectPath: string,

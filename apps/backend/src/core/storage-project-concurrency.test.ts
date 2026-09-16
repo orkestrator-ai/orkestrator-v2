@@ -218,7 +218,7 @@ describe("StorageService project mutation serialization", () => {
       let calls = 0;
       Date.now = () => {
         calls += 1;
-        return calls === 1 ? startedAt : startedAt + 360_001;
+        return calls === 1 ? startedAt : startedAt + 660_001;
       };
       try {
         await expect(

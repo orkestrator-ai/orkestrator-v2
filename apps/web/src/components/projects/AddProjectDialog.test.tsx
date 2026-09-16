@@ -55,6 +55,27 @@ describe("AddProjectDialog", () => {
     expect(createTab.getAttribute("data-state")).toBe("active");
   });
 
+  test("submits a typed destination path with the Git URL", async () => {
+    const { onAdd, onCreate, onOpenChange } = renderDialog();
+
+    fireEvent.change(screen.getByLabelText(/Git URL/), {
+      target: { value: "https://github.com/acme/project.git" },
+    });
+    fireEvent.change(screen.getByLabelText(/Local path/), {
+      target: { value: "/Users/dev/Projects/missing-copy" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add project" }));
+
+    await waitFor(() => {
+      expect(onAdd).toHaveBeenCalledWith(
+        "https://github.com/acme/project.git",
+        "/Users/dev/Projects/missing-copy",
+      );
+    });
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
   test("creates a new private project from the selected target path", async () => {
     const { onCreate, onAdd, onOpenChange } = renderDialog();
 

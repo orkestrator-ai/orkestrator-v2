@@ -12,7 +12,6 @@ import {
   isResourceGeneration,
   isResourceManifestKind,
   isResourceSnapshotRevision,
-  createProject,
   parseUpdateObject,
   runCommand,
   isAgentPlatform,
@@ -63,9 +62,8 @@ import {
   peekContainerAgentBridge,
   fetchAcpNormalizedModelsResult,
   parseClaudeBridgeModelCatalog,
-  projectPathKey,
-  duplicateLocalPathGuard,
   readOriginUrl,
+  addExistingProject,
   createProjectFromScratch,
 } from "./commands-helpers.js";
 
@@ -408,13 +406,12 @@ export function registerProjectCommands(
   );
   register("add_project", async ({ gitUrl, localPath }, { storage }) => {
     const requestedLocalPath = asOptionalString(localPath);
-    // Enforced inside the projects.json critical section so this cannot insert
-    // the duplicate that create_project_from_scratch guards against.
-    const guard =
-      requestedLocalPath === undefined
-        ? undefined
-        : duplicateLocalPathGuard(await projectPathKey(requestedLocalPath), requestedLocalPath);
-    return storage.addProject(createProject(asString(gitUrl, "gitUrl"), requestedLocalPath), guard);
+    return addExistingProject(
+      asString(gitUrl, "gitUrl"),
+      requestedLocalPath,
+      storage,
+      runProjectCreationCommand,
+    );
   });
   register("create_project_from_scratch", (args, { storage }) => {
     assertOnlyKeys(args, ["localPath"], "arguments");

@@ -278,7 +278,7 @@ export function AddProjectDialog({
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Select a local clone to copy its environment files into new environments.
+                  Select a local clone, or enter a new path to clone this repository there.
                 </p>
               </div>
             </TabsContent>

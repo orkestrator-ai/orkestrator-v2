@@ -45,6 +45,9 @@ describe("AddProjectDialog", () => {
 
     expect(existingTab.getAttribute("data-state")).toBe("active");
     expect(createTab.getAttribute("data-state")).toBe("inactive");
+    expect(
+      screen.getByText("Select a local clone, or enter a new path to clone this repository there."),
+    ).toBeTruthy();
 
     fireEvent.mouseDown(createTab, { button: 0 });
 

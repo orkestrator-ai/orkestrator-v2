@@ -211,13 +211,14 @@ describe("storage-backed command delegation", () => {
     const commands = createCommandRegistry();
 
     await expect(commands.get("get_projects")?.({}, context)).resolves.toEqual([project]);
+    const existingLocalPath = worktree;
     const added = (await commands.get("add_project")?.(
-      { gitUrl: "https://github.com/acme/repo.git", localPath: "/tmp/repo" },
+      { gitUrl: "https://github.com/acme/repo.git", localPath: existingLocalPath },
       context,
     )) as Record<string, unknown>;
     expect(added).toMatchObject({
       gitUrl: "https://github.com/acme/repo.git",
-      localPath: "/tmp/repo",
+      localPath: existingLocalPath,
     });
     expect(typeof added.id).toBe("string");
     await expect(

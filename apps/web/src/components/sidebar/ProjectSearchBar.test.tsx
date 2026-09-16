@@ -118,6 +118,15 @@ describe("ProjectSearchBar", () => {
     cleanup();
   });
 
+  test("matches the responsive workspace tab bar height", () => {
+    renderSearchBar();
+
+    const trigger = screen.getByTestId("project-search-trigger");
+    expect(trigger.parentElement?.className).toContain("min-h-[40px]");
+    expect(trigger.parentElement?.className).toContain("md:min-h-[32px]");
+    expect(trigger.className).toContain("md:h-7");
+  });
+
   test("opens a palette of recent projects and environments, including containerized ones", async () => {
     renderSearchBar();
     await openSearch();

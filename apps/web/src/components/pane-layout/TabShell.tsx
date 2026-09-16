@@ -11,9 +11,11 @@ import { cn } from "@/lib/utils";
  * the row, the tab shell, and the close affordance do not.
  */
 
+/** Responsive height shared by adjacent workspace chrome rows. */
+export const WORKSPACE_BAR_HEIGHT_CLASS = "min-h-[40px] md:min-h-[32px]";
+
 /** The row that holds the tabs. */
-export const TAB_STRIP_CLASS =
-  "flex min-h-[40px] items-center gap-0.5 overflow-x-auto border-b border-border/80 bg-background [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:min-h-[32px]";
+export const TAB_STRIP_CLASS = `flex ${WORKSPACE_BAR_HEIGHT_CLASS} items-center gap-0.5 overflow-x-auto border-b border-border/80 bg-background [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`;
 
 /** Every brand mark or type glyph in a tab strip is drawn at this size. */
 export const TAB_ICON_CLASS = "h-3 w-3 shrink-0";

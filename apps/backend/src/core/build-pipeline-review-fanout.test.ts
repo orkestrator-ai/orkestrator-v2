@@ -16,6 +16,9 @@ import type { StructuredReviewReport } from "@orkestrator/protocol/structured-re
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { StorageService } from "./storage.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
+import { ReviewSnapshotChangedError } from "./review-fanout.js";
+import { WorkflowResultRollout } from "./workflow-result-rollout.js";
+import { WorkflowResultService } from "./workflow-result-service.js";
 import type {
   BuildPipelineProvider,
   ProviderCreateSessionOptions,
@@ -122,6 +125,7 @@ class FanoutProvider implements BuildPipelineProvider {
   invalidConsolidationResults = 0;
   unknownSourceConsolidationResults = 0;
   runningConsolidation = false;
+  failingConsolidation = false;
   changingMessages = false;
   private consolidationResultCalls = 0;
   private messageVersion = 0;
@@ -164,6 +168,7 @@ class FanoutProvider implements BuildPipelineProvider {
 
   async status(sessionId: string): Promise<ProviderStatus> {
     this.statusReads.push(sessionId);
+    if (sessionId.includes("consolidation") && this.failingConsolidation) return "error";
     if (sessionId.includes("consolidation") && this.runningConsolidation) return "running";
     const model = this.sessionModels.get(sessionId);
     if (model !== undefined && this.runningModels.has(model)) return "running";
@@ -242,10 +247,11 @@ async function withPipeline(
     providers: Map<BuildPipelineAgent, FanoutProvider>;
     read: (id: string) => Promise<BuildPipeline>;
     worktree: { head: string; fingerprint: string; fail: boolean };
-    packageGeneration: { count: number; verificationCount: number };
+    packageGeneration: { count: number; verificationCount: number; failVerification: boolean };
     commands: string[];
+    workflowResults?: WorkflowResultService;
   }) => Promise<void>,
-  options: { transcriptPersistIntervalMs?: number } = {},
+  options: { transcriptPersistIntervalMs?: number; toolMode?: boolean } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-fanout-"));
   const storage = new StorageService(dataDir);
@@ -276,7 +282,7 @@ async function withPipeline(
     ["pi", new FanoutProvider("pi")],
   ]);
   const worktree = { head: HEAD, fingerprint: FINGERPRINT, fail: false };
-  const packageGeneration = { count: 0, verificationCount: 0 };
+  const packageGeneration = { count: 0, verificationCount: 0, failVerification: false };
   const commands: string[] = [];
   const invoke = async <T>(command: string, _args: Record<string, unknown> = {}): Promise<T> => {
     commands.push(command);
@@ -297,6 +303,11 @@ async function withPipeline(
     }
     if (command === "verify_looped_review_package") {
       packageGeneration.verificationCount += 1;
+      if (packageGeneration.failVerification) {
+        throw new ReviewSnapshotChangedError(
+          "Multi-model review stopped because the environment worktree changed after the review started.",
+        );
+      }
       return { valid: true } as T;
     }
     if (command === "start_environment" || command === "run_environment_setup") {
@@ -312,10 +323,25 @@ async function withPipeline(
     if (command === "pr_monitor_watch") return undefined as T;
     return undefined as T;
   };
+  const workflowResults = options.toolMode ? new WorkflowResultService(dataDir) : undefined;
   const service = new BuildPipelineService(storage, invoke, {
     autoAdvance: false,
     provider: async (_pipeline, agent) => providers.get(agent)!,
-    ...options,
+    transcriptPersistIntervalMs: options.transcriptPersistIntervalMs,
+    ...(workflowResults
+      ? {
+          workflowResults,
+          resolveAgentToolConnection: () => ({
+            url: "http://127.0.0.1:1234/mcp",
+            token: "test-token",
+          }),
+          workflowResultRollout: new WorkflowResultRollout(async () => ({
+            enabled: true,
+            providers: ["claude"],
+            kinds: ["consolidated-review"],
+          })),
+        }
+      : {}),
   });
   const read = async (id: string): Promise<BuildPipeline> => {
     const record = await storage.getBuildPipeline(id);
@@ -332,11 +358,27 @@ async function withPipeline(
       worktree,
       packageGeneration,
       commands,
+      workflowResults,
     });
   } finally {
     await service.shutdown();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
+}
+
+function reviewerSessionCreates(provider: FanoutProvider) {
+  return provider.created.filter(
+    (entry) => entry.label.startsWith("Review ") && entry.label !== "Review · Consolidation",
+  );
+}
+
+function fourReviewers() {
+  return [
+    { agent: "claude" as const, model: "opus" },
+    { agent: "claude" as const, model: "sonnet" },
+    { agent: "claude" as const, model: "haiku" },
+    { agent: "claude" as const, model: "compact" },
+  ];
 }
 
 function startInput(reviewers?: Array<{ agent: BuildPipelineAgent; model?: string }>) {
@@ -1308,6 +1350,146 @@ describe("build pipeline multi-model review", () => {
       const addressing = await advanceUntil(service, read, started.id, "addressing", 10);
       expect(addressing.phase).toBe("addressing");
     });
+  });
+
+  test("retries the full panel after a mid-review snapshot error cancels unfinished reviewers", async () => {
+    await withPipeline(async ({ service, storage, read, provider, packageGeneration }) => {
+      provider.runningModels.add("haiku");
+      provider.runningModels.add("compact");
+      const started = await service.start(startInput(fourReviewers()));
+
+      await advanceUntil(service, read, started.id, "reviewing");
+      await service.advanceNow(started.id);
+      const midPanel = await read(started.id);
+      expect(midPanel.reviewFanout?.reviewers.map((reviewer) => reviewer.status)).toEqual([
+        "completed",
+        "completed",
+        "running",
+        "running",
+      ]);
+      expect(reviewerSessionCreates(provider)).toHaveLength(4);
+      expect(midPanel.reviewFanout?.consolidation).toBeUndefined();
+
+      await rewritePipeline(storage, started.id, (pipeline) => {
+        for (const reviewer of pipeline.reviewFanout!.reviewers) {
+          if (reviewer.status === "running") reviewer.dispatchState = "prepared";
+        }
+      });
+      packageGeneration.failVerification = true;
+      const failed = await advanceUntil(service, read, started.id, "failed", 10);
+
+      expect(failed.reviewFanout?.consolidation).toBeUndefined();
+      expect(failed.reviewFanout?.reviewers.map((reviewer) => reviewer.status)).toEqual([
+        "completed",
+        "completed",
+        "cancelled",
+        "cancelled",
+      ]);
+      expect(failed.failureContext?.phase).toBe("reviewing");
+
+      packageGeneration.failVerification = false;
+      provider.runningModels.clear();
+      const retried = await service.retryStage(started.id);
+
+      expect(retried.phase).toBe("reviewing");
+      expect(retried.reviewFanout?.reviewers).toHaveLength(4);
+      expect(retried.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "pending")).toBe(
+        true,
+      );
+      expect(retried.reviewFanout?.consolidation).toBeUndefined();
+
+      await service.advanceNow(started.id);
+      expect(reviewerSessionCreates(provider)).toHaveLength(8);
+    });
+  });
+
+  test("retries the full panel when consolidation createSession fails before a record exists", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      provider.failingCreateLabels.add("Review · Consolidation");
+      const started = await service.start(startInput(fourReviewers()));
+
+      const failed = await advanceUntil(service, read, started.id, "failed", 20);
+      expect(failed.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "completed")).toBe(
+        true,
+      );
+      expect(failed.reviewFanout?.consolidation).toBeUndefined();
+      expect(reviewerSessionCreates(provider)).toHaveLength(4);
+
+      provider.failingCreateLabels.clear();
+      const retried = await service.retryStage(started.id);
+
+      expect(retried.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "pending")).toBe(
+        true,
+      );
+      expect(retried.reviewFanout?.consolidation).toBeUndefined();
+
+      await service.advanceNow(started.id);
+      expect(reviewerSessionCreates(provider)).toHaveLength(8);
+    });
+  });
+
+  test("retries the full panel when no reviewer produced a usable report", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      for (const model of ["opus", "sonnet", "haiku", "compact"]) {
+        provider.failingModels.add(model);
+      }
+      const started = await service.start(startInput(fourReviewers()));
+
+      const failed = await advanceUntil(service, read, started.id, "failed", 20);
+      expect(failed.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "failed")).toBe(
+        true,
+      );
+      expect(failed.reviewFanout?.consolidation).toBeUndefined();
+      expect(reviewerSessionCreates(provider)).toHaveLength(4);
+
+      provider.failingModels.clear();
+      const retried = await service.retryStage(started.id);
+
+      expect(retried.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "pending")).toBe(
+        true,
+      );
+
+      await service.advanceNow(started.id);
+      expect(reviewerSessionCreates(provider)).toHaveLength(8);
+    });
+  });
+
+  test("closes the failed tool-v1 consolidation slot and retries with a new requestId", async () => {
+    await withPipeline(
+      async ({ service, read, provider, workflowResults }) => {
+        provider.failingConsolidation = true;
+        const started = await service.start(startInput(fourReviewers()));
+
+        const failed = await advanceUntil(service, read, started.id, "failed", 20);
+        const firstConsolidation = failed.reviewFanout!.consolidation!;
+        expect(firstConsolidation.resultTransport).toBe("tool-v1");
+        expect(reviewerSessionCreates(provider)).toHaveLength(4);
+
+        provider.failingConsolidation = false;
+        provider.runningConsolidation = true;
+        const retried = await service.retryStage(started.id);
+
+        expect(retried.reviewFanout?.reviewers.map((reviewer) => reviewer.providerSessionId)).toEqual(
+          failed.reviewFanout!.reviewers.map((reviewer) => reviewer.providerSessionId),
+        );
+        expect(retried.reviewFanout?.consolidation?.providerSessionId).not.toBe(
+          firstConsolidation.providerSessionId,
+        );
+        expect(retried.reviewFanout?.consolidation?.requestId).not.toBe(firstConsolidation.requestId);
+        expect(retried.reviewFanout?.consolidation?.resultTransport).toBe("tool-v1");
+        expect(
+          await workflowResults!.status(
+            { environmentId: "env-1", projectId: "project-1" },
+            firstConsolidation.requestId,
+          ),
+        ).toMatchObject({ lifecycle: "superseded", completion: "blocked" });
+        expect(reviewerSessionCreates(provider)).toHaveLength(4);
+        expect(
+          provider.created.filter((entry) => entry.label === "Review · Consolidation"),
+        ).toHaveLength(2);
+      },
+      { toolMode: true },
+    );
   });
 
   test("continues from the immutable package when the live worktree HEAD moves", async () => {

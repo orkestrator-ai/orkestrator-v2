@@ -211,13 +211,20 @@ export class BuildPipelineReviewFanout {
    * consolidation. Rotating only its session avoids spending every reviewer's
    * turn again while still giving a failed or exhausted consolidator a clean
    * context and repair budget.
+   *
+   * A reviewer-stage failure never writes a consolidation record, and
+   * `abandonReviewFanout` marks unfinished reviewers cancelled — which
+   * `reviewersSettled` treats as done. Either signal means this is not a
+   * consolidation failure, so the caller must recreate the panel.
    */
   async restartConsolidation(pipeline: BuildPipeline): Promise<boolean> {
     const state = pipeline.reviewFanout;
     if (
       !state ||
       state.report ||
+      !state.consolidation ||
       !reviewersSettled(state.reviewers) ||
+      state.reviewers.some((reviewer) => reviewer.status === "cancelled") ||
       usableReviewerReports(state.reviewers).length === 0
     ) {
       return false;

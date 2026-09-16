@@ -8,13 +8,15 @@
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createServer, type Server } from "node:http";
+import { useCursorAgentForTests } from "./agent-session.js";
 import { authToken } from "./config.js";
 import { route } from "./http.js";
+import { resetPlanAccountWindowsForTests, seedPlanAccountWindowsForTests } from "./plan-usage.js";
+import { useCursorSdkRuntimeForTests } from "./sdk-runtime.js";
 import { clientSessionKeys, sessions, type SessionState } from "./state.js";
-import { attachFake } from "./testing/fake-agent.js";
+import { attachFake, fakeAgent, type FakeAgent } from "./testing/fake-agent.js";
 import { applyInteractionUpdate } from "./translate.js";
 import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, credentialStore } from "./credentials.js";
-import { resetPlanAccountWindowsForTests, seedPlanAccountWindowsForTests } from "./plan-usage.js";
 
 let server: Server;
 let baseUrl: string;
@@ -625,6 +627,142 @@ describe("prompt dispatch", () => {
     expect(state.promptJournal.has("r1")).toBe(false);
     expect(state.messages).toEqual([]);
     expect(state.uncheckedTranscriptBytes).toBe(0);
+    // The SDK agent that refused `send` must not be reused. Leaving it attached
+    // is what makes the same HTTP 500 come back on every retry.
+    expect(state.agent).toBeNull();
+  });
+
+  test("a send that fails to start releases the agent so a retry can re-attach", async () => {
+    const state = await createSession();
+    const refused = attachFake(state, { failToStart: new Error("provider refused") });
+    const conversationId = state.agentId;
+
+    const failed = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
+    });
+    expect(failed.status).toBe(500);
+    expect(state.agent).toBeNull();
+    expect(state.agentId).toBe(conversationId);
+    expect(state.promptJournal.has("r1")).toBe(false);
+    expect(refused.sends).toHaveLength(1);
+
+    const replacement = fakeAgent();
+    const { restore, resumed } = stubEnsureAgentResume(replacement);
+    try {
+      const retry = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
+      });
+      expect(retry.status).toBe(202);
+      expect(resumed).toEqual([conversationId]);
+      expect(state.agent).toBe(replacement);
+      expect(state.agent).not.toBe(refused);
+      expect(state.agentId).toBe(conversationId);
+      expect(refused.sends).toHaveLength(1);
+      expect(replacement.sends).toHaveLength(1);
+      expect(state.messages[0]).toMatchObject({ role: "user", content: "hi" });
+    } finally {
+      restore();
+    }
+  });
+
+  test("a stalled detach does not hold the prompt 500 or steal a replacement agent", async () => {
+    const state = await createSession();
+    let finishCleanup: () => void = () => undefined;
+    const cleanup = new Promise<void>((resolve) => {
+      finishCleanup = resolve;
+    });
+    const refused = attachFake(state, {
+      failToStart: new Error("provider refused"),
+      holdDispose: cleanup,
+    });
+    state.workspaceWarmRelease = () => cleanup;
+    state.hostedMcpClose = () => cleanup;
+
+    const failed = await Promise.race([
+      call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("prompt 500 was held by detach cleanup")), 200),
+      ),
+    ]);
+    expect(failed.status).toBe(500);
+    expect(state.agent).toBeNull();
+    expect(state.promptJournal.has("r1")).toBe(false);
+    expect(refused.sends).toHaveLength(1);
+
+    const replacement = fakeAgent();
+    const { restore } = stubEnsureAgentResume(replacement);
+    try {
+      const retry = await Promise.race([
+        call(`/session/${state.id}/prompt`, {
+          method: "POST",
+          body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("retry was held by the in-flight dispose")), 200),
+        ),
+      ]);
+      expect(retry.status).toBe(202);
+      expect(state.agent).toBe(replacement);
+      expect(state.agent).not.toBe(refused);
+      expect(refused.sends).toHaveLength(1);
+      expect(replacement.sends).toHaveLength(1);
+
+      finishCleanup();
+      await Promise.resolve();
+      expect(state.agent).toBe(replacement);
+    } finally {
+      finishCleanup();
+      restore();
+    }
+  });
+
+  test("a rejected detach still returns the prompt 500", async () => {
+    const state = await createSession();
+    const refused = attachFake(state, {
+      failToStart: new Error("provider refused"),
+      failDispose: new Error("dispose exploded"),
+    });
+    state.workspaceWarmRelease = async () => {
+      throw new Error("warm release failed");
+    };
+    state.hostedMcpClose = async () => {
+      throw new Error("mcp close failed");
+    };
+
+    const failed = await Promise.race([
+      call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("prompt 500 was held by a rejected detach")), 200),
+      ),
+    ]);
+    expect(failed.status).toBe(500);
+    expect(state.agent).toBeNull();
+    expect(state.promptJournal.has("r1")).toBe(false);
+    expect(refused.sends).toHaveLength(1);
+
+    const replacement = fakeAgent();
+    const { restore } = stubEnsureAgentResume(replacement);
+    try {
+      const retry = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
+      });
+      expect(retry.status).toBe(202);
+      expect(state.agent).toBe(replacement);
+      expect(refused.sends).toHaveLength(1);
+      await Promise.resolve();
+      expect(state.agent).toBe(replacement);
+    } finally {
+      restore();
+    }
   });
 
   test("starting a prompt clears an estimate left by the previous run", async () => {
@@ -1116,4 +1254,40 @@ async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<voi
     if (Date.now() > deadline) throw new Error("Timed out waiting for the bridge to settle");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+}
+
+/**
+ * Drive a retry through production `ensureAgent` instead of assigning
+ * `state.agent` by hand. Resume is the path that keeps conversation continuity
+ * after a refused send; create would start a new one.
+ */
+function stubEnsureAgentResume(replacement: FakeAgent): { restore: () => void; resumed: string[] } {
+  const previousApiKey = process.env.CURSOR_API_KEY;
+  process.env.CURSOR_API_KEY = previousApiKey?.trim() ? previousApiKey : "retry-test-key";
+  resetPlanAccountWindowsForTests();
+  const resumed: string[] = [];
+  const restoreRuntime = useCursorSdkRuntimeForTests({
+    configureStore: () => undefined,
+    createPlatform: (async () => ({
+      prewarmLocalWorkspace: async () => async () => undefined,
+    })) as unknown as typeof import("@cursor/sdk").createAgentPlatform,
+  });
+  const restoreAgent = useCursorAgentForTests({
+    resume: async (agentId: string) => {
+      resumed.push(agentId);
+      return replacement;
+    },
+    create: async () => {
+      throw new Error("retry must resume the persisted conversation, not create");
+    },
+  } as Parameters<typeof useCursorAgentForTests>[0]);
+  return {
+    resumed,
+    restore() {
+      restoreAgent();
+      restoreRuntime();
+      if (previousApiKey === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previousApiKey;
+    },
+  };
 }

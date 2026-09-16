@@ -732,7 +732,10 @@ async function handlePrompt(
     });
   } catch (error) {
     // `send` rejected before the run started, so nothing ran. Roll the turn
-    // back rather than leaving the session wedged as running.
+    // back rather than leaving the session wedged as running. The SDK agent
+    // has to go too: a failed send can leave that object unable to start
+    // another run, and `ensureAgent` would otherwise hand the same instance
+    // back on retry — which is why this 500 survives a second prompt.
     state.status = "error";
     state.error = errorText(error);
     state.dispatching = false;
@@ -748,6 +751,11 @@ async function handlePrompt(
     if (requestId) state.promptJournal.delete(requestId);
     state.revision += 1;
     schedulePersist();
+    // `detachAgent` nulls `state.agent` synchronously. Do not await the rest:
+    // dispose, warm-workspace release and hosted-MCP close have no timeout, and
+    // a hung teardown would hold this 500 until the backend times out a request
+    // that never dispatched. The idle sweeper fire-and-forgets the same way.
+    void detachAgent(state).catch(() => undefined);
     throw error;
   }
 

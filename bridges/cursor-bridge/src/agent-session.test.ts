@@ -951,6 +951,29 @@ describe("ensureAgent", () => {
   });
 });
 
+describe("detachAgent", () => {
+  test("late dispose does not clear an agent attached while cleanup is still running", async () => {
+    const state = newSessionState();
+    const first = await ensureAgent(state);
+    let finishDispose: () => void = () => undefined;
+    (first as { [Symbol.asyncDispose]: () => Promise<void> })[Symbol.asyncDispose] = () =>
+      new Promise((resolve) => {
+        finishDispose = resolve;
+      });
+
+    const detaching = detachAgent(state);
+    expect(state.agent).toBeNull();
+
+    const second = await ensureAgent(state);
+    expect(second).not.toBe(first);
+    expect(state.agent).toBe(second);
+
+    finishDispose();
+    await detaching;
+    expect(state.agent).toBe(second);
+  });
+});
+
 describe("listResumableSessions", () => {
   test("restoring an injected Agent reinstates the prior session catalogue", async () => {
     listed = { items: [{ agentId: "outer", status: "idle" }] };

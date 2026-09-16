@@ -29,6 +29,10 @@ export interface FakeRunScript {
    * handle exists yet, so a cancel arriving here has nothing to act on.
    */
   holdSend?: Promise<void>;
+  /** Holds `asyncDispose` open, standing in for a stalled SDK teardown. */
+  holdDispose?: Promise<void>;
+  /** Rejects `asyncDispose`, standing in for a teardown that throws. */
+  failDispose?: Error;
 }
 
 export interface FakeAgent extends SDKAgent {
@@ -91,7 +95,10 @@ export function fakeAgent(script: FakeRunScript = {}): FakeAgent {
     },
     close: () => undefined,
     reload: async () => undefined,
-    [Symbol.asyncDispose]: async () => undefined,
+    [Symbol.asyncDispose]: async () => {
+      if (script.holdDispose) await script.holdDispose;
+      if (script.failDispose) throw script.failDispose;
+    },
     listArtifacts: async () => [],
     downloadArtifact: async () => Buffer.alloc(0),
     getUsage: async () => ({ runs: [] }),

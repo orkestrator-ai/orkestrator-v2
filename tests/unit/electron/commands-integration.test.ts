@@ -110,7 +110,7 @@ import type {
 describe("storage-backed command delegation", () => {
   test("validates and delegates project and configuration commands", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
-    const project = { id: "project-1", name: "repo" };
+    const project = { id: "project-1", name: "repo", localPath: null };
     let config = {
       version: "1.0.0",
       global: {
@@ -125,6 +125,9 @@ describe("storage-backed command delegation", () => {
     const repositoryConfig = { defaultBranch: "develop", prBaseBranch: "develop" };
     const storage = {
       getDataDir: () => worktree,
+      withProjectCreationLock: mock(
+        async (_key: string, operation: () => Promise<unknown>) => operation(),
+      ),
       loadProjects: mock(async () => [project]),
       addProject: mock(async (value: Record<string, unknown>) => value),
       removeProject: mock(async (id: string) => id),
@@ -221,6 +224,10 @@ describe("storage-backed command delegation", () => {
       localPath: existingLocalPath,
     });
     expect(typeof added.id).toBe("string");
+    expect(storage.withProjectCreationLock).toHaveBeenCalledWith(
+      "git-url:https://github.com/acme/repo.git",
+      expect.any(Function),
+    );
     await expect(
       commands.get("remove_project")?.({ projectId: "project-1" }, context),
     ).resolves.toBe("project-1");

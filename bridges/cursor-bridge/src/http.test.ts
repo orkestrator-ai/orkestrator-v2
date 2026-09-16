@@ -625,6 +625,29 @@ describe("prompt dispatch", () => {
     expect(state.promptJournal.has("r1")).toBe(false);
     expect(state.messages).toEqual([]);
     expect(state.uncheckedTranscriptBytes).toBe(0);
+    // The SDK agent that refused `send` must not be reused. Leaving it attached
+    // is what makes the same HTTP 500 come back on every retry.
+    expect(state.agent).toBeNull();
+  });
+
+  test("a send that fails to start releases the agent so a retry can re-attach", async () => {
+    const state = await createSession();
+    attachFake(state, { failToStart: new Error("provider refused") });
+
+    const failed = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
+    });
+    expect(failed.status).toBe(500);
+    expect(state.agent).toBeNull();
+
+    attachFake(state);
+    const retry = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
+    });
+    expect(retry.status).toBe(202);
+    expect(state.messages[0]).toMatchObject({ role: "user", content: "hi" });
   });
 
   test("starting a prompt clears an estimate left by the previous run", async () => {

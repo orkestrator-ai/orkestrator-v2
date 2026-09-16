@@ -836,6 +836,97 @@ describe("useNativeAgentSession progressive view", () => {
     expect(stateCalls[0]?.knownToken).toBeUndefined();
   });
 
+  test.each(["remount", "failed-read", "unavailable-state", "runtime-restart"] as const)(
+    "keeps cached agent tasks scoped to their runtime during %s",
+    async (transition) => {
+      const backgroundTasks = [
+        {
+          id: "agent-1",
+          toolUseId: "launch-1",
+          description: "Investigate rendering",
+          status: "running" as const,
+        },
+      ];
+      transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+      stateUpdates = [() => stateSnapshot("state-1", { backgroundTasks })];
+      let view = renderSession();
+      await waitFor(() => expect(view.result.current.sessionStateAvailability).toBe("current"));
+      expect(view.result.current.projection?.backgroundTasks).toEqual(backgroundTasks);
+
+      if (transition === "remount") {
+        view.unmount();
+      } else if (transition !== "runtime-restart") {
+        stateUpdates = [
+          () =>
+            transition === "failed-read"
+              ? Promise.reject(new Error("status endpoint timed out"))
+              : {
+                  viewVersion: 1,
+                  status: "unavailable",
+                  retryable: true,
+                  error: "status endpoint timed out",
+                },
+        ];
+        await act(async () => {
+          await view.result.current.refresh();
+        });
+        expect(view.result.current.sessionStateAvailability).toBe("unavailable");
+      }
+
+      let releaseState!: () => void;
+      const heldState = new Promise<NativeAgentSessionStateUpdate>((resolve) => {
+        releaseState = () =>
+          resolve(
+            stateSnapshot("state-2", {
+              backgroundTasks: [],
+              ...(transition === "runtime-restart"
+                ? { identity: { ...identity, sourceGeneration: "generation-2" } }
+                : {}),
+            }),
+          );
+      });
+      transcriptUpdates = [
+        () =>
+          transcriptSnapshot(
+            "transcript-2",
+            [message("m1"), message("m2")],
+            transition === "runtime-restart"
+              ? { identity: { ...identity, sourceGeneration: "generation-2" } }
+              : {},
+          ),
+      ];
+      stateUpdates = [() => heldState];
+      let refreshed: Promise<unknown> | undefined;
+      if (transition === "remount") {
+        view = renderSession();
+      } else {
+        await act(async () => {
+          refreshed = view.result.current.refresh();
+        });
+      }
+      try {
+        await waitFor(() => expect(view.result.current.projection?.messages).toHaveLength(2));
+        // A transcript read cannot declare a known child gone. Actions still
+        // wait for fresh authority, but the card must remain in the same place.
+        expect(view.result.current.sessionStateAvailability).not.toBe("current");
+        expect(view.result.current.projection?.backgroundTasks).toEqual(
+          transition === "runtime-restart" ? undefined : backgroundTasks,
+        );
+        if (transition !== "runtime-restart") {
+          expect(stateCalls.at(-1)?.knownToken).toBeUndefined();
+        }
+      } finally {
+        await act(async () => {
+          releaseState();
+          await refreshed;
+        });
+      }
+      await waitFor(() => expect(view.result.current.sessionStateAvailability).toBe("current"));
+      // An actual empty snapshot must clear the cached presentation.
+      expect(view.result.current.projection?.backgroundTasks).toEqual([]);
+    },
+  );
+
   test("a remount keeps messages that a later live snapshot omits", async () => {
     transcriptUpdates = [
       () => transcriptSnapshot("transcript-1", [message("m1"), message("m2"), message("m3")]),

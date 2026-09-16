@@ -8,7 +8,7 @@
  * over an authoritative snapshot never withdraws either.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   NativeAgentDiscoveryUpdate,
   NativeAgentSessionProjection,
@@ -32,7 +32,7 @@ interface TestMessage {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
-  parts: { type: "text"; content: string }[];
+  parts: NativeMessage["parts"];
 }
 
 const realBackendSnapshot = { ...realBackend };
@@ -102,7 +102,7 @@ mock.module("@/lib/backend", () => ({
     providerSessionId: identity.providerSessionId,
     logicalSessionKey: identity.logicalSessionKey,
     environmentId: identity.environmentId,
-    agent: "codex",
+    agent: identity.platform,
   }),
   adoptNativeAgentSession: async () => ({}),
   getNativeAgentProjection: async () => null,
@@ -155,7 +155,7 @@ afterAll(() => {
 
 function tabData(): NativeAgentTabData {
   return {
-    platform: "codex",
+    platform: identity.platform,
     environmentId: "env-1",
     containerId: "container-1",
     sessionId: identity.providerSessionId,
@@ -198,7 +198,7 @@ function stateView(extras: Partial<NativeAgentSessionStateView> = {}): NativeAge
     turn: { phase: "idle" },
     interactions: [],
     composerControls: [],
-    capabilities: nativeAgentCapabilities("codex"),
+    capabilities: nativeAgentCapabilities(identity.platform),
     notices: [],
     ...extras,
   };
@@ -213,7 +213,7 @@ function stateSnapshot(
 
 function seedProjection(messages: TestMessage[]): NativeAgentSessionProjection<TestMessage> {
   return {
-    platform: "codex",
+    platform: identity.platform,
     environmentId: "env-1",
     sessionId: identity.providerSessionId,
     connection: "connected",
@@ -221,7 +221,7 @@ function seedProjection(messages: TestMessage[]): NativeAgentSessionProjection<T
     messages,
     interactions: [],
     composerControls: [],
-    capabilities: nativeAgentCapabilities("codex"),
+    capabilities: nativeAgentCapabilities(identity.platform),
     revision: 1,
     generation: "generation-1",
   };
@@ -269,6 +269,7 @@ const pendingApproval: NativeAgentSessionStateView["interactions"] = [
 ];
 
 beforeEach(() => {
+  identity.platform = "codex";
   resetNativeAgentSyncCapabilityForTests();
   transcriptUpdates = [];
   stateUpdates = [];
@@ -303,6 +304,70 @@ function renderTab() {
 }
 
 describe("AgentNativeTab progressive controller", () => {
+  test("keeps a Claude agent pinned when returning before task status has refreshed", async () => {
+    identity.platform = "claude";
+    const launch: TestMessage = {
+      ...message("launch", ""),
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Investigate rendering",
+          toolName: "Agent",
+          toolUseId: "launch-1",
+          toolState: "success",
+          toolArgs: { description: "Investigate rendering", run_in_background: true },
+        },
+      ],
+    };
+    const backgroundTasks = [
+      {
+        id: "agent-1",
+        toolUseId: "launch-1",
+        description: "Investigate rendering",
+        status: "running" as const,
+      },
+    ];
+    transcriptUpdates = [async () => transcriptSnapshot("transcript-1", [launch])];
+    stateUpdates = [async () => stateSnapshot("state-1", { backgroundTasks })];
+    const first = renderTab();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /Agent Investigate rendering Running/ }),
+      ).toBeTruthy(),
+    );
+    first.unmount();
+
+    let releaseState!: () => void;
+    const heldState = new Promise<NativeAgentSessionStateUpdate>((resolve) => {
+      releaseState = () => resolve(stateSnapshot("state-2", { backgroundTasks }));
+    });
+    transcriptUpdates = [
+      async () => transcriptSnapshot("transcript-2", [launch, message("newer", "Newer work")]),
+    ];
+    stateUpdates = [() => heldState];
+    renderTab();
+    try {
+      await waitFor(() => expect(screen.getByText("Newer work")).toBeTruthy());
+      const agent = screen.getByRole("button", { name: /Agent Investigate rendering Running/ });
+      // The launch result is already successful; losing its task snapshot
+      // falsely finishes the agent and moves it above the newer work.
+      expect(screen.getByText("Newer work").compareDocumentPosition(agent) & 4).toBe(4);
+      const composer = screen.getByRole("textbox");
+      fireEvent.input(composer, { target: { textContent: "too early" } });
+      fireEvent.keyDown(composer, { key: "Enter" });
+      await waitFor(() => expect(screen.getByText(/Still reading the .* session/)).toBeTruthy());
+      expect(dispatched).toEqual([]);
+    } finally {
+      await act(async () => {
+        releaseState();
+        await heldState;
+      });
+    }
+    expect(
+      screen.getByRole("button", { name: /Agent Investigate rendering Running/ }),
+    ).toBeTruthy();
+  });
+
   test("shows the transcript but withholds actions until session state lands", async () => {
     let releaseState!: () => void;
     const heldState = new Promise<NativeAgentSessionStateUpdate>((resolve) => {

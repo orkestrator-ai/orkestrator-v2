@@ -751,7 +751,11 @@ async function handlePrompt(
     if (requestId) state.promptJournal.delete(requestId);
     state.revision += 1;
     schedulePersist();
-    await detachAgent(state).catch(() => undefined);
+    // `detachAgent` nulls `state.agent` synchronously. Do not await the rest:
+    // dispose, warm-workspace release and hosted-MCP close have no timeout, and
+    // a hung teardown would hold this 500 until the backend times out a request
+    // that never dispatched. The idle sweeper fire-and-forgets the same way.
+    void detachAgent(state).catch(() => undefined);
     throw error;
   }
 

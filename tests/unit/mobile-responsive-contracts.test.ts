@@ -62,11 +62,18 @@ describe("mobile responsive layout contracts", () => {
     ["apps/web/src/components/pane-layout/DraggableTabBar.tsx", "TAB_STRIP_CLASS"],
     [
       "apps/web/src/components/pane-layout/TabShell.tsx",
+      "WORKSPACE_BAR_HEIGHT_CLASS",
       "text-muted-foreground",
       "md:hover-fine:opacity-0",
       "h-7 w-7",
       "overflow-x-auto",
       "md:min-h-[32px]",
+    ],
+    [
+      "apps/web/src/components/sidebar/ProjectSearchBar.tsx",
+      "WORKSPACE_BAR_HEIGHT_CLASS",
+      "shrink-0",
+      "md:h-7",
     ],
     ["apps/web/src/components/ui/alert-dialog.tsx", "max-h-[calc(100dvh-1rem)]", "overflow-y-auto"],
     ["apps/web/src/components/ui/dialog.tsx", "max-h-[calc(100dvh-1rem)]", "overflow-y-auto"],

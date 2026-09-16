@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
-import { TabShell } from "./TabShell";
+import { TAB_STRIP_CLASS, TabShell, WORKSPACE_BAR_HEIGHT_CLASS } from "./TabShell";
 
 describe("TabShell", () => {
   afterEach(cleanup);
+
+  test("keeps the tab strip on the shared workspace bar height", () => {
+    expect(TAB_STRIP_CLASS).toContain(WORKSPACE_BAR_HEIGHT_CLASS);
+  });
 
   test("renders and dims the active marker for an unfocused pane", () => {
     const { container } = render(

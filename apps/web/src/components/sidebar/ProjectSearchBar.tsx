@@ -293,6 +293,7 @@ export function ProjectSearchBar({
 
   return (
     <div
+      data-testid="project-search-bar"
       className={cn(
         "flex shrink-0 items-center border-b border-border/80 bg-chrome px-2",
         WORKSPACE_BAR_HEIGHT_CLASS,

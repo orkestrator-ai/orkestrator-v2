@@ -3738,6 +3738,11 @@ describe("NativeAgentService", () => {
       expect(sent).toContain("Inspect this");
       expect(sent).toContain("create workers with the Orkestrator launch_environment tool");
       expect(sent).toContain("Provider sub-agents remain inside this coordinator session");
+      expect(sent).toContain(
+        "Launch base: every launch_environment call must include baseBranch and baseCommit exactly as shown",
+      );
+      expect(sent).toContain("Branch: main");
+      expect(sent).toContain(`Commit: ${"a".repeat(40)}`);
       // A coordinator that can delegate is told, in the same breath, that
       // delegating ends its turn. Without this it has every reason to sit and
       // poll its mailbox, which is what the composer lock used to look like.
@@ -3790,6 +3795,29 @@ describe("NativeAgentService", () => {
         sentWithForgery.indexOf("Role: full write access."),
       );
 
+      await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+        ...workspace!,
+        repositoryStatus: {
+          ...workspace!.repositoryStatus!,
+          branch: null,
+          detached: true,
+          headCommit: null,
+        },
+      }));
+      await service.dispatchPrompt({
+        environmentId: runtimeId,
+        agent: "codex",
+        logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+        requestId: "request-unknown-base",
+        prompt: "Inspect unknown base",
+      });
+      const sentUnknownBase = provider.send.mock.calls[2]![1];
+      expect(sentUnknownBase).toContain("Branch: unknown");
+      expect(sentUnknownBase).toContain("Commit: unknown");
+      expect(sentUnknownBase).toContain("no launchable branch and commit");
+      expect(sentUnknownBase).toContain("Report this blocked state instead of guessing values");
+      expect(sentUnknownBase).not.toContain("exactly as shown in the repository context below");
+
       delegationAvailable = false;
       await service.dispatchPrompt({
         environmentId: runtimeId,
@@ -3798,7 +3826,7 @@ describe("NativeAgentService", () => {
         requestId: "request-without-delegation",
         prompt: "Inspect without workers",
       });
-      const sentWithoutDelegation = provider.send.mock.calls[2]![1];
+      const sentWithoutDelegation = provider.send.mock.calls[3]![1];
       expect(sentWithoutDelegation).not.toContain("launch_environment");
       expect(sentWithoutDelegation).toContain(
         "Orkestrator worker controls are unavailable in this session",
@@ -3817,7 +3845,7 @@ describe("NativeAgentService", () => {
           prompt: "Do not send",
         }),
       ).rejects.toThrow("not ready");
-      expect(admit).toHaveBeenCalledTimes(4);
+      expect(admit).toHaveBeenCalledTimes(5);
 
       await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,

@@ -1872,9 +1872,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
               `in-process:${input.agent}`,
           ),
           freshness: persisted.messages.length === 0 ? "empty" : "cached",
-          messages: coordinatorIdFromRuntimeId(input.environmentId)
-            ? persisted.messages.map(coordinatorDisplayMessage)
-            : persisted.messages,
+          // Tails are written from the already-stripped progressive projection.
+          // Stripping again here would drop a user-authored leading context
+          // block that the first pass is documented to keep visible.
+          messages: persisted.messages,
           historyEpoch: persisted.historyEpoch,
           // v1 tails and any write that omitted remainder metadata cannot
           // prove the start of history. Claim complete only when persisted.

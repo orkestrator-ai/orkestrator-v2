@@ -157,6 +157,12 @@ describe("Electron packaging configuration", () => {
     expect(desktopMain).toContain("registerBrowserPreviewWindowActivation");
     expect(desktopMain).toContain("createSerializedMacOsPermissionProbe");
     expect(desktopMain).toContain("shouldProbeMacOsPermissionsBeforeBackend");
+    expect(desktopMain).toContain("createMacOsPermissionSplashWindow");
+    expect(desktopMain).toContain("peekPersistedActiveConnectionId");
+    expect(desktopMain).toContain("runtimeFlavor");
+    expect(desktopMain.indexOf("createMacOsPermissionSplashWindow")).toBeLessThan(
+      desktopMain.indexOf("await getMacOsPermissions()"),
+    );
     expect(desktopMain.indexOf("await getMacOsPermissions()")).toBeGreaterThan(-1);
     expect(desktopMain.indexOf("await getMacOsPermissions()")).toBeLessThan(
       desktopMain.indexOf("backend = await backendProcess.start"),

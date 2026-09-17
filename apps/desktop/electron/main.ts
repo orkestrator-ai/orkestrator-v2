@@ -33,6 +33,7 @@ import { ensurePinnedToolchains } from "./toolchain-manager.js";
 import { pinnedArtifactsForPlatforms } from "./toolchain-manifest.js";
 import {
   chooseAgentPlatforms,
+  createMacOsPermissionSplashWindow,
   createToolchainBootstrapWindow,
   reportToolchainProgress,
 } from "./toolchain-bootstrap-window.js";
@@ -67,6 +68,7 @@ import {
 } from "./desktop-window-lifecycle.js";
 import {
   createSerializedMacOsPermissionProbe,
+  peekPersistedActiveConnectionId,
   probeMacOsPermissions,
   shouldProbeMacOsPermissionsBeforeBackend,
 } from "./macos-permissions.js";
@@ -108,7 +110,10 @@ let legacyRendererSessionClaimed = false;
 let lastFocusedWindowId: number | null = null;
 const backendProcess = new BackendProcess();
 const getMacOsPermissions = createSerializedMacOsPermissionProbe(() =>
-  probeMacOsPermissions({ homeDirectory: os.homedir() }),
+  probeMacOsPermissions({
+    runtimeFlavor,
+    homeDirectory: os.homedir(),
+  }),
 );
 // Closing a main window may quit; the windowless moments before the first one,
 // between programmatic first-run setup handoffs, must not.
@@ -449,10 +454,24 @@ async function startApplication(): Promise<void> {
   });
   if (!toolchainBinDir) return;
   // Raise Files and Folders prompts before restored pipelines or agents can
-  // walk the home directory. The renderer owns the blocking setup UI; this
-  // only sequences the first probe ahead of backend filesystem work.
-  if (shouldProbeMacOsPermissionsBeforeBackend({ runtimeFlavor })) {
-    await getMacOsPermissions();
+  // walk the home directory. Show an in-app explanation first so the system
+  // dialogs have context; skip the walk for agent-test and remote-only launches.
+  const persistedActiveConnectionId = peekPersistedActiveConnectionId(dataDir);
+  if (
+    shouldProbeMacOsPermissionsBeforeBackend({
+      runtimeFlavor,
+      persistedActiveConnectionId,
+    })
+  ) {
+    const splash = await createMacOsPermissionSplashWindow({
+      BrowserWindowCtor: BrowserWindow,
+      dirname: __dirname,
+    });
+    try {
+      await getMacOsPermissions();
+    } finally {
+      if (!splash.isDestroyed()) splash.close();
+    }
   }
   backend = await backendProcess.start({
     isDev,

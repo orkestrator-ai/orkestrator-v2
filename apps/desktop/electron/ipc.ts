@@ -6,9 +6,9 @@ import type {
   BrowserPreviewBounds,
   BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
-import type {
-  MacOsPermissionsStatus,
-  MacOsPrivacySettingsPane,
+import {
+  isMacOsPrivacySettingsPane,
+  type MacOsPermissionsStatus,
 } from "@orkestrator/protocol/macos-permissions";
 import { isTrustedRendererUrl } from "./window.js";
 import { macOsPrivacySettingsUrl } from "./macos-permissions.js";
@@ -252,10 +252,10 @@ export function registerMainIpc({
   );
   handle("orkestrator:permissions:macos-status", () => getMacOsPermissions());
   handle("orkestrator:permissions:open-macos-settings", (_event, pane: unknown) => {
-    if (pane !== "full-disk-access" && pane !== "files-and-folders") {
+    if (!isMacOsPrivacySettingsPane(pane)) {
       throw new Error("Expected a macOS privacy settings pane");
     }
-    return shellApi.openExternal(macOsPrivacySettingsUrl(pane as MacOsPrivacySettingsPane));
+    return shellApi.openExternal(macOsPrivacySettingsUrl(pane));
   });
 
   handle("orkestrator:dialog:open", async (event, options?: unknown) => {

@@ -5,6 +5,7 @@ import { describe, expect, mock, test } from "bun:test";
 import {
   createSerializedMacOsPermissionProbe,
   macOsPrivacySettingsUrl,
+  peekPersistedActiveConnectionId,
   probeMacOsPermissions,
   readDirectoryEntries,
   shouldProbeMacOsPermissionsBeforeBackend,
@@ -13,6 +14,20 @@ import {
 function ioError(code: string): NodeJS.ErrnoException {
   return Object.assign(new Error(code), { code });
 }
+
+const STATIC_PROBE_PATHS = [
+  "/Library/Application Support/com.apple.TCC",
+  "/Users/person/Desktop",
+  "/Users/person/Documents",
+  "/Users/person/Downloads",
+  "/Users/person/Music",
+  "/Users/person/Pictures",
+  "/Users/person/Movies",
+  "/Users/person/Library/Mobile Documents",
+  "/Users/person/Library/CloudStorage",
+  "/Users/person/Pictures/Photos Library.photoslibrary",
+  "/Users/person/Music/Music/Music Library.musiclibrary",
+];
 
 describe("macOS permission probing", () => {
   test("is disabled without touching the filesystem on other platforms", async () => {
@@ -24,12 +39,35 @@ describe("macOS permission probing", () => {
     expect(readDirectory).not.toHaveBeenCalled();
   });
 
+  test("never walks protected directories for the agent-test flavor", async () => {
+    const readDirectory = mock(async () => {
+      throw new Error("agent-test must not probe the host home");
+    });
+    const listDirectory = mock(async () => {
+      throw new Error("agent-test must not list the host home");
+    });
+
+    await expect(
+      probeMacOsPermissions({
+        platform: "darwin",
+        runtimeFlavor: "agent-test",
+        homeDirectory: "/Users/developer",
+        readDirectory,
+        listDirectory,
+      }),
+    ).resolves.toEqual({ supported: false, missing: [] });
+    expect(readDirectory).not.toHaveBeenCalled();
+    expect(listDirectory).not.toHaveBeenCalled();
+  });
+
   test("reports each protected location denied by macOS", async () => {
     const readDirectory = mock(async (directory: string) => {
       if (directory === "/Users/person/Documents") throw ioError("EACCES");
       if (directory === "/Users/person/Music") throw ioError("EPERM");
       if (directory === "/Users/person/Pictures") throw ioError("EACCES");
       if (directory === "/Users/person/Movies") throw ioError("EPERM");
+      if (directory === "/Users/person/Library/Mobile Documents") throw ioError("EACCES");
+      if (directory === "/Users/person/Library/CloudStorage") throw ioError("EPERM");
       if (directory === "/Users/person/Pictures/Photos Library.photoslibrary") {
         throw ioError("EACCES");
       }
@@ -54,7 +92,7 @@ describe("macOS permission probing", () => {
           id: "full-disk-access",
           label: "Full Disk Access",
           settingsPane: "full-disk-access",
-          required: true,
+          required: false,
         },
         {
           id: "documents",
@@ -81,6 +119,18 @@ describe("macOS permission probing", () => {
           required: true,
         },
         {
+          id: "icloud-drive",
+          label: "iCloud Drive",
+          settingsPane: "files-and-folders",
+          required: true,
+        },
+        {
+          id: "cloud-storage",
+          label: "Cloud Storage",
+          settingsPane: "files-and-folders",
+          required: true,
+        },
+        {
           id: "photos",
           label: "Photos library",
           settingsPane: "photos",
@@ -94,17 +144,51 @@ describe("macOS permission probing", () => {
         },
       ],
     });
-    expect(readDirectory.mock.calls.map(([directory]) => directory)).toEqual([
-      "/Library/Application Support/com.apple.TCC",
-      "/Users/person/Desktop",
-      "/Users/person/Documents",
-      "/Users/person/Downloads",
-      "/Users/person/Music",
-      "/Users/person/Pictures",
-      "/Users/person/Movies",
-      "/Users/person/Pictures/Photos Library.photoslibrary",
-      "/Users/person/Music/Music/Music Library.musiclibrary",
-    ]);
+    expect(readDirectory.mock.calls.map(([directory]) => directory)).toEqual(STATIC_PROBE_PATHS);
+  });
+
+  test("reports a renamed Photos library and iCloud Drive denials", async () => {
+    const readDirectory = mock(async (directory: string) => {
+      if (directory === "/Users/person/Library/Mobile Documents") throw ioError("EACCES");
+      if (directory === "/Users/person/Pictures/Family.photoslibrary") throw ioError("EPERM");
+    });
+    const listDirectory = mock(async (directory: string) => {
+      if (directory === "/Users/person/Pictures") {
+        return ["Family.photoslibrary", "Vacation.jpg"];
+      }
+      if (directory === "/Users/person/Music/Music") {
+        return ["Music Library.musiclibrary"];
+      }
+      return [];
+    });
+
+    await expect(
+      probeMacOsPermissions({
+        platform: "darwin",
+        homeDirectory: "/Users/person",
+        readDirectory,
+        listDirectory,
+      }),
+    ).resolves.toEqual({
+      supported: true,
+      missing: [
+        {
+          id: "icloud-drive",
+          label: "iCloud Drive",
+          settingsPane: "files-and-folders",
+          required: true,
+        },
+        {
+          id: "photos",
+          label: "Photos library",
+          settingsPane: "photos",
+          required: true,
+        },
+      ],
+    });
+    expect(readDirectory.mock.calls.map(([directory]) => directory)).toContain(
+      "/Users/person/Pictures/Family.photoslibrary",
+    );
   });
 
   test("does not misreport missing folders or unrelated I/O failures as privacy denials", async () => {
@@ -175,10 +259,10 @@ describe("macOS permission probing", () => {
       { supported: true, missing: [] },
       { supported: true, missing: [] },
     ]);
-    expect(readDirectory).toHaveBeenCalledTimes(9);
+    expect(readDirectory).toHaveBeenCalledTimes(STATIC_PROBE_PATHS.length);
   });
 
-  test("probes before backend start on macOS desktop builds only", () => {
+  test("probes before backend start on local macOS desktop builds only", () => {
     expect(
       shouldProbeMacOsPermissionsBeforeBackend({
         platform: "darwin",
@@ -203,5 +287,54 @@ describe("macOS permission probing", () => {
         runtimeFlavor: "production",
       }),
     ).toBe(false);
+    expect(
+      shouldProbeMacOsPermissionsBeforeBackend({
+        platform: "darwin",
+        runtimeFlavor: "production",
+        persistedActiveConnectionId: "remote-1",
+      }),
+    ).toBe(false);
+    expect(
+      shouldProbeMacOsPermissionsBeforeBackend({
+        platform: "darwin",
+        runtimeFlavor: "production",
+        persistedActiveConnectionId: "local",
+      }),
+    ).toBe(true);
+  });
+
+  test("reads the persisted desktop connection from config.json", () => {
+    const files = new Map<string, string>([
+      [
+        path.join("/data", "config.json"),
+        JSON.stringify({
+          desktopConnections: {
+            activeConnectionId: "remote-1",
+            connections: [
+              {
+                id: "remote-1",
+                name: "Remote",
+                address: "https://gateway.example",
+                encryptedToken: "token",
+                lastConnectedAt: "2026-09-17T00:00:00.000Z",
+              },
+            ],
+          },
+        }),
+      ],
+    ]);
+
+    expect(
+      peekPersistedActiveConnectionId("/data", (filePath) => {
+        const contents = files.get(filePath);
+        if (!contents) throw new Error(`missing ${filePath}`);
+        return contents;
+      }),
+    ).toBe("remote-1");
+    expect(
+      peekPersistedActiveConnectionId("/missing", () => {
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }),
+    ).toBeNull();
   });
 });

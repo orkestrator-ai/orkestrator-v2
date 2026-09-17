@@ -6,23 +6,38 @@ export const MACOS_PERMISSION_IDS = [
   "music",
   "pictures",
   "movies",
+  "icloud-drive",
+  "cloud-storage",
   "photos",
   "media-library",
 ] as const;
 
 export type MacOsPermissionId = (typeof MACOS_PERMISSION_IDS)[number];
 
-export type MacOsPrivacySettingsPane =
-  | "full-disk-access"
-  | "files-and-folders"
-  | "photos"
-  | "media-library";
+export const MACOS_PRIVACY_SETTINGS_PANES = [
+  "full-disk-access",
+  "files-and-folders",
+  "photos",
+  "media-library",
+] as const;
+
+export type MacOsPrivacySettingsPane = (typeof MACOS_PRIVACY_SETTINGS_PANES)[number];
+
+export function isMacOsPrivacySettingsPane(value: unknown): value is MacOsPrivacySettingsPane {
+  return (
+    typeof value === "string" && (MACOS_PRIVACY_SETTINGS_PANES as readonly string[]).includes(value)
+  );
+}
 
 export type MacOsMissingPermission = {
   id: MacOsPermissionId;
   label: string;
   settingsPane: MacOsPrivacySettingsPane;
-  /** Every permission reported by the startup probe blocks local agent work. */
+  /**
+   * Folder, Photos, and Media grants that macOS can prompt for. Full Disk
+   * Access is reported but never required: it has no TCC prompt and must not
+   * lock the user out of the app.
+   */
   required: boolean;
 };
 
@@ -40,5 +55,7 @@ export type MacOsPermissionsStatus = {
 export function hasBlockingMacOsPermissions(
   status: Pick<MacOsPermissionsStatus, "supported" | "missing">,
 ): boolean {
-  return status.supported && status.missing.length > 0;
+  return (
+    status.supported && status.missing.some((permission) => permission.id !== "full-disk-access")
+  );
 }

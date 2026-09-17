@@ -3,6 +3,7 @@ import type { BrowserWindowConstructorOptions } from "electron";
 import { PRODUCT_NAME } from "../../../apps/desktop/electron/app-constants";
 import {
   chooseAgentPlatforms,
+  createMacOsPermissionSplashWindow,
   createToolchainBootstrapWindow,
   reportToolchainProgress,
 } from "../../../apps/desktop/electron/toolchain-bootstrap-window";
@@ -157,6 +158,33 @@ describe("toolchain bootstrap window", () => {
     destroyed = true;
     reportToolchainProgress(window as never, progress);
     expect(window.webContents.send).toHaveBeenCalledTimes(1);
+  });
+
+  test("shows an in-app macOS permission explanation before the first TCC prompts", async () => {
+    class FakeBrowserWindow {
+      readonly webContents = {
+        on: mock(() => undefined),
+        send: mock(() => undefined),
+        setWindowOpenHandler: mock(() => undefined),
+        once: mock(() => undefined),
+      };
+      readonly loadURL = mock(async (_url: string) => undefined);
+      readonly isDestroyed = mock(() => false);
+      readonly close = mock(() => undefined);
+
+      constructor(readonly options: BrowserWindowConstructorOptions) {}
+    }
+
+    const window = (await createMacOsPermissionSplashWindow({
+      BrowserWindowCtor: FakeBrowserWindow as never,
+      dirname: "/app/electron",
+    })) as unknown as FakeBrowserWindow;
+
+    expect(window.options.title).toBe(`${PRODUCT_NAME} — macOS file access`);
+    const loadedUrl = window.loadURL.mock.calls[0]?.[0] ?? "";
+    const loadedHtml = decodeURIComponent(loadedUrl.split(",")[1] ?? "");
+    expect(loadedHtml).toContain("Checking macOS file access");
+    expect(loadedHtml).toContain("those prompts appear here instead of mid-search");
   });
 
   test("closes and rejects when the bootstrap preload fails", async () => {

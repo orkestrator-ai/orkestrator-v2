@@ -1429,7 +1429,7 @@ describe("App Docker availability", () => {
             id: "full-disk-access" as const,
             label: "Full Disk Access",
             settingsPane: "full-disk-access" as const,
-            required: true,
+            required: false,
           },
           {
             id: "documents" as const,
@@ -1492,8 +1492,12 @@ describe("App Docker availability", () => {
       expect(screen.getByText("Movies folder")).toBeTruthy();
       expect(screen.getByText("Photos library")).toBeTruthy();
       expect(screen.getByText("Media Library")).toBeTruthy();
-      expect(screen.getAllByText("Required")).toHaveLength(7);
+      expect(screen.getAllByText("Required")).toHaveLength(6);
+      expect(screen.getByText("Recommended")).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Continue anyway" }) === null).toBe(true);
+      expect(
+        screen.queryByRole("button", { name: "Continue without Full Disk Access" }) === null,
+      ).toBe(true);
       expect(mockCheckDocker).not.toHaveBeenCalled();
 
       fireEvent.click(screen.getByRole("button", { name: "Open Full Disk Access Settings" }));
@@ -1516,7 +1520,7 @@ describe("App Docker availability", () => {
     }
   });
 
-  test("keeps Full Disk Access blocking until it is granted", async () => {
+  test("lets the user continue without Full Disk Access after folder grants are present", async () => {
     const originalOrkestrator = window.orkestrator;
     const getMacOsStatus = mock(async () => ({
       supported: true,
@@ -1525,7 +1529,7 @@ describe("App Docker availability", () => {
           id: "full-disk-access" as const,
           label: "Full Disk Access",
           settingsPane: "full-disk-access" as const,
-          required: true,
+          required: false,
         },
       ],
     }));
@@ -1544,12 +1548,17 @@ describe("App Docker availability", () => {
 
       expect(await screen.findByText("macOS File Access")).toBeTruthy();
       expect(screen.getByText("Full Disk Access")).toBeTruthy();
+      expect(screen.getByText("Recommended")).toBeTruthy();
       expect(mockCheckDocker).not.toHaveBeenCalled();
       expect(screen.queryByRole("button", { name: "Continue anyway" }) === null).toBe(true);
 
       fireEvent.click(screen.getByRole("button", { name: "Open Full Disk Access Settings" }));
       await waitFor(() => expect(openMacOsSettings).toHaveBeenCalledWith("full-disk-access"));
       expect(mockCheckDocker).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: "Continue without Full Disk Access" }));
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      expect(screen.queryByText("macOS File Access") === null).toBe(true);
     } finally {
       cleanup();
       window.orkestrator = originalOrkestrator;
@@ -1584,6 +1593,9 @@ describe("App Docker availability", () => {
       expect(await screen.findByText("macOS File Access")).toBeTruthy();
       expect(mockCheckDocker).not.toHaveBeenCalled();
       expect(screen.queryByRole("button", { name: "Continue anyway" }) === null).toBe(true);
+      expect(
+        screen.queryByRole("button", { name: "Continue without Full Disk Access" }) === null,
+      ).toBe(true);
       expect(screen.getByRole("button", { name: "Check Again" })).toBeTruthy();
     } finally {
       cleanup();
@@ -1674,8 +1686,90 @@ describe("App Docker availability", () => {
       render(<App />);
 
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      expect(getMacOsStatus).not.toHaveBeenCalled();
       expect(screen.queryByText("macOS File Access") === null).toBe(true);
       expect(screen.getByTestId("app-shell")).toBeTruthy();
+    } finally {
+      cleanup();
+      window.orkestrator = originalOrkestrator;
+    }
+  });
+
+  test("keeps a blocking overlay while desktop connections are unresolved", async () => {
+    const originalOrkestrator = window.orkestrator;
+    const getMacOsStatus = mock(async () => ({
+      supported: true,
+      missing: [
+        {
+          id: "documents" as const,
+          label: "Documents folder",
+          settingsPane: "files-and-folders" as const,
+          required: true,
+        },
+      ],
+    }));
+    window.orkestrator = {
+      permissions: { getMacOsStatus, openMacOsSettings: async () => undefined },
+      listen: () => () => undefined,
+      connections: {
+        list: () => new Promise(() => undefined),
+      } as unknown as NonNullable<Window["orkestrator"]>["connections"],
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor: async () => false,
+      },
+    } as unknown as NonNullable<Window["orkestrator"]>;
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      expect(await screen.findByText("Starting Orkestrator...")).toBeTruthy();
+      expect(screen.getByTestId("app-shell")).toBeTruthy();
+      expect(getMacOsStatus).not.toHaveBeenCalled();
+      expect(mockCheckDocker).not.toHaveBeenCalled();
+      expect(screen.queryByText("macOS File Access") === null).toBe(true);
+    } finally {
+      cleanup();
+      window.orkestrator = originalOrkestrator;
+    }
+  });
+
+  test("treats a failed connection list as local so the permission gate can appear", async () => {
+    const originalOrkestrator = window.orkestrator;
+    const getMacOsStatus = mock(async () => ({
+      supported: true,
+      missing: [
+        {
+          id: "documents" as const,
+          label: "Documents folder",
+          settingsPane: "files-and-folders" as const,
+          required: true,
+        },
+      ],
+    }));
+    window.orkestrator = {
+      permissions: { getMacOsStatus, openMacOsSettings: async () => undefined },
+      listen: () => () => undefined,
+      connections: {
+        list: async () => {
+          throw new Error("connection list failed");
+        },
+      } as unknown as NonNullable<Window["orkestrator"]>["connections"],
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor: async () => false,
+      },
+    } as unknown as NonNullable<Window["orkestrator"]>;
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      expect(await screen.findByText("macOS File Access")).toBeTruthy();
+      expect(screen.getByText("Documents folder")).toBeTruthy();
+      expect(getMacOsStatus).toHaveBeenCalled();
+      expect(mockCheckDocker).not.toHaveBeenCalled();
     } finally {
       cleanup();
       window.orkestrator = originalOrkestrator;

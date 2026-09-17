@@ -153,6 +153,22 @@ describe("preload API factory", () => {
       channel: "orkestrator:shell:open-external",
       args: ["https://example.com/docs"],
     });
+    await expect(api.permissions.getMacOsStatus()).resolves.toEqual({
+      channel: "orkestrator:permissions:macos-status",
+      args: [],
+    });
+    await expect(api.permissions.openMacOsSettings("full-disk-access")).resolves.toEqual({
+      channel: "orkestrator:permissions:open-macos-settings",
+      args: ["full-disk-access"],
+    });
+    await expect(api.permissions.openMacOsSettings("photos")).resolves.toEqual({
+      channel: "orkestrator:permissions:open-macos-settings",
+      args: ["photos"],
+    });
+    await expect(api.permissions.openMacOsSettings("media-library")).resolves.toEqual({
+      channel: "orkestrator:permissions:open-macos-settings",
+      args: ["media-library"],
+    });
     await expect(api.webClient.getStatus()).resolves.toEqual({
       channel: "orkestrator:web-client:get-status",
       args: [],

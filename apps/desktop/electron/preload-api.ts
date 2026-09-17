@@ -9,6 +9,10 @@ import {
   type ConnectToRemoteInput,
   type ConnectionList,
 } from "@orkestrator/protocol/connections";
+import type {
+  MacOsPermissionsStatus,
+  MacOsPrivacySettingsPane,
+} from "@orkestrator/protocol/macos-permissions";
 
 type EventCallback<T> = (payload: T) => void;
 
@@ -91,6 +95,15 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
     shell: {
       openExternal(url: string): Promise<void> {
         return ipcRenderer.invoke("orkestrator:shell:open-external", url);
+      },
+    },
+
+    permissions: {
+      getMacOsStatus(): Promise<MacOsPermissionsStatus> {
+        return ipcRenderer.invoke("orkestrator:permissions:macos-status");
+      },
+      openMacOsSettings(pane: MacOsPrivacySettingsPane): Promise<void> {
+        return ipcRenderer.invoke("orkestrator:permissions:open-macos-settings", pane);
       },
     },
 

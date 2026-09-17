@@ -6,7 +6,12 @@ import type {
   BrowserPreviewBounds,
   BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
+import {
+  isMacOsPrivacySettingsPane,
+  type MacOsPermissionsStatus,
+} from "@orkestrator/protocol/macos-permissions";
 import { isTrustedRendererUrl } from "./window.js";
+import { macOsPrivacySettingsUrl } from "./macos-permissions.js";
 
 type BackendInvoker = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
@@ -87,6 +92,7 @@ export type MainIpcDependencies = {
   shellApi: ShellLike;
   appApi: AppLike;
   nativeImageApi: NativeImageLike;
+  getMacOsPermissions: () => Promise<MacOsPermissionsStatus>;
   getWebClientStatus: (event?: IpcEventLike) => WebClientStatus | Promise<WebClientStatus>;
   setWebClientEnabled: (enabled: boolean, event?: IpcEventLike) => Promise<WebClientStatus>;
   resetWebClientServe: (event?: IpcEventLike) => Promise<WebClientStatus>;
@@ -160,6 +166,7 @@ export function registerMainIpc({
   shellApi,
   appApi,
   nativeImageApi,
+  getMacOsPermissions,
   getWebClientStatus,
   setWebClientEnabled,
   resetWebClientServe,
@@ -243,6 +250,13 @@ export function registerMainIpc({
   handle("orkestrator:shell:open-external", (_event, url: unknown) =>
     shellApi.openExternal(externalBrowserUrl(url)),
   );
+  handle("orkestrator:permissions:macos-status", () => getMacOsPermissions());
+  handle("orkestrator:permissions:open-macos-settings", (_event, pane: unknown) => {
+    if (!isMacOsPrivacySettingsPane(pane)) {
+      throw new Error("Expected a macOS privacy settings pane");
+    }
+    return shellApi.openExternal(macOsPrivacySettingsUrl(pane));
+  });
 
   handle("orkestrator:dialog:open", async (event, options?: unknown) => {
     const typedOptions =

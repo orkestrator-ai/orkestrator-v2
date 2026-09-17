@@ -61,6 +61,10 @@ function createHarness(
   const shellApi = {
     openExternal: mock(async () => undefined),
   };
+  const getMacOsPermissions = mock(async () => ({
+    supported: true,
+    missing: [],
+  }));
   const webClientStatus = {
     enabled: true,
     running: true,
@@ -134,6 +138,7 @@ function createHarness(
     shellApi,
     appApi,
     nativeImageApi: nativeImage,
+    getMacOsPermissions,
     getWebClientStatus,
     setWebClientEnabled,
     resetWebClientServe,
@@ -188,6 +193,7 @@ function createHarness(
     appApi,
     dialogApi,
     shellApi,
+    getMacOsPermissions,
     getWebClientStatus,
     setWebClientEnabled,
     resetWebClientServe,
@@ -235,6 +241,24 @@ describe("main IPC registration", () => {
 
     await harness.invoke("orkestrator:shell:open-external", "https://example.com/docs");
     expect(harness.shellApi.openExternal).toHaveBeenCalledWith("https://example.com/docs");
+
+    await expect(harness.invoke("orkestrator:permissions:macos-status")).resolves.toEqual({
+      supported: true,
+      missing: [],
+    });
+    expect(harness.getMacOsPermissions).toHaveBeenCalledTimes(1);
+    await harness.invoke("orkestrator:permissions:open-macos-settings", "full-disk-access");
+    expect(harness.shellApi.openExternal).toHaveBeenCalledWith(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+    );
+    await harness.invoke("orkestrator:permissions:open-macos-settings", "photos");
+    expect(harness.shellApi.openExternal).toHaveBeenCalledWith(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos",
+    );
+    await harness.invoke("orkestrator:permissions:open-macos-settings", "media-library");
+    expect(harness.shellApi.openExternal).toHaveBeenCalledWith(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_Media",
+    );
 
     await harness.invoke("orkestrator:process:exit", 7);
     expect(harness.appApi.exit).toHaveBeenCalledWith(7);
@@ -305,6 +329,39 @@ describe("main IPC registration", () => {
       );
     }
     expect(harness.shellApi.openExternal).not.toHaveBeenCalled();
+  });
+
+  test("only opens known macOS privacy settings panes", async () => {
+    const harness = createHarness();
+    const panes = [
+      ["full-disk-access", "Privacy_AllFiles"],
+      ["files-and-folders", "Privacy_FilesAndFolders"],
+      ["photos", "Privacy_Photos"],
+      ["media-library", "Privacy_Media"],
+    ] as const;
+
+    for (const [pane, anchor] of panes) {
+      await harness.invoke("orkestrator:permissions:open-macos-settings", pane);
+      expect(harness.shellApi.openExternal).toHaveBeenCalledWith(
+        `x-apple.systempreferences:com.apple.preference.security?${anchor}`,
+      );
+    }
+    await expect(
+      harness.invoke("orkestrator:permissions:open-macos-settings", "Privacy_Camera"),
+    ).rejects.toThrow("Expected a macOS privacy settings pane");
+  });
+
+  test("returns the injected macOS permission status unchanged", async () => {
+    const harness = createHarness();
+    harness.getMacOsPermissions.mockImplementationOnce(async () => ({
+      supported: false,
+      missing: [],
+    }));
+
+    await expect(harness.invoke("orkestrator:permissions:macos-status")).resolves.toEqual({
+      supported: false,
+      missing: [],
+    });
   });
 
   test("validates zoom factors and reports a missing main window", async () => {

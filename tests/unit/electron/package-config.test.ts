@@ -30,6 +30,7 @@ describe("Electron packaging configuration", () => {
           identity: string | null;
           hardenedRuntime: boolean;
           notarize: boolean;
+          extendInfo?: Record<string, string>;
           target: string[];
         };
         win?: { icon: string };
@@ -88,6 +89,18 @@ describe("Electron packaging configuration", () => {
     expect(packageJson.build.mac.hardenedRuntime).toBe(false);
     expect(packageJson.build.mac.notarize).toBe(false);
     expect(packageJson.build.mac.target).toEqual(["dmg"]);
+    expect(packageJson.build.mac.extendInfo).toEqual({
+      NSAppleMusicUsageDescription:
+        "Orkestrator checks Music and media-library access at startup so agent searches are not interrupted later.",
+      NSDesktopFolderUsageDescription:
+        "Orkestrator searches project directories on your behalf so agents can work with files on the Desktop.",
+      NSDocumentsFolderUsageDescription:
+        "Orkestrator searches project directories on your behalf so agents can work with files in Documents.",
+      NSDownloadsFolderUsageDescription:
+        "Orkestrator searches project directories on your behalf so agents can work with files in Downloads.",
+      NSPhotoLibraryUsageDescription:
+        "Orkestrator checks Pictures, Movies, and Photos-library access at startup so agent searches are not interrupted later.",
+    });
     expect(packageJson.build.win).toBeUndefined();
     expect(packageJson.build.linux.category).toBe("Development");
     expect(packageJson.build.linux.executableName).toBe("orkestrator-v2");
@@ -142,6 +155,18 @@ describe("Electron packaging configuration", () => {
       desktopMain.indexOf("await createWindow();"),
     );
     expect(desktopMain).toContain("registerBrowserPreviewWindowActivation");
+    expect(desktopMain).toContain("createSerializedMacOsPermissionProbe");
+    expect(desktopMain).toContain("shouldProbeMacOsPermissionsBeforeBackend");
+    expect(desktopMain).toContain("createMacOsPermissionSplashWindow");
+    expect(desktopMain).toContain("peekPersistedActiveConnectionId");
+    expect(desktopMain).toContain("runtimeFlavor");
+    expect(desktopMain.indexOf("createMacOsPermissionSplashWindow")).toBeLessThan(
+      desktopMain.indexOf("await getMacOsPermissions()"),
+    );
+    expect(desktopMain.indexOf("await getMacOsPermissions()")).toBeGreaterThan(-1);
+    expect(desktopMain.indexOf("await getMacOsPermissions()")).toBeLessThan(
+      desktopMain.indexOf("backend = await backendProcess.start"),
+    );
   });
 
   test("opts signing and notarization back in only for release packages", async () => {
@@ -165,6 +190,18 @@ describe("Electron packaging configuration", () => {
     expect(releaseConfig.mac?.hardenedRuntime).toBe(true);
     expect(releaseConfig.mac?.notarize).toBe(true);
     expect(releaseConfig.mac?.target).toEqual(["dmg"]);
+    expect(releaseConfig.mac?.extendInfo).toEqual({
+      NSAppleMusicUsageDescription:
+        "Orkestrator checks Music and media-library access at startup so agent searches are not interrupted later.",
+      NSDesktopFolderUsageDescription:
+        "Orkestrator searches project directories on your behalf so agents can work with files on the Desktop.",
+      NSDocumentsFolderUsageDescription:
+        "Orkestrator searches project directories on your behalf so agents can work with files in Documents.",
+      NSDownloadsFolderUsageDescription:
+        "Orkestrator searches project directories on your behalf so agents can work with files in Downloads.",
+      NSPhotoLibraryUsageDescription:
+        "Orkestrator checks Pictures, Movies, and Photos-library access at startup so agent searches are not interrupted later.",
+    });
   });
 
   test("uses the Bun-based container image before running the simplified workspace setup", async () => {

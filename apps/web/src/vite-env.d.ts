@@ -45,6 +45,15 @@ interface Window {
     shell?: {
       openExternal(url: string): Promise<void>;
     };
+    /** Electron only: checks protected macOS folders before agent work begins. */
+    permissions?: {
+      getMacOsStatus(): Promise<
+        import("@orkestrator/protocol/macos-permissions").MacOsPermissionsStatus
+      >;
+      openMacOsSettings(
+        pane: import("@orkestrator/protocol/macos-permissions").MacOsPrivacySettingsPane,
+      ): Promise<void>;
+    };
     webClient?: {
       getStatus(): Promise<import("./types/webClient").WebClientStatus>;
       setEnabled(enabled: boolean): Promise<import("./types/webClient").WebClientStatus>;

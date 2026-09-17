@@ -66,10 +66,28 @@ import type {
   DockerAvailability,
   DockerUnavailableReason,
 } from "@orkestrator/protocol/docker-availability";
-import type { ConnectionList } from "@orkestrator/protocol/connections";
+import { LOCAL_CONNECTION_ID, type ConnectionList } from "@orkestrator/protocol/connections";
+import {
+  hasBlockingMacOsPermissions,
+  type MacOsPermissionsStatus,
+  type MacOsPrivacySettingsPane,
+} from "@orkestrator/protocol/macos-permissions";
 import { subscribeToConnections } from "@/lib/connections";
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
+
+function desktopConnectionScopeSeed(): {
+  activeConnectionId: string | null;
+  resolved: boolean;
+} {
+  if (!window.orkestrator?.connections) {
+    return { activeConnectionId: null, resolved: true };
+  }
+  if (window.orkestratorGateway?.desktop && window.orkestratorGateway.baseUrl) {
+    return { activeConnectionId: window.orkestratorGateway.baseUrl, resolved: true };
+  }
+  return { activeConnectionId: null, resolved: false };
+}
 
 /**
  * How many consecutive failed probes it takes to declare an outage once Docker
@@ -184,6 +202,20 @@ function App() {
   const [dockerWarningDismissed, setDockerWarningDismissed] = useState(false);
   const dockerAvailableRef = useRef<boolean | null>(null);
   const dockerCheckInFlightRef = useRef<Promise<boolean> | null>(null);
+  const [macOsPermissions, setMacOsPermissions] = useState<MacOsPermissionsStatus | null>(() =>
+    window.orkestrator?.permissions ? null : { supported: false, missing: [] },
+  );
+  const [isCheckingMacOsPermissions, setIsCheckingMacOsPermissions] = useState(
+    Boolean(window.orkestrator?.permissions),
+  );
+  const [activeConnectionId, setActiveConnectionId] = useState<string | null>(
+    () => desktopConnectionScopeSeed().activeConnectionId,
+  );
+  const [connectionScopeResolved, setConnectionScopeResolved] = useState(
+    () => desktopConnectionScopeSeed().resolved,
+  );
+  const [macOsAdvisoryDismissed, setMacOsAdvisoryDismissed] = useState(false);
+  const macOsRefreshGenerationRef = useRef(0);
 
   // Initialize centralized PR monitoring service
   usePrMonitorService();
@@ -275,8 +307,10 @@ function App() {
     let active = true;
     const applyConnectionList = (list: ConnectionList) => {
       if (!active) return;
+      setActiveConnectionId(list.activeConnectionId);
+      setConnectionScopeResolved(true);
       setLocalBackendUnavailableMessage(
-        list.activeConnectionId === "local" && list.localAvailable === false
+        list.activeConnectionId === LOCAL_CONNECTION_ID && list.localAvailable === false
           ? "The Local backend stopped. Restart Orkestrator to recover local work."
           : null,
       );
@@ -284,19 +318,24 @@ function App() {
     void connectionsApi
       .list()
       .then(applyConnectionList)
-      .catch(() => undefined);
-    const unsubscribeConnections = subscribeToConnections(applyConnectionList);
-    const unsubscribeUnavailable = window.orkestrator?.listen<{ message?: string }>(
-      "local-backend-unavailable",
-      (payload) => {
+      .catch(() => {
         if (!active) return;
-        setLocalBackendUnavailableMessage(
-          payload.message
-            ? `The Local backend stopped: ${payload.message}`
-            : "The Local backend stopped. Restart Orkestrator to recover local work.",
-        );
-      },
-    );
+        setActiveConnectionId(LOCAL_CONNECTION_ID);
+        setConnectionScopeResolved(true);
+      });
+    const unsubscribeConnections = subscribeToConnections(applyConnectionList);
+    const listenDesktop = window.orkestrator?.listen;
+    const unsubscribeUnavailable =
+      typeof listenDesktop === "function"
+        ? listenDesktop<{ message?: string }>("local-backend-unavailable", (payload) => {
+            if (!active) return;
+            setLocalBackendUnavailableMessage(
+              payload.message
+                ? `The Local backend stopped: ${payload.message}`
+                : "The Local backend stopped. Restart Orkestrator to recover local work.",
+            );
+          })
+        : undefined;
     return () => {
       active = false;
       unsubscribeConnections();
@@ -307,6 +346,75 @@ function App() {
   const selectedEnvironment = selectedEnvironmentId
     ? (environments.find((env) => env.id === selectedEnvironmentId) ?? null)
     : null;
+  const refreshMacOsPermissions = useCallback(async () => {
+    const permissionsApi = window.orkestrator?.permissions;
+    if (!permissionsApi) {
+      setMacOsPermissions({ supported: false, missing: [] });
+      setIsCheckingMacOsPermissions(false);
+      return;
+    }
+
+    const generation = ++macOsRefreshGenerationRef.current;
+    setIsCheckingMacOsPermissions(true);
+    try {
+      const status = await permissionsApi.getMacOsStatus();
+      if (generation !== macOsRefreshGenerationRef.current) return;
+      setMacOsPermissions(status);
+    } catch (error) {
+      console.error("[App] Failed to check macOS file permissions:", error);
+      if (generation !== macOsRefreshGenerationRef.current) return;
+      setMacOsPermissions({
+        supported: true,
+        missing: [],
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      if (generation === macOsRefreshGenerationRef.current) {
+        setIsCheckingMacOsPermissions(false);
+      }
+    }
+  }, []);
+  const isRemoteBackendWindow =
+    connectionScopeResolved &&
+    activeConnectionId !== null &&
+    activeConnectionId !== LOCAL_CONNECTION_ID;
+  const macOsProbeFailed = Boolean(macOsPermissions?.error);
+  const macOsHasBlockingMissing =
+    macOsPermissions !== null && hasBlockingMacOsPermissions(macOsPermissions);
+  const macOsHasAdvisoryMissing = Boolean(
+    macOsPermissions?.supported &&
+    macOsPermissions.missing.some((permission) => permission.id === "full-disk-access"),
+  );
+  const macOsPermissionsReady =
+    isRemoteBackendWindow ||
+    (connectionScopeResolved &&
+      macOsPermissions !== null &&
+      !macOsProbeFailed &&
+      (!macOsPermissions.supported ||
+        (!macOsHasBlockingMissing && (!macOsHasAdvisoryMissing || macOsAdvisoryDismissed))));
+  const showMacOsPermissionGate =
+    connectionScopeResolved &&
+    !isRemoteBackendWindow &&
+    (macOsPermissions === null ||
+      macOsProbeFailed ||
+      macOsHasBlockingMissing ||
+      (macOsHasAdvisoryMissing && !macOsAdvisoryDismissed));
+  const showStartupBlocker = !connectionScopeResolved || showMacOsPermissionGate;
+
+  useEffect(() => {
+    if (!window.orkestrator?.permissions) return;
+    if (!connectionScopeResolved) return;
+    if (isRemoteBackendWindow) {
+      setMacOsPermissions({ supported: false, missing: [] });
+      setIsCheckingMacOsPermissions(false);
+      return;
+    }
+    void refreshMacOsPermissions();
+    return () => {
+      macOsRefreshGenerationRef.current += 1;
+    };
+  }, [refreshMacOsPermissions, connectionScopeResolved, isRemoteBackendWindow]);
+
   const refreshDockerAvailability = useCallback(async (source: "startup" | "retry" | "poll") => {
     if (dockerCheckInFlightRef.current) return dockerCheckInFlightRef.current;
 
@@ -364,22 +472,24 @@ function App() {
 
   // Check Docker availability on startup and sync environments
   useEffect(() => {
+    if (!macOsPermissionsReady) return;
     const initDocker = async () => {
       await refreshDockerAvailability("startup");
     };
 
     void initDocker();
-  }, [refreshDockerAvailability]);
+  }, [macOsPermissionsReady, refreshDockerAvailability]);
 
   // Docker can be started or stopped while Orkestrator remains open. Keep the
   // shared capability state fresh in both directions without overlapping a
   // slow daemon probe.
   useEffect(() => {
+    if (!macOsPermissionsReady) return;
     const interval = window.setInterval(() => {
       void refreshDockerAvailability("poll");
     }, DOCKER_AVAILABILITY_POLL_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [refreshDockerAvailability]);
+  }, [macOsPermissionsReady, refreshDockerAvailability]);
 
   // Dismissing an outage should last for that outage. Once Docker recovers, a
   // later outage is new information and should warn the user again.
@@ -390,6 +500,7 @@ function App() {
   // Host CLI availability is independent of Docker. Run it in parallel with
   // the daemon probe so local worktree workflows receive the same onboarding.
   useEffect(() => {
+    if (!macOsPermissionsReady) return;
     Promise.all([
       checkClaudeCli(),
       checkClaudeConfig(),
@@ -421,7 +532,7 @@ function App() {
         setGithubCliAvailable(false);
         setAvailableAiCli(null);
       });
-  }, []);
+  }, [macOsPermissionsReady]);
 
   // Load config from backend on startup
   // This ensures repository configs (including default port mappings) are available
@@ -443,6 +554,16 @@ function App() {
       await refreshDockerAvailability("retry");
     } finally {
       setIsCheckingDocker(false);
+    }
+  };
+
+  const handleOpenMacOsSettings = async (pane: MacOsPrivacySettingsPane) => {
+    try {
+      await window.orkestrator?.permissions?.openMacOsSettings(pane);
+    } catch (error) {
+      toast.error("Could not open System Settings", {
+        description: error instanceof Error ? error.message : String(error),
+      });
     }
   };
 
@@ -643,6 +764,7 @@ function App() {
 
   const handleStartEnvironmentFromOverlay = useCallback(
     async (environmentId: string, initialPrompt?: string): Promise<boolean> => {
+      if (!macOsPermissionsReady) return false;
       const environment = getEnvironmentById(environmentId);
       if (environment?.environmentType !== "local" && dockerAvailable === false) {
         toast.warning("Docker is not running", {
@@ -759,6 +881,7 @@ function App() {
       config,
       dockerAvailable,
       getEnvironmentById,
+      macOsPermissionsReady,
       setClaudeOptions,
       startEnvironment,
     ],
@@ -870,8 +993,199 @@ function App() {
         <Toaster />
         <ErrorDetailsDialog />
 
+        {/* macOS privacy access is resolved before any Docker probe starts. */}
+        {showStartupBlocker && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background px-6">
+            {!connectionScopeResolved || macOsPermissions === null ? (
+              <div className="flex flex-col items-center gap-4 text-center">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <div>
+                  <h1 className="text-lg font-semibold">
+                    {!connectionScopeResolved
+                      ? "Starting Orkestrator..."
+                      : "Checking macOS file access..."}
+                  </h1>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {!connectionScopeResolved
+                      ? "Resolving the desktop connection before local file-access checks."
+                      : "This prevents permission prompts from interrupting agent work later."}
+                  </p>
+                </div>
+                {connectionScopeResolved && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => void refreshMacOsPermissions()}
+                  >
+                    Check Again
+                  </Button>
+                )}
+              </div>
+            ) : macOsProbeFailed ? (
+              <div className="w-full max-w-2xl rounded-xl border bg-card p-8 shadow-2xl">
+                <div className="mb-6">
+                  <p className="mb-2 text-xs font-semibold tracking-widest text-primary uppercase">
+                    Setup needed
+                  </p>
+                  <h1 className="text-2xl font-semibold">Could not check macOS file access</h1>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    {macOsPermissions.error}
+                  </p>
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button
+                    type="button"
+                    onClick={() => void refreshMacOsPermissions()}
+                    disabled={isCheckingMacOsPermissions}
+                  >
+                    {isCheckingMacOsPermissions ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Checking...
+                      </>
+                    ) : (
+                      "Check Again"
+                    )}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      void restart().catch((error) => {
+                        toast.error("Could not restart Orkestrator", {
+                          description: error instanceof Error ? error.message : String(error),
+                        });
+                      });
+                    }}
+                  >
+                    Restart App
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="w-full max-w-2xl rounded-xl border bg-card p-8 shadow-2xl">
+                <div className="mb-6">
+                  <p className="mb-2 text-xs font-semibold tracking-widest text-primary uppercase">
+                    {macOsHasBlockingMissing ? "Setup required" : "Recommended setup"}
+                  </p>
+                  <h1 className="text-2xl font-semibold">macOS File Access</h1>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    {macOsHasBlockingMissing
+                      ? "Grant the missing folder, Photos, and Media access before continuing so agents can search your home directory without interrupting their work with macOS privacy prompts."
+                      : "Full Disk Access is strongly recommended for searches that begin at the filesystem root. You can grant it now or continue and add it later."}
+                  </p>
+                </div>
+
+                <ul className="mb-6 space-y-2" aria-label="Missing macOS permissions">
+                  {macOsPermissions.missing.map((permission) => (
+                    <li
+                      key={permission.id}
+                      className="flex items-center justify-between gap-4 rounded-lg border bg-muted/40 px-4 py-3"
+                    >
+                      <span className="font-medium">{permission.label}</span>
+                      <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                        {permission.id === "full-disk-access" ? "Recommended" : "Required"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+
+                <p className="mb-5 text-sm leading-6 text-muted-foreground">
+                  In System Settings, enable Orkestrator in the indicated Privacy &amp; Security
+                  panes, then return here and check again. Full Disk Access is never granted by a
+                  prompt: add Orkestrator manually. macOS may require an app restart before a new
+                  Full Disk Access grant takes effect.
+                </p>
+
+                <div className="flex flex-wrap justify-end gap-2">
+                  {macOsPermissions.missing.some(
+                    (permission) => permission.settingsPane === "files-and-folders",
+                  ) && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void handleOpenMacOsSettings("files-and-folders")}
+                    >
+                      Open Files &amp; Folders Settings
+                    </Button>
+                  )}
+                  {macOsPermissions.missing.some(
+                    (permission) => permission.settingsPane === "full-disk-access",
+                  ) && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void handleOpenMacOsSettings("full-disk-access")}
+                    >
+                      Open Full Disk Access Settings
+                    </Button>
+                  )}
+                  {macOsPermissions.missing.some(
+                    (permission) => permission.settingsPane === "photos",
+                  ) && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void handleOpenMacOsSettings("photos")}
+                    >
+                      Open Photos Settings
+                    </Button>
+                  )}
+                  {macOsPermissions.missing.some(
+                    (permission) => permission.settingsPane === "media-library",
+                  ) && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void handleOpenMacOsSettings("media-library")}
+                    >
+                      Open Media Library Settings
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    onClick={() => void refreshMacOsPermissions()}
+                    disabled={isCheckingMacOsPermissions}
+                  >
+                    {isCheckingMacOsPermissions ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Checking...
+                      </>
+                    ) : (
+                      "Check Again"
+                    )}
+                  </Button>
+                  {!macOsHasBlockingMissing && macOsHasAdvisoryMissing && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setMacOsAdvisoryDismissed(true)}
+                    >
+                      Continue without Full Disk Access
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      void restart().catch((error) => {
+                        toast.error("Could not restart Orkestrator", {
+                          description: error instanceof Error ? error.message : String(error),
+                        });
+                      });
+                    }}
+                  >
+                    Restart App
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Loading overlay while checking Docker */}
-        {dockerAvailable === null && (
+        {macOsPermissionsReady && dockerAvailable === null && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
             <div className="flex flex-col items-center gap-4">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />

@@ -133,6 +133,13 @@
       "identity": "-",
       "hardenedRuntime": false,
       "notarize": false,
+      "extendInfo": {
+        "NSAppleMusicUsageDescription": "Orkestrator checks Music and media-library access at startup so agent searches are not interrupted later.",
+        "NSDesktopFolderUsageDescription": "Orkestrator searches project directories on your behalf so agents can work with files on the Desktop.",
+        "NSDocumentsFolderUsageDescription": "Orkestrator searches project directories on your behalf so agents can work with files in Documents.",
+        "NSDownloadsFolderUsageDescription": "Orkestrator searches project directories on your behalf so agents can work with files in Downloads.",
+        "NSPhotoLibraryUsageDescription": "Orkestrator checks Pictures, Movies, and Photos-library access at startup so agent searches are not interrupted later."
+      },
       "target": [
         "dmg"
       ]

@@ -13,6 +13,7 @@ import {
   WebContentsView,
 } from "electron";
 import path from "node:path";
+import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { LOCAL_CONNECTION_ID } from "@orkestrator/protocol/connections";
@@ -32,6 +33,7 @@ import { ensurePinnedToolchains } from "./toolchain-manager.js";
 import { pinnedArtifactsForPlatforms } from "./toolchain-manifest.js";
 import {
   chooseAgentPlatforms,
+  createMacOsPermissionSplashWindow,
   createToolchainBootstrapWindow,
   reportToolchainProgress,
 } from "./toolchain-bootstrap-window.js";
@@ -64,6 +66,12 @@ import {
   DesktopWindowSlotAllocator,
   rendererPartitionForWindow,
 } from "./desktop-window-lifecycle.js";
+import {
+  createSerializedMacOsPermissionProbe,
+  peekPersistedActiveConnectionId,
+  probeMacOsPermissions,
+  shouldProbeMacOsPermissionsBeforeBackend,
+} from "./macos-permissions.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -101,6 +109,12 @@ const windowRequestGate = new DesktopWindowRequestGate();
 let legacyRendererSessionClaimed = false;
 let lastFocusedWindowId: number | null = null;
 const backendProcess = new BackendProcess();
+const getMacOsPermissions = createSerializedMacOsPermissionProbe(() =>
+  probeMacOsPermissions({
+    runtimeFlavor,
+    homeDirectory: os.homedir(),
+  }),
+);
 // Closing a main window may quit; the windowless moments before the first one,
 // between programmatic first-run setup handoffs, must not.
 const windowAllClosedQuit = registerWindowAllClosedQuit({
@@ -338,6 +352,7 @@ function registerIpc(): void {
     shellApi: shell,
     appApi: app,
     nativeImageApi: nativeImage,
+    getMacOsPermissions,
     listConnections: (event) => manager().getList(scopeForEvent(event)),
     probeConnection: (connectionId) => {
       return manager().probe(connectionId);
@@ -438,6 +453,26 @@ async function startApplication(): Promise<void> {
     interactive: !isAgentTest,
   });
   if (!toolchainBinDir) return;
+  // Raise Files and Folders prompts before restored pipelines or agents can
+  // walk the home directory. Show an in-app explanation first so the system
+  // dialogs have context; skip the walk for agent-test and remote-only launches.
+  const persistedActiveConnectionId = peekPersistedActiveConnectionId(dataDir);
+  if (
+    shouldProbeMacOsPermissionsBeforeBackend({
+      runtimeFlavor,
+      persistedActiveConnectionId,
+    })
+  ) {
+    const splash = await createMacOsPermissionSplashWindow({
+      BrowserWindowCtor: BrowserWindow,
+      dirname: __dirname,
+    });
+    try {
+      await getMacOsPermissions();
+    } finally {
+      if (!splash.isDestroyed()) splash.close();
+    }
+  }
   backend = await backendProcess.start({
     isDev,
     appVersion: app.getVersion(),

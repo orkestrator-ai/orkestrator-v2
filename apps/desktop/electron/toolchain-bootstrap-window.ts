@@ -155,12 +155,40 @@ export async function chooseAgentPlatforms(options: {
   return await choice;
 }
 
-export async function createToolchainBootstrapWindow(options: {
+export const PERMISSION_SPLASH_HTML = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${PRODUCT_NAME}</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: flex; padding: 28px; color: #f4f4f5; background: #111113; }
+    main { width: min(430px, 100%); margin: auto; }
+    .eyebrow { margin: 0 0 12px; color: #a1a1aa; font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: 24px; font-weight: 650; letter-spacing: -.025em; }
+    p { margin: 16px 0 0; color: #d4d4d8; font-size: 14px; line-height: 1.55; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">macOS setup</p>
+    <h1>Checking macOS file access</h1>
+    <p>Orkestrator is requesting the folder, Photos, and Media access agents need so those prompts appear here instead of mid-search.</p>
+  </main>
+</body>
+</html>`;
+
+async function createBootstrapHtmlWindow(options: {
   BrowserWindowCtor: BrowserWindowConstructor;
   dirname: string;
+  title: string;
+  html: string;
 }): Promise<BrowserWindowType> {
   const window = new options.BrowserWindowCtor({
-    title: `${PRODUCT_NAME} — Preparing tools`,
+    title: options.title,
     width: 520,
     height: 300,
     minWidth: 520,
@@ -187,7 +215,7 @@ export async function createToolchainBootstrapWindow(options: {
   });
   try {
     await Promise.race([
-      window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(BOOTSTRAP_HTML)}`),
+      window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(options.html)}`),
       preloadReady,
     ]);
   } catch (error) {
@@ -195,6 +223,28 @@ export async function createToolchainBootstrapWindow(options: {
     throw error;
   }
   return window;
+}
+
+export async function createToolchainBootstrapWindow(options: {
+  BrowserWindowCtor: BrowserWindowConstructor;
+  dirname: string;
+}): Promise<BrowserWindowType> {
+  return createBootstrapHtmlWindow({
+    ...options,
+    title: `${PRODUCT_NAME} — Preparing tools`,
+    html: BOOTSTRAP_HTML,
+  });
+}
+
+export async function createMacOsPermissionSplashWindow(options: {
+  BrowserWindowCtor: BrowserWindowConstructor;
+  dirname: string;
+}): Promise<BrowserWindowType> {
+  return createBootstrapHtmlWindow({
+    ...options,
+    title: `${PRODUCT_NAME} — macOS file access`,
+    html: PERMISSION_SPLASH_HTML,
+  });
 }
 
 export function reportToolchainProgress(

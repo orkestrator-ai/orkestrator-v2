@@ -44,6 +44,27 @@ describe("progressive bridge transcript", () => {
     ).toEqual({ version: 1, status: "unchanged", token: first.token });
   });
 
+  test("a completeness transition invalidates the token", () => {
+    const options = {
+      sessionIdentity: "session-restored",
+      generation: "generation-1",
+      contentEpoch: "epoch-1",
+      revision: 0,
+      limit: 100,
+      targetBytes: 512 * 1024,
+    } as const;
+    const preview = bridgeTranscriptUpdate([], { ...options, complete: false });
+    const hydrated = bridgeTranscriptUpdate([], {
+      ...options,
+      knownToken: preview.token,
+      complete: true,
+    });
+    expect(hydrated.status).toBe("snapshot");
+    if (hydrated.status !== "snapshot") throw new Error("expected snapshot");
+    expect(hydrated.token).not.toBe(preview.token);
+    expect(hydrated.value.complete).toBe(true);
+  });
+
   test("generation, revision and window changes invalidate the token", () => {
     const options = {
       sessionIdentity: "session-1",

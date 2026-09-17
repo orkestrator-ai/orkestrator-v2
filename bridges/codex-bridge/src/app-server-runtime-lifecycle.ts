@@ -540,6 +540,8 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       });
       this.publishPersistedModelOverrides(attached);
       await this.synchronizeAttachedModelOverrides(attached, modelsBeforeAttach);
+      const pendingHydrate = this.transcriptHydrateInFlight.get(attached.threadId);
+      if (pendingHydrate) await pendingHydrate;
       return attached;
     }
     // No thread id yet: lazy creation on first prompt, nothing to re-attach.
@@ -562,21 +564,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       context.name = thread.name ?? context.name;
       // It had a rollout to resume from, so it is materialized by definition.
       context.materialized = true;
-      if (context.messages.length === 0) {
-        const hydrated = await hydrateMessagesFromPersistedSession(threadId, {
-          structuredOutputTurns: this.structuredOutputTurnsForThread(threadId),
-        });
-        context.messages = hydrated.messages;
-        this.registry.indexHydratedAsyncQuestions(context);
-        this.applyPersistedModelOverrides(context);
-        if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
-        if (!session.title) {
-          session.title = thread.name ?? hydrated.title;
-          session.titleSource = thread.name ? "codex" : hydrated.titleSource;
-        }
-      } else {
-        this.publishPersistedModelOverrides(context);
-      }
+      await this.hydrateAttachedTranscript(context, session, thread);
       await this.synchronizeAttachedModelOverrides(context, modelsBeforeAttach);
       this.reattachedThreads += 1;
       return context;
@@ -613,6 +601,54 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       if (!isMissingRolloutError(error)) throw error;
       return undefined;
     }
+  }
+
+  /**
+   * Reads the rollout into an already-attached context, or confirms a live
+   * thread already has its body.
+   *
+   * Shared so a concurrent `ensureAttached` can wait for the first hydrate
+   * instead of treating the empty post-attach context as the exact transcript.
+   */
+  protected async hydrateAttachedTranscript(
+    context: ThreadContext,
+    session: BridgeSession,
+    thread: { cwd?: string; name?: string | null },
+  ): Promise<void> {
+    if (context.transcriptHydrated) return;
+    const existing = this.transcriptHydrateInFlight.get(context.threadId);
+    if (existing) {
+      await existing;
+      return;
+    }
+    const pending = this.readAttachedTranscriptBody(context, session, thread).finally(() => {
+      this.transcriptHydrateInFlight.delete(context.threadId);
+    });
+    this.transcriptHydrateInFlight.set(context.threadId, pending);
+    await pending;
+  }
+
+  private async readAttachedTranscriptBody(
+    context: ThreadContext,
+    session: BridgeSession,
+    thread: { cwd?: string; name?: string | null },
+  ): Promise<void> {
+    if (context.messages.length === 0) {
+      const hydrated = await hydrateMessagesFromPersistedSession(context.threadId, {
+        structuredOutputTurns: this.structuredOutputTurnsForThread(context.threadId),
+      });
+      context.messages = hydrated.messages;
+      this.registry.indexHydratedAsyncQuestions(context);
+      this.applyPersistedModelOverrides(context);
+      if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
+      if (!session.title) {
+        session.title = thread.name ?? hydrated.title;
+        session.titleSource = thread.name ? "codex" : hydrated.titleSource;
+      }
+    } else {
+      this.publishPersistedModelOverrides(context);
+    }
+    context.transcriptHydrated = true;
   }
 
   /** Observability for the storage budget, surfaced through /global/health. */

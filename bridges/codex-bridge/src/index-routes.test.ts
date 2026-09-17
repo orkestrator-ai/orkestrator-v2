@@ -409,14 +409,19 @@ describe("session detail route outcomes", () => {
     await withRuntimeMethod(
       "getMessages",
       async () => messages,
-      async () => {
-        const response = await app.request("/session/session-1/messages");
-        expect(response.status).toBe(200);
-        expect(await response.json()).toEqual({
-          messages,
-          messageWindow: { truncated: false },
-        });
-      },
+      () =>
+        withRuntimeMethod(
+          "transcriptComplete",
+          () => true,
+          async () => {
+            const response = await app.request("/session/session-1/messages");
+            expect(response.status).toBe(200);
+            expect(await response.json()).toEqual({
+              messages,
+              messageWindow: { truncated: false },
+            });
+          },
+        ),
     );
 
     await withRuntimeMethod(
@@ -511,6 +516,29 @@ describe("session detail route outcomes", () => {
         expect(decoded.messages[0]?.id).toBe("message-compress");
       },
     );
+  });
+
+  test("uses the runtime completeness flag on the exact messages route", async () => {
+    const { sessionId } = runtime.createSession({ mode: "build" });
+    try {
+      const complete = await app.request(`/session/${sessionId}/messages`);
+      expect(complete.status).toBe(200);
+      expect(await complete.json()).toEqual({
+        messages: [],
+        messageWindow: { truncated: false },
+      });
+
+      const session = runtime.getRegistry().getSession(sessionId)!;
+      session.localMessagesTrimmed = true;
+      const truncated = await app.request(`/session/${sessionId}/messages`);
+      expect(truncated.status).toBe(200);
+      expect(await truncated.json()).toEqual({
+        messages: [],
+        messageWindow: { truncated: true },
+      });
+    } finally {
+      runtime.getRegistry().releaseSession(sessionId);
+    }
   });
 
   test("marks the recovery read truncated once the local tail dropped a message", async () => {
@@ -1663,6 +1691,41 @@ describe("progressive transcript route", () => {
             expect(body.value.messageWindow.truncated).toBe(true);
             // Nothing local cut this window, so there is no reason to name.
             expect(body.value.messageWindow.truncationReason).toBeUndefined();
+          },
+        ),
+    );
+  });
+
+  test("invalidates a cold incomplete token once an empty restored thread is complete", async () => {
+    let complete = false;
+    await withRuntimeMethod(
+      "getStatus",
+      () => ({
+        ...status,
+        messageRevision: 0,
+      }),
+      async () =>
+        withRuntimeMethod(
+          "getCachedMessages",
+          () =>
+            complete
+              ? { messages: [], freshness: "current" as const, complete: true }
+              : { messages: [], freshness: "cached" as const, complete: false },
+          async () => {
+            const first = await app.request(
+              "/session/session-1/transcript?version=1&limit=100&targetBytes=524288",
+            );
+            const preview = await first.json();
+            expect(preview.status).toBe("snapshot");
+            expect(preview.value.complete).toBe(false);
+            complete = true;
+            const second = await app.request(
+              `/session/session-1/transcript?version=1&limit=100&targetBytes=524288&knownToken=${encodeURIComponent(preview.token)}`,
+            );
+            const hydrated = await second.json();
+            expect(hydrated.status).toBe("snapshot");
+            expect(hydrated.value.complete).toBe(true);
+            expect(hydrated.token).not.toBe(preview.token);
           },
         ),
     );

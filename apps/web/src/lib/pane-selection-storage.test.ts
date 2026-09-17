@@ -7,10 +7,13 @@ import {
   armWindowStartupAgentActivation,
   clearStoredPaneSelection,
   clearWindowBuildPipelineActivation,
+  clearWindowBuildPipelineHandoffResolutions,
   clearWindowStartupAgentActivation,
   consumeWindowBuildPipelineActivation,
   consumeWindowStartupAgentActivation,
   getWindowBuildPipelineActivation,
+  hasWindowBuildPipelineHandoffResolved,
+  markWindowBuildPipelineHandoffResolved,
   readStoredPaneSelection,
   wasWindowBuildPipelineSetupReadyAtArm,
   readWindowPaneSelection,
@@ -113,6 +116,65 @@ describe("read/clear", () => {
 
     consumeWindowBuildPipelineActivation("env-1", "pipeline-1");
     expect(wasWindowBuildPipelineSetupReadyAtArm("env-1")).toBe(false);
+  });
+
+  test("records backend-driven pipeline handoffs and remembers every pipeline per environment", () => {
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-1")).toBe(false);
+
+    markWindowBuildPipelineHandoffResolved("env-1", "pipeline-1");
+    markWindowBuildPipelineHandoffResolved("env-2", "pipeline-2");
+    markWindowBuildPipelineHandoffResolved("env-1", "pipeline-new");
+
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-1")).toBe(true);
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-new")).toBe(true);
+    expect(hasWindowBuildPipelineHandoffResolved("env-2", "pipeline-2")).toBe(true);
+    expect(hasWindowBuildPipelineHandoffResolved("env-unknown", "pipeline-1")).toBe(false);
+  });
+
+  test("evicts the oldest resolved pipeline once an environment exceeds the bound", () => {
+    for (let index = 1; index <= 33; index += 1) {
+      markWindowBuildPipelineHandoffResolved("env-1", `pipeline-${index}`);
+    }
+
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-1")).toBe(false);
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-2")).toBe(true);
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-33")).toBe(true);
+  });
+
+  test("reads a legacy single-pipelineId handoff record", () => {
+    localStorage.setItem(
+      "orkestrator.window-build-pipeline-handoff.v1",
+      JSON.stringify({
+        version: 1,
+        entries: [{ environmentId: "env-1", pipelineId: "pipeline-legacy" }],
+      }),
+    );
+
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-legacy")).toBe(true);
+
+    markWindowBuildPipelineHandoffResolved("env-1", "pipeline-new");
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-legacy")).toBe(true);
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-new")).toBe(true);
+  });
+
+  test("clears backend-driven handoff resolutions only for the named environment", () => {
+    markWindowBuildPipelineHandoffResolved("env-1", "pipeline-1");
+    markWindowBuildPipelineHandoffResolved("env-1", "pipeline-old");
+    markWindowBuildPipelineHandoffResolved("env-2", "pipeline-2");
+
+    clearWindowBuildPipelineHandoffResolutions("env-1");
+
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-1")).toBe(false);
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-old")).toBe(false);
+    expect(hasWindowBuildPipelineHandoffResolved("env-2", "pipeline-2")).toBe(true);
+  });
+
+  test("ignores blank identifiers when recording a handoff resolution", () => {
+    markWindowBuildPipelineHandoffResolved("", "pipeline-1");
+    markWindowBuildPipelineHandoffResolved("env-1", "");
+
+    expect(hasWindowBuildPipelineHandoffResolved("", "pipeline-1")).toBe(false);
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "")).toBe(false);
   });
 
   test("stores current window selection separately from legacy migration state", () => {

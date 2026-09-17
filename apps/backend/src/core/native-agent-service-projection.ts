@@ -1668,6 +1668,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       return previous.value;
     }
     const snapshot = this.resolveProgressiveSnapshot(key, providerResult);
+    if (snapshot.sourceToken) this.progressiveSourceTokens.set(key, snapshot.sourceToken);
     this.scheduleIncompleteProgressiveHydration(
       input,
       key,
@@ -1676,7 +1677,22 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       providerResult,
       resolved.session.initialPromptPresentation,
     );
-    if (snapshot.sourceToken) this.progressiveSourceTokens.set(key, snapshot.sourceToken);
+    /*
+     * A restarted Codex bridge knows the durable thread identity before it has
+     * loaded the rollout body. Its no-touch preview is therefore empty, cached,
+     * and explicitly incomplete. Keep a non-empty persisted display tail on
+     * screen while the exact messages read above re-attaches the thread; the
+     * preview has no authority to erase content it admits it has not loaded.
+     */
+    if (
+      providerResult.freshness === "cached" &&
+      providerResult.complete === false &&
+      providerResult.messages.length === 0 &&
+      previous?.value.identity.providerSessionId === resolved.session.providerSessionId &&
+      previous.value.messages.length > 0
+    ) {
+      return previous.value;
+    }
     return this.projectProgressiveTranscript(
       input,
       key,

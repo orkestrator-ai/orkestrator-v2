@@ -4,6 +4,7 @@ import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import type { Environment, Project } from "@/types";
 import { useConfigStore } from "@/stores/configStore";
 import { useUIStore } from "@/stores/uiStore";
+import { TAB_STRIP_CLASS, WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
 import { ProjectSearchBar } from "./ProjectSearchBar";
 
 const project: Project = {
@@ -116,6 +117,23 @@ describe("ProjectSearchBar", () => {
 
   afterEach(() => {
     cleanup();
+  });
+
+  test("matches the responsive workspace tab bar height", () => {
+    renderSearchBar();
+
+    const wrapper = screen.getByTestId("project-search-bar");
+    const trigger = screen.getByTestId("project-search-trigger");
+    const wrapperClass = wrapper.className;
+
+    expect(TAB_STRIP_CLASS).toContain(WORKSPACE_BAR_HEIGHT_CLASS);
+    for (const token of WORKSPACE_BAR_HEIGHT_CLASS.split(" ")) {
+      expect(wrapperClass).toContain(token);
+    }
+    expect(wrapperClass).toContain("shrink-0");
+    expect(wrapperClass).not.toContain("py-2");
+    expect(trigger.className).toContain("h-8");
+    expect(trigger.className).toContain("md:h-7");
   });
 
   test("opens a palette of recent projects and environments, including containerized ones", async () => {

@@ -1056,6 +1056,15 @@ async function resolvePersistedSessionMetaForThread(
   return meta;
 }
 
+let hydrateMessagesFromPersistedSessionGate: (() => Promise<void>) | undefined;
+
+/** Holds the next hydrate after `attach()` so tests can sample the mid-load window. */
+export function setHydrateMessagesFromPersistedSessionGateForTesting(
+  gate?: () => Promise<void>,
+): void {
+  hydrateMessagesFromPersistedSessionGate = gate;
+}
+
 export async function hydrateMessagesFromPersistedSession(
   threadId: string,
   options: { structuredOutputTurns?: readonly StructuredOutputTurnRecord[] } = {},
@@ -1064,6 +1073,7 @@ export async function hydrateMessagesFromPersistedSession(
   title?: string;
   titleSource?: PersistedSessionMeta["titleSource"];
 }> {
+  if (hydrateMessagesFromPersistedSessionGate) await hydrateMessagesFromPersistedSessionGate();
   // Direct per-thread lookup first: hydration runs on every re-attach, and the
   // cwd listing behind the fallback rebuilds the whole transcript catalog — one
   // head read per rollout on disk — to answer for a single thread.

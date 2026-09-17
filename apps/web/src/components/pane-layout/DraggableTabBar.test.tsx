@@ -9,6 +9,7 @@ import { useClaudeStore } from "@/stores/claudeStore";
 import { createSessionKey } from "@/lib/utils";
 import { invoke } from "@/lib/native/backend";
 import { DraggableTabBar } from "./DraggableTabBar";
+import { TAB_STRIP_CLASS, WORKSPACE_BAR_HEIGHT_CLASS } from "./TabShell";
 
 beforeEach(() => {
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
@@ -55,8 +56,10 @@ describe("DraggableTabBar", () => {
     );
 
     const tabBar = container.querySelector(".overflow-x-auto");
-    expect(tabBar?.className).toContain("min-h-[40px]");
-    expect(tabBar?.className).toContain("md:min-h-[32px]");
+    expect(TAB_STRIP_CLASS).toContain(WORKSPACE_BAR_HEIGHT_CLASS);
+    for (const token of WORKSPACE_BAR_HEIGHT_CLASS.split(" ")) {
+      expect(tabBar?.className).toContain(token);
+    }
     expect(tabBar?.className).toContain("bg-background");
     // The rule below the strip is the same declaration the action bar uses
     // above it, so the row is bounded by one hairline on each side rather than

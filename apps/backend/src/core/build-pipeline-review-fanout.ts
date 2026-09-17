@@ -36,7 +36,12 @@ import {
   type PipelineSession,
   type PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
-import type { ReviewerRecord, ReviewFanoutState } from "@orkestrator/protocol/review-fanout";
+import {
+  reviewersSettled,
+  usableReviewerReports,
+  type ReviewerRecord,
+  type ReviewFanoutState,
+} from "@orkestrator/protocol/review-fanout";
 import type {
   ReviewPackageContext,
   ReviewPackageReference,
@@ -194,6 +199,49 @@ export class BuildPipelineReviewFanout {
       if (outcome.kind === "no-reports") return { kind: "failed", error: outcome.error };
     }
     return this.advanceConsolidation(pipeline, state, targetBranch);
+  }
+
+  /**
+   * Discards only a failed consolidation attempt, keeping the completed
+   * reviewer panel that feeds it.
+   *
+   * The pipeline exposes the whole fan-out as its `reviewing` phase, but the
+   * restart control promises to retry the stage that actually failed. Once the
+   * reviewers have settled with at least one report, that stage is
+   * consolidation. Rotating only its session avoids spending every reviewer's
+   * turn again while still giving a failed or exhausted consolidator a clean
+   * context and repair budget.
+   *
+   * A reviewer-stage failure never writes a consolidation record, and
+   * `abandonReviewFanout` marks unfinished reviewers cancelled — which
+   * `reviewersSettled` treats as done. Either signal means this is not a
+   * consolidation failure, so the caller must recreate the panel.
+   */
+  async restartConsolidation(pipeline: BuildPipeline): Promise<boolean> {
+    const state = pipeline.reviewFanout;
+    if (
+      !state ||
+      state.report ||
+      !state.consolidation ||
+      !reviewersSettled(state.reviewers) ||
+      state.reviewers.some((reviewer) => reviewer.status === "cancelled") ||
+      usableReviewerReports(state.reviewers).length === 0
+    ) {
+      return false;
+    }
+
+    const consolidation = state.consolidation;
+    if (consolidation) {
+      this.deps.progress.forget(consolidation.providerSessionId);
+      if (consolidation.resultTransport === "tool-v1") {
+        await this.deps.workflowResults?.close(consolidation.requestId, "superseded");
+      }
+    }
+    delete state.consolidation;
+    delete pipeline.structuredReview;
+    delete pipeline.structuredReviewRequestId;
+    await this.deps.save(pipeline);
+    return true;
   }
 
   // -------------------------------------------------------------------------

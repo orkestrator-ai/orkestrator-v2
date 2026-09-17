@@ -76,8 +76,11 @@ const {
 const { startStoreResourceSync } = await import("./store-resource-sync");
 const { armBuildPipelineTabActivation, armStartupAgentTabActivation } =
   await import("./pane-layout-authoritative");
-const { getWindowBuildPipelineActivation, hasWindowStartupAgentActivation } =
-  await import("./pane-selection-storage");
+const {
+  getWindowBuildPipelineActivation,
+  hasWindowBuildPipelineHandoffResolved,
+  hasWindowStartupAgentActivation,
+} = await import("./pane-selection-storage");
 const { startEnvironmentInBackground } =
   await import("@/components/environments/CreateEnvironmentFlowDialog");
 const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
@@ -881,6 +884,106 @@ describe("pane-layout binding", () => {
       expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
         "build-pipe-1",
       );
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("moves an unarmed window onto a pipeline the backend published", async () => {
+    detach?.();
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [
+          {
+            ...environment("env-1"),
+            setupPhase: "running",
+            setupScriptsComplete: false,
+          },
+        ],
+      });
+      useBuildPipelineStore.setState({
+        pipelines: new Map([["pipe-1", pipeline("pipe-1", 1)]]),
+      } as never);
+
+      const paneStore = usePaneLayoutStore.getState();
+      paneStore.initialize(null, "env-1");
+      paneStore.addTab("default", { id: "default", type: "plain", isSetupTab: true }, "env-1");
+      paneStore.addTab(
+        "default",
+        {
+          id: "build-pipe-1",
+          type: "claude-build",
+          buildTabData: {
+            environmentId: "env-1",
+            pipelineId: "pipe-1",
+            taskId: "task-1",
+            isLocal: true,
+          },
+        },
+        "env-1",
+      );
+      paneStore.setActiveTab("default", "default", "env-1");
+      paneStore.beginHydration("env-1");
+      paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+
+      // No armBuildPipelineTabActivation: a coordinator or agent started this
+      // pipeline, so this window holds no one-shot of its own.
+      expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+
+      useEnvironmentStore.setState({
+        environments: [
+          {
+            ...environment("env-1"),
+            setupPhase: "ready",
+            setupScriptsComplete: true,
+          },
+        ],
+      });
+
+      const getPaneLayout = mock(async () => ({
+        version: PANE_LAYOUT_VERSION,
+        environmentId: "env-1",
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf" as const,
+          id: "default",
+          tabs: [
+            { id: "default", type: "plain" as const, isSetupTab: true },
+            {
+              id: "build-pipe-1",
+              type: "claude-build" as const,
+              buildTabData: {
+                environmentId: "env-1",
+                pipelineId: "pipe-1",
+                taskId: "task-1",
+                isLocal: true,
+              },
+            },
+          ],
+          activeTabId: "build-pipe-1",
+        },
+        updatedAt: "2026-07-29T08:00:00.000Z",
+        revision: 7,
+      }));
+
+      detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+      await tick();
+
+      dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 3 });
+      await tick();
+
+      expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe(
+        "build-pipe-1",
+      );
+      expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipe-1")).toBe(true);
       expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);

@@ -296,6 +296,23 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       return;
     }
 
+    if (
+      pipeline.stageRetryRequested &&
+      pipeline.phase === "reviewing" &&
+      usesReviewFanout(pipeline) &&
+      pipeline.reviewFanout
+    ) {
+      delete pipeline.stageRetryRequested;
+      if (await this.reviewFanout().restartConsolidation(pipeline)) {
+        await this.advanceReviewFanout(pipeline);
+        return;
+      }
+      // A reviewer-stage failure has no usable settled panel to preserve. Keep
+      // the existing full-stage retry semantics in that case.
+      await this.startStage(pipeline, "review", "reviewing");
+      return;
+    }
+
     if (pipeline.stageRetryRequested) {
       const phase = pipeline.phase as ResumableBuildPhase;
       const sessionPhase = sessionPhaseFor(phase);

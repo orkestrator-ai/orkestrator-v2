@@ -23,6 +23,8 @@ import { DiffViewerTab } from "../../apps/web/src/components/terminal/DiffViewer
 import { ChangedFileItem } from "../../apps/web/src/components/files-panel/ChangedFileItem";
 import { MobileAppShellLayout } from "../../apps/web/src/components/layout/MobileAppShellLayout";
 import { SystemUsageIndicator } from "../../apps/web/src/components/layout/SystemUsageIndicator";
+import { TAB_STRIP_CLASS } from "../../apps/web/src/components/pane-layout/TabShell";
+import { ProjectSearchBar } from "../../apps/web/src/components/sidebar/ProjectSearchBar";
 import { Button } from "../../apps/web/src/components/ui/button";
 import { useProjectStore } from "../../apps/web/src/stores";
 import {
@@ -1074,6 +1076,38 @@ function SystemUsageFixture() {
   );
 }
 
+function WorkspaceBarHeightFixture() {
+  return (
+    <div className="flex h-screen bg-background text-foreground">
+      <aside className="flex w-72 shrink-0 flex-col border-r border-border/80">
+        <div
+          data-testid="workspace-sidebar-header"
+          className="flex h-12 shrink-0 items-center border-b border-border/80 bg-chrome px-3"
+        >
+          Sidebar
+        </div>
+        <ProjectSearchBar
+          projects={[]}
+          environments={[]}
+          onSelectProject={() => undefined}
+          onSelectEnvironment={() => undefined}
+        />
+      </aside>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div
+          data-testid="workspace-action-bar"
+          className="flex h-14 shrink-0 items-center border-b border-border/80 px-3 md:h-12"
+        >
+          Actions
+        </div>
+        <div data-testid="workspace-tab-strip" className={TAB_STRIP_CLASS}>
+          <span className="px-2 text-sm">Terminal</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function fixtureForPath() {
   if (window.location.pathname === "/browser") return <BrowserFixture />;
   if (window.location.pathname === "/build-pipeline-header") {
@@ -1102,6 +1136,9 @@ function fixtureForPath() {
   }
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   if (window.location.pathname === "/system-usage") return <SystemUsageFixture />;
+  if (window.location.pathname === "/workspace-bar-height") {
+    return <WorkspaceBarHeightFixture />;
+  }
   return <CreateEnvironmentFixture />;
 }
 

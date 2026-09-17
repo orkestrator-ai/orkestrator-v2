@@ -115,6 +115,31 @@ describe("same thread in two tabs", () => {
     // Deleting would destroy the user's conversation and its descendants.
     expect(methods).not.toContain("thread/delete");
   });
+
+  test("closing the last tab interrupts a running turn", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "write the PR",
+      requestId: "req-pr",
+      attachments: [],
+    });
+    expect(h.runtime.getStatus(sessionId)?.phase).toBe("running");
+
+    expect(await h.runtime.deleteSession(sessionId)).toBe(true);
+
+    expect(h.child().requests.some((request) => request.method === "turn/interrupt")).toBe(true);
+  });
+
+  test("closing one of two tabs leaves the shared turn running", async () => {
+    const h = await harness({ "thread/resume": () => ({ thread: threadPayload("thread-7") }) });
+    const a = await h.runtime.resumeSession({ threadId: "thread-7", mode: "build" });
+    const b = await h.runtime.resumeSession({ threadId: "thread-7", mode: "build" });
+    await h.runtime.prompt(a!.sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+
+    expect(await h.runtime.deleteSession(a!.sessionId)).toBe(true);
+    expect(h.child().requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+  });
 });
 
 describe("environment refresh", () => {

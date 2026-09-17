@@ -22,37 +22,29 @@ function permissionProbes(homeDirectory: string): PermissionProbe[] {
       id: "full-disk-access",
       label: "Full Disk Access",
       settingsPane: "full-disk-access",
+      required: false,
       path: FULL_DISK_ACCESS_PROBE_PATH,
     },
     {
       id: "desktop",
       label: "Desktop folder",
       settingsPane: "files-and-folders",
+      required: true,
       path: path.join(homeDirectory, "Desktop"),
     },
     {
       id: "documents",
       label: "Documents folder",
       settingsPane: "files-and-folders",
+      required: true,
       path: path.join(homeDirectory, "Documents"),
     },
     {
       id: "downloads",
       label: "Downloads folder",
       settingsPane: "files-and-folders",
+      required: true,
       path: path.join(homeDirectory, "Downloads"),
-    },
-    {
-      id: "music",
-      label: "Music folder",
-      settingsPane: "files-and-folders",
-      path: path.join(homeDirectory, "Music"),
-    },
-    {
-      id: "pictures",
-      label: "Pictures and Photos folder",
-      settingsPane: "files-and-folders",
-      path: path.join(homeDirectory, "Pictures"),
     },
   ];
 }
@@ -63,9 +55,12 @@ function isPermissionDenied(error: unknown): boolean {
   return code === "EACCES" || code === "EPERM";
 }
 
-async function defaultReadDirectory(directory: string): Promise<void> {
-  // Reading only the directory entries exercises the same macOS privacy check
-  // as a recursive `find` without retaining or exposing any file names.
+/**
+ * A shallow listing exercises the Files and Folders TCC check for this
+ * directory. It does not authorize Photos, Media Library, or other nested
+ * privacy services, so those paths are not treated as granted permissions.
+ */
+export async function readDirectoryEntries(directory: string): Promise<void> {
   await readdir(directory);
 }
 
@@ -77,7 +72,7 @@ async function defaultReadDirectory(directory: string): Promise<void> {
 export async function probeMacOsPermissions({
   platform = process.platform,
   homeDirectory,
-  readDirectory = defaultReadDirectory,
+  readDirectory = readDirectoryEntries,
 }: MacOsPermissionsProbeOptions): Promise<MacOsPermissionsStatus> {
   if (platform !== "darwin") return { supported: false, missing: [] };
 
@@ -98,4 +93,34 @@ export async function probeMacOsPermissions({
 export function macOsPrivacySettingsUrl(pane: MacOsPrivacySettingsPane): string {
   const anchor = pane === "full-disk-access" ? "Privacy_AllFiles" : "Privacy_FilesAndFolders";
   return `x-apple.systempreferences:com.apple.preference.security?${anchor}`;
+}
+
+/**
+ * Coalesce overlapping status checks onto one sequential walk so StrictMode
+ * remounts and extra renderer windows cannot stack Desktop/Documents/Downloads
+ * prompts.
+ */
+export function createSerializedMacOsPermissionProbe(
+  probe: () => Promise<MacOsPermissionsStatus>,
+): () => Promise<MacOsPermissionsStatus> {
+  let inFlight: Promise<MacOsPermissionsStatus> | null = null;
+  return () => {
+    if (!inFlight) {
+      inFlight = probe().finally(() => {
+        inFlight = null;
+      });
+    }
+    return inFlight;
+  };
+}
+
+export function shouldProbeMacOsPermissionsBeforeBackend({
+  platform = process.platform,
+  runtimeFlavor,
+}: {
+  platform?: NodeJS.Platform;
+  runtimeFlavor: string;
+}): boolean {
+  // Isolated Electron agent tests must not hang on interactive TCC dialogs.
+  return platform === "darwin" && runtimeFlavor !== "agent-test";
 }

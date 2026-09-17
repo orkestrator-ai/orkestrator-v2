@@ -65,7 +65,11 @@ import {
   DesktopWindowSlotAllocator,
   rendererPartitionForWindow,
 } from "./desktop-window-lifecycle.js";
-import { probeMacOsPermissions } from "./macos-permissions.js";
+import {
+  createSerializedMacOsPermissionProbe,
+  probeMacOsPermissions,
+  shouldProbeMacOsPermissionsBeforeBackend,
+} from "./macos-permissions.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -103,6 +107,9 @@ const windowRequestGate = new DesktopWindowRequestGate();
 let legacyRendererSessionClaimed = false;
 let lastFocusedWindowId: number | null = null;
 const backendProcess = new BackendProcess();
+const getMacOsPermissions = createSerializedMacOsPermissionProbe(() =>
+  probeMacOsPermissions({ homeDirectory: os.homedir() }),
+);
 // Closing a main window may quit; the windowless moments before the first one,
 // between programmatic first-run setup handoffs, must not.
 const windowAllClosedQuit = registerWindowAllClosedQuit({
@@ -340,7 +347,7 @@ function registerIpc(): void {
     shellApi: shell,
     appApi: app,
     nativeImageApi: nativeImage,
-    getMacOsPermissions: () => probeMacOsPermissions({ homeDirectory: os.homedir() }),
+    getMacOsPermissions,
     listConnections: (event) => manager().getList(scopeForEvent(event)),
     probeConnection: (connectionId) => {
       return manager().probe(connectionId);
@@ -441,6 +448,12 @@ async function startApplication(): Promise<void> {
     interactive: !isAgentTest,
   });
   if (!toolchainBinDir) return;
+  // Raise Files and Folders prompts before restored pipelines or agents can
+  // walk the home directory. The renderer still owns the advisory UI; this
+  // only sequences the first probe ahead of backend filesystem work.
+  if (shouldProbeMacOsPermissionsBeforeBackend({ runtimeFlavor })) {
+    await getMacOsPermissions();
+  }
   backend = await backendProcess.start({
     isDev,
     appVersion: app.getVersion(),

@@ -133,6 +133,11 @@
       "identity": "-",
       "hardenedRuntime": false,
       "notarize": false,
+      "extendInfo": {
+        "NSDesktopFolderUsageDescription": "Orkestrator searches project directories on your behalf so agents can work with files on the Desktop.",
+        "NSDocumentsFolderUsageDescription": "Orkestrator searches project directories on your behalf so agents can work with files in Documents.",
+        "NSDownloadsFolderUsageDescription": "Orkestrator searches project directories on your behalf so agents can work with files in Downloads."
+      },
       "target": [
         "dmg"
       ]

@@ -1429,11 +1429,13 @@ describe("App Docker availability", () => {
             id: "full-disk-access" as const,
             label: "Full Disk Access",
             settingsPane: "full-disk-access" as const,
+            required: false,
           },
           {
             id: "documents" as const,
             label: "Documents folder",
             settingsPane: "files-and-folders" as const,
+            required: true,
           },
         ],
       }))
@@ -1451,9 +1453,12 @@ describe("App Docker availability", () => {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
 
-      expect(await screen.findByText("macOS Permissions Required")).toBeTruthy();
+      expect(await screen.findByText("macOS File Access")).toBeTruthy();
+      expect(screen.queryByText("Checking macOS file access...") === null).toBe(true);
       expect(screen.getByText("Full Disk Access")).toBeTruthy();
       expect(screen.getByText("Documents folder")).toBeTruthy();
+      expect(screen.getByText("Required")).toBeTruthy();
+      expect(screen.getByText("Recommended")).toBeTruthy();
       expect(mockCheckDocker).not.toHaveBeenCalled();
 
       fireEvent.click(screen.getByRole("button", { name: "Open Full Disk Access Settings" }));
@@ -1466,6 +1471,337 @@ describe("App Docker availability", () => {
       fireEvent.click(screen.getByRole("button", { name: "Check Again" }));
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
       expect(getMacOsStatus).toHaveBeenCalledTimes(2);
+    } finally {
+      cleanup();
+      window.orkestrator = originalOrkestrator;
+    }
+  });
+
+  test("keeps Full Disk Access advisory and still starts Docker", async () => {
+    const originalOrkestrator = window.orkestrator;
+    const getMacOsStatus = mock(async () => ({
+      supported: true,
+      missing: [
+        {
+          id: "full-disk-access" as const,
+          label: "Full Disk Access",
+          settingsPane: "full-disk-access" as const,
+          required: false,
+        },
+      ],
+    }));
+    const openMacOsSettings = mock(async () => undefined);
+    window.orkestrator = {
+      permissions: { getMacOsStatus, openMacOsSettings },
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor: async () => false,
+      },
+    } as unknown as NonNullable<Window["orkestrator"]>;
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      expect(
+        await screen.findByText(
+          "Full Disk Access is recommended for searches that begin at the filesystem root.",
+        ),
+      ).toBeTruthy();
+      expect(screen.queryByText("macOS File Access") === null).toBe(true);
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId("app-shell")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Open Full Disk Access Settings" }));
+      await waitFor(() => expect(openMacOsSettings).toHaveBeenCalledWith("full-disk-access"));
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+      expect(
+        screen.queryByText(
+          "Full Disk Access is recommended for searches that begin at the filesystem root.",
+        ) === null,
+      ).toBe(true);
+    } finally {
+      cleanup();
+      window.orkestrator = originalOrkestrator;
+    }
+  });
+
+  test("lets the user continue past missing folder grants and then starts Docker", async () => {
+    const originalOrkestrator = window.orkestrator;
+    const getMacOsStatus = mock(async () => ({
+      supported: true,
+      missing: [
+        {
+          id: "documents" as const,
+          label: "Documents folder",
+          settingsPane: "files-and-folders" as const,
+          required: true,
+        },
+      ],
+    }));
+    window.orkestrator = {
+      permissions: { getMacOsStatus, openMacOsSettings: async () => undefined },
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor: async () => false,
+      },
+    } as unknown as NonNullable<Window["orkestrator"]>;
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      expect(await screen.findByText("macOS File Access")).toBeTruthy();
+      expect(mockCheckDocker).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      expect(screen.queryByText("macOS File Access") === null).toBe(true);
+      expect(screen.getByTestId("app-shell")).toBeTruthy();
+    } finally {
+      cleanup();
+      window.orkestrator = originalOrkestrator;
+    }
+  });
+
+  test("keeps the gate closed when the permission probe fails and recovers on retry", async () => {
+    const originalOrkestrator = window.orkestrator;
+    const originalConsoleError = console.error;
+    const consoleError = mock(() => {});
+    console.error = consoleError;
+    const getMacOsStatus = mock()
+      .mockImplementationOnce(async () => {
+        throw new Error("ipc unavailable");
+      })
+      .mockImplementationOnce(async () => ({ supported: true, missing: [] }));
+    window.orkestrator = {
+      permissions: { getMacOsStatus, openMacOsSettings: async () => undefined },
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor: async () => false,
+      },
+    } as unknown as NonNullable<Window["orkestrator"]>;
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      expect(await screen.findByText("Could not check macOS file access")).toBeTruthy();
+      expect(screen.getByText("ipc unavailable")).toBeTruthy();
+      expect(mockCheckDocker).not.toHaveBeenCalled();
+      expect(consoleError).toHaveBeenCalledWith(
+        "[App] Failed to check macOS file permissions:",
+        expect.any(Error),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Check Again" }));
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      expect(screen.queryByText("Could not check macOS file access") === null).toBe(true);
+    } finally {
+      console.error = originalConsoleError;
+      cleanup();
+      window.orkestrator = originalOrkestrator;
+    }
+  });
+
+  test("skips the local permission gate for a remote-backend window", async () => {
+    const originalOrkestrator = window.orkestrator;
+    const getMacOsStatus = mock(async () => ({
+      supported: true,
+      missing: [
+        {
+          id: "documents" as const,
+          label: "Documents folder",
+          settingsPane: "files-and-folders" as const,
+          required: true,
+        },
+      ],
+    }));
+    window.orkestrator = {
+      permissions: { getMacOsStatus, openMacOsSettings: async () => undefined },
+      listen: () => () => undefined,
+      connections: {
+        list: async () => ({
+          activeConnectionId: "remote-1",
+          localAvailable: true,
+          connections: [
+            {
+              id: "remote-1",
+              name: "Remote",
+              address: "https://gateway.example",
+              kind: "remote",
+              active: true,
+              requiresToken: false,
+            },
+          ],
+        }),
+      } as NonNullable<Window["orkestrator"]>["connections"],
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor: async () => false,
+      },
+    } as unknown as NonNullable<Window["orkestrator"]>;
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      expect(screen.queryByText("macOS File Access") === null).toBe(true);
+      expect(screen.getByTestId("app-shell")).toBeTruthy();
+    } finally {
+      cleanup();
+      window.orkestrator = originalOrkestrator;
+    }
+  });
+
+  test("skips the gate on a successful unsupported desktop status", async () => {
+    const originalOrkestrator = window.orkestrator;
+    const getMacOsStatus = mock(async () => ({ supported: false, missing: [] }));
+    window.orkestrator = {
+      permissions: { getMacOsStatus, openMacOsSettings: async () => undefined },
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor: async () => false,
+      },
+    } as unknown as NonNullable<Window["orkestrator"]>;
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      expect(screen.queryByText("macOS File Access") === null).toBe(true);
+      expect(screen.queryByText("Checking macOS file access...") === null).toBe(true);
+    } finally {
+      cleanup();
+      window.orkestrator = originalOrkestrator;
+    }
+  });
+
+  test("ignores a stale permission probe once a newer check has started", async () => {
+    const originalOrkestrator = window.orkestrator;
+    let releaseFirst: (() => void) | undefined;
+    const firstStatus = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const getMacOsStatus = mock()
+      .mockImplementationOnce(async () => {
+        await firstStatus;
+        return {
+          supported: true,
+          missing: [
+            {
+              id: "downloads" as const,
+              label: "Downloads folder",
+              settingsPane: "files-and-folders" as const,
+              required: true,
+            },
+          ],
+        };
+      })
+      .mockImplementationOnce(async () => ({ supported: true, missing: [] }));
+    window.orkestrator = {
+      permissions: { getMacOsStatus, openMacOsSettings: async () => undefined },
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor: async () => false,
+      },
+    } as unknown as NonNullable<Window["orkestrator"]>;
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      expect(await screen.findByText("Checking macOS file access...")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Check Again" }));
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      releaseFirst?.();
+      await act(async () => {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      });
+      expect(screen.queryByText("Downloads folder") === null).toBe(true);
+      expect(screen.queryByText("macOS File Access") === null).toBe(true);
+    } finally {
+      cleanup();
+      window.orkestrator = originalOrkestrator;
+    }
+  });
+
+  test("does not start the Docker poll while the permission gate is visible", async () => {
+    const originalOrkestrator = window.orkestrator;
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    const pollCallbacks: Array<() => void> = [];
+    window.setInterval = ((handler: TimerHandler, timeout?: number) => {
+      if (timeout === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
+        pollCallbacks.push(handler as () => void);
+      }
+      return 42;
+    }) as typeof window.setInterval;
+    window.clearInterval = mock(() => {}) as typeof window.clearInterval;
+    const getMacOsStatus = mock(async () => ({
+      supported: true,
+      missing: [
+        {
+          id: "desktop" as const,
+          label: "Desktop folder",
+          settingsPane: "files-and-folders" as const,
+          required: true,
+        },
+      ],
+    }));
+    window.orkestrator = {
+      permissions: { getMacOsStatus, openMacOsSettings: async () => undefined },
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor: async () => false,
+      },
+    } as unknown as NonNullable<Window["orkestrator"]>;
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      expect(await screen.findByText("macOS File Access")).toBeTruthy();
+      expect(pollCallbacks).toEqual([]);
+      expect(mockCheckDocker).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+      window.orkestrator = originalOrkestrator;
+    }
+  });
+
+  test("restarts the app from the permission gate", async () => {
+    const originalOrkestrator = window.orkestrator;
+    const getMacOsStatus = mock(async () => ({
+      supported: true,
+      missing: [
+        {
+          id: "documents" as const,
+          label: "Documents folder",
+          settingsPane: "files-and-folders" as const,
+          required: true,
+        },
+      ],
+    }));
+    window.orkestrator = {
+      permissions: { getMacOsStatus, openMacOsSettings: async () => undefined },
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor: async () => false,
+      },
+    } as unknown as NonNullable<Window["orkestrator"]>;
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      expect(await screen.findByText("macOS File Access")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Restart App" }));
+      await waitFor(() => expect(mockRestart).toHaveBeenCalledTimes(1));
+      expect(mockCheckDocker).not.toHaveBeenCalled();
     } finally {
       cleanup();
       window.orkestrator = originalOrkestrator;

@@ -21,6 +21,7 @@ import {
   workspaceFilePath,
   INITIAL_PROMPT_STAGING_DIRECTORY,
   MAX_TOTAL_ATTACHMENT_BYTES,
+  CommandFailedError,
 } from "./commands-dependencies.js";
 import type { EnvironmentDiffStatsSnapshot } from "./commands-dependencies.js";
 import {
@@ -92,12 +93,14 @@ import {
   revertLocalFile,
   deleteLocalFile,
   moveLocalFile,
+  copyExternalFileToLocalWorkspace,
   createLocalFolder,
   requireLocalMutationEnvironment,
   requireContainerMutationEnvironment,
   containerRevertFileCommand,
   containerDeleteFileCommand,
   resolveWorkspaceFileMove,
+  resolveWorkspaceExternalFileCopy,
   resolveWorkspaceFolderCreate,
   containerMoveFileCommand,
   containerCreateFolderCommand,
@@ -1023,6 +1026,69 @@ export function registerTerminalCommands(
       diffStatsService.invalidateChanges({ containerId: id });
       diffStatsService.refresh(environmentIdString);
       return created.folderPath;
+    },
+  );
+
+  register(
+    "copy_external_file",
+    async ({ environmentId, destinationDirectory, fileName, base64Data }, context) => {
+      const environmentIdString = asString(environmentId, "environmentId");
+      const directory = asString(destinationDirectory, "destinationDirectory");
+      const name = asString(fileName, "fileName");
+      const data = assertBase64PayloadWithinLimit(asString(base64Data, "base64Data"));
+      const copy = resolveWorkspaceExternalFileCopy(directory, name);
+      const environment = await context.storage.getEnvironment(environmentIdString);
+      if (!environment) throw new Error(`Environment not found: ${environmentIdString}`);
+
+      if (environment.environmentType === "local") {
+        const local = await requireLocalMutationEnvironment(context.storage, environmentIdString);
+        await copyExternalFileToLocalWorkspace(local.worktreePath!, directory, name, data);
+        diffStatsService.invalidateChanges({ worktreePath: local.worktreePath! });
+      } else {
+        const container = await requireContainerMutationEnvironment(
+          context.storage,
+          environmentIdString,
+        );
+        try {
+          await dependencies.runContainerFileCopyCommand(
+            "docker",
+            [
+              "exec",
+              "-i",
+              container.containerId!,
+              "node",
+              "-e",
+              CONTAINER_PINNED_ATTACHMENT_WRITE,
+              "/workspace",
+              copy.directory,
+              copy.fileName,
+              String(base64DecodedByteLength(data)),
+              "",
+              "exclusive",
+              String(0o644),
+              "existing",
+            ],
+            { stdin: data, timeoutMs: dependencies.containerFileCopyTimeoutMs },
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const exitCode = error instanceof CommandFailedError ? error.exitCode : undefined;
+          if ((exitCode === 76 || exitCode === undefined) && message.includes("EEXIST")) {
+            throw new Error(`A file already exists at ${copy.destination}`);
+          }
+          if ((exitCode === 77 || exitCode === undefined) && message.includes("ENOENT_ANCESTOR")) {
+            throw new Error(
+              copy.directory === "."
+                ? "Workspace root is not available"
+                : `Destination directory no longer exists: ${copy.directory}`,
+            );
+          }
+          throw new Error("The file could not be copied into the container workspace");
+        }
+        diffStatsService.invalidateChanges({ containerId: container.containerId! });
+      }
+      diffStatsService.refresh(environmentIdString);
+      return copy.destination;
     },
   );
 

@@ -1,4 +1,5 @@
 import { memo, useState, type DragEvent, type MouseEvent } from "react";
+import { toast } from "sonner";
 import {
   ChevronRight,
   Copy,
@@ -30,9 +31,53 @@ import {
 const EMPTY_CHANGED_PATHS: ReadonlySet<string> = new Set();
 const EMPTY_SELECTED_PATHS: ReadonlySet<string> = new Set();
 export const FILE_DRAG_TYPE = "application/x-orkestrator-workspace-file";
+export const EXTERNAL_FILE_DRAG_TYPE = "Files";
 
 export function isWorkspaceFileDrag(event: DragEvent<HTMLElement>): boolean {
   return Array.from(event.dataTransfer.types).includes(FILE_DRAG_TYPE);
+}
+
+export function isExternalFileDrag(event: DragEvent<HTMLElement>): boolean {
+  return Array.from(event.dataTransfer.types).includes(EXTERNAL_FILE_DRAG_TYPE);
+}
+
+type FileSystemEntryLike = { isDirectory?: boolean };
+
+export function externalFilesFromDataTransfer(dataTransfer: DataTransfer): {
+  files: File[];
+  directoryCount: number;
+} {
+  const items = Array.from(dataTransfer.items);
+  if (items.length === 0) {
+    return { files: Array.from(dataTransfer.files), directoryCount: 0 };
+  }
+
+  const files: File[] = [];
+  let directoryCount = 0;
+  for (const item of items) {
+    if (item.kind !== "file") continue;
+    const entry = (
+      item as DataTransferItem & { webkitGetAsEntry?: () => FileSystemEntryLike | null }
+    ).webkitGetAsEntry?.();
+    if (entry?.isDirectory) {
+      directoryCount += 1;
+      continue;
+    }
+    const file = item.getAsFile();
+    if (file) files.push(file);
+  }
+
+  if (directoryCount === 0 && files.length === 0) {
+    return { files: Array.from(dataTransfer.files), directoryCount: 0 };
+  }
+  return { files, directoryCount };
+}
+
+export function reportUnsupportedDroppedDirectories(directoryCount: number): void {
+  if (directoryCount === 0) return;
+  toast.error(directoryCount === 1 ? "Folder cannot be copied" : "Folders cannot be copied", {
+    description: "Drop individual files into the workspace instead.",
+  });
 }
 
 export function workspaceParentDirectory(filePath: string): string {
@@ -55,6 +100,7 @@ interface FileTreeNodeProps {
   onRevert?: (path: string) => void;
   onDelete?: (paths: string[]) => void;
   onMove?: (sourcePaths: string[], destinationDirectory: string) => void;
+  onCopyFiles?: (files: File[], destinationDirectory: string) => void;
   onRequestMove?: (sourcePaths: string[]) => void;
   onCreateFolder?: (parentDirectory: string) => void;
   movePending?: boolean;
@@ -71,6 +117,7 @@ export const FileTreeNode = memo(function FileTreeNode({
   onRevert,
   onDelete,
   onMove,
+  onCopyFiles,
   onRequestMove,
   onCreateFolder,
   movePending = false,
@@ -91,14 +138,22 @@ export const FileTreeNode = memo(function FileTreeNode({
       <CollapsibleTrigger asChild>
         <button
           onDragEnter={(event) => {
-            if (!onMove || movePending || !isWorkspaceFileDrag(event)) return;
+            if (
+              movePending ||
+              ((!onMove || !isWorkspaceFileDrag(event)) &&
+                (!onCopyFiles || !isExternalFileDrag(event)))
+            ) {
+              return;
+            }
             event.preventDefault();
             setIsDragOver(true);
           }}
           onDragOver={(event) => {
-            if (!onMove || movePending || !isWorkspaceFileDrag(event)) return;
+            const workspaceDrag = Boolean(onMove) && isWorkspaceFileDrag(event);
+            const externalDrag = Boolean(onCopyFiles) && isExternalFileDrag(event);
+            if (movePending || (!workspaceDrag && !externalDrag)) return;
             event.preventDefault();
-            event.dataTransfer.dropEffect = "move";
+            event.dataTransfer.dropEffect = externalDrag ? "copy" : "move";
             setIsDragOver(true);
           }}
           onDragLeave={(event) => {
@@ -112,14 +167,26 @@ export const FileTreeNode = memo(function FileTreeNode({
           }}
           onDrop={(event) => {
             setIsDragOver(false);
-            if (!onMove || movePending) return;
-            const sourcePaths = decodeWorkspaceFileDrag(
-              event.dataTransfer.getData(FILE_DRAG_TYPE),
-            ).filter((sourcePath) => workspaceParentDirectory(sourcePath) !== item.path);
-            if (sourcePaths.length === 0) return;
-            event.preventDefault();
-            setFolderExpanded(item.path, true);
-            onMove(sourcePaths, item.path);
+            if (movePending) return;
+            if (onMove && isWorkspaceFileDrag(event)) {
+              const sourcePaths = decodeWorkspaceFileDrag(
+                event.dataTransfer.getData(FILE_DRAG_TYPE),
+              ).filter((sourcePath) => workspaceParentDirectory(sourcePath) !== item.path);
+              if (sourcePaths.length === 0) return;
+              event.preventDefault();
+              setFolderExpanded(item.path, true);
+              onMove(sourcePaths, item.path);
+              return;
+            }
+            if (onCopyFiles && isExternalFileDrag(event)) {
+              const { files, directoryCount } = externalFilesFromDataTransfer(event.dataTransfer);
+              if (files.length === 0 && directoryCount === 0) return;
+              event.preventDefault();
+              reportUnsupportedDroppedDirectories(directoryCount);
+              if (files.length === 0) return;
+              setFolderExpanded(item.path, true);
+              onCopyFiles(files, item.path);
+            }
           }}
           className={cn(
             "flex w-full items-center gap-1.5 rounded-sm py-1 text-sm text-foreground transition-colors hover:bg-accent/50",
@@ -182,6 +249,7 @@ export const FileTreeNode = memo(function FileTreeNode({
               onRevert={onRevert}
               onDelete={onDelete}
               onMove={onMove}
+              onCopyFiles={onCopyFiles}
               onRequestMove={onRequestMove}
               onCreateFolder={onCreateFolder}
               movePending={movePending}

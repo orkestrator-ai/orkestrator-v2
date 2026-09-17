@@ -1908,7 +1908,7 @@ exit 0
     const worktreePath = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-partial-"));
     const batchesDirectory = path.join(worktreePath, ".orkestrator/initial-prompt");
     const realRealpath = fs.realpath.bind(fs);
-    const readsByBatch = new Map<string, number>();
+    let rootReads = 0;
     let failNextCleanupRoot = false;
     let simulateCleanupFailure = false;
     const realpathSpy = spyOn(fs, "realpath").mockImplementation((async (
@@ -1919,10 +1919,9 @@ exit 0
         failNextCleanupRoot = false;
         throw new Error("cleanup exploded");
       }
-      if (typeof target === "string" && /initial-prompt\/[0-9a-f-]+$/.test(target)) {
-        const reads = (readsByBatch.get(target) ?? 0) + 1;
-        readsByBatch.set(target, reads);
-        if (reads > 1) {
+      if (target === worktreePath) {
+        rootReads += 1;
+        if (rootReads === 3 || rootReads === 7) {
           failNextCleanupRoot = simulateCleanupFailure;
           throw new Error("simulated attachment write failure");
         }
@@ -2147,7 +2146,7 @@ describe("container attachment confinement helpers", () => {
     }
   });
 
-  test("keeps a write inside its pinned directory during ancestor replacement", async () => {
+  test("rejects and cleans up a write when its pinned directory is renamed", async () => {
     const root = await fs.mkdtemp(path.join(tmpdir(), "ork-container-helper-race-"));
     const external = await fs.mkdtemp(path.join(tmpdir(), "ork-container-helper-race-external-"));
     const displaced = path.join(root, "stage-original");
@@ -2167,8 +2166,10 @@ describe("container attachment confinement helpers", () => {
         child.once("error", reject);
         child.once("exit", resolve);
       });
-      expect(code).toBe(0);
-      await expect(fs.readFile(path.join(displaced, "batch/image.png"), "utf8")).resolves.toBe("A");
+      expect(code).toBe(76);
+      await expect(fs.stat(path.join(displaced, "batch/image.png"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
       expect(await fs.readdir(path.join(external, "batch"))).toEqual([]);
     } finally {
       await fs.rm(root, { recursive: true, force: true });

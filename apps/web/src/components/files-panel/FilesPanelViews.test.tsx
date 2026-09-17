@@ -84,14 +84,15 @@ const multiFileTree: FileNode[] = [
   { name: "README.md", path: "README.md", isDirectory: false },
 ];
 
-function createDataTransfer(): DataTransfer {
+function createDataTransfer(files: File[] = [], items: DataTransferItem[] = []): DataTransfer {
   const values = new Map<string, string>();
+  const nativeTypes = files.length > 0 || items.length > 0 ? ["Files"] : [];
   return {
     dropEffect: "none",
     effectAllowed: "uninitialized",
-    files: [] as unknown as FileList,
-    items: [] as unknown as DataTransferItemList,
-    types: [],
+    files: files as unknown as FileList,
+    items: items as unknown as DataTransferItemList,
+    types: [...nativeTypes],
     clearData: (type?: string) => {
       if (type) values.delete(type);
       else values.clear();
@@ -99,16 +100,17 @@ function createDataTransfer(): DataTransfer {
     getData: (type: string) => values.get(type) ?? "",
     setData(type: string, value: string) {
       values.set(type, value);
-      (this.types as string[]).splice(0, this.types.length, ...values.keys());
+      (this.types as string[]).splice(0, this.types.length, ...nativeTypes, ...values.keys());
     },
     setDragImage: () => undefined,
   } as DataTransfer;
 }
 
-function fireDrag(target: Element, type: string, dataTransfer: DataTransfer): void {
+function fireDrag(target: Element, type: string, dataTransfer: DataTransfer): Event {
   const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
   fireEvent(target, event);
+  return event;
 }
 
 describe("files panel views", () => {
@@ -116,6 +118,8 @@ describe("files panel views", () => {
     createFileTab.mockClear();
     mockWriteText.mockClear();
     mockWriteText.mockImplementation(async () => undefined);
+    mockToastError.mockClear();
+    mockToastSuccess.mockClear();
     setMobileViewport(false);
     useFilesPanelStore.setState({
       isOpen: true,
@@ -315,6 +319,101 @@ describe("files panel views", () => {
     expect(rootTarget.className).toContain("ring-primary/60");
     fireDrag(rootTarget, "drop", rootTransfer);
     expect(onMove).toHaveBeenCalledWith(["src/App.tsx"], ".");
+  });
+
+  test("copies files dragged from the operating system into folders and the workspace root", () => {
+    const onCopyFiles = mock(() => undefined);
+    const first = new File(["hello"], "notes.txt", { type: "text/plain" });
+    const second = new File([new Uint8Array([0, 1, 255])], "image.bin");
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onCopyFiles={onCopyFiles} />);
+
+    const destination = screen.getByRole("button", { name: "archive" });
+    const folderTransfer = createDataTransfer([first, second]);
+    fireDrag(destination, "dragover", folderTransfer);
+    expect(folderTransfer.dropEffect).toBe("copy");
+    expect(destination.className).toContain("ring-primary/60");
+    fireDrag(destination, "drop", folderTransfer);
+    expect(onCopyFiles).toHaveBeenCalledWith([first, second], "archive");
+    expect(useFilesPanelStore.getState().expandedFolders).toContain("archive");
+
+    const rootTransfer = createDataTransfer([first]);
+    const rootTarget = screen.getByLabelText("Workspace root drop target");
+    fireDrag(rootTarget, "dragover", rootTransfer);
+    expect(rootTransfer.dropEffect).toBe("copy");
+    fireDrag(rootTarget, "drop", rootTransfer);
+    expect(onCopyFiles).toHaveBeenLastCalledWith([first], ".");
+  });
+
+  test("copies files into the empty workspace drop target", () => {
+    const onCopyFiles = mock(() => undefined);
+    const file = new File(["hello"], "notes.txt", { type: "text/plain" });
+    useFilesPanelStore.setState({ fileTree: [], isLoadingTree: false });
+    renderWithTerminal(<AllFilesView onCopyFiles={onCopyFiles} />);
+
+    const target = screen.getByLabelText("Workspace root drop target");
+    const dataTransfer = createDataTransfer([file]);
+    fireDrag(target, "dragenter", dataTransfer);
+    fireDrag(target, "dragover", dataTransfer);
+    expect(dataTransfer.dropEffect).toBe("copy");
+    expect(target.className).toContain("ring-primary/60");
+    fireDrag(target, "drop", dataTransfer);
+
+    expect(onCopyFiles).toHaveBeenCalledWith([file], ".");
+    expect(target.className).not.toContain("ring-primary/60");
+  });
+
+  test("rejects directory entries while copying regular files from the same drop", () => {
+    const onCopyFiles = mock(() => undefined);
+    const file = new File(["hello"], "notes.txt");
+    const folder = new File([], "photos");
+    const fileItem = {
+      kind: "file",
+      type: "text/plain",
+      getAsFile: () => file,
+      webkitGetAsEntry: () => ({ isDirectory: false }),
+    } as unknown as DataTransferItem;
+    const folderItem = {
+      kind: "file",
+      type: "",
+      getAsFile: () => folder,
+      webkitGetAsEntry: () => ({ isDirectory: true }),
+    } as unknown as DataTransferItem;
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onCopyFiles={onCopyFiles} />);
+
+    const event = fireDrag(
+      screen.getByRole("button", { name: "archive" }),
+      "drop",
+      createDataTransfer([file, folder], [fileItem, folderItem]),
+    );
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onCopyFiles).toHaveBeenCalledWith([file], "archive");
+    expect(mockToastError).toHaveBeenCalledWith("Folder cannot be copied", {
+      description: "Drop individual files into the workspace instead.",
+    });
+  });
+
+  test("prioritizes workspace drags and leaves empty external drags to the browser", () => {
+    const onMove = mock(() => undefined);
+    const onCopyFiles = mock(() => undefined);
+    const file = new File(["hello"], "notes.txt");
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onMove={onMove} onCopyFiles={onCopyFiles} />);
+    const destination = screen.getByRole("button", { name: "archive" });
+
+    const mixedTransfer = createDataTransfer([file]);
+    mixedTransfer.setData("application/x-orkestrator-workspace-file", "src/App.tsx");
+    fireDrag(destination, "drop", mixedTransfer);
+    expect(onMove).toHaveBeenCalledWith(["src/App.tsx"], "archive");
+    expect(onCopyFiles).not.toHaveBeenCalled();
+
+    const emptyExternalTransfer = createDataTransfer();
+    (emptyExternalTransfer.types as string[]).push("Files");
+    const emptyEvent = fireDrag(destination, "drop", emptyExternalTransfer);
+    expect(emptyEvent.defaultPrevented).toBe(false);
+    expect(onCopyFiles).not.toHaveBeenCalled();
   });
 
   test("ignores foreign drags, clears hover state, and disables moves while pending", async () => {

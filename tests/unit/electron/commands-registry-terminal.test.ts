@@ -118,6 +118,8 @@ import type {
   RepositoryConfig,
 } from "./command-fixtures";
 
+type RunCommand = typeof import("../../../apps/backend/src/core/shell").runCommand;
+
 describe("Electron backend command registry", () => {
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
@@ -1916,6 +1918,136 @@ exit 0
         context,
       ),
     ).rejects.toThrow("Git metadata cannot be modified");
+  });
+
+  test("copies external files through the bounded container helper command", async () => {
+    const environment = createEnvironment({
+      id: "env-container-copy",
+      environmentType: "containerized",
+      containerId: "container-copy-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const invocations: Array<{
+      command: string;
+      args: string[];
+      options: { stdin?: string | Buffer; timeoutMs?: number };
+    }> = [];
+    const runner = mock(async (command: string, args: string[], options = {}) => {
+      invocations.push({ command, args, options });
+      if (args[8] === "exists.txt") throw new Error("EEXIST");
+      if (args[7] === "missing") throw new Error("ENOENT_ANCESTOR");
+      if (args[8] === "failed.txt") throw new Error("docker unavailable");
+      return { stdout: "", stderr: "" };
+    });
+    const commands = createCommandRegistry({
+      containerFileCopy: { runCommand: runner as unknown as RunCommand },
+    });
+    const copy = commands.get("copy_external_file");
+    if (!copy) throw new Error("copy_external_file command is not registered");
+    const payload = Buffer.from([0, 1, 255]).toString("base64");
+
+    await expect(
+      copy(
+        {
+          environmentId: environment.id,
+          destinationDirectory: "assets",
+          fileName: "image.bin",
+          base64Data: payload,
+        },
+        context,
+      ),
+    ).resolves.toBe("assets/image.bin");
+
+    expect(invocations).toHaveLength(1);
+    expect(invocations[0]).toMatchObject({
+      command: "docker",
+      options: { stdin: payload, timeoutMs: 120_000 },
+    });
+    expect(invocations[0]!.args.slice(0, 5)).toEqual([
+      "exec",
+      "-i",
+      "container-copy-1",
+      "node",
+      "-e",
+    ]);
+    expect(invocations[0]!.args.slice(6)).toEqual([
+      "/workspace",
+      "assets",
+      "image.bin",
+      "3",
+      "",
+      "exclusive",
+      String(0o644),
+      "existing",
+    ]);
+
+    await expect(
+      copy(
+        {
+          environmentId: environment.id,
+          destinationDirectory: "assets",
+          fileName: "exists.txt",
+          base64Data: "QQ==",
+        },
+        context,
+      ),
+    ).rejects.toThrow("A file already exists at assets/exists.txt");
+    await expect(
+      copy(
+        {
+          environmentId: environment.id,
+          destinationDirectory: "missing",
+          fileName: "new.txt",
+          base64Data: "QQ==",
+        },
+        context,
+      ),
+    ).rejects.toThrow("Destination directory no longer exists: missing");
+    await expect(
+      copy(
+        {
+          environmentId: environment.id,
+          destinationDirectory: "assets",
+          fileName: "failed.txt",
+          base64Data: "QQ==",
+        },
+        context,
+      ),
+    ).rejects.toThrow("The file could not be copied into the container workspace");
+  });
+
+  test("times out a wedged container external-file copy", async () => {
+    const environment = createEnvironment({
+      id: "env-container-copy-timeout",
+      environmentType: "containerized",
+      containerId: "container-copy-timeout-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry({ containerFileCopy: { timeoutMs: 50 } });
+
+    await withFakeDocker(
+      `#!/bin/sh
+cat >/dev/null
+exec sleep 30
+`,
+      async () => {
+        const startedAt = Date.now();
+        await expect(
+          commands.get("copy_external_file")?.(
+            {
+              environmentId: environment.id,
+              destinationDirectory: ".",
+              fileName: "notes.txt",
+              base64Data: "QQ==",
+            },
+            context,
+          ),
+        ).rejects.toThrow("The file could not be copied into the container workspace");
+        expect(Date.now() - startedAt).toBeLessThan(2_000);
+      },
+    );
   });
 
   test("binds destructive container commands to a stored container environment", async () => {

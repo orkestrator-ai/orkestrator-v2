@@ -871,7 +871,7 @@ ${INITIAL_PROMPT_PRUNE_BODY}`;
 
 export const CONTAINER_PINNED_ATTACHMENT_WRITE = String.raw`
 const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
-const [workspaceRoot, relativeDirectory, filename, expectedBytes, readyToken, writeMode, fileMode] = process.argv.slice(1);
+const [workspaceRoot, relativeDirectory, filename, expectedBytes, readyToken, writeMode, fileMode, ancestorMode] = process.argv.slice(1);
 let current = workspaceRoot;
 const root = fs.lstatSync(current);
 if (root.isSymbolicLink() || !root.isDirectory()) process.exit(73);
@@ -884,6 +884,10 @@ for (const segment of relativeDirectory.split("/")) {
     if (stat.isSymbolicLink() || !stat.isDirectory()) process.exit(73);
   } catch (error) {
     if (!error || error.code !== "ENOENT") throw error;
+    if (ancestorMode === "existing") {
+      process.stderr.write("ENOENT_ANCESTOR");
+      process.exit(77);
+    }
     try { fs.mkdirSync(segment, { mode: 0o700 }); }
     catch (mkdirError) { if (!mkdirError || mkdirError.code !== "EEXIST") throw mkdirError; }
   }
@@ -892,6 +896,22 @@ for (const segment of relativeDirectory.split("/")) {
   const pinned = fs.statSync(".");
   if (pinned.dev !== expected.dev || pinned.ino !== expected.ino) process.exit(73);
 }
+const assertDirectoryStillNamed = () => {
+  let current = workspaceRoot, named;
+  try {
+    named = fs.lstatSync(current);
+    if (named.isSymbolicLink() || !named.isDirectory()) throw new Error("invalid root");
+    for (const segment of relativeDirectory.split("/")) {
+      current = path.join(current, segment);
+      named = fs.lstatSync(current);
+      if (named.isSymbolicLink() || !named.isDirectory()) throw new Error("invalid ancestor");
+    }
+  } catch { const error = new Error("workspace directory changed"); error.code = "ESTALE_DIRECTORY"; throw error; }
+  const pinned = fs.statSync(".");
+  if (named.dev !== pinned.dev || named.ino !== pinned.ino) {
+    const error = new Error("workspace directory changed"); error.code = "ESTALE_DIRECTORY"; throw error;
+  }
+};
 if (readyToken) process.stdout.write(readyToken + "\n");
 const chunks = []; let encodedBytes = 0;
 process.stdin.on("data", chunk => { encodedBytes += chunk.length; if (encodedBytes > Number(expectedBytes) * 2 + 16) process.exit(74); chunks.push(chunk); });
@@ -899,18 +919,28 @@ process.stdin.on("end", () => {
   const content = Buffer.from(Buffer.concat(chunks).toString("ascii"), "base64");
   if (content.length !== Number(expectedBytes)) process.exit(74);
   const temp = "." + filename + "." + crypto.randomUUID() + ".tmp";
-  let fd;
+  let fd, identity, published = false;
   try {
+    assertDirectoryStillNamed();
     fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
-    const identity = fs.fstatSync(fd);
+    identity = fs.fstatSync(fd);
     fs.writeFileSync(fd, content); if (fileMode) fs.fchmodSync(fd, Number(fileMode)); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
     if (writeMode === "overwrite") fs.renameSync(temp, filename);
     else { fs.linkSync(temp, filename); fs.unlinkSync(temp); }
-    const published = fs.lstatSync(filename);
-    if (!published.isFile() || published.isSymbolicLink() || published.dev !== identity.dev || published.ino !== identity.ino) process.exit(75);
+    published = true;
+    const publishedStat = fs.lstatSync(filename);
+    if (!publishedStat.isFile() || publishedStat.isSymbolicLink() || publishedStat.dev !== identity.dev || publishedStat.ino !== identity.ino) process.exit(75);
+    assertDirectoryStillNamed();
   } catch (error) {
     if (fd !== undefined) try { fs.closeSync(fd); } catch {}
-    try { fs.unlinkSync(temp); } catch {}
+    if (published && writeMode !== "overwrite") try {
+      const current = fs.lstatSync(filename);
+      if (identity && current.dev === identity.dev && current.ino === identity.ino) fs.unlinkSync(filename);
+    } catch {}
+    try {
+      const current = fs.lstatSync(temp);
+      if (identity && current.dev === identity.dev && current.ino === identity.ino) fs.unlinkSync(temp);
+    } catch {}
     process.stderr.write(error && error.code || "WRITE_FAILED"); process.exit(76);
   }
 });
@@ -1097,6 +1127,71 @@ export async function moveLocalFile(
   }
   await moveConfinedFile(worktreePath, move.source, move.destination);
   return move.destination;
+}
+
+// The confined writers stage to `.<name>.<uuid>.tmp`, a 42-byte suffix/prefix.
+// Leave enough room for that sibling on filesystems with 255-byte components.
+const MAX_WORKSPACE_FILE_NAME_BYTES = 213;
+
+/** Resolve one externally supplied leaf filename against an existing workspace directory. */
+export function resolveWorkspaceExternalFileCopy(
+  destinationDirectory: string,
+  fileName: string,
+): { directory: string; fileName: string; destination: string } {
+  if (fileName.length === 0) {
+    throw new Error("Invalid fileName: name is required");
+  }
+  if (Buffer.byteLength(fileName, "utf8") > MAX_WORKSPACE_FILE_NAME_BYTES) {
+    throw new Error(`Invalid fileName: name exceeds ${MAX_WORKSPACE_FILE_NAME_BYTES} bytes`);
+  }
+  if (fileName === "." || fileName === ".." || fileName.includes("/") || fileName.includes("\\")) {
+    throw new Error("Invalid fileName: path separators are not allowed");
+  }
+
+  const directory =
+    destinationDirectory === "."
+      ? "."
+      : validateWorkspaceMutationPath(destinationDirectory, "destinationDirectory");
+  const destination = validateWorkspaceMutationPath(
+    directory === "." ? fileName : path.posix.join(directory, fileName),
+    "destinationPath",
+  );
+  if (path.posix.basename(destination) !== fileName) {
+    throw new Error("Invalid fileName: path must stay inside the workspace");
+  }
+  return { directory, fileName, destination };
+}
+
+/** Copy one browser-supplied file into an existing local-worktree directory. */
+export async function copyExternalFileToLocalWorkspace(
+  worktreePath: string,
+  destinationDirectory: string,
+  fileName: string,
+  payload: string | Buffer,
+): Promise<string> {
+  const copy = resolveWorkspaceExternalFileCopy(destinationDirectory, fileName);
+  try {
+    await writeConfinedFile(worktreePath, copy.destination, payload, {
+      exclusive: true,
+      createAncestors: false,
+      label: "destinationPath",
+      fileMode: 0o644,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("(EEXIST)")) {
+      throw new Error(`A file already exists at ${copy.destination}`);
+    }
+    if (message.includes("(ENOENT_ANCESTOR)")) {
+      throw new Error(
+        copy.directory === "."
+          ? "Workspace root is not available"
+          : `Destination directory no longer exists: ${copy.directory}`,
+      );
+    }
+    throw error;
+  }
+  return copy.destination;
 }
 
 const MAX_FOLDER_NAME_LENGTH = 255;

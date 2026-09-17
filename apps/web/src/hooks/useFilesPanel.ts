@@ -8,6 +8,17 @@ import { resolveComparisonRef } from "@/lib/diff-baseline";
 
 // Auto-refresh interval in milliseconds (5 seconds)
 const AUTO_REFRESH_INTERVAL = 5000;
+export const MAX_EXTERNAL_FILE_DROP_BYTES = 8 * 1024 * 1024;
+export const MAX_EXTERNAL_FILE_DROP_COUNT = 20;
+
+export function encodeBytesAsBase64(bytes: Uint8Array): string {
+  const chunkSize = 32 * 1024;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
 
 /**
  * Raised when a batch file action could only be applied to part of its inputs.
@@ -599,6 +610,79 @@ export function useFilesPanel() {
     [isAvailable, selectedEnvironmentId, isLocalEnvironment, worktreePath, refreshAllFilesData],
   );
 
+  const copyExternalFiles = useCallback(
+    async (files: File[], destinationDirectory: string) => {
+      if (!isAvailable || !selectedEnvironmentId) {
+        const error = new Error("The selected environment is not available");
+        toast.error(files.length === 1 ? "Failed to copy file" : "Failed to copy files", {
+          description: error.message,
+        });
+        throw error;
+      }
+      if (files.length === 0) return;
+      if (files.length > MAX_EXTERNAL_FILE_DROP_COUNT) {
+        const error = new Error(`Drop up to ${MAX_EXTERNAL_FILE_DROP_COUNT} files at a time`);
+        toast.error("Too many files", { description: error.message });
+        throw error;
+      }
+      const oversized = files.find((file) => file.size > MAX_EXTERNAL_FILE_DROP_BYTES);
+      if (oversized) {
+        const error = new Error(`${oversized.name} exceeds the 8 MB file limit`);
+        toast.error("File too large", { description: error.message });
+        throw error;
+      }
+
+      setFileActionPending(`copy\0${destinationDirectory}`);
+      const completedPaths: string[] = [];
+      const failures: Array<{ name: string; message: string }> = [];
+      try {
+        for (const file of files) {
+          try {
+            const contents = new Uint8Array(await file.arrayBuffer());
+            const destination = await backend.copyExternalFile(
+              selectedEnvironmentId,
+              destinationDirectory,
+              file.name,
+              encodeBytesAsBase64(contents),
+            );
+            completedPaths.push(destination);
+          } catch (error) {
+            failures.push({
+              name: file.name,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+
+        if (completedPaths.length > 0) {
+          await refreshAllFilesData();
+        }
+        if (failures.length === 0) {
+          toast.success(files.length === 1 ? "File copied" : "Files copied", {
+            description: files.length === 1 ? completedPaths[0] : `${completedPaths.length} files`,
+          });
+          return;
+        }
+
+        const message = formatBatchFailure(
+          completedPaths.length,
+          files.length,
+          failures[0]!.message,
+        );
+        toast.error(files.length === 1 ? "Failed to copy file" : "Failed to copy files", {
+          description: message,
+        });
+        throw new FileBatchActionError(message, {
+          remainingPaths: failures.map((failure) => failure.name),
+          completedPaths,
+        });
+      } finally {
+        setFileActionPending(null);
+      }
+    },
+    [isAvailable, selectedEnvironmentId, refreshAllFilesData],
+  );
+
   // Load data when panel opens, tab changes, or environment changes
   useEffect(() => {
     if (isOpen && isAvailable) {
@@ -642,6 +726,7 @@ export function useFilesPanel() {
     deleteFile,
     moveFile,
     createFolder,
+    copyExternalFiles,
     fileActionPending,
   };
 }

@@ -107,19 +107,54 @@ function writeBuildPipelineActivations(entries: BuildPipelineActivation[]): void
   }
 }
 
+/** Oldest resolved pipeline ids are evicted first once an environment exceeds this. */
+const MAX_RESOLVED_PIPELINES_PER_ENVIRONMENT = 32;
+
 interface BuildPipelineHandoffResolution {
   environmentId: string;
-  pipelineId: string;
+  pipelineIds: string[];
 }
 
 function parseBuildPipelineHandoffResolution(
   value: unknown,
 ): BuildPipelineHandoffResolution | null {
   if (!isRecord(value)) return null;
-  const { environmentId, pipelineId } = value;
+  const { environmentId } = value;
   if (typeof environmentId !== "string" || environmentId.length === 0) return null;
-  if (typeof pipelineId !== "string" || pipelineId.length === 0) return null;
-  return { environmentId, pipelineId };
+  const pipelineIds: string[] = [];
+  if (Array.isArray(value.pipelineIds)) {
+    for (const pipelineId of value.pipelineIds) {
+      if (typeof pipelineId === "string" && pipelineId.length > 0) {
+        pipelineIds.push(pipelineId);
+      }
+    }
+  }
+  // Legacy records stored a single pipelineId per environment.
+  if (typeof value.pipelineId === "string" && value.pipelineId.length > 0) {
+    pipelineIds.push(value.pipelineId);
+  }
+  if (pipelineIds.length === 0) return null;
+  return { environmentId, pipelineIds };
+}
+
+function mergeBuildPipelineHandoffResolutions(
+  entries: BuildPipelineHandoffResolution[],
+): BuildPipelineHandoffResolution[] {
+  const pipelineIdsByEnvironment = new Map<string, string[]>();
+  for (const entry of entries) {
+    const existing = pipelineIdsByEnvironment.get(entry.environmentId) ?? [];
+    for (const pipelineId of entry.pipelineIds) {
+      if (!existing.includes(pipelineId)) existing.push(pipelineId);
+    }
+    pipelineIdsByEnvironment.set(
+      entry.environmentId,
+      existing.slice(-MAX_RESOLVED_PIPELINES_PER_ENVIRONMENT),
+    );
+  }
+  return [...pipelineIdsByEnvironment.entries()].map(([environmentId, pipelineIds]) => ({
+    environmentId,
+    pipelineIds,
+  }));
 }
 
 function readBuildPipelineHandoffResolutions(): BuildPipelineHandoffResolution[] {
@@ -130,9 +165,11 @@ function readBuildPipelineHandoffResolutions(): BuildPipelineHandoffResolution[]
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed) || !Array.isArray(parsed.entries)) return [];
-    return parsed.entries
-      .map(parseBuildPipelineHandoffResolution)
-      .filter((entry): entry is BuildPipelineHandoffResolution => entry !== null);
+    return mergeBuildPipelineHandoffResolutions(
+      parsed.entries
+        .map(parseBuildPipelineHandoffResolution)
+        .filter((entry): entry is BuildPipelineHandoffResolution => entry !== null),
+    );
   } catch {
     return [];
   }
@@ -372,14 +409,13 @@ export function clearWindowBuildPipelineActivation(environmentId: string): void 
 }
 
 /**
- * Record that this window already followed a backend-published build tab for a
- * pipeline it did not launch itself.
+ * Record that this window already resolved a backend-published build tab.
  *
  * A window that never armed a one-shot — the pipeline was started by an agent,
  * a coordinator, another window or the web client — otherwise has no way to
  * distinguish "the backend just handed selection to this pipeline" from "the
- * user deliberately chose the setup terminal again". Keeping the latest resolved
- * pipeline per environment lets the backend-driven handoff fire exactly once,
+ * user deliberately chose the setup terminal again". Remembering a bounded
+ * list of resolved pipeline ids lets each pipeline's follow fire exactly once,
  * while a later pipeline into the same environment still takes focus.
  */
 export function markWindowBuildPipelineHandoffResolved(
@@ -387,11 +423,18 @@ export function markWindowBuildPipelineHandoffResolved(
   pipelineId: string,
 ): void {
   if (!environmentId || !pipelineId) return;
-  const entries = readBuildPipelineHandoffResolutions().filter(
-    (candidate) => candidate.environmentId !== environmentId,
-  );
-  entries.push({ environmentId, pipelineId });
-  writeBuildPipelineHandoffResolutions(entries);
+  const entries = readBuildPipelineHandoffResolutions();
+  const existing = entries.find((candidate) => candidate.environmentId === environmentId);
+  const others = entries.filter((candidate) => candidate.environmentId !== environmentId);
+  const pipelineIds = existing
+    ? existing.pipelineIds.filter((candidate) => candidate !== pipelineId)
+    : [];
+  pipelineIds.push(pipelineId);
+  others.push({
+    environmentId,
+    pipelineIds: pipelineIds.slice(-MAX_RESOLVED_PIPELINES_PER_ENVIRONMENT),
+  });
+  writeBuildPipelineHandoffResolutions(others);
 }
 
 /** Whether this window already resolved the backend handoff for this pipeline. */
@@ -400,7 +443,8 @@ export function hasWindowBuildPipelineHandoffResolved(
   pipelineId: string,
 ): boolean {
   return readBuildPipelineHandoffResolutions().some(
-    (candidate) => candidate.environmentId === environmentId && candidate.pipelineId === pipelineId,
+    (candidate) =>
+      candidate.environmentId === environmentId && candidate.pipelineIds.includes(pipelineId),
   );
 }
 

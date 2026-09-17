@@ -14,6 +14,8 @@ import {
   armWindowStartupAgentActivation,
   consumeWindowStartupAgentActivation,
   getWindowBuildPipelineActivation,
+  hasWindowBuildPipelineHandoffResolved,
+  markWindowBuildPipelineHandoffResolved,
 } from "@/lib/pane-selection-storage";
 
 const originalClaudeClose = useClaudeStore.getState().closeEventSubscription;
@@ -84,10 +86,12 @@ describe("cleanupDeletedEnvironmentSubscriptions", () => {
     });
     try {
       armWindowBuildPipelineActivation("env-deleted", "pipeline-1");
+      markWindowBuildPipelineHandoffResolved("env-deleted", "pipeline-1");
 
       cleanupDeletedEnvironmentSubscriptions("env-deleted");
 
       expect(getWindowBuildPipelineActivation("env-deleted")).toBeNull();
+      expect(hasWindowBuildPipelineHandoffResolved("env-deleted", "pipeline-1")).toBe(false);
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;
@@ -183,10 +187,12 @@ describe("pipeline handoff failure cleanup", () => {
         ],
       });
       armWindowBuildPipelineActivation("env-1", "pipeline-1");
+      markWindowBuildPipelineHandoffResolved("env-1", "pipeline-1");
 
       reconcileEnvironmentLifecycleErrors();
 
       expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+      expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-1")).toBe(true);
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;
@@ -204,10 +210,12 @@ describe("pipeline handoff failure cleanup", () => {
         environments: [{ ...environment("env-1", "project-1"), pendingAgentLaunch: true }],
       });
       armWindowBuildPipelineActivation("env-1", "pipeline-1");
+      markWindowBuildPipelineHandoffResolved("env-1", "pipeline-1");
 
       applyEnvironmentSetupComplete({ environment_id: "env-1", success: false });
 
       expect(getWindowBuildPipelineActivation("env-1")).toBeNull();
+      expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-1")).toBe(true);
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;

@@ -32,6 +32,7 @@ import type {
 } from "@/types";
 import { rendererDebugLog } from "@/lib/debug-log";
 import {
+  clearBuildPipelineHandoffResolutions,
   clearBuildPipelineTabActivation,
   clearStartupAgentTabActivation,
 } from "@/lib/pane-layout-authoritative";
@@ -183,6 +184,7 @@ export function cleanupDeletedEnvironmentSubscriptions(environmentId: string): v
   useClaudeStore.getState().closeEventSubscription(environmentId);
   useOpenCodeStore.getState().closeEventSubscription(environmentId);
   clearBuildPipelineTabActivation(environmentId);
+  clearBuildPipelineHandoffResolutions(environmentId);
   clearStartupAgentTabActivation(environmentId);
 }
 

@@ -207,16 +207,21 @@ function paneSelectionAllowsSetupHandoff(
  *
  * A rebuild into an already-ready environment has no long setup to protect, so
  * Start Build activates unconditionally. During a live setup, stay on the
- * setup surface — or the startup-agent tab the automatic setup handoff just
- * chose — and decline a later steal from a tab the user picked.
+ * setup surface — or, when this window armed the pipeline, the startup-agent
+ * tab the automatic setup handoff just chose — and decline a later steal from
+ * a tab the user picked. Unarmed windows following a backend-published
+ * pipeline only move off the setup surface; a user-chosen startup-agent tab
+ * is left alone.
  */
 function paneSelectionAllowsPipelineHandoff(
   selected: EnvironmentPaneState,
   targetLeafId: string,
   environmentId: string,
+  fromArmedOneShot: boolean,
 ): boolean {
   if (wasWindowBuildPipelineSetupReadyAtArm(environmentId)) return true;
   if (paneSelectionAllowsSetupHandoff(selected, targetLeafId)) return true;
+  if (!fromArmedOneShot) return false;
   const targetLeaf = findLeaf(selected.root, (leaf) => leaf.id === targetLeafId);
   const focusedLeaf = findLeaf(selected.root, (leaf) => leaf.id === selected.activePaneId);
   return (
@@ -265,6 +270,7 @@ function applyBuildPipelineSetupHandoff(
   authoritative: EnvironmentPaneState,
   selected: EnvironmentPaneState,
   pipelineId: string | null,
+  fromArmedOneShot: boolean,
 ): { state: EnvironmentPaneState; pipelineId: string | null } {
   if (
     !pipelineId ||
@@ -290,13 +296,26 @@ function applyBuildPipelineSetupHandoff(
   // A published backend selection must not yank focus from a tab or pane the
   // user chose during a long setup. Retire the one-shot in that declined case
   // so a later reconcile cannot. Rebuilds and the automatic startup-agent
-  // landing are not user choices and still activate.
-  if (!paneSelectionAllowsPipelineHandoff(selected, authoritativeLeaf.id, environmentId)) {
+  // landing are not user choices and still activate when this window armed.
+  if (
+    !paneSelectionAllowsPipelineHandoff(
+      selected,
+      authoritativeLeaf.id,
+      environmentId,
+      fromArmedOneShot,
+    )
+  ) {
     return { state: selected, pipelineId };
   }
 
   const activated = activateTabInState(selected, targetTab.id);
   return activated ? { state: activated, pipelineId } : { state: selected, pipelineId: null };
+}
+
+/** Consume the armed one-shot and remember that this window resolved the pipeline. */
+function retireBuildPipelineHandoff(environmentId: string, pipelineId: string): void {
+  consumeWindowBuildPipelineActivation(environmentId, pipelineId);
+  markWindowBuildPipelineHandoffResolved(environmentId, pipelineId);
 }
 
 /** Arm the post-setup focus handoff in the Electron window that created the environment. */
@@ -346,13 +365,18 @@ export function armBuildPipelineTabActivation(environmentId: string, pipelineId:
   // setActiveTab is a silent no-op for an unknown pane or tab. Leave the
   // one-shot armed so a later authoritative frame can still finish the handoff.
   if (installedLeaf?.activeTabId !== targetTab.id) return;
-  consumeWindowBuildPipelineActivation(environmentId, pipelineId);
+  retireBuildPipelineHandoff(environmentId, pipelineId);
 }
 
-/** Cancel a pipeline handoff whose environment was deleted. */
+/** Cancel a pending pipeline handoff. Does not forget resolved follow records. */
 export function clearBuildPipelineTabActivation(environmentId: string): void {
   if (!window.orkestrator?.isolatedViewState) return;
   clearWindowBuildPipelineActivation(environmentId);
+}
+
+/** Forget resolved pipeline follows when their environment is deleted. */
+export function clearBuildPipelineHandoffResolutions(environmentId: string): void {
+  if (!window.orkestrator?.isolatedViewState) return;
   clearWindowBuildPipelineHandoffResolutions(environmentId);
 }
 
@@ -378,12 +402,11 @@ export function commitBuildPipelineSetupHandoff(
   const commit = buildPipelineActivationCommits.get(state);
   if (!commit || commit.environmentId !== environmentId) return;
   buildPipelineActivationCommits.delete(state);
-  consumeWindowBuildPipelineActivation(commit.environmentId, commit.pipelineId);
   // Remember the decision regardless of whether an armed one-shot drove it. The
   // armed one-shot is consumed here, so without this a later authoritative frame
   // still selecting this pipeline would re-derive it and yank a user who had
   // deliberately returned to the setup terminal.
-  markWindowBuildPipelineHandoffResolved(commit.environmentId, commit.pipelineId);
+  retireBuildPipelineHandoff(commit.environmentId, commit.pipelineId);
 }
 
 /**
@@ -599,6 +622,7 @@ export function reconcileAuthoritativePaneLayout(
       restored,
       selected,
       armedPipelineId ?? unhandledBackendBuildPipelineId(environmentId, restored),
+      armedPipelineId !== null,
     );
     const startupHandoff = applyStartupAgentSetupHandoff(
       environmentId,

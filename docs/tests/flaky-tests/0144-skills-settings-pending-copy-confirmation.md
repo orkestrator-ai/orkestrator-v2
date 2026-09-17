@@ -1,7 +1,7 @@
 # SkillsSettings pending copy confirmation
 
 - **ID:** 0144
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-15
 - **Test:** `SkillsSettings > drops a pending copy confirmation when the selection changes`
 - **File:** `apps/web/src/components/settings/SkillsSettings.test.tsx:976`
@@ -24,3 +24,16 @@ mise run test:logged -- --name skills-settings-isolated -- \
   bun test --cwd apps/web ./src/components/settings/SkillsSettings.test.tsx \
   --parallel=1 --only-failures
 ```
+
+## Resolution (2026-09-18)
+
+A 50-repetition focused run reproduced the exact missing `Skill path copied`
+button twice in this case. The selected-path reset ran in a passive effect, so
+an async clipboard success could commit first and then be cleared by the late
+reset. The reset now runs in a layout effect and increments a selection version;
+the copy continuation checks that version before showing confirmation. This
+also prevents a slow clipboard success from reappearing after navigating away
+and back, which is covered by a new deterministic regression.
+
+The four clipboard cases passed 200/200 after the fix, and the complete 46-test
+owner passed.

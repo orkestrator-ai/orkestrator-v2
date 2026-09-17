@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
+  ASYNC_TEST_BUDGET_MS,
   createCommandRegistry,
   createContext,
   createEnvironment,
@@ -658,23 +659,32 @@ describe("fork_environment", () => {
     );
   });
 
-  test("falls back to the project checkout when a local worktree has vanished", async () => {
-    const { worktree, remote } = await createGitWorktreeWithOrigin();
-    const vanished = path.join(await createTempDir("ork-fork-vanished-"), "missing");
-    const source = createEnvironment({
-      id: "env-source",
-      name: "feature-env",
-      branch: "main",
-      environmentType: "local",
-      worktreePath: vanished,
-    });
+  test(
+    "falls back to the project checkout when a local worktree has vanished",
+    async () => {
+      const { worktree, remote } = await createGitWorktreeWithOrigin();
+      const vanished = path.join(await createTempDir("ork-fork-vanished-"), "missing");
+      const source = createEnvironment({
+        id: "env-source",
+        name: "feature-env",
+        branch: "main",
+        environmentType: "local",
+        worktreePath: vanished,
+      });
 
-    await expect(resolveEnvironmentForkBase(source, { localPath: worktree })).resolves.toEqual({
-      branch: "main",
-      commit: await currentGitCommit(worktree),
-    });
-    expect(remote).toBeTruthy();
-  });
+      // Resolve the expected value before starting the subject. If the generic
+      // outer test deadline fires while both Git subprocesses contend for CPU,
+      // fixture cleanup can remove the repository from under the still-running
+      // subject and turn the timeout into an unhandled rejection.
+      const expectedCommit = await currentGitCommit(worktree);
+      await expect(resolveEnvironmentForkBase(source, { localPath: worktree })).resolves.toEqual({
+        branch: "main",
+        commit: expectedCommit,
+      });
+      expect(remote).toBeTruthy();
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("uses a recorded commit when the checkout and branch are unavailable", async () => {
     const recorded = "c".repeat(40);

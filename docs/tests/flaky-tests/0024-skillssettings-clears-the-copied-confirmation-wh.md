@@ -1,7 +1,7 @@
 # `SkillsSettings > clears the copied confirmation when its timer expires` (`apps/web/src/components/settings/SkillsSettings.test.tsx:759`)
 
 - **ID:** 0024
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-11
 - **Original command:** `bun --cwd=apps/web test src --parallel --only-failures`
 - **Worker configuration:** the web package ran `bun test src --parallel` with
@@ -18,3 +18,13 @@
   copy-confirmation timeout; the web suite is dominated by real-timer waits, so
   a slow worker starves the deadline. A recurrence should retain the assertion
   detail before changing the timeout or expectation.
+
+## Resolution (2026-09-18)
+
+The focused reproduction retained the missing-button assertion: this case
+failed once in a 50-repetition run before its fake-timer checks began. The
+component's passive selection-reset effect could run after the clipboard
+promise and clear the confirmation. Moving that reset to the commit-time layout
+phase and rejecting stale clipboard completions fixes the race without changing
+the 1.5-second product timeout or loosening the assertions. The four clipboard
+cases passed 200/200 under repetition, and the complete 46-test owner passed.

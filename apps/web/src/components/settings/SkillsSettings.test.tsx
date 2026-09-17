@@ -998,6 +998,29 @@ describe("SkillsSettings", () => {
     expect(screen.queryByRole("button", { name: "Skill path copied" }) === null).toBe(true);
   });
 
+  test("ignores a copy completion from a previously selected skill", async () => {
+    skillScans.claude = {
+      ...emptyScan("claude"),
+      skills: [
+        skill({ name: "alpha", filePath: "/a/SKILL.md" }),
+        skill({ name: "beta", filePath: "/b/SKILL.md" }),
+      ],
+    };
+    const pendingCopy = deferred<void>();
+    writeText.mockImplementationOnce(() => pendingCopy.promise);
+
+    render(<SkillsSettings />);
+    await waitFor(() => expect(list().getByText("beta")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy skill path" }));
+    fireEvent.click(list().getByText("beta"));
+    await act(async () => pendingCopy.resolve());
+
+    expect(screen.getByRole("button", { name: "Copy skill path" })).toBeTruthy();
+    fireEvent.click(list().getByText("alpha"));
+    expect(screen.getByRole("button", { name: "Copy skill path" })).toBeTruthy();
+  });
+
   test("reports scan progress and failure in the footer instead of zero counts", async () => {
     const pending = deferred<unknown>();
     listOverride = () => pending.promise;

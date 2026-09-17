@@ -9,10 +9,12 @@ import {
 import { useFilesPanelStore } from "@/stores";
 import { useTerminalContext } from "@/contexts";
 import {
+  externalFilesFromDataTransfer,
   FILE_DRAG_TYPE,
   FileTreeNode,
   isExternalFileDrag,
   isWorkspaceFileDrag,
+  reportUnsupportedDroppedDirectories,
   workspaceParentDirectory,
 } from "./FileTreeNode";
 import { CreateFolderDialog } from "./CreateFolderDialog";
@@ -200,9 +202,11 @@ export function AllFilesView({
       return;
     }
     if (onCopyFiles && isExternalFileDrag(event)) {
-      const files = Array.from(event.dataTransfer.files);
-      if (files.length === 0) return;
+      const { files, directoryCount } = externalFilesFromDataTransfer(event.dataTransfer);
+      if (files.length === 0 && directoryCount === 0) return;
       event.preventDefault();
+      reportUnsupportedDroppedDirectories(directoryCount);
+      if (files.length === 0) return;
       onCopyFiles(files, ".");
     }
   };

@@ -21,6 +21,10 @@ export type CommandRegistryOptions = {
   projectCreation?: {
     runCommand?: typeof runCommand;
   };
+  containerFileCopy?: {
+    runCommand?: typeof runCommand;
+    timeoutMs?: number;
+  };
   modelCatalogRefresh?: typeof refreshHostModelCatalog;
   planUsageReader?: PlanUsageReader;
   tabTeardown?: {
@@ -49,6 +53,8 @@ export type RegistryDependencies = {
   validatedClaudeModelCatalogs: Set<string>;
   extensionDiscoveryCache: ReturnType<typeof createExtensionDiscoveryCache>;
   runProjectCreationCommand: typeof runCommand;
+  runContainerFileCopyCommand: typeof runCommand;
+  containerFileCopyTimeoutMs: number;
   refreshHostModelCatalog: typeof refreshHostModelCatalog;
   planUsageReader: PlanUsageReader;
   conditionalManifestSnapshot: <T>(

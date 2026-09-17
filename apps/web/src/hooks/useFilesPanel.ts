@@ -613,7 +613,11 @@ export function useFilesPanel() {
   const copyExternalFiles = useCallback(
     async (files: File[], destinationDirectory: string) => {
       if (!isAvailable || !selectedEnvironmentId) {
-        throw new Error("The selected environment is not available");
+        const error = new Error("The selected environment is not available");
+        toast.error(files.length === 1 ? "Failed to copy file" : "Failed to copy files", {
+          description: error.message,
+        });
+        throw error;
       }
       if (files.length === 0) return;
       if (files.length > MAX_EXTERNAL_FILE_DROP_COUNT) {

@@ -21,6 +21,7 @@ import {
   workspaceFilePath,
   INITIAL_PROMPT_STAGING_DIRECTORY,
   MAX_TOTAL_ATTACHMENT_BYTES,
+  CommandFailedError,
 } from "./commands-dependencies.js";
 import type { EnvironmentDiffStatsSnapshot } from "./commands-dependencies.js";
 import {
@@ -1048,52 +1049,42 @@ export function registerTerminalCommands(
           context.storage,
           environmentIdString,
         );
-        const child = spawnCommand("docker", [
-          "exec",
-          "-i",
-          container.containerId!,
-          "node",
-          "-e",
-          CONTAINER_PINNED_ATTACHMENT_WRITE,
-          "/workspace",
-          copy.directory,
-          copy.fileName,
-          String(base64DecodedByteLength(data)),
-          "",
-          "exclusive",
-          String(0o644),
-          "existing",
-        ]);
-        let stderr = "";
-        child.stderr.on("data", (chunk) => {
-          if (stderr.length < 1_024) {
-            stderr += chunk.toString().slice(0, 1_024 - stderr.length);
+        try {
+          await dependencies.runContainerFileCopyCommand(
+            "docker",
+            [
+              "exec",
+              "-i",
+              container.containerId!,
+              "node",
+              "-e",
+              CONTAINER_PINNED_ATTACHMENT_WRITE,
+              "/workspace",
+              copy.directory,
+              copy.fileName,
+              String(base64DecodedByteLength(data)),
+              "",
+              "exclusive",
+              String(0o644),
+              "existing",
+            ],
+            { stdin: data, timeoutMs: dependencies.containerFileCopyTimeoutMs },
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const exitCode = error instanceof CommandFailedError ? error.exitCode : undefined;
+          if ((exitCode === 76 || exitCode === undefined) && message.includes("EEXIST")) {
+            throw new Error(`A file already exists at ${copy.destination}`);
           }
-        });
-        await new Promise<void>((resolve, reject) => {
-          child.once("error", reject);
-          child.once("close", (code) => {
-            if (code === 0) {
-              resolve();
-            } else if (stderr.includes("EEXIST")) {
-              reject(new Error(`A file already exists at ${copy.destination}`));
-            } else if (stderr.includes("ENOENT_ANCESTOR")) {
-              reject(
-                new Error(
-                  copy.directory === "."
-                    ? "Workspace root is not available"
-                    : `Destination directory no longer exists: ${copy.directory}`,
-                ),
-              );
-            } else {
-              reject(new Error("The file could not be copied into the container workspace"));
-            }
-          });
-          child.stdin.on("error", (error: NodeJS.ErrnoException) => {
-            if (error.code !== "EPIPE") reject(error);
-          });
-          child.stdin.end(data);
-        });
+          if ((exitCode === 77 || exitCode === undefined) && message.includes("ENOENT_ANCESTOR")) {
+            throw new Error(
+              copy.directory === "."
+                ? "Workspace root is not available"
+                : `Destination directory no longer exists: ${copy.directory}`,
+            );
+          }
+          throw new Error("The file could not be copied into the container workspace");
+        }
         diffStatsService.invalidateChanges({ containerId: container.containerId! });
       }
       diffStatsService.refresh(environmentIdString);

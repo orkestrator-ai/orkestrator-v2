@@ -269,24 +269,26 @@ describe("writeConfinedFile", () => {
   /** Parent validation failures are driven at the syscall boundary; the actual
    * ancestor swap above exercises the pinned-cwd helper end to end. */
   describe("replacement races", () => {
-    test("refuses a parent that resolves outside the worktree", async () => {
+    test("removes an exclusive write when its pinned destination is renamed", async () => {
       const root = await createWorktree();
-      const canonicalRoot = await fs.realpath(root);
-      const realpath = fs.realpath.bind(fs);
-      const spy = spyOn(fs, "realpath").mockImplementation((async (
-        target: string,
-        ...rest: unknown[]
-      ) => {
-        if (target === path.join(canonicalRoot, ".orkestrator")) return "/elsewhere";
-        return realpath(target as never, ...(rest as never[]));
-      }) as typeof fs.realpath);
-      try {
-        await expect(writeConfinedFile(root, ".orkestrator/image.png", "QQ==")).rejects.toThrow(
-          "path leaves the local worktree",
-        );
-      } finally {
-        spy.mockRestore();
-      }
+      const destination = path.join(root, "notes");
+      const renamedDestination = path.join(root, "notes-renamed");
+      await fs.mkdir(destination);
+
+      await expect(
+        writeConfinedFile(root, "notes/data.bin", "QQ==", {
+          createAncestors: false,
+          testHooks: {
+            afterDirectoriesOpened: async () => {
+              await fs.rename(destination, renamedDestination);
+            },
+          },
+        }),
+      ).rejects.toThrow("ESTALE_DIRECTORY");
+      await expect(fs.stat(path.join(renamedDestination, "data.bin"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(fs.stat(destination)).rejects.toMatchObject({ code: "ENOENT" });
     });
 
     test("atomically replaces a final symlink entry without following it", async () => {

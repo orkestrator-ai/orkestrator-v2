@@ -487,6 +487,8 @@ type ConfinedWriteOptions = {
   maxBytes?: number;
   /** Final mode applied to the still-open temporary inode before publication. */
   fileMode?: number;
+  /** Test-only synchronization point after the destination directory is pinned. */
+  testHooks?: ConfinedPathTestHooks;
 };
 
 // The helper's cwd is resolved by the kernel during spawn and remains pinned to
@@ -494,11 +496,12 @@ type ConfinedWriteOptions = {
 // opens, publishes, and cleanup are relative to that cwd, so no post-validation
 // pathname lookup can reach a replacement directory outside the worktree.
 const PINNED_CWD_WRITE_HELPER = String.raw`
-const fs = require("node:fs");
-const [targetPath, mode, expectedDev, expectedIno, expectedBytes, fileMode, ancestorMode] = process.argv.slice(1);
+const fs = require("node:fs"), path = require("node:path");
+const [targetPath, mode, expectedDev, expectedIno, expectedBytes, fileMode, ancestorMode, readyToken] = process.argv.slice(1);
 const invalidAncestor = () => { process.stderr.write("symlink or non-directory ancestor"); process.exit(73); };
 const cwd = fs.statSync(".");
 if (String(cwd.dev) !== expectedDev || String(cwd.ino) !== expectedIno) invalidAncestor();
+const rootPath = process.cwd();
 const segments = targetPath.split("/");
 const target = segments.pop();
 for (const segment of segments) {
@@ -519,6 +522,23 @@ for (const segment of segments) {
   const pinned = fs.statSync(".");
   if (pinned.dev !== expected.dev || pinned.ino !== expected.ino) invalidAncestor();
 }
+const assertDirectoryStillNamed = () => {
+  let current = rootPath, named;
+  try {
+    named = fs.lstatSync(current);
+    if (named.isSymbolicLink() || !named.isDirectory()) throw new Error("invalid root");
+    for (const segment of segments) {
+      current = path.join(current, segment);
+      named = fs.lstatSync(current);
+      if (named.isSymbolicLink() || !named.isDirectory()) throw new Error("invalid ancestor");
+    }
+  } catch { const error = new Error("workspace directory changed"); error.code = "ESTALE_DIRECTORY"; throw error; }
+  const pinned = fs.statSync(".");
+  if (named.dev !== pinned.dev || named.ino !== pinned.ino) {
+    const error = new Error("workspace directory changed"); error.code = "ESTALE_DIRECTORY"; throw error;
+  }
+};
+if (readyToken) process.stdout.write(readyToken + "\n");
 const chunks = [];
 let bytes = 0;
 process.stdin.on("data", (chunk) => {
@@ -531,7 +551,9 @@ process.stdin.on("end", () => {
   const temp = "." + target + "." + require("node:crypto").randomUUID() + ".tmp";
   let fd;
   let identity;
+  let published = false;
   try {
+    assertDirectoryStillNamed();
     fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
     identity = fs.fstatSync(fd);
     fs.writeFileSync(fd, Buffer.concat(chunks));
@@ -545,12 +567,18 @@ process.stdin.on("end", () => {
     } else {
       fs.renameSync(temp, target);
     }
-    const published = fs.lstatSync(target);
-    if (published.isSymbolicLink() || !published.isFile() || published.dev !== identity.dev || published.ino !== identity.ino) {
+    published = true;
+    const publishedStat = fs.lstatSync(target);
+    if (publishedStat.isSymbolicLink() || !publishedStat.isFile() || publishedStat.dev !== identity.dev || publishedStat.ino !== identity.ino) {
       process.exit(75);
     }
+    assertDirectoryStillNamed();
   } catch (error) {
     if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+    if (published && mode === "exclusive") try {
+      const current = fs.lstatSync(target);
+      if (identity && current.dev === identity.dev && current.ino === identity.ino) fs.unlinkSync(target);
+    } catch {}
     try {
       const current = fs.lstatSync(temp);
       if (identity && current.dev === identity.dev && current.ino === identity.ino) fs.unlinkSync(temp);
@@ -588,8 +616,10 @@ async function writeFromPinnedRoot(
   exclusive: boolean,
   fileMode: number,
   createAncestors: boolean,
+  testHooks: ConfinedPathTestHooks = {},
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
+    const readyToken = testHooks.afterDirectoriesOpened ? "ORK_WRITE_READY" : "";
     const child = spawn(
       process.execPath,
       [
@@ -602,10 +632,11 @@ async function writeFromPinnedRoot(
         String(content.byteLength),
         String(fileMode),
         createAncestors ? "create" : "existing",
+        readyToken,
       ],
       {
         cwd: rootPath,
-        stdio: ["pipe", "ignore", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
       },
     );
     let stderr = "";
@@ -625,7 +656,22 @@ async function writeFromPinnedRoot(
       // payload is consumed. The exit status is the authoritative failure.
       if (error.code !== "EPIPE") reject(error);
     });
-    child.stdin.end(content);
+    if (readyToken) {
+      let stdout = "";
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+        if (!stdout.includes(`${readyToken}\n`)) return;
+        stdout = "";
+        void Promise.resolve(testHooks.afterDirectoriesOpened?.())
+          .then(() => child.stdin.end(content))
+          .catch((error) => {
+            child.kill();
+            reject(error);
+          });
+      });
+    } else {
+      child.stdin.end(content);
+    }
   });
 }
 
@@ -705,18 +751,8 @@ export async function writeConfinedFile(
     options.exclusive !== false,
     fileMode,
     options.createAncestors !== false,
+    options.testHooks,
   );
-  let current = canonicalRoot;
-  for (const segment of target.split("/").slice(0, -1)) {
-    current = path.join(current, segment);
-    const stats = await fs.lstat(current);
-    if (stats.isSymbolicLink() || !stats.isDirectory()) {
-      throw new Error(`Invalid ${label}: ancestor changed after the write: ${target}`);
-    }
-    if (!isPathInsideRoot(await fs.realpath(current), canonicalRoot)) {
-      throw new Error(`Invalid ${label}: path leaves the local worktree: ${target}`);
-    }
-  }
   return fullPath;
 }
 

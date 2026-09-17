@@ -1,4 +1,5 @@
 import { memo, useState, type DragEvent, type MouseEvent } from "react";
+import { toast } from "sonner";
 import {
   ChevronRight,
   Copy,
@@ -38,6 +39,45 @@ export function isWorkspaceFileDrag(event: DragEvent<HTMLElement>): boolean {
 
 export function isExternalFileDrag(event: DragEvent<HTMLElement>): boolean {
   return Array.from(event.dataTransfer.types).includes(EXTERNAL_FILE_DRAG_TYPE);
+}
+
+type FileSystemEntryLike = { isDirectory?: boolean };
+
+export function externalFilesFromDataTransfer(dataTransfer: DataTransfer): {
+  files: File[];
+  directoryCount: number;
+} {
+  const items = Array.from(dataTransfer.items);
+  if (items.length === 0) {
+    return { files: Array.from(dataTransfer.files), directoryCount: 0 };
+  }
+
+  const files: File[] = [];
+  let directoryCount = 0;
+  for (const item of items) {
+    if (item.kind !== "file") continue;
+    const entry = (
+      item as DataTransferItem & { webkitGetAsEntry?: () => FileSystemEntryLike | null }
+    ).webkitGetAsEntry?.();
+    if (entry?.isDirectory) {
+      directoryCount += 1;
+      continue;
+    }
+    const file = item.getAsFile();
+    if (file) files.push(file);
+  }
+
+  if (directoryCount === 0 && files.length === 0) {
+    return { files: Array.from(dataTransfer.files), directoryCount: 0 };
+  }
+  return { files, directoryCount };
+}
+
+export function reportUnsupportedDroppedDirectories(directoryCount: number): void {
+  if (directoryCount === 0) return;
+  toast.error(directoryCount === 1 ? "Folder cannot be copied" : "Folders cannot be copied", {
+    description: "Drop individual files into the workspace instead.",
+  });
 }
 
 export function workspaceParentDirectory(filePath: string): string {
@@ -139,9 +179,11 @@ export const FileTreeNode = memo(function FileTreeNode({
               return;
             }
             if (onCopyFiles && isExternalFileDrag(event)) {
-              const files = Array.from(event.dataTransfer.files);
-              if (files.length === 0) return;
+              const { files, directoryCount } = externalFilesFromDataTransfer(event.dataTransfer);
+              if (files.length === 0 && directoryCount === 0) return;
               event.preventDefault();
+              reportUnsupportedDroppedDirectories(directoryCount);
+              if (files.length === 0) return;
               setFolderExpanded(item.path, true);
               onCopyFiles(files, item.path);
             }

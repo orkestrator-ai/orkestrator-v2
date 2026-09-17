@@ -77,6 +77,8 @@ export function createCommandRegistry(
   const validatedClaudeModelCatalogs = new Set<string>();
   const extensionDiscoveryCache = createExtensionDiscoveryCache();
   const runProjectCreationCommand = options.projectCreation?.runCommand ?? runCommand;
+  const runContainerFileCopyCommand = options.containerFileCopy?.runCommand ?? runCommand;
+  const containerFileCopyTimeoutMs = options.containerFileCopy?.timeoutMs ?? 120_000;
 
   const conditionalManifestSnapshot = async <T>(
     args: Record<string, unknown>,
@@ -226,6 +228,8 @@ export function createCommandRegistry(
     validatedClaudeModelCatalogs,
     extensionDiscoveryCache,
     runProjectCreationCommand,
+    runContainerFileCopyCommand,
+    containerFileCopyTimeoutMs,
     refreshHostModelCatalog: options.modelCatalogRefresh ?? refreshHostModelCatalog,
     planUsageReader: options.planUsageReader ?? readPlanUsage,
     conditionalManifestSnapshot,

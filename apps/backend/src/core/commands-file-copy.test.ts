@@ -120,13 +120,30 @@ describe("external workspace file copies", () => {
     expect(() => resolveWorkspaceExternalFileCopy("assets", "\0secret")).toThrow(
       "control characters are not allowed",
     );
-    expect(() => resolveWorkspaceExternalFileCopy("assets", "🙂".repeat(64))).toThrow(
-      "name exceeds 255 bytes",
+    expect(() => resolveWorkspaceExternalFileCopy("assets", "x".repeat(214))).toThrow(
+      "name exceeds 213 bytes",
+    );
+  });
+
+  test("copies a filename at the maximum staging-safe length", async () => {
+    const fileName = "x".repeat(213);
+    expect(resolveWorkspaceExternalFileCopy("assets", fileName).fileName).toBe(fileName);
+    await expect(
+      copyExternalFileToLocalWorkspace(worktreePath, "assets", fileName, "QQ=="),
+    ).resolves.toBe(`assets/${fileName}`);
+    await expect(fs.readFile(path.join(worktreePath, "assets", fileName), "utf8")).resolves.toBe(
+      "A",
     );
   });
 
   test("the container helper requires an existing directory and preserves collisions", async () => {
-    const run = async (directory: string, name: string, contents: Buffer) => {
+    const run = async (
+      directory: string,
+      name: string,
+      contents: Buffer,
+      afterReady?: () => Promise<void>,
+    ) => {
+      const readyToken = afterReady ? "READY" : "";
       const child = spawn(
         process.execPath,
         [
@@ -136,18 +153,26 @@ describe("external workspace file copies", () => {
           directory,
           name,
           String(contents.byteLength),
-          "",
+          readyToken,
           "exclusive",
           String(0o644),
           "existing",
         ],
-        { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+        { stdio: ["pipe", "pipe", "pipe"] },
       );
       let stderr = "";
-      child.stderr.on("data", (chunk) => {
+      child.stderr.on("data", (chunk: Buffer) => {
         stderr += chunk.toString();
       });
-      child.stdin.end(contents.toString("base64"));
+      if (afterReady) {
+        child.stdout.once("data", () => {
+          void afterReady()
+            .then(() => child.stdin.end(contents.toString("base64")))
+            .catch((error) => child.stdin.destroy(error));
+        });
+      } else {
+        child.stdin.end(contents.toString("base64"));
+      }
       const code = await new Promise<number | null>((resolve, reject) => {
         child.once("error", reject);
         child.once("close", resolve);
@@ -173,6 +198,16 @@ describe("external workspace file copies", () => {
     expect(missing.code).toBe(77);
     expect(missing.stderr).toContain("ENOENT_ANCESTOR");
     await expect(fs.stat(path.join(worktreePath, "missing"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    const renamedDirectory = path.join(worktreePath, "assets-renamed");
+    const renamed = await run("assets", "late.bin", contents, async () => {
+      await fs.rename(path.join(worktreePath, "assets"), renamedDirectory);
+    });
+    expect(renamed.code).toBe(76);
+    expect(renamed.stderr).toContain("ESTALE_DIRECTORY");
+    await expect(fs.stat(path.join(renamedDirectory, "late.bin"))).rejects.toMatchObject({
       code: "ENOENT",
     });
   });

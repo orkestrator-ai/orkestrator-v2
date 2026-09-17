@@ -896,6 +896,22 @@ for (const segment of relativeDirectory.split("/")) {
   const pinned = fs.statSync(".");
   if (pinned.dev !== expected.dev || pinned.ino !== expected.ino) process.exit(73);
 }
+const assertDirectoryStillNamed = () => {
+  let current = workspaceRoot, named;
+  try {
+    named = fs.lstatSync(current);
+    if (named.isSymbolicLink() || !named.isDirectory()) throw new Error("invalid root");
+    for (const segment of relativeDirectory.split("/")) {
+      current = path.join(current, segment);
+      named = fs.lstatSync(current);
+      if (named.isSymbolicLink() || !named.isDirectory()) throw new Error("invalid ancestor");
+    }
+  } catch { const error = new Error("workspace directory changed"); error.code = "ESTALE_DIRECTORY"; throw error; }
+  const pinned = fs.statSync(".");
+  if (named.dev !== pinned.dev || named.ino !== pinned.ino) {
+    const error = new Error("workspace directory changed"); error.code = "ESTALE_DIRECTORY"; throw error;
+  }
+};
 if (readyToken) process.stdout.write(readyToken + "\n");
 const chunks = []; let encodedBytes = 0;
 process.stdin.on("data", chunk => { encodedBytes += chunk.length; if (encodedBytes > Number(expectedBytes) * 2 + 16) process.exit(74); chunks.push(chunk); });
@@ -903,18 +919,28 @@ process.stdin.on("end", () => {
   const content = Buffer.from(Buffer.concat(chunks).toString("ascii"), "base64");
   if (content.length !== Number(expectedBytes)) process.exit(74);
   const temp = "." + filename + "." + crypto.randomUUID() + ".tmp";
-  let fd;
+  let fd, identity, published = false;
   try {
+    assertDirectoryStillNamed();
     fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
-    const identity = fs.fstatSync(fd);
+    identity = fs.fstatSync(fd);
     fs.writeFileSync(fd, content); if (fileMode) fs.fchmodSync(fd, Number(fileMode)); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
     if (writeMode === "overwrite") fs.renameSync(temp, filename);
     else { fs.linkSync(temp, filename); fs.unlinkSync(temp); }
-    const published = fs.lstatSync(filename);
-    if (!published.isFile() || published.isSymbolicLink() || published.dev !== identity.dev || published.ino !== identity.ino) process.exit(75);
+    published = true;
+    const publishedStat = fs.lstatSync(filename);
+    if (!publishedStat.isFile() || publishedStat.isSymbolicLink() || publishedStat.dev !== identity.dev || publishedStat.ino !== identity.ino) process.exit(75);
+    assertDirectoryStillNamed();
   } catch (error) {
     if (fd !== undefined) try { fs.closeSync(fd); } catch {}
-    try { fs.unlinkSync(temp); } catch {}
+    if (published && writeMode !== "overwrite") try {
+      const current = fs.lstatSync(filename);
+      if (identity && current.dev === identity.dev && current.ino === identity.ino) fs.unlinkSync(filename);
+    } catch {}
+    try {
+      const current = fs.lstatSync(temp);
+      if (identity && current.dev === identity.dev && current.ino === identity.ino) fs.unlinkSync(temp);
+    } catch {}
     process.stderr.write(error && error.code || "WRITE_FAILED"); process.exit(76);
   }
 });
@@ -1103,7 +1129,9 @@ export async function moveLocalFile(
   return move.destination;
 }
 
-const MAX_WORKSPACE_FILE_NAME_BYTES = 255;
+// The confined writers stage to `.<name>.<uuid>.tmp`, a 42-byte suffix/prefix.
+// Leave enough room for that sibling on filesystems with 255-byte components.
+const MAX_WORKSPACE_FILE_NAME_BYTES = 213;
 
 /** Resolve one externally supplied leaf filename against an existing workspace directory. */
 export function resolveWorkspaceExternalFileCopy(

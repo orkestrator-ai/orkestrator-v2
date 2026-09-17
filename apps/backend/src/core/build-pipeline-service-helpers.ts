@@ -35,6 +35,7 @@ import type { AppConfig } from "./models.js";
 import {
   type BuildPipelineProvider,
   type ProviderExecutionMode,
+  type ProviderPrepareDispatchOptions,
 } from "./build-pipeline-provider.js";
 import { REVIEW_PREPARATION_OUTPUT_CONTRACT } from "./build-pipeline-prompts.js";
 
@@ -544,9 +545,10 @@ export function transcriptFingerprint(messages: unknown[]): string {
 export async function attachBeforeDispatch(
   provider: BuildPipelineProvider,
   sessionId: string,
+  options?: ProviderPrepareDispatchOptions,
 ): Promise<void> {
   try {
-    await provider.prepareDispatch?.(sessionId);
+    await provider.prepareDispatch?.(sessionId, options);
   } catch (error) {
     console.warn(
       "[build-pipeline] Attaching the agent before dispatch failed:",

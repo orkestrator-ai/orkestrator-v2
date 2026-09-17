@@ -49,8 +49,10 @@ import type { AgentToolConnection } from "./agent-tools.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
   AmbiguousPromptDispatchError,
+  ProviderDispatchPreparationError,
   readProviderStatus,
   type BuildPipelineProvider,
+  type ProviderPrepareDispatchOptions,
 } from "./build-pipeline-provider.js";
 import {
   structuredReportRepairPrompt,
@@ -126,6 +128,17 @@ class ReviewerPolicyUnavailableError extends Error {
   constructor(cause: unknown) {
     super("Reviewer execution policy is temporarily unavailable", { cause });
     this.name = "ReviewerPolicyUnavailableError";
+  }
+}
+
+/** Broker or permission setup failed before the prompt request was written. */
+class ReviewerDispatchSetupError extends Error {
+  constructor(cause: unknown) {
+    super(
+      cause instanceof Error ? cause.message : "Reviewer dispatch setup is temporarily unavailable",
+      { cause },
+    );
+    this.name = "ReviewerDispatchSetupError";
   }
 }
 
@@ -502,9 +515,10 @@ export function commitProgressObservation(
 export async function attachAgentBeforeDispatch(
   provider: BuildPipelineProvider,
   providerSessionId: string,
+  options?: ProviderPrepareDispatchOptions,
 ): Promise<void> {
   try {
-    await provider.prepareDispatch?.(providerSessionId);
+    await provider.prepareDispatch?.(providerSessionId, options);
   } catch (error) {
     console.warn(
       "[review-fanout] Attaching the agent before dispatch failed:",
@@ -694,9 +708,12 @@ export class ReviewFanoutRunner {
           throw error;
         }
         if (this.isFatal(error)) throw error;
-        if (error instanceof ReviewerPolicyUnavailableError) {
+        if (
+          error instanceof ReviewerPolicyUnavailableError ||
+          error instanceof ReviewerDispatchSetupError
+        ) {
           // The reviewer is still durably prepared. Leave it retryable instead
-          // of converting a storage read failure into a terminal review result.
+          // of converting a pre-prompt failure into a terminal review result.
           return { kind: "working" };
         }
         // The failure may have been raised while the provider turn was still
@@ -836,10 +853,6 @@ export class ReviewFanoutRunner {
           });
         }
       }
-      // Attach the agent process before the at-most-once window opens: a cold
-      // spawn is the slowest thing a dispatch can wait on, and time spent on it
-      // inside the request is time the outcome is unknowable if it fails.
-      await attachAgentBeforeDispatch(provider, reviewer.providerSessionId);
       await host.assertFence();
       const agentMcp =
         reviewer.resultTransport === "tool-v1"
@@ -862,6 +875,20 @@ export class ReviewFanoutRunner {
           throw new ReviewerPolicyUnavailableError(error);
         }
       }
+      // Attach after the connection is resolved so broker registration happens
+      // outside the at-most-once window.
+      await attachAgentBeforeDispatch(
+        provider,
+        reviewer.providerSessionId,
+        agentMcp
+          ? {
+              agentMcp,
+              ...(agentMcp.workflowResultCapability
+                ? { workflowResultTool: workflowResultToolName("review-report") }
+                : {}),
+            }
+          : undefined,
+      );
       reviewer.dispatchState = "dispatching";
       await host.save();
       try {
@@ -892,6 +919,11 @@ export class ReviewFanoutRunner {
         );
       } catch (error) {
         if (error instanceof AmbiguousPromptDispatchError) return "stop";
+        reviewer.dispatchState = "prepared";
+        await host.save();
+        if (error instanceof ProviderDispatchPreparationError) {
+          throw new ReviewerDispatchSetupError(error);
+        }
         throw error;
       }
       await host.assertFence();

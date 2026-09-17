@@ -552,6 +552,16 @@ export class FeaturePlanningService {
       const agentMcp = toolMode
         ? this.agentMcp(environment, record.projectId, requestId)
         : undefined;
+      try {
+        await provider.prepareDispatch?.(sessionId, {
+          ...(agentMcp ? { agentMcp } : {}),
+          ...(agentMcp?.workflowResultCapability
+            ? { workflowResultTool: workflowResultToolName(resultKind) }
+            : {}),
+        });
+      } catch {
+        // Best-effort: send performs the same registration.
+      }
       await provider.send(
         sessionId,
         toolMode

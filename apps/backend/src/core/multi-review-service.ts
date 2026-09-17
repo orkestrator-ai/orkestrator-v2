@@ -52,6 +52,7 @@ import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
   AmbiguousPromptDispatchError,
+  ProviderDispatchPreparationError,
   createBuildPipelineProvider,
   readProviderStatus,
   type BridgeConnection,
@@ -2112,9 +2113,6 @@ export class MultiReviewService {
           prompt = addressPrompt(workflow.consolidatedReport!);
         }
       }
-      // Same reason as the reviewer dispatch: pay the cold start before the
-      // at-most-once window rather than inside it.
-      await attachAgentBeforeDispatch(provider, session.providerSessionId);
       await this.assertFence(workflow.id, token);
       const schema =
         request.kind === "prepare"
@@ -2145,6 +2143,20 @@ export class MultiReviewService {
             : {}),
         });
       }
+      // Same reason as the reviewer dispatch: pay the cold start before the
+      // at-most-once window rather than inside it.
+      await attachAgentBeforeDispatch(
+        provider,
+        session.providerSessionId,
+        agentMcp
+          ? {
+              agentMcp,
+              ...(agentMcp.workflowResultCapability
+                ? { workflowResultTool: workflowResultToolName(resultKind) }
+                : {}),
+            }
+          : undefined,
+      );
       request.state = "dispatching";
       await this.save(workflow, token);
       try {
@@ -2172,6 +2184,9 @@ export class MultiReviewService {
         );
       } catch (error) {
         if (error instanceof AmbiguousPromptDispatchError) return;
+        request.state = "prepared";
+        await this.save(workflow, token);
+        if (error instanceof ProviderDispatchPreparationError) return;
         throw error;
       }
       await this.assertFence(workflow.id, token);

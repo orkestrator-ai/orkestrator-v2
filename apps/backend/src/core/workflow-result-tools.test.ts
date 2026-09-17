@@ -237,3 +237,99 @@ describe("workflow result context fencing", () => {
     expect(await service.status(scope, crypto.randomUUID())).toBeNull();
   });
 });
+
+describe("workflow result broker tools", () => {
+  test("status reports capability rejection, unavailability, and storage failure", async () => {
+    const handlers = new Map<string, (args: Record<string, unknown>) => Promise<unknown>>();
+    const server = {
+      registerTool(
+        name: string,
+        _meta: unknown,
+        handler: (args: Record<string, unknown>) => Promise<unknown>,
+      ) {
+        handlers.set(name, handler);
+      },
+    };
+    const workflowResults = {
+      async authorizeCapability(_scope: unknown, resultKey: string, capability: string) {
+        if (capability === "denied") return false;
+        if (capability === "storage") throw new Error("disk full");
+        return resultKey === "known-key";
+      },
+      async status() {
+        return null;
+      },
+      async binding() {
+        return { kind: "review-report" };
+      },
+      async submit() {
+        return { ok: true, lifecycle: "accepted" };
+      },
+    };
+    const { registerWorkflowResultBrokerTools } = await import("./workflow-result-tools.js");
+    registerWorkflowResultBrokerTools(
+      server as never,
+      workflowResults as never,
+      { environmentId: "env-1", projectId: "project-1" },
+    );
+    const status = handlers.get("get_workflow_result_status");
+    if (!status) throw new Error("missing status tool");
+    expect(await status({ resultKey: "known-key", capability: "denied" })).toMatchObject({
+      isError: true,
+      structuredContent: { ok: false, error: { code: "capability_denied" } },
+    });
+    expect(await status({ resultKey: "known-key", capability: "ok" })).toMatchObject({
+      isError: true,
+      structuredContent: { ok: false, error: { code: "result_status_unavailable" } },
+    });
+    expect(await status({ resultKey: "known-key", capability: "storage" })).toMatchObject({
+      isError: true,
+      structuredContent: { ok: false, error: { code: "storage_unavailable" } },
+    });
+  });
+
+  test("a valid capability presented to the wrong submit tool is denied", async () => {
+    const handlers = new Map<string, (args: Record<string, unknown>) => Promise<unknown>>();
+    const server = {
+      registerTool(
+        name: string,
+        _meta: unknown,
+        handler: (args: Record<string, unknown>) => Promise<unknown>,
+      ) {
+        handlers.set(name, handler);
+      },
+    };
+    const workflowResults = {
+      async authorizeCapability() {
+        return true;
+      },
+      async binding() {
+        return { kind: "review-report" };
+      },
+      async submit() {
+        return { ok: true, lifecycle: "accepted" };
+      },
+      async status() {
+        return null;
+      },
+    };
+    const { registerWorkflowResultBrokerTools } = await import("./workflow-result-tools.js");
+    registerWorkflowResultBrokerTools(
+      server as never,
+      workflowResults as never,
+      { environmentId: "env-1", projectId: "project-1" },
+    );
+    const submitFix = handlers.get("submit_fix_result");
+    if (!submitFix) throw new Error("missing submit_fix_result");
+    expect(
+      await submitFix({
+        resultKey: "known-key",
+        capability: "ok",
+        result: { complete: true },
+      }),
+    ).toMatchObject({
+      isError: true,
+      structuredContent: { ok: false, error: { code: "capability_denied" } },
+    });
+  });
+});

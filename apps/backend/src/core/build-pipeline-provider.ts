@@ -17,6 +17,7 @@ import type { PipelineSessionPhase } from "@orkestrator/protocol/build-pipeline"
 export {
   AmbiguousPromptDispatchError,
   PromptRejectedError,
+  ProviderDispatchPreparationError,
   ProviderSessionFailedError,
   ProviderUnavailableError,
   readProviderStatus,
@@ -28,6 +29,7 @@ export type {
   ProviderDependencies,
   ProviderExecutionMode,
   ProviderInteractionObservationEvent,
+  ProviderPrepareDispatchOptions,
   ProviderSendOptions,
   ProviderSessionObservation,
   ProviderSessionRegistration,

@@ -276,6 +276,10 @@ export type OpenCodeFake = {
   setDeleteResponse(response: Record<string, unknown>): void;
   setCreateResponse(response: Record<string, unknown>): void;
   setUpdateResponse(response: Record<string, unknown>): void;
+  setMcpAddError(error: unknown): void;
+  setMcpAddHandler(
+    handler: ((parameters: Record<string, unknown>) => Promise<Record<string, unknown>>) | null,
+  ): void;
   setPromptResponse(response: Record<string, unknown>): void;
   setStatusError(error: unknown): void;
   setStatusResponse(response: Record<string, unknown>): void;
@@ -328,7 +332,36 @@ export function openCodeFake(): OpenCodeFake {
   let deleteResponse: Record<string, unknown> = { data: true };
   let createResponse: Record<string, unknown> = { data: { id: "owned-session" } };
   let updateResponse: Record<string, unknown> = { data: { id: "owned-session" } };
+  let mcpAddError: unknown = null;
+  let mcpAddHandler:
+    | ((parameters: Record<string, unknown>) => Promise<Record<string, unknown>>)
+    | null = null;
   let promptResponse: Record<string, unknown> = { data: true };
+
+  function applyPromptToolsAsSessionPermission(parameters: Record<string, unknown>): void {
+    const tools = parameters.tools;
+    if (!tools || typeof tools !== "object" || Array.isArray(tools)) return;
+    const entries = Object.entries(tools as Record<string, unknown>);
+    if (entries.length === 0) return;
+    const sessionId = String(parameters.sessionID ?? "");
+    if (!sessionId) return;
+    const current = sessionGetResponses.get(sessionId);
+    const currentData =
+      current?.data && typeof current.data === "object"
+        ? (current.data as Record<string, unknown>)
+        : {};
+    sessionGetResponses.set(sessionId, {
+      data: {
+        ...currentData,
+        id: sessionId,
+        permission: entries.map(([permission, allowed]) => ({
+          permission,
+          pattern: "*",
+          action: allowed ? "allow" : "deny",
+        })),
+      },
+    });
+  }
   let statusError: unknown = null;
   const statusCalls: Array<Record<string, unknown> | undefined> = [];
   const statusOptions: Array<{ signal?: AbortSignal } | undefined> = [];
@@ -350,6 +383,8 @@ export function openCodeFake(): OpenCodeFake {
     mcp: {
       async add(parameters: Record<string, unknown>) {
         mcpAddCalls.push(parameters);
+        if (mcpAddHandler) return mcpAddHandler(parameters);
+        if (mcpAddError) throw mcpAddError;
         return { data: true };
       },
     },
@@ -450,6 +485,7 @@ export function openCodeFake(): OpenCodeFake {
       },
       async promptAsync(parameters: Record<string, unknown>) {
         promptCalls.push(parameters);
+        applyPromptToolsAsSessionPermission(parameters);
         await promptGate;
         if (promptError) throw promptError;
         return promptResponse;
@@ -604,6 +640,12 @@ export function openCodeFake(): OpenCodeFake {
     },
     setUpdateResponse(response) {
       updateResponse = response;
+    },
+    setMcpAddError(error) {
+      mcpAddError = error;
+    },
+    setMcpAddHandler(handler) {
+      mcpAddHandler = handler;
     },
     setPromptResponse(response) {
       promptResponse = response;

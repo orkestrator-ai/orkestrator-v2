@@ -1236,9 +1236,20 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         schema,
       });
     }
-    await attachBeforeDispatch(provider, sessionId);
     const agentMcp =
       resultTransport === "tool-v1" ? this.workflowAgentMcp(pipeline, requestId, agent) : undefined;
+    await attachBeforeDispatch(
+      provider,
+      sessionId,
+      agentMcp
+        ? {
+            agentMcp,
+            ...(agentMcp.workflowResultCapability && resultKind
+              ? { workflowResultTool: workflowResultToolName(resultKind) }
+              : {}),
+          }
+        : undefined,
+    );
     try {
       await provider.send(
         sessionId,
@@ -1338,11 +1349,22 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     const mode =
       executionModeOverrideForPhase(attempt.phase) ??
       (sessionPhase && step ? executionModeForSessionPhase(sessionPhase, step.agent) : undefined);
-    await attachBeforeDispatch(provider, attempt.sessionId);
     const agentMcp =
       attempt.resultTransport === "tool-v1"
         ? this.workflowAgentMcp(pipeline, attempt.requestId, step?.agent)
         : undefined;
+    await attachBeforeDispatch(
+      provider,
+      attempt.sessionId,
+      agentMcp
+        ? {
+            agentMcp,
+            ...(agentMcp.workflowResultCapability && resultKind
+              ? { workflowResultTool: workflowResultToolName(resultKind) }
+              : {}),
+          }
+        : undefined,
+    );
     try {
       await provider.send(
         attempt.sessionId,

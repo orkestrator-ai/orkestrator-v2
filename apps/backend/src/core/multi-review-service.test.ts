@@ -2124,14 +2124,17 @@ async function waitUntil(
   }
 }
 
-test("MultiReviewService delivers Grok reviewer and consolidation reports through MCP tools", async () => {
+test.each(["grok", "cursor", "pi"] as const)(
+  "MultiReviewService delivers %s reviewer and consolidation reports through MCP tools",
+  async (agent) => {
   const provider = new Provider(false);
+  const environmentId = `env-tool-results-${agent}`;
   await withService(
-    "env-tool-results",
+    environmentId,
     provider,
     async ({ service, start, snapshot, workflowResults }) => {
-      const grok = { agent: "grok" as const, model: "grok-4.6" };
-      const started = await start([grok], grok);
+      const selection = { agent, model: agent === "grok" ? "grok-4.6" : "default" };
+      const started = await start([selection], selection);
       await waitUntil(async () => {
         await service.advanceNow(started.id);
         return Boolean((await snapshot(started.id))?.reviewers[0]?.requestId);
@@ -2148,7 +2151,7 @@ test("MultiReviewService delivers Grok reviewer and consolidation reports throug
       });
 
       await workflowResults!.submit(
-        { environmentId: "env-tool-results", projectId: "project-1" },
+        { environmentId, projectId: "project-1" },
         reviewerRequestId,
         cleanReport,
       );
@@ -2160,7 +2163,7 @@ test("MultiReviewService delivers Grok reviewer and consolidation reports throug
       expect(current.reviewers[0]?.status).toBe("completed");
       expect(
         await workflowResults!.status(
-          { environmentId: "env-tool-results", projectId: "project-1" },
+          { environmentId, projectId: "project-1" },
           reviewerRequestId,
         ),
       ).toMatchObject({ lifecycle: "consumed" });
@@ -2180,7 +2183,7 @@ test("MultiReviewService delivers Grok reviewer and consolidation reports throug
         token: "test-token",
       });
       await workflowResults!.submit(
-        { environmentId: "env-tool-results", projectId: "project-1" },
+        { environmentId, projectId: "project-1" },
         consolidationRequestId,
         cleanReport,
       );
@@ -2189,7 +2192,7 @@ test("MultiReviewService delivers Grok reviewer and consolidation reports throug
       expect((await snapshot(started.id))?.phase).toBe("ready");
       expect(
         await workflowResults!.status(
-          { environmentId: "env-tool-results", projectId: "project-1" },
+          { environmentId, projectId: "project-1" },
           consolidationRequestId,
         ),
       ).toMatchObject({ lifecycle: "consumed" });

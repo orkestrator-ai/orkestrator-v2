@@ -61,6 +61,7 @@ import type { AgentToolConnection } from "./agent-tools.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import {
   AmbiguousPromptDispatchError,
+  ProviderDispatchPreparationError,
   readProviderStatus,
   type BuildPipelineProvider,
 } from "./build-pipeline-provider.js";
@@ -602,7 +603,6 @@ export class BuildPipelineReviewFanout {
           reports: consolidationReports(state.reviewers),
         });
       }
-      await attachAgentBeforeDispatch(provider, consolidation.providerSessionId);
       const agentMcp =
         consolidation.resultTransport === "tool-v1"
           ? this.deps.agentMcp?.(pipeline, consolidation.requestId, consolidation.agent)
@@ -618,6 +618,18 @@ export class BuildPipelineReviewFanout {
           context: consolidationResultContext(state.reviewers),
         });
       }
+      await attachAgentBeforeDispatch(
+        provider,
+        consolidation.providerSessionId,
+        agentMcp
+          ? {
+              agentMcp,
+              ...(agentMcp.workflowResultCapability
+                ? { workflowResultTool: workflowResultToolName("consolidated-review") }
+                : {}),
+            }
+          : undefined,
+      );
       consolidation.state = "dispatching";
       await this.deps.save(pipeline);
       try {
@@ -650,6 +662,9 @@ export class BuildPipelineReviewFanout {
         );
       } catch (error) {
         if (error instanceof AmbiguousPromptDispatchError) return { kind: "working" };
+        consolidation.state = "prepared";
+        await this.deps.save(pipeline);
+        if (error instanceof ProviderDispatchPreparationError) return { kind: "working" };
         throw error;
       }
       consolidation.state = "sent";

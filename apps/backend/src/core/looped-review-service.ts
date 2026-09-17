@@ -58,6 +58,7 @@ import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
   AmbiguousPromptDispatchError,
+  ProviderDispatchPreparationError,
   createBuildPipelineProvider,
   ProviderUnavailableError,
   readProviderStatus,
@@ -815,6 +816,16 @@ export class LoopedReviewService {
             : {}),
         });
       }
+      try {
+        await provider.prepareDispatch?.(session.providerSessionId, {
+          ...(agentMcp ? { agentMcp } : {}),
+          ...(agentMcp?.workflowResultCapability
+            ? { workflowResultTool: workflowResultToolName(resultKind) }
+            : {}),
+        });
+      } catch {
+        // Best-effort: send performs the same registration.
+      }
       dispatch.state = "dispatching";
       await this.save(workflow, lease.token);
       await this.assertFence(workflow.id, lease.token);
@@ -843,6 +854,11 @@ export class LoopedReviewService {
         );
       } catch (error) {
         if (error instanceof AmbiguousPromptDispatchError) return;
+        if (error instanceof ProviderDispatchPreparationError) {
+          dispatch.state = "prepared";
+          await this.save(workflow, lease.token);
+          return;
+        }
         throw new DefiniteDispatchError(message(error));
       }
       await this.assertFence(workflow.id, lease.token);

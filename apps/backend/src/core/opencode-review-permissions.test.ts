@@ -9,7 +9,7 @@ import {
 } from "./agent-provider-test-support.js";
 import { ProviderUnavailableError } from "./native-agent-provider.js";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
-import { openCodeWorkflowResultTurnTools } from "./opencode-provider-helpers.js";
+import { effectiveOpenCodePolicy, openCodePermissionRules } from "./opencode-provider-helpers.js";
 
 const environment = { environmentType: "local" as const, networkAccessMode: "full" as const };
 const policy = resolveNativeAgentExecutionPolicy(environment, "looped-review");
@@ -116,7 +116,7 @@ describe("OpenCode reviewer shell permissions", () => {
         expect(actionFor(update, tool, "find . -delete")).toBe("deny");
       }
       expect(fake.promptCalls[0]!.agent).toBe("plan");
-      expect(fake.promptCalls[0]!.tools).toEqual(openCodeWorkflowResultTurnTools());
+      expect(fake.promptCalls[0]!.tools).toBeUndefined();
     } finally {
       await provider.dispose?.();
     }
@@ -262,7 +262,7 @@ describe("OpenCode reviewer shell permissions", () => {
         mode: "build",
       });
       expect(fake.updateCalls).toHaveLength(2);
-      expect(fake.promptCalls.at(-1)!.tools).toEqual(openCodeWorkflowResultTurnTools());
+      expect(fake.promptCalls.at(-1)!.tools).toBeUndefined();
     } finally {
       await provider.dispose?.();
     }
@@ -291,6 +291,104 @@ describe("OpenCode reviewer shell permissions", () => {
       expect(fake.updateCalls).toHaveLength(2);
       expect(actionFor(fake.updateCalls[1]!, "edit")).toBe("allow");
       expect(actionFor(fake.updateCalls[1]!, "bash", "git commit -am later")).toBe("allow");
+    } finally {
+      await restoredProvider.dispose?.();
+    }
+  });
+
+  test("a prompt tools mask does not erase coordinator or reviewer execution policy", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    const agentMcp = {
+      url: "http://127.0.0.1:43123/mcp",
+      token: "broker-token",
+      workflowResultCapability: "signed-attempt-capability",
+    };
+    try {
+      const coordinatorPolicy = resolveNativeAgentExecutionPolicy(environment, "coordinator");
+      const coordinatorId = await provider.createSession("review", "Coordinator", {
+        policy: coordinatorPolicy,
+      });
+      await provider.send(coordinatorId, "ordinary turn", {
+        requestId: "coord-ordinary",
+        readOnly: true,
+      });
+      await provider.send(coordinatorId, "workflow turn", {
+        requestId: "coord-workflow",
+        readOnly: true,
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
+      const coordinatorRules = openCodePermissionRules(effectiveOpenCodePolicy(coordinatorPolicy));
+      for (const tool of ["read", "grep"]) {
+        expect(actionFor({ permission: coordinatorRules }, tool)).toBe("allow");
+      }
+      expect(actionFor({ permission: coordinatorRules }, "bash")).toBe("deny");
+      expect(actionFor({ permission: coordinatorRules }, "write")).toBe("deny");
+      expect(fake.promptCalls[0]!.tools).toMatchObject({ bash: false, write: false });
+      expect(fake.promptCalls[1]!.tools).toMatchObject({ bash: false, write: false });
+
+      const sessionId = await createReviewerSession(fake, provider);
+      await provider.send(sessionId, "Inspect evidence", {
+        ...reviewOptions,
+        requestId: "review-ordinary",
+      });
+      await provider.send(sessionId, "Inspect with broker", {
+        ...reviewOptions,
+        requestId: "review-workflow",
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
+      expect(fake.promptCalls[2]!.tools).toBeUndefined();
+      expect(fake.promptCalls[3]!.tools).toBeUndefined();
+      const reviewEnable = fake.updateCalls.find(
+        (update) =>
+          update.sessionID === sessionId &&
+          actionFor(update, "bash", "git diff HEAD") === "allow" &&
+          actionFor(update, "edit") === "deny",
+      );
+      expect(reviewEnable).toBeDefined();
+      expect(actionFor(reviewEnable!, "write")).toBe("deny");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("restores reviewer-shell after a workflow turn and provider restart", async () => {
+    const fake = openCodeFake();
+    const first = openCodeProvider(fake);
+    const agentMcp = {
+      url: "http://127.0.0.1:43123/mcp",
+      token: "broker-token",
+      workflowResultCapability: "signed-attempt-capability",
+    };
+    try {
+      const sessionId = await createReviewerSession(fake, first);
+      await first.send(sessionId, "Inspect evidence", {
+        ...reviewOptions,
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
+    } finally {
+      await first.dispose?.();
+    }
+
+    const restoredProvider = openCodeProvider(fake);
+    restoredProvider.registerSession?.("review-session", {
+      origin: "looped-review",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      reviewerSession: true,
+      phase: "review",
+    });
+    fake.setStatusResponse({ data: { "review-session": { type: "idle" } } });
+    try {
+      await expect(restoredProvider.status("review-session")).resolves.toBe("idle");
+      const restore = fake.updateCalls.at(-1)!;
+      expect(restore.permission).toEqual(
+        openCodePermissionRules(effectiveOpenCodePolicy(policy)),
+      );
+      expect(actionFor(restore, "edit")).toBe("allow");
+      expect(actionFor(restore, "bash", "git commit -am later")).toBe("allow");
     } finally {
       await restoredProvider.dispose?.();
     }

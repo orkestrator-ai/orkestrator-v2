@@ -5882,7 +5882,7 @@ describe("AgentNativeTab", () => {
     render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
 
     expect(await screen.findByText("Please also fix the tests.")).toBeTruthy();
-    expect(screen.queryByText("Structured review report")).toBeNull();
+    expect(screen.queryByText("Structured review report") === null).toBe(true);
   });
 
   test("reconciles and explains a replacement Multi Review Fix session", async () => {

@@ -1130,6 +1130,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       const messageCount = Number.isSafeInteger(session?.messageCount)
         ? (session!.messageCount as number)
         : undefined;
+      const providerDetail = nonEmptyString(session?.detail);
       const parentId = nonEmptyString(session?.parentId);
       const branchLabel = nonEmptyString(session?.branchLabel);
       return [
@@ -1139,9 +1140,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           ...(createdAt && Number.isFinite(Date.parse(createdAt)) ? { createdAt } : {}),
           ...(updatedAt && Number.isFinite(Date.parse(updatedAt)) ? { updatedAt } : {}),
           ...(status ? { status } : {}),
-          ...(messageCount === undefined
-            ? {}
-            : { detail: `${messageCount} message${messageCount === 1 ? "" : "s"}` }),
+          ...(messageCount !== undefined
+            ? { detail: `${messageCount} message${messageCount === 1 ? "" : "s"}` }
+            : providerDetail
+              ? { detail: providerDetail.slice(0, 256) }
+              : {}),
           ...(parentId ? { parentId: parentId.slice(0, 512) } : {}),
           ...(branchLabel ? { branchLabel: branchLabel.slice(0, 256) } : {}),
         },

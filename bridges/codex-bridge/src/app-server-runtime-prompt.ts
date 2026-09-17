@@ -651,6 +651,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         requestId,
         engineGeneration: turn.engineGeneration,
         assistantMessageId: assistantMessage.id,
+        configurationRevision: session.configurationRevision,
         expectsStructuredOutput: input.outputSchema !== undefined,
         startedAt: context.turnStartedAt,
       });
@@ -811,6 +812,12 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         requestId,
         engineGeneration: this.options.engine.info().generation,
         assistantMessageId,
+        configurationRevision: Math.max(
+          0,
+          ...[...context.bridgeSessionIds].map(
+            (sessionId) => this.registry.getSession(sessionId)?.configurationRevision ?? 0,
+          ),
+        ),
         startedAt:
           context.turnStartedAt ??
           context.messages.find((message) => message.id === assistantMessageId)?.createdAt ??

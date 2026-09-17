@@ -10,6 +10,7 @@ import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { claudeStartupFailureMessage } from "./session-manager-prompt.js";
 
 import {
   MAX_IMAGE_ATTACHMENT_BYTES,
@@ -45,6 +46,16 @@ import {
 // ---------------------------------------------------------------------------
 // sendPrompt — happy path, errors, abort, init
 // ---------------------------------------------------------------------------
+
+describe("Claude startup failure diagnostics", () => {
+  test("turns new structured causes into actionable guidance", () => {
+    expect(claudeStartupFailureMessage("cli_version_too_old")).toContain("Update Claude Code");
+    expect(claudeStartupFailureMessage("session_held_by_background")).toContain(
+      "background session",
+    );
+    expect(claudeStartupFailureMessage("bypass_root")).toContain("non-root user");
+  });
+});
 
 describe("sendPrompt", () => {
   test("keeps plan guidance out of the user turn and passes it through SDK options", async () => {
@@ -512,6 +523,59 @@ describe("sendPrompt", () => {
     expect(getSession(session.id)?.usage).toMatchObject({
       lastTurnTokens: 106,
       sessionTokens: 106,
+    });
+  });
+
+  test("consumes the structured usage report without parsing provider prose", async () => {
+    const session = createSession("structured usage report");
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "/usage");
+    const call = await nextQueryCall();
+    call.push({
+      type: "assistant",
+      uuid: "usage-report",
+      message: { id: "usage-report-message", role: "assistant", content: [] },
+      usage_report: {
+        session: {
+          total_cost_usd: 1.25,
+          total_api_duration_ms: 2_000,
+          total_duration_ms: 3_000,
+          total_lines_added: 42,
+          total_lines_removed: 7,
+          model_usage: {},
+        },
+        rate_limits: {
+          limits: [
+            {
+              kind: "weekly_scoped",
+              group: "weekly",
+              percent: 25,
+              resets_at: "2026-09-20T00:00:00.000Z",
+              scope: { model: { display_name: "Opus" } },
+            },
+          ],
+          extra_usage: {
+            is_enabled: true,
+            monthly_limit: 10_000,
+            used_credits: 2_500,
+            utilization: 25,
+            currency: "USD",
+          },
+        },
+      },
+    });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    expect(session.usage).toMatchObject({
+      costUsd: 1.25,
+      durationMs: 3_000,
+      apiDurationMs: 2_000,
+      linesAdded: 42,
+      linesRemoved: 7,
+      credits: { hasCredits: true, balance: "75.00 USD" },
+      rateLimits: [{ label: "Opus", usedPercent: 25, resetsAt: "2026-09-20T00:00:00.000Z" }],
     });
   });
 

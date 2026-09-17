@@ -454,6 +454,93 @@ export class HttpBridgeInteractionAdapter {
     });
   }
 
+  private mapGrokInteraction(sessionId: string, raw: unknown): AgentInteractionRequest {
+    const request = asRecord(raw);
+    const providerRequestId = nonEmptyString(request?.id);
+    const requestedAt = request?.requestedAt;
+    const expiresAt = request?.expiresAt;
+    if (
+      !request ||
+      !providerRequestId ||
+      !Number.isSafeInteger(requestedAt) ||
+      !Number.isSafeInteger(expiresAt)
+    ) {
+      throw new ProviderUnavailableError("Grok returned a malformed interaction");
+    }
+    if (request.kind === "plan-approval") {
+      const rawPlan = typeof request.plan === "string" ? request.plan : "";
+      const truncated = request.planTruncated === true;
+      const plan = truncatedText(rawPlan, rawPlan || "Grok did not provide plan text.");
+      const mapped = this.interactionRequest(sessionId, providerRequestId, "plan", {
+        kind: "plan-approval",
+        presentation: {
+          title: truncated ? "Grok's plan is too large to approve" : "Approve Grok's plan",
+          body: plan,
+          questions: [],
+          confirmLabel: "Approve",
+          declineLabel: "Request changes",
+          confirmDisabled: truncated,
+          planAvailable: rawPlan.trim().length > 0,
+        },
+        createdAt: requestedAt as number,
+        updatedAt: requestedAt as number,
+        expiresAt: expiresAt as number,
+      });
+      const identity = this.providerInteractionIds.get(mapped.id);
+      if (identity) identity.actionable = !truncated;
+      return mapped;
+    }
+    if (request.kind !== "question" || !Array.isArray(request.questions)) {
+      throw new ProviderUnavailableError("Grok returned an unknown interaction kind");
+    }
+    const questions: AgentInteractionQuestion[] = request.questions.map(
+      (candidate, questionIndex) => {
+        const question = asRecord(candidate);
+        const id = nonEmptyString(question?.id);
+        const prompt = nonEmptyString(question?.question);
+        const options = question?.options;
+        if (!id || !prompt || !Array.isArray(options)) {
+          throw new ProviderUnavailableError("Grok returned a malformed question");
+        }
+        return {
+          id: boundedText(id, id, AGENT_INTERACTION_LIMITS.maxIdLength),
+          prompt: boundedText(prompt, "Grok needs input"),
+          required: true,
+          multiple: question?.multiple === true,
+          secret: false,
+          allowFreeText: options.length === 0,
+          options: options.map((rawOption, optionIndex) => {
+            const option = asRecord(rawOption);
+            const providerValue = nonEmptyString(option?.id);
+            const label = nonEmptyString(option?.label);
+            if (!providerValue || !label) {
+              throw new ProviderUnavailableError("Grok returned a malformed question option");
+            }
+            return {
+              id: opaqueOptionId(questionIndex, optionIndex),
+              label: boundedText(label, label),
+              providerValue: boundedText(
+                providerValue,
+                providerValue,
+                AGENT_INTERACTION_LIMITS.maxProviderValueLength,
+              ),
+              ...(typeof option?.description === "string"
+                ? { description: truncatedText(option.description, "Option") }
+                : {}),
+            };
+          }),
+        };
+      },
+    );
+    return this.interactionRequest(sessionId, providerRequestId, "question", {
+      kind: "question",
+      presentation: { title: "Grok needs input", questions },
+      createdAt: requestedAt as number,
+      updatedAt: requestedAt as number,
+      expiresAt: expiresAt as number,
+    });
+  }
+
   private mapCodexInteraction(sessionId: string, raw: unknown): AgentInteractionRequest {
     const request = asRecord(raw);
     const providerRequestId = nonEmptyString(request?.interactionId);
@@ -648,10 +735,13 @@ export class HttpBridgeInteractionAdapter {
       for (const request of firstRequests) {
         mapRequest(request, (raw) => this.mapAcpApproval(sessionId, raw));
       }
-      // ACP currently has no second interaction family. Keep reading the
-      // endpoint so a future bridge can add one without losing requests, but
-      // reject non-empty unknown payloads instead of pretending they vanished.
-      if (secondRequests.length > 0) droppedRequests += secondRequests.length;
+      if (this.agent === "grok") {
+        for (const request of secondRequests) {
+          mapRequest(request, (raw) => this.mapGrokInteraction(sessionId, raw));
+        }
+      } else if (secondRequests.length > 0) {
+        droppedRequests += secondRequests.length;
+      }
     } else {
       // Codex and Pi. The Pi bridge serves the same approval payload shape and
       // an always-empty second family, so it needs no branch of its own — the
@@ -812,6 +902,51 @@ export class HttpBridgeInteractionAdapter {
         body: JSON.stringify({
           approved: resolution.action === "answer",
           ...(resolution.feedback ? { feedback: resolution.feedback } : {}),
+        }),
+      };
+    }
+
+    if (this.agent === "grok" && request.kind === "plan-approval") {
+      return {
+        path: `${base}/interactions/${encodeURIComponent(providerRequestId)}`,
+        method: "POST",
+        body: JSON.stringify({
+          action:
+            resolution.action === "answer"
+              ? "approve"
+              : resolution.action === "cancel"
+                ? "abandon"
+                : "revise",
+          ...(resolution.feedback ? { feedback: resolution.feedback } : {}),
+        }),
+      };
+    }
+
+    if (this.agent === "grok" && request.kind === "question") {
+      const byQuestion = new Map(
+        resolution.answer?.answers.map((answer) => [answer.questionId, answer]),
+      );
+      const answers = Object.fromEntries(
+        request.presentation.questions.map((question) => {
+          const answer = byQuestion.get(question.id);
+          const options = new Map(
+            question.options.map((option) => [option.id, option.providerValue]),
+          );
+          return [
+            question.id,
+            [
+              ...(answer?.optionIds ?? []).map((id) => options.get(id)!),
+              ...(answer?.freeText === undefined ? [] : [answer.freeText]),
+            ],
+          ];
+        }),
+      );
+      return {
+        path: `${base}/interactions/${encodeURIComponent(providerRequestId)}`,
+        method: "POST",
+        body: JSON.stringify({
+          action: resolution.action === "answer" ? "accept" : "cancel",
+          ...(resolution.action === "answer" ? { answers } : {}),
         }),
       };
     }

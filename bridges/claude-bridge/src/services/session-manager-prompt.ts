@@ -9,6 +9,8 @@ import type {
   SDKAPIRetryMessage,
   SDKAuthStatusMessage,
   SDKAssistantMessage,
+  SDKStartupFailureReason,
+  SDKUsageReport,
   SDKSystemMessage,
   SDKToolProgressMessage,
   SDKToolUseSummaryMessage,
@@ -78,6 +80,91 @@ import {
 } from "./read-only-policy.js";
 import { getPluginsForSdk } from "./plugin-config.js";
 import type { McpToolMetadata } from "../types/mcp.js";
+
+export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): string {
+  switch (reason) {
+    case "org_pin_api_key_conflict":
+      return "Claude is configured for a managed organization, but an API key or auth token is overriding that sign-in. Remove the conflicting credential and sign in again.";
+    case "org_verify_failed":
+      return "Claude could not verify the signed-in organization. Check connectivity, then sign in again if the token was revoked.";
+    case "org_pin_mismatch":
+      return "The Claude account does not belong to the organization required by managed settings. Sign in with an allowed organization.";
+    case "managed_settings_invalid":
+      return "Claude could not read the managed settings policy. Ask an administrator to validate the organization policy.";
+    case "remote_settings_required_unavailable":
+      return "Required Claude managed settings are unavailable. Restore connectivity to the managed-settings service and retry.";
+    case "gateway_signin_required":
+      return "The Claude gateway requires a fresh sign-in. Sign in to Claude again, then retry.";
+    case "gateway_access_denied":
+      return "The Claude gateway denied access to this account's managed settings. Ask an administrator to verify access.";
+    case "proxy_invalid":
+      return "Claude's proxy setting is not a valid complete URL. Correct the proxy configuration and retry.";
+    case "temp_dir_unusable":
+      return "Claude cannot safely use the current temporary directory. Check its ownership and permissions, then retry.";
+    case "cwd_unavailable":
+      return "The workspace directory is missing or unreadable. Restore access to it, then retry.";
+    case "shell_tool_missing":
+      return "Claude cannot find a supported shell. Install or enable Git Bash or PowerShell, then retry.";
+    case "session_held_by_background":
+      return "This Claude conversation is still running in a background session. Stop or reconnect to that session before resuming it here.";
+    case "worktree_resume_refused":
+      return "Claude refused to resume because the session worktree did not pass its safety checks. Review the provider error and reopen the workspace safely.";
+    case "worktree_unverified":
+      return "Claude could not verify the session worktree. Retry after the worktree becomes available.";
+    case "cli_version_too_old":
+      return "This Claude Code version is below the provider's minimum. Update Claude Code and retry.";
+    case "bypass_root":
+      return "Claude cannot use bypass-permissions mode while running as root. Run the agent as a non-root user.";
+  }
+}
+
+export function applyClaudeUsageReport(
+  session: SessionState,
+  report: SDKUsageReport,
+): SessionUsageSnapshot {
+  const previous = session.inProgressUsage ?? session.usage;
+  const limits = report.rate_limits?.limits?.map((limit) => ({
+    label:
+      limit.scope?.model?.display_name ??
+      limit.scope?.surface?.display_name ??
+      limit.kind.replaceAll("_", " "),
+    usedPercent: Math.max(0, Math.min(100, limit.percent)),
+    ...(limit.resets_at ? { resetsAt: limit.resets_at } : {}),
+  }));
+  if (limits) session.rateLimits = limits;
+
+  const extra = report.rate_limits?.extra_usage;
+  const remaining =
+    extra?.monthly_limit != null && extra.used_credits != null
+      ? Math.max(0, extra.monthly_limit - extra.used_credits)
+      : undefined;
+  const snapshot: SessionUsageSnapshot = {
+    ...(previous ?? {
+      usedTokens: 0,
+      source: "claude" as const,
+      updatedAt: new Date().toISOString(),
+    }),
+    costUsd: report.session.total_cost_usd,
+    durationMs: report.session.total_duration_ms,
+    apiDurationMs: report.session.total_api_duration_ms,
+    linesAdded: report.session.total_lines_added,
+    linesRemoved: report.session.total_lines_removed,
+    ...(extra
+      ? {
+          credits: {
+            hasCredits: extra.is_enabled,
+            ...(remaining !== undefined
+              ? { balance: `${(remaining / 100).toFixed(2)} ${extra.currency ?? "USD"}` }
+              : {}),
+          },
+        }
+      : {}),
+    ...(limits ? { rateLimits: limits } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  session.usage = snapshot;
+  return snapshot;
+}
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants, existsSync, type Stats } from "node:fs";
@@ -1101,7 +1188,7 @@ export async function sendPrompt(
         // events a failed lifecycle hook would silently leave task or
         // compaction projection stale.
         includeHookEvents: true,
-        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.263: although the
+        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.274: although the
         // SDK warns that bypassPermissions shadows canUseTool for ordinary
         // tool permission checks, AskUserQuestion is a special case. A live
         // contract probe confirmed it still reaches this callback and the SDK
@@ -1136,12 +1223,14 @@ export async function sendPrompt(
               };
             }
             // Create a question request and wait for user answer
-            const questionId = generateMessageId();
+            // The SDK request id survives transport reinitialization. Reusing it
+            // keeps a redelivered question attached to the same UI interaction.
+            const questionId = permissionContext?.requestId || generateMessageId();
             const questionRequest: QuestionRequest = {
               id: questionId,
               sessionId,
               questions,
-              toolUseId: questionId,
+              toolUseId: permissionContext?.toolUseID ?? questionId,
               expiresAt: Date.now() + QUESTION_TIMEOUT_MS,
             };
 
@@ -1239,7 +1328,9 @@ export async function sendPrompt(
             });
 
             // Create a plan approval request and wait for user decision
-            const approvalId = generateMessageId();
+            // Keep the provider's stable identity so a transport replay cannot
+            // manufacture a second approval card for the same request.
+            const approvalId = permissionContext?.requestId || generateMessageId();
             // The SDK's ExitPlanMode request is the authoritative plan. Reading
             // and replaying the preceding plan-file edits duplicated Edit
             // semantics and could drift from the bytes Claude actually asks
@@ -1897,6 +1988,18 @@ export async function sendPrompt(
           recordSystemMessageNotice(session, sysMsg);
         }
       } else if (message.type === "assistant") {
+        const usageReport = (message as SDKAssistantMessage).usage_report;
+        if (usageReport) {
+          const usage = applyClaudeUsageReport(session, usageReport);
+          eventEmitter.emit({
+            type: "session.updated",
+            sessionId,
+            data: {
+              contextUsage: usage,
+              ...(session.rateLimits !== undefined ? { rateLimits: session.rateLimits } : {}),
+            },
+          });
+        }
         // The retry above worked: the model answered. Settle the row rather
         // than leaving a spinner on a request that has already succeeded.
         settlePendingApiRetry(session, sessionId, (event) => eventEmitter.emit(event), stream, {
@@ -2230,11 +2333,23 @@ export async function sendPrompt(
             sessionId,
             isError: resultIsError,
           });
+          const startupFailure = resultMsg.startup_failure_reason
+            ? claudeStartupFailureMessage(resultMsg.startup_failure_reason)
+            : undefined;
           const resultError =
+            startupFailure ||
             resultMsg.errors?.filter(Boolean).join("\n") ||
             (resultMsg.subtype === "success"
               ? "Claude ended the turn on an API error."
               : `Claude query failed: ${resultMsg.subtype}`);
+          if (startupFailure) {
+            appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
+              type: "status",
+              content: startupFailure,
+              severity: "error",
+              createdAt: new Date().toISOString(),
+            });
+          }
           if (resultMsg.subtype === "error_max_budget_usd") {
             appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
               type: "status",

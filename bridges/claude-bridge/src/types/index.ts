@@ -104,6 +104,7 @@ export interface SdkResultMessage extends SdkMessageBase {
   num_turns?: number;
   ttft_ms?: number;
   errors?: string[];
+  startup_failure_reason?: import("@anthropic-ai/claude-agent-sdk").SDKStartupFailureReason;
   usage?: Record<string, unknown>;
   modelUsage?: Record<
     string,
@@ -579,6 +580,12 @@ export interface SessionUsageSnapshot {
   costUsd?: number;
   durationMs?: number;
   apiDurationMs?: number;
+  linesAdded?: number;
+  linesRemoved?: number;
+  credits?: {
+    hasCredits?: boolean;
+    balance?: string;
+  };
   estimated?: boolean;
   source: "claude";
   updatedAt: string;

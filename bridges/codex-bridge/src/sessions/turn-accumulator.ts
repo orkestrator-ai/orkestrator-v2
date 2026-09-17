@@ -83,6 +83,8 @@ export interface TurnAccumulatorOptions {
   startedAt?: string;
   /** UI cap for a single command's aggregated output. */
   maxCommandOutputChars?: number;
+  /** Session configuration revision captured when the turn was dispatched. */
+  configurationRevision?: number;
 }
 
 export interface AssistantSegment {
@@ -115,6 +117,7 @@ export class TurnAccumulator {
   /** Assistant transcript row receiving newly introduced items in this turn. */
   assistantMessageId: string;
   readonly startedAt: string;
+  readonly configurationRevision: number;
 
   /**
    * Mutable so a turn confirmed to still be running can be re-bound to the
@@ -151,6 +154,7 @@ export class TurnAccumulator {
     this.engineGeneration = options.engineGeneration;
     this.assistantMessageId = options.assistantMessageId;
     this.startedAt = options.startedAt ?? new Date().toISOString();
+    this.configurationRevision = options.configurationRevision ?? 0;
     this.assistantSegments = [
       {
         assistantMessageId: options.assistantMessageId,

@@ -31,6 +31,8 @@ export type { AppTemplateUnavailableReason } from "./AppTemplateUnavailableReaso
 export type { AppToolApproval } from "./AppToolApproval.js";
 export type { AppToolSummary } from "./AppToolSummary.js";
 export type { AppToolsConfig } from "./AppToolsConfig.js";
+export type { ApplicationNetworkRequirements } from "./ApplicationNetworkRequirements.js";
+export type { ApplicationRequirements } from "./ApplicationRequirements.js";
 export type { ApprovalsReviewer } from "./ApprovalsReviewer.js";
 export type { AppsConfig } from "./AppsConfig.js";
 export type { AppsDefaultConfig } from "./AppsDefaultConfig.js";
@@ -192,6 +194,7 @@ export type { FsWatchResponse } from "./FsWatchResponse.js";
 export type { FsWriteFileParams } from "./FsWriteFileParams.js";
 export type { FsWriteFileResponse } from "./FsWriteFileResponse.js";
 export type { GetAccountParams } from "./GetAccountParams.js";
+export type { GetAccountRateLimitsParams } from "./GetAccountRateLimitsParams.js";
 export type { GetAccountRateLimitsResponse } from "./GetAccountRateLimitsResponse.js";
 export type { GetAccountResponse } from "./GetAccountResponse.js";
 export type { GetAccountTokenUsageParams } from "./GetAccountTokenUsageParams.js";
@@ -472,6 +475,7 @@ export type { ThreadCompactStartResponse } from "./ThreadCompactStartResponse.js
 export type { ThreadDeleteParams } from "./ThreadDeleteParams.js";
 export type { ThreadDeleteResponse } from "./ThreadDeleteResponse.js";
 export type { ThreadDeletedNotification } from "./ThreadDeletedNotification.js";
+export type { ThreadEnvironment } from "./ThreadEnvironment.js";
 export type { ThreadExtra } from "./ThreadExtra.js";
 export type { ThreadForkParams } from "./ThreadForkParams.js";
 export type { ThreadForkResponse } from "./ThreadForkResponse.js";

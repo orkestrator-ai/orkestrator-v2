@@ -459,9 +459,10 @@ describe("AgentNativeTab progressive controller", () => {
       const heldState = new Promise<NativeAgentSessionStateUpdate>((resolve) => {
         releaseState = () =>
           resolve(
-            stateSnapshot("state-2", {
-              ...(transition === "runtime-restart" ? { identity: restarted } : { backgroundTasks }),
-            }),
+            stateSnapshot(
+              "state-2",
+              transition === "runtime-restart" ? { identity: restarted } : { backgroundTasks },
+            ),
           );
       });
       transcriptUpdates = [

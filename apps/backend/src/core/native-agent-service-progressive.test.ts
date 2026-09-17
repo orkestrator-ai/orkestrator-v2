@@ -557,7 +557,10 @@ describe("native agent progressive remainder", () => {
     );
     const stub = createProviderStub("codex", { transcriptSnapshot });
     await withService(
-      { prefix: "orkestrator-progressive-codex-empty-current-", provider: async () => stub.provider },
+      {
+        prefix: "orkestrator-progressive-codex-empty-current-",
+        provider: async () => stub.provider,
+      },
       async ({ service, storage }) => {
         const identity = {
           environmentId: "env-1",
@@ -657,7 +660,10 @@ describe("native agent progressive remainder", () => {
     }));
     const stub = createProviderStub("codex", { transcriptSnapshot });
     await withService(
-      { prefix: "orkestrator-progressive-codex-empty-cached-", provider: async () => stub.provider },
+      {
+        prefix: "orkestrator-progressive-codex-empty-cached-",
+        provider: async () => stub.provider,
+      },
       async ({ service }) => {
         const identity = {
           environmentId: "env-1",

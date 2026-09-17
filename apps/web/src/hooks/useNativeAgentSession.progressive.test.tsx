@@ -966,7 +966,9 @@ describe("useNativeAgentSession progressive view", () => {
     transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
     stateUpdates = [() => stateSnapshot("state-1", { backgroundTasks })];
     const first = renderSession();
-    await waitFor(() => expect(first.result.current.projection?.backgroundTasks).toEqual(backgroundTasks));
+    await waitFor(() =>
+      expect(first.result.current.projection?.backgroundTasks).toEqual(backgroundTasks),
+    );
     first.unmount();
 
     expect(
@@ -984,9 +986,9 @@ describe("useNativeAgentSession progressive view", () => {
         stateAvailability: "unavailable",
       });
     }
-    expect(
-      useNativeAgentProjectionStore.getState().progressiveCaches.has("env-env-1:tab-1"),
-    ).toBe(false);
+    expect(useNativeAgentProjectionStore.getState().progressiveCaches.has("env-env-1:tab-1")).toBe(
+      false,
+    );
     expect(
       useNativeAgentProjectionStore.getState().projections.get("env-env-1:tab-1")?.backgroundTasks,
     ).toEqual(backgroundTasks);
@@ -1031,15 +1033,16 @@ describe("useNativeAgentSession progressive view", () => {
       },
     ];
     transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
-    stateUpdates = [() => stateSnapshot("state-1", { interactions, composerControls, backgroundTasks })];
+    stateUpdates = [
+      () => stateSnapshot("state-1", { interactions, composerControls, backgroundTasks }),
+    ];
 
     const { result } = renderSession();
     await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
     expect(result.current.projection?.interactions).toHaveLength(1);
     expect(result.current.projection?.composerControls).toHaveLength(1);
     expect(
-      useNativeAgentProjectionStore.getState().progressiveCaches.get("env-env-1:tab-1")
-        ?.stateToken,
+      useNativeAgentProjectionStore.getState().progressiveCaches.get("env-env-1:tab-1")?.stateToken,
     ).toBe("state-1");
 
     transcriptUpdates = [];
@@ -1050,8 +1053,7 @@ describe("useNativeAgentSession progressive view", () => {
 
     expect(result.current.sessionStateAvailability).toBe("unavailable");
     expect(
-      useNativeAgentProjectionStore.getState().progressiveCaches.get("env-env-1:tab-1")
-        ?.stateToken,
+      useNativeAgentProjectionStore.getState().progressiveCaches.get("env-env-1:tab-1")?.stateToken,
     ).toBeUndefined();
 
     /*

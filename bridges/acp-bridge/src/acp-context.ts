@@ -279,6 +279,8 @@ export interface SessionState {
   /** Dormant Grok extension correlation; runtime steer remains unadvertised. */
   grokInterjectionJournal: Map<string, GrokInterjectionJournalEntry>;
   approvals: Map<string, ApprovalState>;
+  /** Grok reverse requests projected through the shared interaction surface. */
+  interactions: Map<string, AcpInteractionState>;
   outputTruncated: boolean;
   uncheckedTranscriptBytes: number;
   currentTurnOutput: string | null;
@@ -405,6 +407,32 @@ export interface ApprovalState {
   respond(optionId?: string): void;
   timer: ReturnType<typeof setTimeout>;
 }
+
+export type AcpInteractionState =
+  | {
+      id: string;
+      kind: "plan-approval";
+      plan: string;
+      planTruncated: boolean;
+      requestedAt: number;
+      expiresAt: number;
+      respond(result: JsonObject): void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  | {
+      id: string;
+      kind: "question";
+      questions: Array<{
+        id: string;
+        question: string;
+        multiple: boolean;
+        options: Array<{ id: string; label: string; description?: string }>;
+      }>;
+      requestedAt: number;
+      expiresAt: number;
+      respond(result: JsonObject): void;
+      timer: ReturnType<typeof setTimeout>;
+    };
 
 export interface PersistedSession {
   id: string;
@@ -757,6 +785,8 @@ export class AcpProcess {
   onPermission: (id: number, params: JsonObject) => void = (id) => {
     this.respond(id, { outcome: { outcome: "cancelled" } });
   };
+  /** Return true only when the provider adapter owns and will answer the request. */
+  onInteraction: (id: number, method: string, params: JsonObject) => boolean = () => false;
   onClose: (error: Error) => void = () => undefined;
 
   constructor(spawnOptions: AcpSpawnOptions = {}) {
@@ -1013,6 +1043,9 @@ export class AcpProcess {
       this.#diagnostics?.activity("request");
       if (message.method === "session/request_permission") {
         this.onPermission(message.id, params);
+      } else if (this.onInteraction(message.id, message.method, params)) {
+        // The adapter parked this request and will answer it from the HTTP
+        // interaction endpoint. Never await a person on the stdout loop.
       } else if (isAcpClientMethod(message.method)) {
         // Client work may touch disk or wait on a child. Start it from the read
         // loop but never await it here: one slow terminal must not back-pressure

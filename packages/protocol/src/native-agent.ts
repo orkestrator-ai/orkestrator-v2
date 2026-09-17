@@ -667,7 +667,10 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
       // rather than omitting the field lets the renderer say "this agent does
       // not ask" instead of showing a list that looks like it is still loading.
       interactions: {
-        kinds: agent === "cursor" ? [] : ["command-approval", "file-approval", "permission"],
+        kinds:
+          agent === "cursor"
+            ? []
+            : ["question", "plan-approval", "command-approval", "file-approval", "permission"],
       },
     };
   }

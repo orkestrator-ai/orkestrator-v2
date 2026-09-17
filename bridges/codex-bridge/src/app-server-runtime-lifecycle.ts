@@ -897,6 +897,22 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       case "turn.model.updated":
         this.applyConfirmedModel(context, event.model, event.turnId);
         return;
+      case "turn.configuration.updated": {
+        const turn = context.activeTurn;
+        if (!turn || !turn.accepts(event)) return;
+        for (const session of this.registry.boundSessionsForThread(threadId)) {
+          // A user edit made after dispatch wins over an in-turn provider update.
+          if (session.configurationRevision !== turn.configurationRevision) continue;
+          session.config = { ...session.config, reasoningEffort: event.reasoningEffort };
+          void this.persistSession(session);
+          this.options.emit({
+            type: "session.updated",
+            sessionId: session.id,
+            data: { modelReasoningEffort: event.reasoningEffort },
+          });
+        }
+        return;
+      }
       case "thread.usage.updated": {
         const previous = this.usageByThread.get(threadId);
         const usage = {

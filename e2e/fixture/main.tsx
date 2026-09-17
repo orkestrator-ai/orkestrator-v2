@@ -991,6 +991,78 @@ function NativeRefreshShimmerFixture() {
   );
 }
 
+function NativeHydratingPreviewFixture() {
+  const [hydrated, setHydrated] = useState(false);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const messages = Array.from({ length: 80 }, (_, index) => ({
+    id: `message-${index}`,
+    role: "assistant" as const,
+    content:
+      hydrated && index === 0
+        ? "Hydrated transcript snapshot"
+        : `Preview transcript row ${index + 1}`,
+    createdAt: "2026-09-09T00:00:00.000Z",
+    parts: [
+      {
+        type: "text" as const,
+        content:
+          hydrated && index === 0
+            ? "Hydrated transcript snapshot"
+            : `Preview transcript row ${index + 1}`,
+      },
+    ],
+  }));
+  const messageWindow = hydrated
+    ? undefined
+    : {
+        limit: messages.length,
+        truncated: true,
+        truncationReason: "count" as const,
+        canLoadEarlier: false,
+      };
+  const showLoadEarlier = messageWindow?.canLoadEarlier === true;
+
+  return (
+    <main className="h-screen bg-background p-4 text-foreground">
+      <button type="button" onClick={() => setHydrated(true)}>
+        Hydrate transcript
+      </button>
+      <output data-testid="native-hydration-state">{hydrated ? "hydrated" : "preview"}</output>
+      <section data-testid="native-hydrating-preview-shell" className="h-[32rem]">
+        <NativeChatShell
+          agentLabel="Codex"
+          platform="codex"
+          agentExpansionScope="fixture-hydrating-preview"
+          isActive
+          connectionState="connected"
+          displayAvailable
+          sessionEstablished
+          transcriptSettled
+          onRetry={() => {}}
+          messages={messages}
+          transcriptHeader={
+            showLoadEarlier ? <button type="button">Load earlier messages</button> : null
+          }
+          isLoading={false}
+          elapsedSeconds={null}
+          finalElapsedSeconds={null}
+          centerCompose={false}
+          composer={<textarea aria-label="Prompt" />}
+          isAtBottom={false}
+          scrollToBottom={() => {}}
+          scrollProps={{
+            followOutput: () => false,
+            atBottomStateChange: () => {},
+            atBottomThreshold: 100,
+            restoreStateFrom: undefined,
+          }}
+          virtuosoRef={virtuosoRef}
+        />
+      </section>
+    </main>
+  );
+}
+
 function systemUsageFixtureSnapshot() {
   return {
     cpuPercent: 12.4,
@@ -1133,6 +1205,9 @@ function fixtureForPath() {
   }
   if (window.location.pathname === "/native-refresh-shimmer") {
     return <NativeRefreshShimmerFixture />;
+  }
+  if (window.location.pathname === "/native-hydrating-preview") {
+    return <NativeHydratingPreviewFixture />;
   }
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   if (window.location.pathname === "/system-usage") return <SystemUsageFixture />;

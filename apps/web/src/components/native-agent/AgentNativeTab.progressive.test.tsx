@@ -16,6 +16,7 @@ import type {
   NativeAgentSessionStateView,
   NativeAgentTabData,
   NativeAgentTranscriptUpdate,
+  NativeAgentTranscriptView,
   NativeAgentViewIdentity,
 } from "@orkestrator/protocol/native-agent";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
@@ -182,18 +183,19 @@ function message(id: string, content: string): TestMessage {
 function transcriptSnapshot(
   token: string,
   messages: TestMessage[],
-  extras: { identity?: NativeAgentViewIdentity } = {},
+  extras: Partial<NativeAgentTranscriptView<TestMessage>> = {},
 ): NativeAgentTranscriptUpdate<TestMessage> {
   return {
     viewVersion: 1,
     status: "snapshot",
     token,
     value: {
-      identity: extras.identity ?? identity,
+      identity,
       freshness: messages.length === 0 ? "empty" : "current",
       messages,
       historyEpoch: "epoch-1",
       historyComplete: true,
+      ...extras,
     },
   };
 }
@@ -459,9 +461,10 @@ describe("AgentNativeTab progressive controller", () => {
       const heldState = new Promise<NativeAgentSessionStateUpdate>((resolve) => {
         releaseState = () =>
           resolve(
-            stateSnapshot("state-2", {
-              ...(transition === "runtime-restart" ? { identity: restarted } : { backgroundTasks }),
-            }),
+            stateSnapshot(
+              "state-2",
+              transition === "runtime-restart" ? { identity: restarted } : { backgroundTasks },
+            ),
           );
       });
       transcriptUpdates = [
@@ -609,6 +612,40 @@ describe("AgentNativeTab progressive controller", () => {
 
     releaseState();
     await waitFor(() => expect(screen.getByText("Approve command")).toBeTruthy());
+  });
+
+  test("keeps the transcript header and scroll position stable while a non-pageable preview hydrates", async () => {
+    transcriptUpdates = [
+      async () =>
+        transcriptSnapshot("transcript-1", [message("m2", "Preview answer")], {
+          historyComplete: false,
+          messageWindow: {
+            limit: 1,
+            truncated: true,
+            truncationReason: "count",
+            canLoadEarlier: false,
+          },
+        }),
+      async () =>
+        transcriptSnapshot("transcript-2", [
+          message("m1", "Hydrated prompt"),
+          message("m2", "Preview answer"),
+        ]),
+    ];
+    stateUpdates = [async () => stateSnapshot("state-1"), async () => stateSnapshot("state-2")];
+
+    renderTab();
+    const list = await screen.findByTestId("progressive-transcript-list");
+    await waitFor(() => expect(screen.getByText("Preview answer")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
+    list.scrollTop = 137;
+
+    await waitFor(() => expect(screen.getByText("Hydrated prompt")).toBeTruthy(), {
+      timeout: 5_000,
+    });
+
+    expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
+    expect(screen.getByTestId("progressive-transcript-list").scrollTop).toBe(137);
   });
 
   test("does not shimmer while session state connects over an authoritative empty transcript", async () => {

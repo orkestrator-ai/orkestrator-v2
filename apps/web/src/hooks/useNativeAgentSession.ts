@@ -1277,15 +1277,24 @@ export function useNativeAgentSession<TMessage = unknown>({
        * still hydrating, not an older page. The backend distinguishes that case
        * with an explicit `canLoadEarlier: false`; overriding it mounts a
        * transient Virtuoso header that disappears with the hydrated snapshot
-       * and shifts the whole transcript. An omitted flag remains bootstrap-able
-       * for compatibility with older progressive responses.
+       * and shifts the whole transcript.
+       *
+       * A byte-capped incomplete tail is the exception: its live-window limit
+       * cannot reveal the omitted whole messages, but a joined snapshot can
+       * still mint the paging cursor that restores them. Part-only truncation
+       * is not recoverable through history paging. An omitted flag remains
+       * bootstrap-able for compatibility with older progressive responses.
        */
+      const byteCappedMessagesOmitted =
+        value.messageWindow?.truncationReason === "bytes" &&
+        (value.messageWindow.omittedMessages ?? 0) > 0;
       const canBootstrapHistory =
         !historyUnpageableRef.current &&
         !historyBoundaryCursor &&
         !settledHistoryCursor &&
         (serverCanLoadEarlier ||
-          (historyComplete === false && value.messageWindow?.canLoadEarlier !== false));
+          (historyComplete === false &&
+            (value.messageWindow?.canLoadEarlier !== false || byteCappedMessagesOmitted)));
       const budget = historyRequestBudget();
       const messageWindow = historyMessageWindow({
         messageCount: messages.length,

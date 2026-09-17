@@ -966,7 +966,9 @@ describe("useNativeAgentSession progressive view", () => {
     transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
     stateUpdates = [() => stateSnapshot("state-1", { backgroundTasks })];
     const first = renderSession();
-    await waitFor(() => expect(first.result.current.projection?.backgroundTasks).toEqual(backgroundTasks));
+    await waitFor(() =>
+      expect(first.result.current.projection?.backgroundTasks).toEqual(backgroundTasks),
+    );
     first.unmount();
 
     expect(
@@ -984,9 +986,9 @@ describe("useNativeAgentSession progressive view", () => {
         stateAvailability: "unavailable",
       });
     }
-    expect(
-      useNativeAgentProjectionStore.getState().progressiveCaches.has("env-env-1:tab-1"),
-    ).toBe(false);
+    expect(useNativeAgentProjectionStore.getState().progressiveCaches.has("env-env-1:tab-1")).toBe(
+      false,
+    );
     expect(
       useNativeAgentProjectionStore.getState().projections.get("env-env-1:tab-1")?.backgroundTasks,
     ).toEqual(backgroundTasks);
@@ -1031,15 +1033,16 @@ describe("useNativeAgentSession progressive view", () => {
       },
     ];
     transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
-    stateUpdates = [() => stateSnapshot("state-1", { interactions, composerControls, backgroundTasks })];
+    stateUpdates = [
+      () => stateSnapshot("state-1", { interactions, composerControls, backgroundTasks }),
+    ];
 
     const { result } = renderSession();
     await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
     expect(result.current.projection?.interactions).toHaveLength(1);
     expect(result.current.projection?.composerControls).toHaveLength(1);
     expect(
-      useNativeAgentProjectionStore.getState().progressiveCaches.get("env-env-1:tab-1")
-        ?.stateToken,
+      useNativeAgentProjectionStore.getState().progressiveCaches.get("env-env-1:tab-1")?.stateToken,
     ).toBe("state-1");
 
     transcriptUpdates = [];
@@ -1050,8 +1053,7 @@ describe("useNativeAgentSession progressive view", () => {
 
     expect(result.current.sessionStateAvailability).toBe("unavailable");
     expect(
-      useNativeAgentProjectionStore.getState().progressiveCaches.get("env-env-1:tab-1")
-        ?.stateToken,
+      useNativeAgentProjectionStore.getState().progressiveCaches.get("env-env-1:tab-1")?.stateToken,
     ).toBeUndefined();
 
     /*
@@ -1513,7 +1515,72 @@ describe("useNativeAgentSession progressive view", () => {
     await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
     expect(result.current.projection?.messageWindow?.truncated).toBe(true);
     expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(false);
+    expect(
+      useNativeAgentProjectionStore.getState().syncCaches.get("env-env-1:tab-1")?.historyBootstrap,
+    ).toBeUndefined();
     expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
+  });
+
+  test("keeps a non-pageable hydrating preview suppressed across a remount", async () => {
+    const preview = (token: string) =>
+      truncatedTail(token, [message("m3"), message("m4")], {
+        messageWindow: {
+          limit: 2,
+          truncated: true,
+          truncationReason: "count",
+          canLoadEarlier: false,
+        },
+      });
+    transcriptUpdates = [() => preview("transcript-1")];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const first = renderSession();
+    await waitFor(() => expect(first.result.current.sessionStateAvailability).toBe("current"));
+    expect(first.result.current.projection?.messageWindow?.canLoadEarlier).toBe(false);
+    expect(
+      useNativeAgentProjectionStore.getState().syncCaches.get("env-env-1:tab-1")?.historyBootstrap,
+    ).toBeUndefined();
+    first.unmount();
+
+    transcriptUpdates = [() => preview("transcript-2")];
+    stateUpdates = [() => stateSnapshot("state-2")];
+    const remount = renderSession();
+    await waitFor(() => expect(remount.result.current.sessionStateAvailability).toBe("current"));
+
+    expect(remount.result.current.projection?.messageWindow?.canLoadEarlier).toBe(false);
+    expect(
+      useNativeAgentProjectionStore.getState().syncCaches.get("env-env-1:tab-1")?.historyBootstrap,
+    ).toBeUndefined();
+    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
+  });
+
+  test("restores bootstrap after a hydrating preview becomes pageable", async () => {
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-1", [message("m3"), message("m4")], {
+          messageWindow: {
+            limit: 2,
+            truncated: true,
+            truncationReason: "count",
+            canLoadEarlier: false,
+          },
+        }),
+      () => truncatedTail("transcript-2", [message("m3"), message("m4")]),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1"), () => stateSnapshot("state-2")];
+
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(false);
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+    expect(
+      useNativeAgentProjectionStore.getState().syncCaches.get("env-env-1:tab-1")?.historyBootstrap,
+    ).toBe(true);
   });
 
   test("still bootstraps an incomplete tail when an older server omits pageability", async () => {
@@ -1797,6 +1864,52 @@ describe("useNativeAgentSession progressive view", () => {
     expect(result.current.projection?.messageWindow?.truncationReason).toBe("bytes");
     expect(result.current.projection?.messageWindow?.omittedMessages).toBe(2);
     expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+  });
+
+  test("bootstraps and pages a byte-capped incomplete tail marked non-pageable", async () => {
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-1", [message("m3"), message("m4")], {
+          messageWindow: {
+            limit: 2,
+            truncated: true,
+            truncationReason: "bytes",
+            omittedMessages: 2,
+            canLoadEarlier: false,
+          },
+        }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    projectionUpdates = [
+      () =>
+        joinedSnapshot("joined-1", [message("m3"), message("m4")], {
+          historyCursor: "cursor-before-m3",
+          historyComplete: true,
+        }),
+    ];
+    messagePages = [() => historyPage([message("m1"), message("m2")])];
+
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+
+    expect(result.current.projection?.messageWindow).toMatchObject({
+      truncationReason: "bytes",
+      omittedMessages: 2,
+      canLoadEarlier: true,
+    });
+
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+
+    expect(getNativeAgentProjectionUpdateMock).toHaveBeenCalledTimes(1);
+    expect(messagePageCalls).toEqual([{ before: "cursor-before-m3" }]);
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m1",
+      "m2",
+      "m3",
+      "m4",
+    ]);
   });
 
   test("retires the control when a forced snapshot mints no cursor", async () => {

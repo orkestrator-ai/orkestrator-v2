@@ -1,8 +1,22 @@
 import { describe, expect, test } from "bun:test";
-import { hasBlockingMacOsPermissions, hasRecommendedMacOsPermissions } from "./macos-permissions";
+import { hasBlockingMacOsPermissions, MACOS_PERMISSION_IDS } from "./macos-permissions";
 
 describe("macOS permission status helpers", () => {
-  test("treats Full Disk Access as recommended rather than startup-blocking", () => {
+  test("covers every protected location an agent can encounter in a home or root search", () => {
+    expect(MACOS_PERMISSION_IDS).toEqual([
+      "full-disk-access",
+      "desktop",
+      "documents",
+      "downloads",
+      "music",
+      "pictures",
+      "movies",
+      "photos",
+      "media-library",
+    ]);
+  });
+
+  test("treats every missing permission, including Full Disk Access, as startup-blocking", () => {
     const status = {
       supported: true,
       missing: [
@@ -10,16 +24,15 @@ describe("macOS permission status helpers", () => {
           id: "full-disk-access" as const,
           label: "Full Disk Access",
           settingsPane: "full-disk-access" as const,
-          required: false,
+          required: true,
         },
       ],
     };
 
-    expect(hasBlockingMacOsPermissions(status)).toBe(false);
-    expect(hasRecommendedMacOsPermissions(status)).toBe(true);
+    expect(hasBlockingMacOsPermissions(status)).toBe(true);
   });
 
-  test("blocks startup only when a required Files and Folders grant is missing", () => {
+  test("does not trust a legacy advisory flag on a missing permission", () => {
     const status = {
       supported: true,
       missing: [
@@ -27,17 +40,15 @@ describe("macOS permission status helpers", () => {
           id: "documents" as const,
           label: "Documents folder",
           settingsPane: "files-and-folders" as const,
-          required: true,
+          required: false,
         },
       ],
     };
 
     expect(hasBlockingMacOsPermissions(status)).toBe(true);
-    expect(hasRecommendedMacOsPermissions(status)).toBe(false);
   });
 
   test("does not block unsupported platforms", () => {
     expect(hasBlockingMacOsPermissions({ supported: false, missing: [] })).toBe(false);
-    expect(hasRecommendedMacOsPermissions({ supported: false, missing: [] })).toBe(false);
   });
 });

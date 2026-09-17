@@ -1429,12 +1429,42 @@ describe("App Docker availability", () => {
             id: "full-disk-access" as const,
             label: "Full Disk Access",
             settingsPane: "full-disk-access" as const,
-            required: false,
+            required: true,
           },
           {
             id: "documents" as const,
             label: "Documents folder",
             settingsPane: "files-and-folders" as const,
+            required: true,
+          },
+          {
+            id: "music" as const,
+            label: "Music folder",
+            settingsPane: "files-and-folders" as const,
+            required: true,
+          },
+          {
+            id: "pictures" as const,
+            label: "Pictures folder",
+            settingsPane: "files-and-folders" as const,
+            required: true,
+          },
+          {
+            id: "movies" as const,
+            label: "Movies folder",
+            settingsPane: "files-and-folders" as const,
+            required: true,
+          },
+          {
+            id: "photos" as const,
+            label: "Photos library",
+            settingsPane: "photos" as const,
+            required: true,
+          },
+          {
+            id: "media-library" as const,
+            label: "Media Library",
+            settingsPane: "media-library" as const,
             required: true,
           },
         ],
@@ -1457,15 +1487,24 @@ describe("App Docker availability", () => {
       expect(screen.queryByText("Checking macOS file access...") === null).toBe(true);
       expect(screen.getByText("Full Disk Access")).toBeTruthy();
       expect(screen.getByText("Documents folder")).toBeTruthy();
-      expect(screen.getByText("Required")).toBeTruthy();
-      expect(screen.getByText("Recommended")).toBeTruthy();
+      expect(screen.getByText("Music folder")).toBeTruthy();
+      expect(screen.getByText("Pictures folder")).toBeTruthy();
+      expect(screen.getByText("Movies folder")).toBeTruthy();
+      expect(screen.getByText("Photos library")).toBeTruthy();
+      expect(screen.getByText("Media Library")).toBeTruthy();
+      expect(screen.getAllByText("Required")).toHaveLength(7);
+      expect(screen.queryByRole("button", { name: "Continue anyway" }) === null).toBe(true);
       expect(mockCheckDocker).not.toHaveBeenCalled();
 
       fireEvent.click(screen.getByRole("button", { name: "Open Full Disk Access Settings" }));
       fireEvent.click(screen.getByRole("button", { name: "Open Files & Folders Settings" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open Photos Settings" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open Media Library Settings" }));
       await waitFor(() => {
         expect(openMacOsSettings).toHaveBeenCalledWith("full-disk-access");
         expect(openMacOsSettings).toHaveBeenCalledWith("files-and-folders");
+        expect(openMacOsSettings).toHaveBeenCalledWith("photos");
+        expect(openMacOsSettings).toHaveBeenCalledWith("media-library");
       });
 
       fireEvent.click(screen.getByRole("button", { name: "Check Again" }));
@@ -1477,7 +1516,7 @@ describe("App Docker availability", () => {
     }
   });
 
-  test("keeps Full Disk Access advisory and still starts Docker", async () => {
+  test("keeps Full Disk Access blocking until it is granted", async () => {
     const originalOrkestrator = window.orkestrator;
     const getMacOsStatus = mock(async () => ({
       supported: true,
@@ -1486,7 +1525,7 @@ describe("App Docker availability", () => {
           id: "full-disk-access" as const,
           label: "Full Disk Access",
           settingsPane: "full-disk-access" as const,
-          required: false,
+          required: true,
         },
       ],
     }));
@@ -1503,30 +1542,21 @@ describe("App Docker availability", () => {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
 
-      expect(
-        await screen.findByText(
-          "Full Disk Access is recommended for searches that begin at the filesystem root.",
-        ),
-      ).toBeTruthy();
-      expect(screen.queryByText("macOS File Access") === null).toBe(true);
-      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
-      expect(screen.getByTestId("app-shell")).toBeTruthy();
+      expect(await screen.findByText("macOS File Access")).toBeTruthy();
+      expect(screen.getByText("Full Disk Access")).toBeTruthy();
+      expect(mockCheckDocker).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: "Continue anyway" }) === null).toBe(true);
 
       fireEvent.click(screen.getByRole("button", { name: "Open Full Disk Access Settings" }));
       await waitFor(() => expect(openMacOsSettings).toHaveBeenCalledWith("full-disk-access"));
-      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-      expect(
-        screen.queryByText(
-          "Full Disk Access is recommended for searches that begin at the filesystem root.",
-        ) === null,
-      ).toBe(true);
+      expect(mockCheckDocker).not.toHaveBeenCalled();
     } finally {
       cleanup();
       window.orkestrator = originalOrkestrator;
     }
   });
 
-  test("lets the user continue past missing folder grants and then starts Docker", async () => {
+  test("does not let the user continue past missing folder grants", async () => {
     const originalOrkestrator = window.orkestrator;
     const getMacOsStatus = mock(async () => ({
       supported: true,
@@ -1553,10 +1583,8 @@ describe("App Docker availability", () => {
 
       expect(await screen.findByText("macOS File Access")).toBeTruthy();
       expect(mockCheckDocker).not.toHaveBeenCalled();
-      fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
-      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
-      expect(screen.queryByText("macOS File Access") === null).toBe(true);
-      expect(screen.getByTestId("app-shell")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Continue anyway" }) === null).toBe(true);
+      expect(screen.getByRole("button", { name: "Check Again" })).toBeTruthy();
     } finally {
       cleanup();
       window.orkestrator = originalOrkestrator;

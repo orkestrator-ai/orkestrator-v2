@@ -3,21 +3,26 @@ export const MACOS_PERMISSION_IDS = [
   "desktop",
   "documents",
   "downloads",
+  "music",
+  "pictures",
+  "movies",
+  "photos",
+  "media-library",
 ] as const;
 
 export type MacOsPermissionId = (typeof MACOS_PERMISSION_IDS)[number];
 
-export type MacOsPrivacySettingsPane = "full-disk-access" | "files-and-folders";
+export type MacOsPrivacySettingsPane =
+  | "full-disk-access"
+  | "files-and-folders"
+  | "photos"
+  | "media-library";
 
 export type MacOsMissingPermission = {
   id: MacOsPermissionId;
   label: string;
   settingsPane: MacOsPrivacySettingsPane;
-  /**
-   * Required permissions can hold the advisory startup screen until granted or
-   * dismissed. Full Disk Access is recommended only: macOS never prompts for it
-   * and the rest of the product can run without it.
-   */
+  /** Every permission reported by the startup probe blocks local agent work. */
   required: boolean;
 };
 
@@ -35,11 +40,5 @@ export type MacOsPermissionsStatus = {
 export function hasBlockingMacOsPermissions(
   status: Pick<MacOsPermissionsStatus, "supported" | "missing">,
 ): boolean {
-  return status.supported && status.missing.some((permission) => permission.required);
-}
-
-export function hasRecommendedMacOsPermissions(
-  status: Pick<MacOsPermissionsStatus, "supported" | "missing">,
-): boolean {
-  return status.supported && status.missing.some((permission) => !permission.required);
+  return status.supported && status.missing.length > 0;
 }

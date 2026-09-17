@@ -449,7 +449,7 @@ async function startApplication(): Promise<void> {
   });
   if (!toolchainBinDir) return;
   // Raise Files and Folders prompts before restored pipelines or agents can
-  // walk the home directory. The renderer still owns the advisory UI; this
+  // walk the home directory. The renderer owns the blocking setup UI; this
   // only sequences the first probe ahead of backend filesystem work.
   if (shouldProbeMacOsPermissionsBeforeBackend({ runtimeFlavor })) {
     await getMacOsPermissions();

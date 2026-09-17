@@ -22,7 +22,7 @@ function permissionProbes(homeDirectory: string): PermissionProbe[] {
       id: "full-disk-access",
       label: "Full Disk Access",
       settingsPane: "full-disk-access",
-      required: false,
+      required: true,
       path: FULL_DISK_ACCESS_PROBE_PATH,
     },
     {
@@ -46,6 +46,41 @@ function permissionProbes(homeDirectory: string): PermissionProbe[] {
       required: true,
       path: path.join(homeDirectory, "Downloads"),
     },
+    {
+      id: "music",
+      label: "Music folder",
+      settingsPane: "files-and-folders",
+      required: true,
+      path: path.join(homeDirectory, "Music"),
+    },
+    {
+      id: "pictures",
+      label: "Pictures folder",
+      settingsPane: "files-and-folders",
+      required: true,
+      path: path.join(homeDirectory, "Pictures"),
+    },
+    {
+      id: "movies",
+      label: "Movies folder",
+      settingsPane: "files-and-folders",
+      required: true,
+      path: path.join(homeDirectory, "Movies"),
+    },
+    {
+      id: "photos",
+      label: "Photos library",
+      settingsPane: "photos",
+      required: true,
+      path: path.join(homeDirectory, "Pictures", "Photos Library.photoslibrary"),
+    },
+    {
+      id: "media-library",
+      label: "Media Library",
+      settingsPane: "media-library",
+      required: true,
+      path: path.join(homeDirectory, "Music", "Music", "Music Library.musiclibrary"),
+    },
   ];
 }
 
@@ -56,9 +91,10 @@ function isPermissionDenied(error: unknown): boolean {
 }
 
 /**
- * A shallow listing exercises the Files and Folders TCC check for this
- * directory. It does not authorize Photos, Media Library, or other nested
- * privacy services, so those paths are not treated as granted permissions.
+ * Reading only directory entries exercises the same macOS privacy check as a
+ * recursive `find` without retaining or exposing any file names. The Photos
+ * and Music library package probes deliberately cross the nested privacy
+ * boundaries that a home-directory search would otherwise encounter later.
  */
 export async function readDirectoryEntries(directory: string): Promise<void> {
   await readdir(directory);
@@ -91,14 +127,18 @@ export async function probeMacOsPermissions({
 }
 
 export function macOsPrivacySettingsUrl(pane: MacOsPrivacySettingsPane): string {
-  const anchor = pane === "full-disk-access" ? "Privacy_AllFiles" : "Privacy_FilesAndFolders";
+  const anchor = {
+    "full-disk-access": "Privacy_AllFiles",
+    "files-and-folders": "Privacy_FilesAndFolders",
+    photos: "Privacy_Photos",
+    "media-library": "Privacy_Media",
+  }[pane];
   return `x-apple.systempreferences:com.apple.preference.security?${anchor}`;
 }
 
 /**
  * Coalesce overlapping status checks onto one sequential walk so StrictMode
- * remounts and extra renderer windows cannot stack Desktop/Documents/Downloads
- * prompts.
+ * remounts and extra renderer windows cannot stack protected-location prompts.
  */
 export function createSerializedMacOsPermissionProbe(
   probe: () => Promise<MacOsPermissionsStatus>,

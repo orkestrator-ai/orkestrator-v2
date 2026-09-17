@@ -27,6 +27,15 @@ describe("macOS permission probing", () => {
   test("reports each protected location denied by macOS", async () => {
     const readDirectory = mock(async (directory: string) => {
       if (directory === "/Users/person/Documents") throw ioError("EACCES");
+      if (directory === "/Users/person/Music") throw ioError("EPERM");
+      if (directory === "/Users/person/Pictures") throw ioError("EACCES");
+      if (directory === "/Users/person/Movies") throw ioError("EPERM");
+      if (directory === "/Users/person/Pictures/Photos Library.photoslibrary") {
+        throw ioError("EACCES");
+      }
+      if (directory === "/Users/person/Music/Music/Music Library.musiclibrary") {
+        throw ioError("EPERM");
+      }
       if (directory === "/Library/Application Support/com.apple.TCC") {
         throw ioError("EPERM");
       }
@@ -45,12 +54,42 @@ describe("macOS permission probing", () => {
           id: "full-disk-access",
           label: "Full Disk Access",
           settingsPane: "full-disk-access",
-          required: false,
+          required: true,
         },
         {
           id: "documents",
           label: "Documents folder",
           settingsPane: "files-and-folders",
+          required: true,
+        },
+        {
+          id: "music",
+          label: "Music folder",
+          settingsPane: "files-and-folders",
+          required: true,
+        },
+        {
+          id: "pictures",
+          label: "Pictures folder",
+          settingsPane: "files-and-folders",
+          required: true,
+        },
+        {
+          id: "movies",
+          label: "Movies folder",
+          settingsPane: "files-and-folders",
+          required: true,
+        },
+        {
+          id: "photos",
+          label: "Photos library",
+          settingsPane: "photos",
+          required: true,
+        },
+        {
+          id: "media-library",
+          label: "Media Library",
+          settingsPane: "media-library",
           required: true,
         },
       ],
@@ -60,6 +99,11 @@ describe("macOS permission probing", () => {
       "/Users/person/Desktop",
       "/Users/person/Documents",
       "/Users/person/Downloads",
+      "/Users/person/Music",
+      "/Users/person/Pictures",
+      "/Users/person/Movies",
+      "/Users/person/Pictures/Photos Library.photoslibrary",
+      "/Users/person/Music/Music/Music Library.musiclibrary",
     ]);
   });
 
@@ -84,6 +128,12 @@ describe("macOS permission probing", () => {
     );
     expect(macOsPrivacySettingsUrl("files-and-folders")).toBe(
       "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders",
+    );
+    expect(macOsPrivacySettingsUrl("photos")).toBe(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos",
+    );
+    expect(macOsPrivacySettingsUrl("media-library")).toBe(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_Media",
     );
   });
 
@@ -125,7 +175,7 @@ describe("macOS permission probing", () => {
       { supported: true, missing: [] },
       { supported: true, missing: [] },
     ]);
-    expect(readDirectory).toHaveBeenCalledTimes(4);
+    expect(readDirectory).toHaveBeenCalledTimes(9);
   });
 
   test("probes before backend start on macOS desktop builds only", () => {

@@ -69,7 +69,6 @@ import type {
 import { LOCAL_CONNECTION_ID, type ConnectionList } from "@orkestrator/protocol/connections";
 import {
   hasBlockingMacOsPermissions,
-  hasRecommendedMacOsPermissions,
   type MacOsPermissionsStatus,
   type MacOsPrivacySettingsPane,
 } from "@orkestrator/protocol/macos-permissions";
@@ -196,7 +195,6 @@ function App() {
   const [isCheckingMacOsPermissions, setIsCheckingMacOsPermissions] = useState(
     Boolean(window.orkestrator?.permissions),
   );
-  const [macOsPermissionsDismissed, setMacOsPermissionsDismissed] = useState(false);
   const [activeConnectionId, setActiveConnectionId] = useState<string | null>(null);
   const [connectionScopeResolved, setConnectionScopeResolved] = useState(
     !window.orkestrator?.connections,
@@ -363,27 +361,15 @@ function App() {
   const macOsProbeFailed = Boolean(macOsPermissions?.error);
   const macOsHasBlockingMissing =
     macOsPermissions !== null && hasBlockingMacOsPermissions(macOsPermissions);
-  const macOsHasRecommendedMissing =
-    macOsPermissions !== null && hasRecommendedMacOsPermissions(macOsPermissions);
   const macOsPermissionsReady =
-    macOsPermissionsDismissed ||
     isRemoteBackendWindow ||
     (macOsPermissions !== null &&
       !macOsProbeFailed &&
       (!macOsPermissions.supported || !macOsHasBlockingMissing));
   const showMacOsPermissionGate =
-    !macOsPermissionsDismissed &&
     connectionScopeResolved &&
     !isRemoteBackendWindow &&
     (macOsPermissions === null || macOsProbeFailed || macOsHasBlockingMissing);
-  const showMacOsPermissionBanner =
-    macOsPermissionsReady &&
-    !macOsPermissionsDismissed &&
-    connectionScopeResolved &&
-    !isRemoteBackendWindow &&
-    !macOsProbeFailed &&
-    macOsHasRecommendedMissing &&
-    !macOsHasBlockingMissing;
 
   useEffect(() => {
     if (!window.orkestrator?.permissions) return;
@@ -1003,13 +989,6 @@ function App() {
                 <div className="flex flex-wrap justify-end gap-2">
                   <Button
                     type="button"
-                    variant="ghost"
-                    onClick={() => setMacOsPermissionsDismissed(true)}
-                  >
-                    Continue anyway
-                  </Button>
-                  <Button
-                    type="button"
                     onClick={() => void refreshMacOsPermissions()}
                     disabled={isCheckingMacOsPermissions}
                   >
@@ -1041,13 +1020,12 @@ function App() {
               <div className="w-full max-w-2xl rounded-xl border bg-card p-8 shadow-2xl">
                 <div className="mb-6">
                   <p className="mb-2 text-xs font-semibold tracking-widest text-primary uppercase">
-                    Setup recommended
+                    Setup required
                   </p>
                   <h1 className="text-2xl font-semibold">macOS File Access</h1>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                    Orkestrator can work without these grants, but agents that search your home
-                    directory may be interrupted by macOS privacy prompts. Grant access now, or
-                    continue and handle prompts later.
+                    Grant the missing access before continuing so agents can search your home or
+                    root directory without interrupting their work with macOS privacy prompts.
                   </p>
                 </div>
 
@@ -1059,7 +1037,7 @@ function App() {
                     >
                       <span className="font-medium">{permission.label}</span>
                       <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
-                        {permission.required ? "Required" : "Recommended"}
+                        Required
                       </span>
                     </li>
                   ))}
@@ -1067,9 +1045,9 @@ function App() {
 
                 <p className="mb-5 text-sm leading-6 text-muted-foreground">
                   In System Settings, enable Orkestrator in the indicated Privacy &amp; Security
-                  pane. Full Disk Access is optional and is used only for searches that begin at the
-                  filesystem root. Photos and Media Library access are not covered here. macOS may
-                  require an app restart before a new Full Disk Access grant takes effect.
+                  panes, then return here and check again. Full Disk Access covers searches that
+                  begin at the filesystem root. macOS may require an app restart before a new Full
+                  Disk Access grant takes effect.
                 </p>
 
                 <div className="flex flex-wrap justify-end gap-2">
@@ -1095,13 +1073,28 @@ function App() {
                       Open Full Disk Access Settings
                     </Button>
                   )}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={() => setMacOsPermissionsDismissed(true)}
-                  >
-                    Continue anyway
-                  </Button>
+                  {macOsPermissions.missing.some(
+                    (permission) => permission.settingsPane === "photos",
+                  ) && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void handleOpenMacOsSettings("photos")}
+                    >
+                      Open Photos Settings
+                    </Button>
+                  )}
+                  {macOsPermissions.missing.some(
+                    (permission) => permission.settingsPane === "media-library",
+                  ) && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void handleOpenMacOsSettings("media-library")}
+                    >
+                      Open Media Library Settings
+                    </Button>
+                  )}
                   <Button
                     type="button"
                     onClick={() => void refreshMacOsPermissions()}
@@ -1132,32 +1125,6 @@ function App() {
                 </div>
               </div>
             )}
-          </div>
-        )}
-
-        {showMacOsPermissionBanner && (
-          <div className="fixed inset-x-0 bottom-4 z-[90] flex justify-center px-6">
-            <div className="flex w-full max-w-3xl flex-wrap items-center justify-between gap-3 rounded-xl border bg-card px-4 py-3 shadow-xl">
-              <p className="text-sm text-muted-foreground">
-                Full Disk Access is recommended for searches that begin at the filesystem root.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void handleOpenMacOsSettings("full-disk-access")}
-                >
-                  Open Full Disk Access Settings
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => setMacOsPermissionsDismissed(true)}
-                >
-                  Dismiss
-                </Button>
-              </div>
-            </div>
           </div>
         )}
 

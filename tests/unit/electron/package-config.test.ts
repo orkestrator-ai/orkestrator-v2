@@ -90,12 +90,16 @@ describe("Electron packaging configuration", () => {
     expect(packageJson.build.mac.notarize).toBe(false);
     expect(packageJson.build.mac.target).toEqual(["dmg"]);
     expect(packageJson.build.mac.extendInfo).toEqual({
+      NSAppleMusicUsageDescription:
+        "Orkestrator checks Music and media-library access at startup so agent searches are not interrupted later.",
       NSDesktopFolderUsageDescription:
         "Orkestrator searches project directories on your behalf so agents can work with files on the Desktop.",
       NSDocumentsFolderUsageDescription:
         "Orkestrator searches project directories on your behalf so agents can work with files in Documents.",
       NSDownloadsFolderUsageDescription:
         "Orkestrator searches project directories on your behalf so agents can work with files in Downloads.",
+      NSPhotoLibraryUsageDescription:
+        "Orkestrator checks Pictures, Movies, and Photos-library access at startup so agent searches are not interrupted later.",
     });
     expect(packageJson.build.win).toBeUndefined();
     expect(packageJson.build.linux.category).toBe("Development");
@@ -181,12 +185,16 @@ describe("Electron packaging configuration", () => {
     expect(releaseConfig.mac?.notarize).toBe(true);
     expect(releaseConfig.mac?.target).toEqual(["dmg"]);
     expect(releaseConfig.mac?.extendInfo).toEqual({
+      NSAppleMusicUsageDescription:
+        "Orkestrator checks Music and media-library access at startup so agent searches are not interrupted later.",
       NSDesktopFolderUsageDescription:
         "Orkestrator searches project directories on your behalf so agents can work with files on the Desktop.",
       NSDocumentsFolderUsageDescription:
         "Orkestrator searches project directories on your behalf so agents can work with files in Documents.",
       NSDownloadsFolderUsageDescription:
         "Orkestrator searches project directories on your behalf so agents can work with files in Downloads.",
+      NSPhotoLibraryUsageDescription:
+        "Orkestrator checks Pictures, Movies, and Photos-library access at startup so agent searches are not interrupted later.",
     });
   });
 

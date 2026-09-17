@@ -3,6 +3,7 @@ import {
   BUILD_PIPELINE_VERSION,
   isActiveBuildPhase,
   isBuildPipeline,
+  isWorkingBuildPipeline,
   useBuildPipelineStore,
   type BuildPhase,
   type BuildPipeline,
@@ -44,6 +45,7 @@ describe("buildPipelineStore backend projection", () => {
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
+      activeBuildEnvironmentIds: new Set(),
       viewedSessionIds: new Map(),
     });
   });
@@ -96,6 +98,7 @@ describe("buildPipelineStore backend projection", () => {
     useBuildPipelineStore.getState().replacePipeline(snapshot);
     expect(useBuildPipelineStore.getState().pipelines.get(snapshot.id)).toBe(snapshot);
     expect(useBuildPipelineStore.getState().buildEnvironmentIds).toEqual(new Set(["env-1"]));
+    expect(useBuildPipelineStore.getState().activeBuildEnvironmentIds).toEqual(new Set(["env-1"]));
   });
 
   test.each([
@@ -184,6 +187,7 @@ describe("buildPipelineStore backend projection", () => {
       }),
     );
     expect(useBuildPipelineStore.getState().buildEnvironmentIds).toEqual(new Set(["env-2"]));
+    expect(useBuildPipelineStore.getState().activeBuildEnvironmentIds).toEqual(new Set(["env-2"]));
 
     useBuildPipelineStore.getState().replacePipeline(
       pipeline({
@@ -192,6 +196,49 @@ describe("buildPipelineStore backend projection", () => {
       }),
     );
     expect(useBuildPipelineStore.getState().buildEnvironmentIds.size).toBe(0);
+    expect(useBuildPipelineStore.getState().activeBuildEnvironmentIds.size).toBe(0);
+  });
+
+  test.each(["complete", "failed", "paused"] as const)(
+    "drops activeBuildEnvironmentIds when the pipeline becomes %s",
+    (phase) => {
+      useBuildPipelineStore.getState().replacePipeline(pipeline());
+      expect(useBuildPipelineStore.getState().activeBuildEnvironmentIds).toEqual(
+        new Set(["env-1"]),
+      );
+
+      useBuildPipelineStore.getState().replacePipeline(
+        pipeline({
+          phase,
+          backendRevision: 2,
+        }),
+      );
+
+      expect(useBuildPipelineStore.getState().buildEnvironmentIds).toEqual(new Set(["env-1"]));
+      expect(useBuildPipelineStore.getState().activeBuildEnvironmentIds.size).toBe(0);
+    },
+  );
+
+  test.each(["waiting-for-setup", "creating-environment", "starting-environment"] as const)(
+    "does not treat setup phase %s as a working environment",
+    (phase) => {
+      useBuildPipelineStore.getState().replacePipeline(pipeline({ phase }));
+      expect(isWorkingBuildPipeline(pipeline({ phase }))).toBe(false);
+      expect(useBuildPipelineStore.getState().buildEnvironmentIds).toEqual(new Set(["env-1"]));
+      expect(useBuildPipelineStore.getState().activeBuildEnvironmentIds.size).toBe(0);
+    },
+  );
+
+  test("drops activeBuildEnvironmentIds when the pipeline carries a stallWarning", () => {
+    useBuildPipelineStore.getState().replacePipeline(pipeline());
+    useBuildPipelineStore.getState().replacePipeline(
+      pipeline({
+        backendRevision: 2,
+        stallWarning: { sessionId: "session-1", detectedAt: NOW },
+      }),
+    );
+    expect(useBuildPipelineStore.getState().buildEnvironmentIds).toEqual(new Set(["env-1"]));
+    expect(useBuildPipelineStore.getState().activeBuildEnvironmentIds.size).toBe(0);
   });
 
   test("removes one pipeline and no-ops for an unknown id", () => {

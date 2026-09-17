@@ -231,6 +231,14 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const isBuildEnvironment = useBuildPipelineStore((s) =>
     s.buildEnvironmentIds.has(environment.id),
   );
+  const hasWorkingBuildPipeline = useBuildPipelineStore((s) =>
+    s.activeBuildEnvironmentIds.has(environment.id),
+  );
+  // Pipeline steps can run in sessions that do not project their activity onto
+  // the environment. The pipeline snapshot is authoritative for in-flight agent
+  // work, so it must keep the environment icon working between agent events.
+  // Setup phases and stallWarning fall back to the real agentActivityState.
+  const displayedActivityState = hasWorkingBuildPipeline ? "working" : agentActivityState;
   // Backend-owned, so the badge agrees across every connected client.
   const hasUnreadActivity = environment.hasUnreadWork === true;
   const messagingEnabled = useConfigStore(
@@ -485,9 +493,13 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                   className={cn(
                     "h-4 w-4 shrink-0 transition-colors",
                     !isRunning && "text-muted-foreground",
-                    isRunning && agentActivityState === "waiting" && "text-amber-500 animate-pulse",
-                    isRunning && agentActivityState === "working" && "text-blue-500 animate-pulse",
-                    isRunning && agentActivityState === "idle" && "text-success",
+                    isRunning &&
+                      displayedActivityState === "waiting" &&
+                      "text-amber-500 animate-pulse",
+                    isRunning &&
+                      displayedActivityState === "working" &&
+                      "text-blue-500 animate-pulse",
+                    isRunning && displayedActivityState === "idle" && "text-success",
                   )}
                 />
               ) : (
@@ -495,9 +507,13 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                   className={cn(
                     "h-4 w-4 shrink-0 transition-colors",
                     !isRunning && "text-muted-foreground",
-                    isRunning && agentActivityState === "waiting" && "text-amber-500 animate-pulse",
-                    isRunning && agentActivityState === "working" && "text-blue-500 animate-pulse",
-                    isRunning && agentActivityState === "idle" && "text-success",
+                    isRunning &&
+                      displayedActivityState === "waiting" &&
+                      "text-amber-500 animate-pulse",
+                    isRunning &&
+                      displayedActivityState === "working" &&
+                      "text-blue-500 animate-pulse",
+                    isRunning && displayedActivityState === "idle" && "text-success",
                   )}
                 />
               )}

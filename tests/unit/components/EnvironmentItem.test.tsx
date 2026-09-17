@@ -243,7 +243,10 @@ beforeEach(() => {
   useUIStore.setState({ selectedEnvironmentId: null });
   useEnvironmentStore.setState({ deletingEnvironments: new Set<string>() });
   useEnvironmentDiffStore.setState({ stats: new Map() });
-  useBuildPipelineStore.setState({ buildEnvironmentIds: new Set<string>() });
+  useBuildPipelineStore.setState({
+    buildEnvironmentIds: new Set<string>(),
+    activeBuildEnvironmentIds: new Set<string>(),
+  });
   useAgentMailStore.setState(useAgentMailStore.getInitialState());
   const config = structuredClone(useConfigStore.getInitialState().config);
   config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: true };

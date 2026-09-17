@@ -36,6 +36,12 @@ interface BuildPipelineState {
   pipelines: Map<string, BuildPipeline>;
   buildEnvironmentIds: Set<string>;
   /**
+   * Environments whose pipeline is in an in-flight agent phase (not setup,
+   * stalled, paused, or terminal). O(1) sidebar lookup; rebuilt with the
+   * pipeline map so it cannot drift from replace/remove.
+   */
+  activeBuildEnvironmentIds: Set<string>;
+  /**
    * Renderer-only stage selection shared by the build tab and shell info pane.
    * Agent stages use their SDK session id; backend validation uses a namespaced
    * synthetic id because it has no agent session.
@@ -62,12 +68,45 @@ interface BuildPipelineState {
   isBuildEnvironment: (environmentId: string) => boolean;
 }
 
+const SETUP_BUILD_PHASES = new Set<BuildPhase>([
+  "creating-environment",
+  "starting-environment",
+  "waiting-for-setup",
+]);
+
+/** True when a pipeline should paint the environment icon as working. */
+export function isWorkingBuildPipeline(pipeline: BuildPipeline): boolean {
+  return (
+    isActiveBuildPhase(pipeline.phase) &&
+    !SETUP_BUILD_PHASES.has(pipeline.phase) &&
+    pipeline.stallWarning === undefined
+  );
+}
+
 function environmentIds(pipelines: ReadonlyMap<string, BuildPipeline>): Set<string> {
   const ids = new Set<string>();
   for (const pipeline of pipelines.values()) {
     if (pipeline.environmentId) ids.add(pipeline.environmentId);
   }
   return ids;
+}
+
+function activeEnvironmentIds(pipelines: ReadonlyMap<string, BuildPipeline>): Set<string> {
+  const ids = new Set<string>();
+  for (const pipeline of pipelines.values()) {
+    if (pipeline.environmentId && isWorkingBuildPipeline(pipeline)) {
+      ids.add(pipeline.environmentId);
+    }
+  }
+  return ids;
+}
+
+function pipelineProjection(pipelines: Map<string, BuildPipeline>) {
+  return {
+    pipelines,
+    buildEnvironmentIds: environmentIds(pipelines),
+    activeBuildEnvironmentIds: activeEnvironmentIds(pipelines),
+  };
 }
 
 function without(
@@ -80,6 +119,7 @@ function without(
 export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => ({
   pipelines: new Map(),
   buildEnvironmentIds: new Set(),
+  activeBuildEnvironmentIds: new Set(),
   viewedSessionIds: new Map(),
 
   replacePipeline: (pipeline) => {
@@ -93,10 +133,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
       }
       const pipelines = new Map(state.pipelines);
       pipelines.set(pipeline.id, pipeline);
-      return {
-        pipelines,
-        buildEnvironmentIds: environmentIds(pipelines),
-      };
+      return pipelineProjection(pipelines);
     });
   },
 
@@ -108,8 +145,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
       const viewedSessionIds = new Map(state.viewedSessionIds);
       viewedSessionIds.delete(pipelineId);
       return {
-        pipelines,
-        buildEnvironmentIds: environmentIds(pipelines),
+        ...pipelineProjection(pipelines),
         viewedSessionIds,
       };
     }),
@@ -122,8 +158,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
         Array.from(state.viewedSessionIds).filter(([pipelineId]) => pipelines.has(pipelineId)),
       );
       return {
-        pipelines,
-        buildEnvironmentIds: environmentIds(pipelines),
+        ...pipelineProjection(pipelines),
         viewedSessionIds,
       };
     }),
@@ -139,8 +174,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
         Array.from(state.viewedSessionIds).filter(([pipelineId]) => pipelines.has(pipelineId)),
       );
       return {
-        pipelines,
-        buildEnvironmentIds: environmentIds(pipelines),
+        ...pipelineProjection(pipelines),
         viewedSessionIds,
       };
     }),
@@ -169,10 +203,14 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
 
   getPipelineById: (id) => get().pipelines.get(id),
 
-  getActivePipelineForEnvironment: (environmentId) =>
-    Array.from(get().pipelines.values()).find(
-      (pipeline) => pipeline.environmentId === environmentId && isActiveBuildPhase(pipeline.phase),
-    ),
+  getActivePipelineForEnvironment: (environmentId) => {
+    for (const pipeline of get().pipelines.values()) {
+      if (pipeline.environmentId === environmentId && isActiveBuildPhase(pipeline.phase)) {
+        return pipeline;
+      }
+    }
+    return undefined;
+  },
 
   isBuildEnvironment: (environmentId) => get().buildEnvironmentIds.has(environmentId),
 }));

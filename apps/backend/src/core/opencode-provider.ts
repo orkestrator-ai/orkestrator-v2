@@ -1,6 +1,10 @@
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
-import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/types";
+import type {
+  Event as OpenCodeEvent,
+  PermissionRule as OpenCodePermissionRule,
+} from "@opencode-ai/sdk/v2/types";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import { WORKFLOW_RESULT_MCP_SERVER_NAME } from "@orkestrator/protocol/workflow-results";
 import { isKnownOpenCodeEvent } from "./opencode-events.js";
 import {
   boundedOpenCodeMessageHistory,
@@ -93,6 +97,7 @@ import {
   DEFAULT_MONITOR_RETRY_MS,
   DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS,
   effectiveOpenCodePolicy,
+  isOpenCodeWorkflowResultToolName,
   openCodeAgentFor,
   listOpenCodeResumableSessions,
   type OpenCodeProviderDependencies,
@@ -106,6 +111,9 @@ import {
   openCodePermissionRules,
   preflightOpenCodeModel,
   OPENCODE_READ_ONLY_TURN_TOOLS,
+  openCodeWorkflowResultDenyPermissionRules,
+  openCodeWorkflowResultPermissionRules,
+  openCodeWorkflowResultTurnTools,
   openCodePromptParts,
   openCodeReasoningVariant,
   openCodeRequestOptions,
@@ -118,6 +126,8 @@ import { readOpenCodeStructuredOutput } from "./opencode-structured-output.js";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 const defaultOpenCodeMessageIds = new OpenCodeMessageIdCoordinator();
+const MAX_OPENCODE_PERMISSION_RULES = 512;
+const MAX_OPENCODE_PERMISSION_RULE_BYTES = 256 * 1024;
 export type { OpenCodeProviderDependencies } from "./opencode-provider-helpers.js";
 
 export class OpenCodeProvider implements NativeAgentRuntimeProvider {
@@ -169,6 +179,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private readonly blockedSessions = new Set<string>();
   private readonly failedQuestionSessions = new Set<string>();
   private readonly sessionPolicies = new Map<string, NativeAgentExecutionPolicy>();
+  private workflowResultMcpKey: string | null = null;
+  private workflowResultMcpSetup: { key: string; promise: Promise<void> } | null = null;
+  private readonly workflowResultPermissionRestore = new Map<string, OpenCodePermissionRule[]>();
   private readonly reviewPermissions: OpenCodeReviewSessionPermissions;
   private readonly monitorController = new AbortController();
   private readonly monitorRetryMs: number;
@@ -686,7 +699,129 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     }
   }
 
+  async prepareDispatch(
+    _sessionId: string,
+    options: { agentMcp?: ProviderSendOptions["agentMcp"] } = {},
+  ): Promise<void> {
+    if (options.agentMcp?.workflowResultCapability) {
+      await this.ensureWorkflowResultMcp(options.agentMcp);
+    }
+  }
+
+  private async ensureWorkflowResultMcp(
+    connection: NonNullable<ProviderSendOptions["agentMcp"]>,
+  ): Promise<void> {
+    const key = `${connection.url}\0${connection.token}`;
+    if (this.workflowResultMcpKey === key) return;
+    if (this.workflowResultMcpSetup?.key === key) return this.workflowResultMcpSetup.promise;
+    const promise = (async () => {
+      const response = await this.client.mcp.add(
+        {
+          directory: this.connection.directory,
+          name: WORKFLOW_RESULT_MCP_SERVER_NAME,
+          config: {
+            type: "remote",
+            url: connection.url,
+            headers: { Authorization: `Bearer ${connection.token}` },
+            oauth: false,
+          },
+        },
+        this.requestOptions(),
+      );
+      assertSdkResponse(response, "OpenCode workflow-result MCP registration");
+      this.workflowResultMcpKey = key;
+    })();
+    this.workflowResultMcpSetup = { key, promise };
+    try {
+      await promise;
+    } catch (error) {
+      throw new ProviderUnavailableError("OpenCode workflow-result MCP is unavailable", {
+        cause: error,
+      });
+    } finally {
+      if (this.workflowResultMcpSetup?.promise === promise) this.workflowResultMcpSetup = null;
+    }
+  }
+
+  private async enableWorkflowResultForTurn(
+    sessionId: string,
+    selectedTool: string | undefined,
+  ): Promise<void> {
+    if (!selectedTool) return;
+    const restore = this.sessionPolicies.get(sessionId);
+    let restoreRules: OpenCodePermissionRule[];
+    if (restore) {
+      restoreRules = openCodePermissionRules(restore);
+    } else {
+      const response = await this.client.session.get(
+        { sessionID: sessionId, directory: this.connection.directory },
+        this.requestOptions(),
+      );
+      assertSdkResponse(response, "OpenCode workflow-result permission read");
+      const current = asRecord(response.data)?.permission;
+      if (
+        Array.isArray(current) &&
+        (current.length > MAX_OPENCODE_PERMISSION_RULES ||
+          serializedByteLength(current) > MAX_OPENCODE_PERMISSION_RULE_BYTES)
+      ) {
+        throw new ProviderUnavailableError("OpenCode workflow-result permissions are oversized");
+      }
+      if (Array.isArray(current)) {
+        restoreRules = current.filter((rule): rule is OpenCodePermissionRule => {
+          const candidate = asRecord(rule);
+          return (
+            typeof candidate?.permission === "string" &&
+            typeof candidate.pattern === "string" &&
+            (candidate.action === "allow" ||
+              candidate.action === "deny" ||
+              candidate.action === "ask")
+          );
+        });
+        if (restoreRules.length !== current.length) {
+          throw new ProviderUnavailableError("OpenCode workflow-result permissions are malformed");
+        }
+      } else {
+        restoreRules = [];
+      }
+    }
+    restoreRules.push(...openCodeWorkflowResultDenyPermissionRules());
+    const response = await this.client.session.update(
+      {
+        sessionID: sessionId,
+        directory: this.connection.directory,
+        permission: openCodeWorkflowResultPermissionRules(selectedTool),
+      },
+      this.requestOptions(),
+    );
+    assertSdkResponse(response, "OpenCode workflow-result permission update");
+    this.workflowResultPermissionRestore.set(sessionId, restoreRules);
+  }
+
+  private async restoreWorkflowResultPermissions(sessionId: string): Promise<void> {
+    const permission = this.workflowResultPermissionRestore.get(sessionId);
+    if (!permission) return;
+    const response = await this.client.session.update(
+      { sessionID: sessionId, directory: this.connection.directory, permission },
+      this.requestOptions(),
+    );
+    assertSdkResponse(response, "OpenCode workflow-result permission restore");
+    this.workflowResultPermissionRestore.delete(sessionId);
+  }
+
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
+    const workflowResultCapability = options.agentMcp?.workflowResultCapability;
+    if (
+      Boolean(options.workflowResultTool) !== Boolean(workflowResultCapability) ||
+      (options.workflowResultTool !== undefined &&
+        !isOpenCodeWorkflowResultToolName(options.workflowResultTool))
+    ) {
+      throw new ProviderUnavailableError(
+        "OpenCode workflow-result tool configuration is incomplete",
+      );
+    }
+    if (workflowResultCapability && options.agentMcp) {
+      await this.ensureWorkflowResultMcp(options.agentMcp);
+    }
     const shapedPrompt = options.schema ? openCodeStructuredPrompt(prompt, options.schema) : prompt;
     const parts = openCodePromptParts(shapedPrompt, options);
     const selectedModel = options.model ?? this.connection.model;
@@ -721,6 +856,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       }
       const messageID = this.messageIds.resolve(scope, history, options.requestId);
       const reviewShellEnabled = await this.reviewPermissions.enableForTurn(sessionId, options);
+      await this.enableWorkflowResultForTurn(sessionId, options.workflowResultTool);
       const dispatchStartedAt = this.now();
       this.streamState.beginTurn(sessionId, dispatchStartedAt);
       let response;
@@ -755,9 +891,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
                 model,
                 agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options, "build"),
                 variant,
-                ...(options.readOnly && !reviewShellEnabled
-                  ? { tools: OPENCODE_READ_ONLY_TURN_TOOLS }
-                  : {}),
+                tools: {
+                  ...openCodeWorkflowResultTurnTools(options.workflowResultTool),
+                  ...(options.readOnly && !reviewShellEnabled ? OPENCODE_READ_ONLY_TURN_TOOLS : {}),
+                },
               },
               this.requestOptions(),
             );
@@ -823,6 +960,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       }
       if (lifecycle === "running") return "running";
       if (lifecycle === "missing") return "missing";
+      await this.restoreWorkflowResultPermissions(sessionId);
       await this.reviewPermissions.restoreIfNeeded(sessionId);
       if (lifecycle === "idle") return "idle";
       return "error";

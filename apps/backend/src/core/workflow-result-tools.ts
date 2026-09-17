@@ -3,7 +3,10 @@ import type {
   WorkflowResultKind,
   WorkflowResultSubmission,
 } from "@orkestrator/protocol/workflow-results";
-import { workflowResultToolName } from "@orkestrator/protocol/workflow-results";
+import {
+  WORKFLOW_RESULT_KINDS,
+  workflowResultToolName,
+} from "@orkestrator/protocol/workflow-results";
 import { z } from "zod";
 import { workflowResultJsonSchema } from "./workflow-result-contracts.js";
 import type {
@@ -36,20 +39,23 @@ function storageFailure(): WorkflowResultSubmission {
   };
 }
 
-/** Registers the two tools exposed by one attempt-scoped result capability. */
-export function registerWorkflowResultTools(
-  server: McpServer,
-  workflowResults: WorkflowResultService,
-  scope: WorkflowResultToolScope,
-): void {
-  const denied = (): WorkflowResultSubmission => ({
+function capabilityDenied(): WorkflowResultSubmission {
+  return {
     ok: false,
     error: {
       code: "capability_denied",
       nextAction: "stop",
       message: "This tool connection cannot access that workflow result key.",
     },
-  });
+  };
+}
+
+/** Registers the two tools exposed by one attempt-scoped result capability. */
+export function registerWorkflowResultTools(
+  server: McpServer,
+  workflowResults: WorkflowResultService,
+  scope: WorkflowResultToolScope,
+): void {
   const submissionToolName = workflowResultToolName(scope.kind);
   server.registerTool(
     submissionToolName,
@@ -70,7 +76,7 @@ export function registerWorkflowResultTools(
       },
     },
     async ({ resultKey, result }) => {
-      if (resultKey !== scope.workflowResultKey) return resultResponse(denied());
+      if (resultKey !== scope.workflowResultKey) return resultResponse(capabilityDenied());
       try {
         return resultResponse(await workflowResults.submit(scope, resultKey, result));
       } catch {
@@ -92,7 +98,7 @@ export function registerWorkflowResultTools(
       },
     },
     async ({ resultKey }) => {
-      if (resultKey !== scope.workflowResultKey) return resultResponse(denied());
+      if (resultKey !== scope.workflowResultKey) return resultResponse(capabilityDenied());
       let status;
       try {
         status = await workflowResults.status(scope, resultKey);
@@ -104,6 +110,103 @@ export function registerWorkflowResultTools(
           content: [{ type: "text" as const, text: JSON.stringify(status) }],
           structuredContent: status as unknown as Record<string, unknown>,
         };
+      }
+      return resultResponse({
+        ok: false,
+        error: {
+          code: "result_status_unavailable",
+          nextAction: "stop",
+          message: "The workflow result status is unavailable.",
+        },
+      });
+    },
+  );
+}
+
+/**
+ * Registers the stable OpenCode broker surface.
+ *
+ * The bearer credential identifies only the environment/project. Every call
+ * must additionally present the signed, one-attempt capability embedded in the
+ * trusted workflow prompt, so directory-scoped MCP registration cannot widen
+ * access to another attempt.
+ */
+export function registerWorkflowResultBrokerTools(
+  server: McpServer,
+  workflowResults: WorkflowResultService,
+  scope: WorkflowResultCallerScope,
+): void {
+  for (const kind of WORKFLOW_RESULT_KINDS) {
+    server.registerTool(
+      workflowResultToolName(kind),
+      {
+        title: `Submit ${kind.replaceAll("-", " ")}`,
+        description: `Submit the complete ${kind.replaceAll("-", " ")} for the authorized workflow attempt. Validation errors are returned for correction. Repeating an accepted result is safe.`,
+        inputSchema: z
+          .object({
+            resultKey: z.string().uuid(),
+            capability: z.string().min(32).max(2_048),
+            result: z.fromJSONSchema(workflowResultJsonSchema(kind)),
+          })
+          .strict(),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ resultKey, capability, result }) => {
+        try {
+          if (
+            !(await workflowResults.authorizeCapability(scope, resultKey, capability, "opencode"))
+          ) {
+            return resultResponse(capabilityDenied());
+          }
+          const binding = await workflowResults.binding(scope, resultKey);
+          if (binding?.kind !== kind) return resultResponse(capabilityDenied());
+          return resultResponse(await workflowResults.submit(scope, resultKey, result));
+        } catch {
+          return resultResponse(storageFailure());
+        }
+      },
+    );
+  }
+
+  server.registerTool(
+    "get_workflow_result_status",
+    {
+      title: "Get workflow result status",
+      description: "Check whether the authorized workflow result was accepted before retrying.",
+      inputSchema: z
+        .object({
+          resultKey: z.string().uuid(),
+          capability: z.string().min(32).max(2_048),
+        })
+        .strict(),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ resultKey, capability }) => {
+      try {
+        if (
+          !(await workflowResults.authorizeCapability(scope, resultKey, capability, "opencode"))
+        ) {
+          return resultResponse(capabilityDenied());
+        }
+        const status = await workflowResults.status(scope, resultKey);
+        if (status) {
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify(status) }],
+            structuredContent: status as unknown as Record<string, unknown>,
+          };
+        }
+      } catch {
+        return resultResponse(storageFailure());
       }
       return resultResponse({
         ok: false,

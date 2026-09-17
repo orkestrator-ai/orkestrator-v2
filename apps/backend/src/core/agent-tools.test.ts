@@ -301,6 +301,75 @@ describe("agent Kanban tools", () => {
     });
   });
 
+  test("exposes a stable OpenCode broker while requiring a signed capability per attempt", async () => {
+    await server.stop();
+    const workflowResults = new WorkflowResultService(dataDir);
+    server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
+    await server.start();
+    const firstKey = crypto.randomUUID();
+    const secondKey = crypto.randomUUID();
+    for (const resultKey of [firstKey, secondKey]) {
+      await workflowResults.prepare({
+        resultKey,
+        kind: "feature-plan-state",
+        environmentId: "env-1",
+        projectId: "project-1",
+        provider: "opencode",
+      });
+    }
+    const first = server.workflowResultConnection(
+      "env-1",
+      "project-1",
+      "host",
+      firstKey,
+      "opencode",
+    );
+    const second = server.workflowResultConnection(
+      "env-1",
+      "project-1",
+      "host",
+      secondKey,
+      "opencode",
+    );
+    expect(second.token).toBe(first.token);
+    expect(second.workflowResultCapability).not.toBe(first.workflowResultCapability);
+
+    const listed = await rpc(first.url, first.token, "tools/list");
+    expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual([
+      ...WORKFLOW_RESULT_KINDS.map(workflowResultToolName),
+      "get_workflow_result_status",
+    ]);
+    expect(listed.body.result?.tools?.[0]?.inputSchema).toMatchObject({
+      required: ["resultKey", "capability", "result"],
+    });
+
+    const crossed = await rpc(first.url, first.token, "tools/call", {
+      name: "submit_feature_plan_state",
+      arguments: {
+        resultKey: firstKey,
+        capability: second.workflowResultCapability,
+        result: { phase: "collecting", title: "Tools", summary: "" },
+      },
+    });
+    expect(crossed.body.result).toMatchObject({
+      isError: true,
+      structuredContent: { ok: false, error: { code: "capability_denied" } },
+    });
+
+    const accepted = await rpc(first.url, first.token, "tools/call", {
+      name: "submit_feature_plan_state",
+      arguments: {
+        resultKey: firstKey,
+        capability: first.workflowResultCapability,
+        result: { phase: "collecting", title: "Tools", summary: "" },
+      },
+    });
+    expect(accepted.body.result?.structuredContent).toMatchObject({
+      ok: true,
+      lifecycle: "accepted",
+    });
+  });
+
   test("starts ordinary tools after regenerating a truncated workflow capability identity", async () => {
     await server.stop();
     await writeFile(join(dataDir, "workflow-result-tools.json"), "");

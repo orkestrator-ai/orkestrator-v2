@@ -10,6 +10,7 @@ import {
   ProviderUnavailableError,
 } from "./native-agent-provider.js";
 import { openCodeIncompleteTurnRequestId } from "./opencode-turn-recovery.js";
+import { openCodeWorkflowResultToolId } from "./opencode-provider-helpers.js";
 import {
   deferred,
   expectedOpenCodeMessageId,
@@ -19,6 +20,86 @@ import {
 } from "./agent-provider-test-support.js";
 
 describe("OpenCode provider dispatch", () => {
+  test("registers the persistent result broker and exposes only the selected workflow tools", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    const agentMcp = {
+      url: "http://127.0.0.1:43123/mcp",
+      token: "broker-token",
+      workflowResultCapability: "signed-attempt-capability",
+    };
+    try {
+      await provider.prepareDispatch?.("owned-session", { agentMcp });
+      await provider.send("owned-session", "prompt", {
+        requestId: "request-1",
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
+      await expect(provider.status("owned-session")).resolves.toBe("idle");
+      await provider.send("owned-session", "ordinary prompt", { requestId: "request-2" });
+
+      expect(fake.mcpAddCalls).toEqual([
+        {
+          directory: "/workspace",
+          name: "orkestrator_workflow_result",
+          config: {
+            type: "remote",
+            url: agentMcp.url,
+            headers: { Authorization: "Bearer broker-token" },
+            oauth: false,
+          },
+        },
+      ]);
+      const selected = openCodeWorkflowResultToolId("submit_review_report");
+      const other = openCodeWorkflowResultToolId("submit_fix_result");
+      const status = openCodeWorkflowResultToolId("get_workflow_result_status");
+      expect(fake.promptCalls[0]?.tools).toMatchObject({
+        [selected]: true,
+        [other]: false,
+        [status]: true,
+      });
+      expect(fake.promptCalls[1]?.tools).toMatchObject({
+        [selected]: false,
+        [other]: false,
+        [status]: false,
+      });
+      expect(fake.updateCalls[0]?.permission).toEqual([
+        { permission: selected, pattern: "*", action: "allow" },
+        { permission: status, pattern: "*", action: "allow" },
+      ]);
+      expect(fake.updateCalls[1]?.permission).toEqual(
+        expect.arrayContaining([
+          { permission: selected, pattern: "*", action: "deny" },
+          { permission: status, pattern: "*", action: "deny" },
+        ]),
+      );
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("rejects a workflow capability paired with a non-result tool before registration", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await expect(
+        provider.send("owned-session", "prompt", {
+          requestId: "request-1",
+          agentMcp: {
+            url: "http://127.0.0.1:43123/mcp",
+            token: "broker-token",
+            workflowResultCapability: "signed-attempt-capability",
+          },
+          workflowResultTool: "list_tickets",
+        }),
+      ).rejects.toThrow("OpenCode workflow-result tool configuration is incomplete");
+      expect(fake.mcpAddCalls).toHaveLength(0);
+      expect(fake.promptCalls).toHaveLength(0);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("rejects a disconnected model before creating a user-only turn", async () => {
     const fake = openCodeFake();
     Object.assign(fake.client as object, {

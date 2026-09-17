@@ -53,6 +53,16 @@ describe("workflow result contracts", () => {
     expect(instruction).not.toContain("http");
   });
 
+  test("a broker instruction carries its attempt capability inside the system frame", () => {
+    const capability = "signed-attempt-capability";
+    const instruction = workflowResultInstruction("fix-result", crypto.randomUUID(), {
+      capability,
+    });
+    expect(instruction).toContain(`capability ${JSON.stringify(capability)}`);
+    expect(instruction.startsWith(SYSTEM_INSTRUCTIONS_FRAME_OPEN)).toBe(true);
+    expect(instruction.endsWith(SYSTEM_INSTRUCTIONS_FRAME_CLOSE)).toBe(true);
+  });
+
   test("submission state guard accepts only the four projected states", () => {
     const states: WorkflowResultSubmissionState[] = [
       "preparing",

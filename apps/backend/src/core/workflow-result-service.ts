@@ -274,6 +274,25 @@ export class WorkflowResultService {
     }
   }
 
+  /** Verify a signed attempt capability presented through a persistent broker. */
+  async authorizeCapability(
+    scope: WorkflowResultCallerScope,
+    resultKey: string,
+    capability: string,
+    expectedProvider?: StructuredOutputProvider,
+  ): Promise<boolean> {
+    const authorized = await this.authenticateCapability(capability);
+    if (
+      authorized?.environmentId === scope.environmentId &&
+      authorized.projectId === scope.projectId &&
+      authorized.workflowResultKey === resultKey
+    ) {
+      if (!expectedProvider) return true;
+      return (await this.binding(scope, resultKey))?.provider === expectedProvider;
+    }
+    return false;
+  }
+
   async prepare(input: WorkflowResultSlotInput): Promise<void> {
     await this.mutate(async (store) => {
       const existing = store.entries[input.resultKey];
@@ -624,7 +643,10 @@ export class WorkflowResultService {
   async binding(
     scope: WorkflowResultCallerScope,
     resultKey: string,
-  ): Promise<{ kind: StoredWorkflowResult["kind"] } | null> {
+  ): Promise<{
+    kind: StoredWorkflowResult["kind"];
+    provider: StoredWorkflowResult["provider"];
+  } | null> {
     const entry = (await this.load()).entries[resultKey];
     if (
       !entry ||
@@ -633,7 +655,7 @@ export class WorkflowResultService {
     ) {
       return null;
     }
-    return { kind: entry.kind };
+    return { kind: entry.kind, provider: entry.provider };
   }
 
   async consume(resultKey: string): Promise<void> {

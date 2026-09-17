@@ -9,6 +9,7 @@ import {
 } from "./agent-provider-test-support.js";
 import { ProviderUnavailableError } from "./native-agent-provider.js";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
+import { openCodeWorkflowResultTurnTools } from "./opencode-provider-helpers.js";
 
 const environment = { environmentType: "local" as const, networkAccessMode: "full" as const };
 const policy = resolveNativeAgentExecutionPolicy(environment, "looped-review");
@@ -115,8 +116,7 @@ describe("OpenCode reviewer shell permissions", () => {
         expect(actionFor(update, tool, "find . -delete")).toBe("deny");
       }
       expect(fake.promptCalls[0]!.agent).toBe("plan");
-      // Sending even a partial legacy mask here replaces the complete policy.
-      expect(fake.promptCalls[0]!.tools).toBeUndefined();
+      expect(fake.promptCalls[0]!.tools).toEqual(openCodeWorkflowResultTurnTools());
     } finally {
       await provider.dispose?.();
     }
@@ -262,7 +262,7 @@ describe("OpenCode reviewer shell permissions", () => {
         mode: "build",
       });
       expect(fake.updateCalls).toHaveLength(2);
-      expect(fake.promptCalls.at(-1)!.tools).toBeUndefined();
+      expect(fake.promptCalls.at(-1)!.tools).toEqual(openCodeWorkflowResultTurnTools());
     } finally {
       await provider.dispose?.();
     }

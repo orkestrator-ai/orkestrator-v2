@@ -220,6 +220,8 @@ export interface ProviderSendOptions {
    * Resupplied on dispatch, but applied only to a durably marked reviewer.
    */
   reviewShellPolicy?: NativeAgentExecutionPolicy;
+  /** Exact workflow-result MCP tool to expose for this turn, when present. */
+  workflowResultTool?: string;
   requestId: string;
   attachments?: PromptAttachment[];
   images?: ProviderPromptImage[];
@@ -235,8 +237,13 @@ export interface ProviderSendOptions {
   parameterValues?: Record<string, string | boolean>;
   persistDefaults?: boolean;
   allowProviderCommands?: boolean;
-  /** Per-session Orkestrator MCP credential; consumed by Claude and Codex. */
-  agentMcp?: { url: string; token: string };
+  /** Scoped Orkestrator MCP connection for providers with a qualified delivery path. */
+  agentMcp?: {
+    url: string;
+    token: string;
+    /** Signed one-attempt argument for providers using a persistent MCP broker. */
+    workflowResultCapability?: string;
+  };
 }
 
 export interface ProviderInteractiveSnapshot {

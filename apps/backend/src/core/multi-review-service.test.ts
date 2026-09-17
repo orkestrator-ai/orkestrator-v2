@@ -2029,7 +2029,10 @@ async function withService(
   run: (context: {
     service: MultiReviewService;
     storage: StorageService;
-    start: (reviewers?: MultiReviewModelSelection[]) => Promise<MultiReviewWorkflow>;
+    start: (
+      reviewers?: MultiReviewModelSelection[],
+      fixModel?: MultiReviewModelSelection,
+    ) => Promise<MultiReviewWorkflow>;
     snapshot: (workflowId: string) => Promise<MultiReviewWorkflow | undefined>;
     workflowResults?: WorkflowResultService;
   }) => Promise<void>,
@@ -2069,9 +2072,12 @@ async function withService(
     ...(workflowResults
       ? {
           workflowResults,
-          resolveAgentToolConnection: () => ({
+          resolveAgentToolConnection: (_environmentId, _projectId, _target, _resultKey, agent) => ({
             url: "http://127.0.0.1:1234/mcp",
-            token: "test-token",
+            token: agent === "opencode" ? "broker-token" : "test-token",
+            ...(agent === "opencode"
+              ? { workflowResultCapability: "signed-attempt-capability" }
+              : {}),
           }),
         }
       : {}),
@@ -2082,7 +2088,10 @@ async function withService(
       service,
       storage,
       workflowResults,
-      start: (reviewers = [{ agent: "claude", model: "opus" }]) =>
+      start: (
+        reviewers = [{ agent: "claude", model: "opus" }],
+        fixModel = { agent: "claude", model: "opus" },
+      ) =>
         (options.packageFlow
           ? service.start.bind(service)
           : (input: Parameters<MultiReviewService["start"]>[0]) =>
@@ -2091,7 +2100,7 @@ async function withService(
           projectId: "project-1",
           targetBranch: "main",
           reviewers,
-          fixModel: { agent: "claude", model: "opus" },
+          fixModel,
         }),
       snapshot: async (workflowId) =>
         (await storage.getMultiReviewWorkflow(workflowId))?.snapshot as
@@ -2115,13 +2124,14 @@ async function waitUntil(
   }
 }
 
-test("MultiReviewService uses and consumes tool-mode reviewer and consolidation slots", async () => {
+test("MultiReviewService delivers Grok reviewer and consolidation reports through MCP tools", async () => {
   const provider = new Provider(false);
   await withService(
     "env-tool-results",
     provider,
     async ({ service, start, snapshot, workflowResults }) => {
-      const started = await start();
+      const grok = { agent: "grok" as const, model: "grok-4.6" };
+      const started = await start([grok], grok);
       await waitUntil(async () => {
         await service.advanceNow(started.id);
         return Boolean((await snapshot(started.id))?.reviewers[0]?.requestId);
@@ -2129,6 +2139,13 @@ test("MultiReviewService uses and consumes tool-mode reviewer and consolidation 
       let current = (await snapshot(started.id))!;
       const reviewerRequestId = current.reviewers[0]!.requestId!;
       expect(current.reviewers[0]?.resultTransport).toBe("tool-v1");
+      const reviewerDispatch = provider.sends.get(reviewerRequestId);
+      expect(reviewerDispatch?.prompt).toContain("submit_review_report");
+      expect(reviewerDispatch?.options.schema).toBeUndefined();
+      expect(reviewerDispatch?.options.agentMcp).toEqual({
+        url: "http://127.0.0.1:1234/mcp",
+        token: "test-token",
+      });
 
       await workflowResults!.submit(
         { environmentId: "env-tool-results", projectId: "project-1" },
@@ -2155,6 +2172,13 @@ test("MultiReviewService uses and consumes tool-mode reviewer and consolidation 
       current = (await snapshot(started.id))!;
       const consolidationRequestId = current.activeRequest!.requestId;
       expect(current.activeRequest?.resultTransport).toBe("tool-v1");
+      const consolidationDispatch = provider.sends.get(consolidationRequestId);
+      expect(consolidationDispatch?.prompt).toContain("submit_consolidated_review");
+      expect(consolidationDispatch?.options.schema).toBeUndefined();
+      expect(consolidationDispatch?.options.agentMcp).toEqual({
+        url: "http://127.0.0.1:1234/mcp",
+        token: "test-token",
+      });
       await workflowResults!.submit(
         { environmentId: "env-tool-results", projectId: "project-1" },
         consolidationRequestId,
@@ -2169,6 +2193,36 @@ test("MultiReviewService uses and consumes tool-mode reviewer and consolidation 
           consolidationRequestId,
         ),
       ).toMatchObject({ lifecycle: "consumed" });
+    },
+    { toolMode: true },
+  );
+});
+
+test("MultiReviewService sends OpenCode the stable broker capability and exact turn tool", async () => {
+  const provider = new Provider(false);
+  await withService(
+    "env-opencode-tool-results",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const opencode = { agent: "opencode" as const, model: "default" };
+      const started = await start([opencode], opencode);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return Boolean((await snapshot(started.id))?.reviewers[0]?.requestId);
+      });
+      const reviewer = (await snapshot(started.id))!.reviewers[0]!;
+      expect(reviewer.resultTransport).toBe("tool-v1");
+      const dispatch = provider.sends.get(reviewer.requestId!);
+      expect(dispatch?.prompt).toContain('capability "signed-attempt-capability"');
+      expect(dispatch?.options).toMatchObject({
+        schema: undefined,
+        workflowResultTool: "submit_review_report",
+        agentMcp: {
+          url: "http://127.0.0.1:1234/mcp",
+          token: "broker-token",
+          workflowResultCapability: "signed-attempt-capability",
+        },
+      });
     },
     { toolMode: true },
   );

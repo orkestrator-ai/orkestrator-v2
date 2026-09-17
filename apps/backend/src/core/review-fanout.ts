@@ -42,6 +42,7 @@ import {
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import {
   workflowResultInstruction,
+  workflowResultToolName,
   type WorkflowResultSubmissionState,
 } from "@orkestrator/protocol/workflow-results";
 import type { AgentToolConnection } from "./agent-tools.js";
@@ -867,7 +868,9 @@ export class ReviewFanoutRunner {
         await provider.send(
           reviewer.providerSessionId,
           reviewer.resultTransport === "tool-v1"
-            ? `${prompt}\n\n${workflowResultInstruction("review-report", reviewer.requestId)}`
+            ? `${prompt}\n\n${workflowResultInstruction("review-report", reviewer.requestId, {
+                capability: agentMcp?.workflowResultCapability,
+              })}`
             : prompt,
           {
             requestId: reviewer.requestId,
@@ -882,6 +885,9 @@ export class ReviewFanoutRunner {
             effort: reviewer.reasoningEffort,
             ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
             ...(agentMcp ? { agentMcp } : {}),
+            ...(agentMcp?.workflowResultCapability
+              ? { workflowResultTool: workflowResultToolName("review-report") }
+              : {}),
           },
         );
       } catch (error) {

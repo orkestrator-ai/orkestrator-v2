@@ -16,7 +16,10 @@ import {
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
 } from "@orkestrator/protocol/build-pipeline";
 import type { ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
-import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import type {
+  StructuredOutputProvider,
+  StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
 import type { Environment, PersistedBuildPipeline } from "./models.js";
 import type { StorageService } from "./storage.js";
 import type { AgentToolConnection } from "./agent-tools.js";
@@ -159,6 +162,7 @@ export abstract class BuildPipelineServiceBase {
         projectId: string,
         target: "host" | "container",
         resultKey: string,
+        provider?: StructuredOutputProvider,
       ) => AgentToolConnection;
     } = {},
   ) {}
@@ -203,12 +207,14 @@ export abstract class BuildPipelineServiceBase {
   protected workflowAgentMcp(
     pipeline: BuildPipeline,
     resultKey: string,
+    provider?: StructuredOutputProvider,
   ): AgentToolConnection | undefined {
     return this.options.resolveAgentToolConnection?.(
       pipeline.environmentId,
       pipeline.projectId,
       pipeline.environmentType === "local" ? "host" : "container",
       resultKey,
+      provider,
     );
   }
 

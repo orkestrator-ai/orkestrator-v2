@@ -226,6 +226,7 @@ export type OpenCodeFake = {
   createCalls: Array<Record<string, unknown> | undefined>;
   updateCalls: Array<Record<string, unknown>>;
   messageCalls: Array<Record<string, unknown> | undefined>;
+  mcpAddCalls: Array<Record<string, unknown>>;
   promptCalls: Array<Record<string, unknown>>;
   commandDispatchCalls: Array<Record<string, unknown>>;
   commandListCalls: Array<Record<string, unknown> | undefined>;
@@ -290,6 +291,7 @@ export function openCodeFake(): OpenCodeFake {
   const createCalls: Array<Record<string, unknown> | undefined> = [];
   const updateCalls: Array<Record<string, unknown>> = [];
   const messageCalls: Array<Record<string, unknown> | undefined> = [];
+  const mcpAddCalls: Array<Record<string, unknown>> = [];
   const permissionReplies: Array<Record<string, unknown>> = [];
   const promptCalls: Array<Record<string, unknown>> = [];
   const commandDispatchCalls: Array<Record<string, unknown>> = [];
@@ -345,6 +347,12 @@ export function openCodeFake(): OpenCodeFake {
   const sessionGetResponses = new Map<string, Record<string, unknown>>();
 
   const client = {
+    mcp: {
+      async add(parameters: Record<string, unknown>) {
+        mcpAddCalls.push(parameters);
+        return { data: true };
+      },
+    },
     event: {
       async subscribe(_parameters: unknown, options: { signal: AbortSignal }) {
         subscribeCallCount += 1;
@@ -508,6 +516,7 @@ export function openCodeFake(): OpenCodeFake {
     createCalls,
     updateCalls,
     messageCalls,
+    mcpAddCalls,
     get permissionListCallCount() {
       return permissionListCallCount;
     },

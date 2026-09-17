@@ -417,10 +417,10 @@ verification, and consumes an accepted result exactly once.
 | --- | --- | --- |
 | Claude | Qualified | Per-turn `agentMcp`; the restricted review policy admits `mcp__orkestrator-workflow-result__*` and nothing else new |
 | Codex | Qualified | Per-turn `agentMcp` on the pinned bridge |
-| OpenCode | Not qualified | No per-turn MCP attachment; stays on `structured-output-v1` |
-| Cursor | Not qualified | No per-turn MCP attachment; stays on `structured-output-v1` |
-| Grok (ACP) | Not qualified | No per-turn MCP attachment; stays on `structured-output-v1` |
-| Pi | Not qualified | No per-turn MCP attachment; stays on `structured-output-v1` |
+| Cursor | Qualified | Per-turn `agentMcp`; a changed attempt capability re-attaches the SDK session before dispatch |
+| Grok (ACP) | Qualified | Per-turn `agentMcp`; a changed attempt capability re-attaches the ACP session before dispatch |
+| Pi | Qualified | Per-turn `agentMcp`; the bridge-owned MCP client rebuilds its session runtime when the capability changes |
+| OpenCode | Qualified | One directory-scoped workflow-only broker is registered dynamically; every ordinary turn masks all broker tools, a workflow turn exposes only its submit/status pair, and each call still requires the signed one-attempt capability from the trusted prompt |
 
 An unqualified provider is not a degraded path. It runs the legacy transport it
 has always run, with the same validation and the same domain results.

@@ -15,6 +15,11 @@ import {
   OPEN_CODE_MESSAGE_HISTORY_LIMIT,
   type OpenCodeMessageIdCoordinator,
 } from "@orkestrator/protocol/opencode-message-id";
+import {
+  WORKFLOW_RESULT_KINDS,
+  WORKFLOW_RESULT_MCP_SERVER_NAME,
+  workflowResultToolName,
+} from "@orkestrator/protocol/workflow-results";
 import type {
   BridgeConnection,
   ProviderInteractionObservationEvent,
@@ -197,6 +202,51 @@ export const OPENCODE_READ_ONLY_TURN_TOOLS: Readonly<Record<string, boolean>> = 
   webfetch: false,
   websearch: false,
 });
+
+export function openCodeWorkflowResultToolId(toolName: string): string {
+  return `${WORKFLOW_RESULT_MCP_SERVER_NAME}_${toolName}`;
+}
+
+const OPENCODE_WORKFLOW_RESULT_SUBMISSION_TOOLS = new Set(
+  WORKFLOW_RESULT_KINDS.map(workflowResultToolName),
+);
+
+export function isOpenCodeWorkflowResultToolName(toolName: string): boolean {
+  return OPENCODE_WORKFLOW_RESULT_SUBMISSION_TOOLS.has(toolName);
+}
+
+/** Hide the persistent broker by default and expose only this turn's tools. */
+export function openCodeWorkflowResultTurnTools(selectedTool?: string): Record<string, boolean> {
+  const tools = Object.fromEntries(
+    [
+      ...WORKFLOW_RESULT_KINDS.map((kind) =>
+        openCodeWorkflowResultToolId(workflowResultToolName(kind)),
+      ),
+      openCodeWorkflowResultToolId("get_workflow_result_status"),
+    ].map((tool) => [tool, false]),
+  );
+  if (selectedTool) {
+    tools[openCodeWorkflowResultToolId(selectedTool)] = true;
+    tools[openCodeWorkflowResultToolId("get_workflow_result_status")] = true;
+  }
+  return tools;
+}
+
+export function openCodeWorkflowResultPermissionRules(selectedTool: string) {
+  return [selectedTool, "get_workflow_result_status"].map((tool) => ({
+    permission: openCodeWorkflowResultToolId(tool),
+    pattern: "*",
+    action: "allow" as const,
+  }));
+}
+
+export function openCodeWorkflowResultDenyPermissionRules() {
+  return Object.keys(openCodeWorkflowResultTurnTools()).map((permission) => ({
+    permission,
+    pattern: "*",
+    action: "deny" as const,
+  }));
+}
 
 export function effectiveOpenCodePolicy(
   policy: NativeAgentExecutionPolicy,

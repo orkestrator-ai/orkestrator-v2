@@ -1495,7 +1495,7 @@ describe("useNativeAgentSession progressive view", () => {
     expect(result.current.projection?.turn.phase).toBe("idle");
   });
 
-  test("bootstraps a paging cursor when the live tail says earlier messages are not pageable", async () => {
+  test("does not override an incomplete preview the server marks non-pageable", async () => {
     transcriptUpdates = [
       () =>
         truncatedTail("transcript-1", [message("m3"), message("m4")], {
@@ -1504,6 +1504,26 @@ describe("useNativeAgentSession progressive view", () => {
             truncated: true,
             truncationReason: "count",
             canLoadEarlier: false,
+          },
+        }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    expect(result.current.projection?.messageWindow?.truncated).toBe(true);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(false);
+    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
+  });
+
+  test("still bootstraps an incomplete tail when an older server omits pageability", async () => {
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-1", [message("m3"), message("m4")], {
+          messageWindow: {
+            limit: 2,
+            truncated: true,
+            truncationReason: "count",
           },
         }),
     ];
@@ -1519,7 +1539,6 @@ describe("useNativeAgentSession progressive view", () => {
 
     const { result } = renderSession();
     await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
-    expect(result.current.projection?.messageWindow?.truncated).toBe(true);
     expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
 
     await act(async () => {

@@ -1272,11 +1272,20 @@ export function useNativeAgentSession<TMessage = unknown>({
         : pagingCarriesOver && historyBoundaryCursor && !settledHistoryCursor
           ? historyCompleteRef.current
           : value.historyComplete;
+      /*
+       * `historyComplete: false` can describe a short provider preview that is
+       * still hydrating, not an older page. The backend distinguishes that case
+       * with an explicit `canLoadEarlier: false`; overriding it mounts a
+       * transient Virtuoso header that disappears with the hydrated snapshot
+       * and shifts the whole transcript. An omitted flag remains bootstrap-able
+       * for compatibility with older progressive responses.
+       */
       const canBootstrapHistory =
         !historyUnpageableRef.current &&
         !historyBoundaryCursor &&
         !settledHistoryCursor &&
-        (serverCanLoadEarlier || historyComplete === false);
+        (serverCanLoadEarlier ||
+          (historyComplete === false && value.messageWindow?.canLoadEarlier !== false));
       const budget = historyRequestBudget();
       const messageWindow = historyMessageWindow({
         messageCount: messages.length,

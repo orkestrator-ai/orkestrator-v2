@@ -1,3 +1,5 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import * as shared from "./native-agent-service-shared.js";
 import { AGENT_INTERACTION_KINDS } from "@orkestrator/protocol/agent-interactions";
 import {
@@ -80,6 +82,7 @@ import {
   type ProgressiveCacheTier,
   type ProgressiveReadOutcome,
 } from "./native-agent-progressive-metrics.js";
+import { readReadableHostFile } from "./path-safety.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
 type PipelineSessionPhase = shared.PipelineSessionPhase;
 type TaskSnapshotImage = shared.TaskSnapshotImage;
@@ -138,6 +141,66 @@ type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
 type AgentInteractionObservation = shared.AgentInteractionObservation;
 type OpenCodeRecoveryCandidate = shared.OpenCodeRecoveryCandidate;
 type PromptDispatchPreparation = shared.PromptDispatchPreparation;
+
+const IMAGE_MIME_TYPES = new Map([
+  [".png", "image/png"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".gif", "image/gif"],
+  [".webp", "image/webp"],
+  [".avif", "image/avif"],
+  [".svg", "image/svg+xml"],
+  [".bmp", "image/bmp"],
+  [".ico", "image/x-icon"],
+  [".tif", "image/tiff"],
+  [".tiff", "image/tiff"],
+]);
+const READ_TOOL_KEYS = new Set(["read", "readfile", "cursorread", "view", "viewfile"]);
+const READ_TOOL_PATH_KEYS = ["file_path", "filePath", "path", "target_file", "file"] as const;
+
+function localImagePath(reference: unknown): string | undefined {
+  if (typeof reference !== "string" || /[\0\r\n]/.test(reference)) return undefined;
+  let candidate = reference.trim();
+  if (!candidate) return undefined;
+  if (/^file:\/\//i.test(candidate)) {
+    try {
+      candidate = fileURLToPath(candidate);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!path.isAbsolute(candidate) || !IMAGE_MIME_TYPES.has(path.extname(candidate).toLowerCase())) {
+    return undefined;
+  }
+  return candidate;
+}
+
+function providerReportedImagePath(part: Record<string, unknown>): string | undefined {
+  if (part.type === "image") {
+    return (
+      localImagePath(part.fileUrl) ?? localImagePath(part.filename) ?? localImagePath(part.content)
+    );
+  }
+  if (part.type !== "tool-invocation" || part.toolState !== "success") return undefined;
+  const toolKey =
+    typeof part.toolName === "string"
+      ? part.toolName.trim().toLowerCase().replace(/[_-]+/g, "")
+      : "";
+  if (!READ_TOOL_KEYS.has(toolKey)) return undefined;
+  const args =
+    part.toolArgs && typeof part.toolArgs === "object" && !Array.isArray(part.toolArgs)
+      ? (part.toolArgs as Record<string, unknown>)
+      : undefined;
+  for (const key of READ_TOOL_PATH_KEYS) {
+    const candidate = localImagePath(args?.[key]);
+    if (candidate) return candidate;
+  }
+  return localImagePath(part.toolTitle);
+}
+
+function imageMimeType(filePath: string): string {
+  return IMAGE_MIME_TYPES.get(path.extname(filePath).toLowerCase()) ?? "image/png";
+}
 
 function visibleProjectionNotices(
   notices: readonly NativeAgentNotice[] | undefined,
@@ -617,27 +680,44 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
      * Per-entry ceiling. Defaults to the tool-output cap; a deferred image
      * raises it because one attachment legitimately outweighs a tool result.
      */
-    maximumBytes: number = NATIVE_TOOL_DETAIL_MAX_BYTES,
+    options: {
+      maximumBytes?: number;
+      /** Exact path observed in a trusted provider transcript. */
+      localImagePath?: string;
+    } = {},
   ): string {
     const serializedDetails = JSON.stringify(details);
     const detailRef = createHash("sha256")
-      .update(`${sessionKey}\0${messageId}\0${partPath}\0${serializedDetails}`)
+      .update(
+        `${sessionKey}\0${messageId}\0${partPath}\0${serializedDetails}\0${options.localImagePath ?? ""}`,
+      )
       .digest("hex")
       .slice(0, 32);
     let stored: NativeAgentToolDetails = { detailRef, ...details };
-    let bytes = Buffer.byteLength(serializedDetails) + detailRef.length + 32;
-    if (bytes > maximumBytes) {
+    let bytes =
+      Buffer.byteLength(serializedDetails) +
+      Buffer.byteLength(options.localImagePath ?? "") +
+      detailRef.length +
+      32;
+    let storedLocalImagePath = options.localImagePath;
+    if (bytes > (options.maximumBytes ?? NATIVE_TOOL_DETAIL_MAX_BYTES)) {
       stored = {
         detailRef,
         toolError: "Tool details exceeded the deferred display limit.",
       };
+      storedLocalImagePath = undefined;
       bytes = Buffer.byteLength(JSON.stringify(stored));
     }
 
     const previous = this.toolDetailCache.get(detailRef);
     if (previous) this.toolDetailCacheBytes -= previous.bytes;
     this.toolDetailCache.delete(detailRef);
-    this.toolDetailCache.set(detailRef, { sessionKey, details: stored, bytes });
+    this.toolDetailCache.set(detailRef, {
+      sessionKey,
+      details: stored,
+      bytes,
+      ...(storedLocalImagePath ? { localImagePath: storedLocalImagePath } : {}),
+    });
     this.toolDetailCacheBytes += bytes;
     this.pruneToolDetailCache();
     return detailRef;
@@ -669,6 +749,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
     const part = raw as Record<string, unknown>;
     const projected: Record<string, unknown> = { ...part };
+    const deferredImagePath = providerReportedImagePath(part);
     const backgroundTaskId = backgroundTaskIdFromProjectedLaunch(part);
     if (backgroundTaskId) projected.backgroundTaskId = backgroundTaskId;
 
@@ -707,7 +788,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           messageId,
           partPath,
           { fileDataUrl: inlineFileUrl },
-          NATIVE_FILE_DETAIL_MAX_BYTES,
+          { maximumBytes: NATIVE_FILE_DETAIL_MAX_BYTES },
         );
       }
       /*
@@ -754,6 +835,18 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           ...(hasHeavyDiff ? { deferred: true } : {}),
         };
       }
+    }
+
+    if (deferredImagePath) {
+      const imageDetailRef = this.cacheToolDetails(
+        sessionKey,
+        messageId,
+        `${partPath}/image`,
+        {},
+        { localImagePath: deferredImagePath },
+      );
+      if (part.type === "tool-invocation") projected.imageDetailRef = imageDetailRef;
+      else if (part.type === "image") projected.detailRef = imageDetailRef;
     }
 
     for (const field of ["parts", "childTools", "subagentActions"] as const) {
@@ -2549,7 +2642,19 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
     this.toolDetailCache.delete(input.detailRef);
     this.toolDetailCache.set(input.detailRef, entry);
-    return entry.details;
+    if (!entry.localImagePath) return entry.details;
+
+    // The renderer presents only the opaque, session-scoped reference. The
+    // path came from the provider transcript and cannot be replaced by the
+    // caller, so this grants one exact lazy read instead of widening a shared
+    // directory such as /tmp into a renderer-readable root.
+    const bytes = await readReadableHostFile(entry.localImagePath, [
+      path.dirname(entry.localImagePath),
+    ]);
+    return {
+      ...entry.details,
+      fileDataUrl: `data:${imageMimeType(entry.localImagePath)};base64,${bytes.toString("base64")}`,
+    };
   }
 
   /**

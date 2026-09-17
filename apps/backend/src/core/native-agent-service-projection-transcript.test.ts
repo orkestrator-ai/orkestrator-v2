@@ -3,6 +3,9 @@
  * byte bounds, expandable tool details, and background-task cards.
  */
 import { describe, expect, mock, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { nativeAsyncQuestionRequestId } from "@orkestrator/protocol/native-agent";
 
@@ -14,8 +17,134 @@ import {
 
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { normalizeOpenCodeInteractiveMessage } from "./opencode-messages.js";
+import { adaptAppServerItem } from "../../../../bridges/codex-bridge/src/app-server/item-adapter.js";
+import { itemToParts } from "../../../../bridges/codex-bridge/src/messages/normalization.js";
 
 describe("NativeAgentService transcript projection", () => {
+  test("turns provider-reported temp images into exact session-scoped lazy reads", async () => {
+    const temporaryDirectory = await fs.mkdtemp(
+      path.join(os.tmpdir(), "orkestrator-native-temp-images-"),
+    );
+    try {
+      const canonicalDirectory = await fs.realpath(temporaryDirectory);
+      const extensions = [
+        "png",
+        "jpg",
+        "jpeg",
+        "gif",
+        "webp",
+        "avif",
+        "svg",
+        "bmp",
+        "ico",
+        "tif",
+        "tiff",
+      ];
+      const imagePaths = extensions.map((extension) =>
+        path.join(canonicalDirectory, `preview.${extension}`),
+      );
+      await Promise.all(
+        imagePaths.map((imagePath, index) => fs.writeFile(imagePath, `image-${index}`)),
+      );
+
+      // Start with a real app-server imageView and carry it through the bridge's
+      // item adapter and normalized transcript shape before the backend sees it.
+      const adapted = adaptAppServerItem({
+        id: "image-view-svg",
+        type: "imageView",
+        path: imagePaths[6],
+      });
+      expect(adapted.item).not.toBeNull();
+      const normalizedImage = await itemToParts(adapted.item!, canonicalDirectory);
+      const parts = [
+        ...normalizedImage,
+        ...imagePaths
+          .filter((candidate) => candidate !== imagePaths[6])
+          .map((candidate) => ({
+            type: "image",
+            content: path.basename(candidate),
+            fileUrl: `file://${candidate}`,
+            filename: candidate,
+            imageSource: "viewed",
+          })),
+        {
+          type: "tool-invocation",
+          content: "Read",
+          toolName: "Read",
+          toolState: "success",
+          toolArgs: { file_path: imagePaths[0] },
+        },
+        {
+          type: "image",
+          content: "decoy.png.txt",
+          fileUrl: `file://${path.join(canonicalDirectory, "decoy.png.txt")}`,
+          imageSource: "viewed",
+        },
+      ];
+      const messages = [
+        {
+          id: "assistant-temp-images",
+          role: "assistant" as const,
+          content: "",
+          parts,
+          createdAt: "2026-09-17T10:00:00.000Z",
+        },
+      ];
+      const stub = createProviderStub("codex", {
+        interactiveSnapshot: async () => ({ status: "idle", messages }),
+      });
+
+      await withService(
+        {
+          prefix: "orkestrator-native-temp-image-capability-",
+          provider: async () => stub.provider,
+        },
+        async ({ service }) => {
+          const owner = {
+            environmentId: "env-1",
+            agent: "codex" as const,
+            logicalSessionKey: "env-env-1:tab-temp-images",
+          };
+          const other = { ...owner, logicalSessionKey: "env-env-1:tab-other" };
+          await service.ensureSession(owner);
+          await service.ensureSession(other);
+          const projection = await service.getProjection(owner);
+          const projected = (projection!.messages[0] as { parts: Array<Record<string, unknown>> })
+            .parts;
+          const imageParts = projected.slice(0, extensions.length);
+          expect(imageParts.every((part) => typeof part.detailRef === "string")).toBe(true);
+          expect(projected[extensions.length]?.imageDetailRef).toBeString();
+          expect(projected.at(-1)?.detailRef).toBeUndefined();
+
+          const svgPart = imageParts.find((part) => part.filename === imagePaths[6]);
+          const svgDetails = await service.getProjectionToolDetails({
+            ...owner,
+            detailRef: svgPart!.detailRef as string,
+          });
+          expect(svgDetails.fileDataUrl).toBe(
+            `data:image/svg+xml;base64,${Buffer.from("image-6").toString("base64")}`,
+          );
+
+          const readDetails = await service.getProjectionToolDetails({
+            ...owner,
+            detailRef: projected[extensions.length]!.imageDetailRef as string,
+          });
+          expect(readDetails.fileDataUrl).toBe(
+            `data:image/png;base64,${Buffer.from("image-0").toString("base64")}`,
+          );
+          await expect(
+            service.getProjectionToolDetails({
+              ...other,
+              detailRef: svgPart!.detailRef as string,
+            }),
+          ).rejects.toThrow("no longer available");
+        },
+      );
+    } finally {
+      await fs.rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
   test("defers an OpenCode edit body while keeping its path and counts projected", async () => {
     // This is the persisted-transcript path a user sees on reload: an OpenCode
     // edit is normalized, then the projection moves its heavy diff body behind a

@@ -557,12 +557,62 @@ describe("backend command I/O coverage", () => {
       Buffer.from("profile-image").toString("base64"),
     );
 
-    const outsideFile = path.join(path.dirname(profileWorktrees), "outside-profile.png");
+    const outsideFile = path.join(path.dirname(profileWorktrees), "outside-profile.bin");
     await fs.writeFile(outsideFile, "private");
     await expect(
       commands.get("read_file_base64")?.({ filePath: outsideFile }, context),
     ).rejects.toThrow("file is outside Orkestrator workspace storage");
   });
+
+  test("does not widen generic reads to image-named files in shared temporary storage", async () => {
+    const temporaryDirectory = await createTempDir("ork-temp-image-preview-");
+    const commands = createCommandRegistry();
+    const context = {
+      ...createContext(),
+      worktreeDir: await createTempDir("ork-temp-image-worktrees-"),
+    };
+    const extensions = [
+      "png",
+      "jpg",
+      "jpeg",
+      "gif",
+      "webp",
+      "avif",
+      "svg",
+      "bmp",
+      "ico",
+      "tif",
+      "tiff",
+    ];
+    for (const extension of [...extensions, "png.txt"]) {
+      const imagePath = path.join(temporaryDirectory, `unregistered.${extension}`);
+      await fs.writeFile(imagePath, Buffer.from("unregistered-temporary-file"));
+      await expect(
+        commands.get("read_file_base64")?.({ filePath: imagePath }, context),
+      ).rejects.toThrow("file is outside Orkestrator workspace storage");
+    }
+
+    const canonicalDirectory = await fs.realpath(temporaryDirectory);
+    await expect(
+      commands.get("read_file_base64")?.(
+        { filePath: path.join(canonicalDirectory, "unregistered.png") },
+        context,
+      ),
+    ).rejects.toThrow("file is outside Orkestrator workspace storage");
+  });
+
+  test("rejects an image-named FIFO promptly without waiting for a writer", async () => {
+    if (process.platform === "win32") return;
+    const workspaceStorage = path.join(os.homedir(), APP_SLUG, "workspaces");
+    const allowedRoot = await createTempDir("commands-io-fifo-", workspaceStorage);
+    const fifoPath = path.join(allowedRoot, "blocked.png");
+    await runCommand("mkfifo", [fifoPath]);
+    const commands = createCommandRegistry();
+
+    await expect(
+      commands.get("read_file_base64")?.({ filePath: fifoPath }, createContext()),
+    ).rejects.toThrow("not a stable regular file");
+  }, 2_000);
 
   test("container base64 reader uses one bounded no-follow file snapshot", async () => {
     const directory = await createTempDir("ork-container-reader-");

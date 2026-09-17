@@ -168,6 +168,7 @@ function ImageReadPreview({
           type: "image",
           content: imageRead.path,
           fileUrl: imageRead.fileUrl,
+          detailRef: imageRead.detailRef,
           filename: imageRead.filename,
           imageSource: "viewed",
         }}

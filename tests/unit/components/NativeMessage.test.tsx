@@ -610,9 +610,9 @@ describe("NativeMessage", () => {
   });
 
   test("drops a recovered preview whose host read the backend refuses", async () => {
-    // `read_file_base64` is confined to the worktree base directory and will
-    // not traverse a symbolic link, so an absolute path is not proof of a
-    // readable file. The tool row must be what survives, not a red badge.
+    // `read_file_base64` is confined to workspace storage and will not traverse
+    // a symbolic link, so an absolute path is not proof of a readable file. The
+    // tool row must be what survives, not a red badge.
     mockReadFileBase64.mockImplementation(async () => {
       throw new Error("Invalid file path: file is outside Orkestrator workspace storage");
     });
@@ -627,7 +627,7 @@ describe("NativeMessage", () => {
           content: "Read",
           toolName: "Read",
           toolState: "success",
-          toolArgs: { file_path: "/tmp/outside.png" },
+          toolArgs: { file_path: "/Users/ada/Downloads/outside.png" },
         },
       ],
     };
@@ -635,7 +635,7 @@ describe("NativeMessage", () => {
     render(<NativeMessage message={message} />);
 
     await waitFor(() => {
-      expect(mockReadFileBase64).toHaveBeenCalledWith("/tmp/outside.png");
+      expect(mockReadFileBase64).toHaveBeenCalledWith("/Users/ada/Downloads/outside.png");
     });
     await waitFor(() => {
       expect(screen.queryByText("Image read") === null).toBe(true);
@@ -645,6 +645,53 @@ describe("NativeMessage", () => {
     expect(screen.queryByText("preview unavailable") === null).toBe(true);
     // The call itself is still reported; only the picture went away.
     expect(screen.getAllByText("Read").length > 0).toBe(true);
+  });
+
+  test("renders a provider-registered temp image read through its scoped detail", async () => {
+    const loadToolDetails = mock(async (detailRef: string) => ({
+      detailRef,
+      fileDataUrl: "data:image/png;base64,registered-temp-image",
+    }));
+    const message: NativeMessageType = {
+      id: "msg-host-image-read-registered-temp",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-09-17T10:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Read",
+          toolName: "Read",
+          toolState: "success",
+          toolArgs: { file_path: "/private/tmp/codex-view.png" },
+          imageDetailRef: "registered-temp-preview",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} loadToolDetails={loadToolDetails} />);
+
+    const thumbnail = await screen.findByAltText("Thumbnail: codex-view.png");
+    expect(thumbnail.getAttribute("src")).toBe("data:image/png;base64,registered-temp-image");
+    expect(loadToolDetails).toHaveBeenCalledWith("registered-temp-preview");
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+  });
+
+  test("loads a host image from a Windows drive-letter path", async () => {
+    const message: NativeMessageType = {
+      id: "msg-host-windows-image",
+      role: "user",
+      content: "",
+      createdAt: "2026-09-17T10:00:00.000Z",
+      parts: [{ type: "file", content: "C:\\Users\\Ada\\AppData\\Local\\Temp\\shot.png" }],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    expect(await screen.findByAltText("Thumbnail: shot.png")).toBeTruthy();
+    expect(mockReadFileBase64).toHaveBeenCalledWith(
+      "C:\\Users\\Ada\\AppData\\Local\\Temp\\shot.png",
+    );
   });
 
   test("does not re-read a recovered preview that already failed once", async () => {
@@ -664,7 +711,7 @@ describe("NativeMessage", () => {
           content: "Read",
           toolName: "Read",
           toolState: "success",
-          toolArgs: { file_path: "/tmp/outside-twice.png" },
+          toolArgs: { file_path: "/Users/ada/Downloads/outside-twice.png" },
         },
       ],
     };

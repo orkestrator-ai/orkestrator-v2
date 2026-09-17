@@ -29,6 +29,8 @@ export interface ImageRead {
   filename: string;
   /** Same path, or the URL form when the argument already was one. */
   fileUrl: string;
+  /** Session-scoped backend capability for this exact provider-reported path. */
+  detailRef?: string;
 }
 
 /**
@@ -40,6 +42,7 @@ export interface ImageRead {
  * to grow its own `imageView`.
  */
 export function imageReadFromToolPart(part: {
+  imageDetailRef?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolTitle?: string;
@@ -56,7 +59,12 @@ export function imageReadFromToolPart(part: {
   if (!path) return null;
 
   const filename = path.split(/[?#]/)[0]?.split(/[\\/]/).pop() || path;
-  return { path, filename, fileUrl: path };
+  return {
+    path,
+    filename,
+    fileUrl: path,
+    ...(part.imageDetailRef ? { detailRef: part.imageDetailRef } : {}),
+  };
 }
 
 function readToolImagePath(args?: Record<string, unknown>): string | undefined {

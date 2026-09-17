@@ -53,6 +53,22 @@ describe("imageReadFromToolPart", () => {
     ).toEqual({ path: "/workspace/d.gif", filename: "d.gif", fileUrl: "/workspace/d.gif" });
   });
 
+  test("carries a backend image capability with the recovered preview", () => {
+    expect(
+      imageReadFromToolPart({
+        toolName: "Read",
+        toolState: "success",
+        toolArgs: { file_path: "/tmp/a.png" },
+        imageDetailRef: "image-capability",
+      }),
+    ).toEqual({
+      path: "/tmp/a.png",
+      filename: "a.png",
+      fileUrl: "/tmp/a.png",
+      detailRef: "image-capability",
+    });
+  });
+
   test("does not treat a display title as a path", () => {
     expect(
       imageReadFromToolPart({

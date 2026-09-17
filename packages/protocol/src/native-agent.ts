@@ -1369,12 +1369,14 @@ export interface NativeAgentToolDetails {
   toolOutput?: string;
   toolError?: string;
   /**
-   * An inline `data:` URL for an image whose message carries no readable path.
+   * An inline `data:` URL for image bytes resolved on demand.
    *
    * `projectionPart` strips a `fileUrl` that names a staged workspace file, but
    * a provider that persists the bytes inline (OpenCode's pasted attachments)
    * has no path to re-read. Moving the bytes here keeps them out of every live
-   * transcript read and lets the renderer fetch the image on demand.
+   * transcript read and lets the renderer fetch the image on demand. The same
+   * field carries a provider-reported local image after the backend resolves
+   * its opaque, session-scoped exact-path reference.
    */
   fileDataUrl?: string;
   toolDiff?: {

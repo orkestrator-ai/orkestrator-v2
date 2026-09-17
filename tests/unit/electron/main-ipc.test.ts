@@ -61,6 +61,10 @@ function createHarness(
   const shellApi = {
     openExternal: mock(async () => undefined),
   };
+  const getMacOsPermissions = mock(async () => ({
+    supported: true,
+    missing: [],
+  }));
   const webClientStatus = {
     enabled: true,
     running: true,
@@ -134,6 +138,7 @@ function createHarness(
     shellApi,
     appApi,
     nativeImageApi: nativeImage,
+    getMacOsPermissions,
     getWebClientStatus,
     setWebClientEnabled,
     resetWebClientServe,
@@ -188,6 +193,7 @@ function createHarness(
     appApi,
     dialogApi,
     shellApi,
+    getMacOsPermissions,
     getWebClientStatus,
     setWebClientEnabled,
     resetWebClientServe,
@@ -235,6 +241,16 @@ describe("main IPC registration", () => {
 
     await harness.invoke("orkestrator:shell:open-external", "https://example.com/docs");
     expect(harness.shellApi.openExternal).toHaveBeenCalledWith("https://example.com/docs");
+
+    await expect(harness.invoke("orkestrator:permissions:macos-status")).resolves.toEqual({
+      supported: true,
+      missing: [],
+    });
+    expect(harness.getMacOsPermissions).toHaveBeenCalledTimes(1);
+    await harness.invoke("orkestrator:permissions:open-macos-settings", "full-disk-access");
+    expect(harness.shellApi.openExternal).toHaveBeenCalledWith(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+    );
 
     await harness.invoke("orkestrator:process:exit", 7);
     expect(harness.appApi.exit).toHaveBeenCalledWith(7);
@@ -305,6 +321,18 @@ describe("main IPC registration", () => {
       );
     }
     expect(harness.shellApi.openExternal).not.toHaveBeenCalled();
+  });
+
+  test("only opens known macOS privacy settings panes", async () => {
+    const harness = createHarness();
+
+    await harness.invoke("orkestrator:permissions:open-macos-settings", "files-and-folders");
+    expect(harness.shellApi.openExternal).toHaveBeenCalledWith(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders",
+    );
+    await expect(
+      harness.invoke("orkestrator:permissions:open-macos-settings", "Privacy_Camera"),
+    ).rejects.toThrow("Expected a macOS privacy settings pane");
   });
 
   test("validates zoom factors and reports a missing main window", async () => {

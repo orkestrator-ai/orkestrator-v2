@@ -1419,6 +1419,59 @@ describe("App Docker availability", () => {
     mock.restore();
   });
 
+  test("resolves macOS filesystem permissions before checking Docker", async () => {
+    const originalOrkestrator = window.orkestrator;
+    const getMacOsStatus = mock()
+      .mockImplementationOnce(async () => ({
+        supported: true,
+        missing: [
+          {
+            id: "full-disk-access" as const,
+            label: "Full Disk Access",
+            settingsPane: "full-disk-access" as const,
+          },
+          {
+            id: "documents" as const,
+            label: "Documents folder",
+            settingsPane: "files-and-folders" as const,
+          },
+        ],
+      }))
+      .mockImplementationOnce(async () => ({ supported: true, missing: [] }));
+    const openMacOsSettings = mock(async () => undefined);
+    window.orkestrator = {
+      permissions: { getMacOsStatus, openMacOsSettings },
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor: async () => false,
+      },
+    } as unknown as NonNullable<Window["orkestrator"]>;
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      expect(await screen.findByText("macOS Permissions Required")).toBeTruthy();
+      expect(screen.getByText("Full Disk Access")).toBeTruthy();
+      expect(screen.getByText("Documents folder")).toBeTruthy();
+      expect(mockCheckDocker).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: "Open Full Disk Access Settings" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open Files & Folders Settings" }));
+      await waitFor(() => {
+        expect(openMacOsSettings).toHaveBeenCalledWith("full-disk-access");
+        expect(openMacOsSettings).toHaveBeenCalledWith("files-and-folders");
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Check Again" }));
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      expect(getMacOsStatus).toHaveBeenCalledTimes(2);
+    } finally {
+      cleanup();
+      window.orkestrator = originalOrkestrator;
+    }
+  });
+
   test("retry rechecks Docker and syncs environments after Docker becomes available", async () => {
     // Startup: Docker unavailable. Retry: Docker now available.
     mockCheckDocker.mockImplementationOnce(async () => false);

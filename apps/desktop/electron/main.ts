@@ -13,6 +13,7 @@ import {
   WebContentsView,
 } from "electron";
 import path from "node:path";
+import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { LOCAL_CONNECTION_ID } from "@orkestrator/protocol/connections";
@@ -64,6 +65,7 @@ import {
   DesktopWindowSlotAllocator,
   rendererPartitionForWindow,
 } from "./desktop-window-lifecycle.js";
+import { probeMacOsPermissions } from "./macos-permissions.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -338,6 +340,7 @@ function registerIpc(): void {
     shellApi: shell,
     appApi: app,
     nativeImageApi: nativeImage,
+    getMacOsPermissions: () => probeMacOsPermissions({ homeDirectory: os.homedir() }),
     listConnections: (event) => manager().getList(scopeForEvent(event)),
     probeConnection: (connectionId) => {
       return manager().probe(connectionId);

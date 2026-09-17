@@ -29,6 +29,7 @@
     "./github-repository": "./src/github-repository.ts",
     "./host-test-scheduler": "./src/host-test-scheduler.ts",
     "./initial-prompt-attachments": "./src/initial-prompt-attachments.ts",
+    "./macos-permissions": "./src/macos-permissions.ts",
     "./model-id": "./src/model-id.ts",
     "./multi-review": "./src/multi-review.ts",
     "./native-agent": "./src/native-agent.ts",

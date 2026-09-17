@@ -67,6 +67,10 @@ import type {
   DockerUnavailableReason,
 } from "@orkestrator/protocol/docker-availability";
 import type { ConnectionList } from "@orkestrator/protocol/connections";
+import type {
+  MacOsPermissionsStatus,
+  MacOsPrivacySettingsPane,
+} from "@orkestrator/protocol/macos-permissions";
 import { subscribeToConnections } from "@/lib/connections";
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
@@ -184,6 +188,12 @@ function App() {
   const [dockerWarningDismissed, setDockerWarningDismissed] = useState(false);
   const dockerAvailableRef = useRef<boolean | null>(null);
   const dockerCheckInFlightRef = useRef<Promise<boolean> | null>(null);
+  const [macOsPermissions, setMacOsPermissions] = useState<MacOsPermissionsStatus | null>(() =>
+    window.orkestrator?.permissions ? null : { supported: false, missing: [] },
+  );
+  const [isCheckingMacOsPermissions, setIsCheckingMacOsPermissions] = useState(
+    Boolean(window.orkestrator?.permissions),
+  );
 
   // Initialize centralized PR monitoring service
   usePrMonitorService();
@@ -307,6 +317,34 @@ function App() {
   const selectedEnvironment = selectedEnvironmentId
     ? (environments.find((env) => env.id === selectedEnvironmentId) ?? null)
     : null;
+  const refreshMacOsPermissions = useCallback(async () => {
+    const permissionsApi = window.orkestrator?.permissions;
+    if (!permissionsApi) {
+      setMacOsPermissions({ supported: false, missing: [] });
+      return;
+    }
+
+    setIsCheckingMacOsPermissions(true);
+    try {
+      setMacOsPermissions(await permissionsApi.getMacOsStatus());
+    } catch (error) {
+      // A broken platform probe must not strand browser clients or older
+      // desktop builds behind an actionless startup screen.
+      console.error("[App] Failed to check macOS file permissions:", error);
+      setMacOsPermissions({ supported: false, missing: [] });
+    } finally {
+      setIsCheckingMacOsPermissions(false);
+    }
+  }, []);
+  const macOsPermissionsReady =
+    macOsPermissions !== null &&
+    (!macOsPermissions.supported || macOsPermissions.missing.length === 0);
+
+  useEffect(() => {
+    if (!window.orkestrator?.permissions) return;
+    void refreshMacOsPermissions();
+  }, [refreshMacOsPermissions]);
+
   const refreshDockerAvailability = useCallback(async (source: "startup" | "retry" | "poll") => {
     if (dockerCheckInFlightRef.current) return dockerCheckInFlightRef.current;
 
@@ -364,22 +402,24 @@ function App() {
 
   // Check Docker availability on startup and sync environments
   useEffect(() => {
+    if (!macOsPermissionsReady) return;
     const initDocker = async () => {
       await refreshDockerAvailability("startup");
     };
 
     void initDocker();
-  }, [refreshDockerAvailability]);
+  }, [macOsPermissionsReady, refreshDockerAvailability]);
 
   // Docker can be started or stopped while Orkestrator remains open. Keep the
   // shared capability state fresh in both directions without overlapping a
   // slow daemon probe.
   useEffect(() => {
+    if (!macOsPermissionsReady) return;
     const interval = window.setInterval(() => {
       void refreshDockerAvailability("poll");
     }, DOCKER_AVAILABILITY_POLL_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [refreshDockerAvailability]);
+  }, [macOsPermissionsReady, refreshDockerAvailability]);
 
   // Dismissing an outage should last for that outage. Once Docker recovers, a
   // later outage is new information and should warn the user again.
@@ -443,6 +483,16 @@ function App() {
       await refreshDockerAvailability("retry");
     } finally {
       setIsCheckingDocker(false);
+    }
+  };
+
+  const handleOpenMacOsSettings = async (pane: MacOsPrivacySettingsPane) => {
+    try {
+      await window.orkestrator?.permissions?.openMacOsSettings(pane);
+    } catch (error) {
+      toast.error("Could not open System Settings", {
+        description: error instanceof Error ? error.message : String(error),
+      });
     }
   };
 
@@ -870,8 +920,111 @@ function App() {
         <Toaster />
         <ErrorDetailsDialog />
 
+        {/* macOS privacy access is resolved before any Docker probe starts. */}
+        {!macOsPermissionsReady && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background px-6">
+            {macOsPermissions === null ? (
+              <div className="flex flex-col items-center gap-4 text-center">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <div>
+                  <h1 className="text-lg font-semibold">Checking macOS file access...</h1>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    This prevents permission prompts from interrupting agent work later.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="w-full max-w-2xl rounded-xl border bg-card p-8 shadow-2xl">
+                <div className="mb-6">
+                  <p className="mb-2 text-xs font-semibold tracking-widest text-primary uppercase">
+                    Setup required
+                  </p>
+                  <h1 className="text-2xl font-semibold">macOS Permissions Required</h1>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    Orkestrator needs access before agents search your home directory or the wider
+                    filesystem. Grant the permissions below now to avoid macOS interrupting a run.
+                  </p>
+                </div>
+
+                <ul className="mb-6 space-y-2" aria-label="Missing macOS permissions">
+                  {macOsPermissions.missing.map((permission) => (
+                    <li
+                      key={permission.id}
+                      className="flex items-center justify-between gap-4 rounded-lg border bg-muted/40 px-4 py-3"
+                    >
+                      <span className="font-medium">{permission.label}</span>
+                      <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                        Not granted
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+
+                <p className="mb-5 text-sm leading-6 text-muted-foreground">
+                  In System Settings, enable Orkestrator in the indicated Privacy &amp; Security
+                  pane. Full Disk Access is required for searches that begin at the filesystem root.
+                  Return here afterward and check again. macOS may require an app restart before a
+                  new Full Disk Access grant takes effect.
+                </p>
+
+                <div className="flex flex-wrap justify-end gap-2">
+                  {macOsPermissions.missing.some(
+                    (permission) => permission.settingsPane === "files-and-folders",
+                  ) && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void handleOpenMacOsSettings("files-and-folders")}
+                    >
+                      Open Files &amp; Folders Settings
+                    </Button>
+                  )}
+                  {macOsPermissions.missing.some(
+                    (permission) => permission.settingsPane === "full-disk-access",
+                  ) && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void handleOpenMacOsSettings("full-disk-access")}
+                    >
+                      Open Full Disk Access Settings
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    onClick={() => void refreshMacOsPermissions()}
+                    disabled={isCheckingMacOsPermissions}
+                  >
+                    {isCheckingMacOsPermissions ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Checking...
+                      </>
+                    ) : (
+                      "Check Again"
+                    )}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      void restart().catch((error) => {
+                        toast.error("Could not restart Orkestrator", {
+                          description: error instanceof Error ? error.message : String(error),
+                        });
+                      });
+                    }}
+                  >
+                    Restart App
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Loading overlay while checking Docker */}
-        {dockerAvailable === null && (
+        {macOsPermissionsReady && dockerAvailable === null && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
             <div className="flex flex-col items-center gap-4">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />

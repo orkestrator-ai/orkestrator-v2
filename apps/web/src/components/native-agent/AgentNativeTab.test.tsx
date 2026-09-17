@@ -4,8 +4,10 @@
  * Every provider exercises the shared authoritative-projection path.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { StrictMode, useEffect, type ReactNode } from "react";
+import { isValidElement, memo, StrictMode, useEffect, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { NativeMessage as NativeMessageCard } from "@/components/chat/NativeMessage";
+import type { NativeMessageProps } from "@/components/chat/NativeMessage.shared";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
@@ -66,6 +68,18 @@ const realPaneLayoutPersistenceSnapshot = { ...realPaneLayoutPersistence };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 const realNativeComposeBarPasteSnapshot = { ...realNativeComposeBarPaste };
 let renderVirtualizedMessages = false;
+let virtualizedMessageListRenderCount = 0;
+let latestRenderedMessageActions = new Map<string, ReactNode>();
+let nativeMessageRenderCounts = new Map<string, number>();
+const InstrumentedNativeMessage = memo(function InstrumentedNativeMessage(
+  props: NativeMessageProps,
+) {
+  nativeMessageRenderCounts.set(
+    props.message.id,
+    (nativeMessageRenderCounts.get(props.message.id) ?? 0) + 1,
+  );
+  return <NativeMessageCard {...props} />;
+});
 let latestTranscriptAnnotationProps:
   | {
       enabled: boolean;
@@ -77,28 +91,39 @@ let latestTranscriptAnnotationProps:
 mock.module("@/components/chat/VirtualizedMessageList", () => ({
   ...realVirtualizedMessageListSnapshot,
   VirtualizedMessageList: (props: any) => {
+    virtualizedMessageListRenderCount += 1;
     latestTranscriptAnnotationProps = props.annotation;
     if (!renderVirtualizedMessages) {
       const RealVirtualizedMessageList = realVirtualizedMessageListSnapshot.VirtualizedMessageList;
       return <RealVirtualizedMessageList {...props} />;
     }
+    latestRenderedMessageActions = new Map();
+    const renderedMessages = props.messages.map((message: NativeMessage, index: number) => {
+      const rendered = props.renderMessage(
+        index,
+        message,
+        props.resolvePreviousMessage
+          ? props.resolvePreviousMessage(props.messages, index)
+          : index > 0
+            ? props.messages[index - 1]
+            : null,
+      );
+      latestRenderedMessageActions.set(
+        message.id,
+        isValidElement<{ actions?: ReactNode }>(rendered) ? rendered.props.actions : undefined,
+      );
+      const counted = isValidElement(rendered) ? (
+        <InstrumentedNativeMessage {...(rendered.props as NativeMessageProps)} />
+      ) : (
+        rendered
+      );
+      return <div key={props.computeItemKey(index, message)}>{counted}</div>;
+    });
     return (
       <div data-testid="native-agent-transcript-test-list">
         {props.header}
         {props.messages.length === 0 ? props.emptyState : null}
-        {props.messages.map((message: NativeMessage, index: number) => (
-          <div key={props.computeItemKey(index, message)}>
-            {props.renderMessage(
-              index,
-              message,
-              props.resolvePreviousMessage
-                ? props.resolvePreviousMessage(props.messages, index)
-                : index > 0
-                  ? props.messages[index - 1]
-                  : null,
-            )}
-          </div>
-        ))}
+        {renderedMessages}
         {props.footer}
       </div>
     );
@@ -420,6 +445,9 @@ afterEach(() => {
   saveComposeDraftMock.mockClear();
   deleteComposeDraftMock.mockClear();
   composeDraftRecords.clear();
+  virtualizedMessageListRenderCount = 0;
+  latestRenderedMessageActions = new Map();
+  nativeMessageRenderCounts = new Map();
   latestPasteOptions = null;
   useEnvironmentStore.setState({ environments: [] });
   useConfigStore.getState().updateGlobalConfig({
@@ -6797,6 +6825,134 @@ describe("AgentNativeTab", () => {
         generation: "test-generation",
       }));
     }
+
+    test("keeps existing transcript actions stable across unrelated controller renders", async () => {
+      renderVirtualizedMessages = true;
+      const tabId = "tab-stable-transcript-actions";
+      const sessionKey = createSessionKey("env-1", tabId);
+      seedProjection({
+        phase: "running",
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: "Inspect the renderer",
+            parts: [{ type: "text", content: "Inspect the renderer" }],
+            createdAt: "2026-08-14T10:00:00.000Z",
+          },
+          {
+            id: "assistant-1",
+            role: "assistant",
+            content: "I am checking it.",
+            parts: [{ type: "text", content: "I am checking it." }],
+            createdAt: "2026-08-14T10:00:01.000Z",
+          },
+        ],
+      });
+      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+
+      await waitFor(() => expect(latestRenderedMessageActions.get("user-1")).toBeTruthy());
+      const firstAction = latestRenderedMessageActions.get("user-1");
+      const firstRenderCount = virtualizedMessageListRenderCount;
+      const firstUserRenders = nativeMessageRenderCounts.get("user-1");
+      const firstAssistantRenders = nativeMessageRenderCounts.get("assistant-1");
+
+      // Draft edits re-render the controller without touching displayMessages.
+      // Already-painted rows must keep their action element *and* skip
+      // NativeMessage so a later change that churns some other controller prop
+      // cannot restore the flicker while this identity check still passes.
+      act(() => {
+        useNativeComposeStore.getState().updateDraft(sessionKey, { text: "A draft update" });
+      });
+      await waitFor(() =>
+        expect(virtualizedMessageListRenderCount).toBeGreaterThan(firstRenderCount),
+      );
+
+      expect(latestRenderedMessageActions.get("user-1")).toBe(firstAction);
+      expect(nativeMessageRenderCounts.get("user-1")).toBe(firstUserRenders);
+      expect(nativeMessageRenderCounts.get("assistant-1")).toBe(firstAssistantRenders);
+    });
+
+    test("keeps earlier transcript rows stable while a new tool call streams", async () => {
+      renderVirtualizedMessages = true;
+      const tabId = "tab-stable-transcript-stream";
+      const sessionKey = createSessionKey("env-1", tabId);
+      seedProjection({
+        phase: "running",
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: "Inspect the renderer",
+            parts: [{ type: "text", content: "Inspect the renderer" }],
+            createdAt: "2026-08-14T10:00:00.000Z",
+          },
+          {
+            id: "assistant-1",
+            role: "assistant",
+            content: "I am checking it.",
+            parts: [{ type: "text", content: "I am checking it." }],
+            createdAt: "2026-08-14T10:00:01.000Z",
+            turnId: "turn-1",
+          },
+          {
+            id: "assistant-2",
+            role: "assistant",
+            content: "Still looking.",
+            parts: [{ type: "text", content: "Still looking." }],
+            createdAt: "2026-08-14T10:00:02.000Z",
+            turnId: "turn-1",
+          },
+        ],
+      });
+      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+
+      await waitFor(() => expect(latestRenderedMessageActions.get("user-1")).toBeTruthy());
+      await waitFor(() => expect(latestRenderedMessageActions.get("assistant-1")).toBeTruthy());
+      const firstUserAction = latestRenderedMessageActions.get("user-1");
+      const firstAssistantAction = latestRenderedMessageActions.get("assistant-1");
+      const firstRenderCount = virtualizedMessageListRenderCount;
+      const firstUserRenders = nativeMessageRenderCounts.get("user-1");
+      const firstAssistantRenders = nativeMessageRenderCounts.get("assistant-1");
+
+      // A streaming tool row rebuilds forkPlan and renderMessageActions. Earlier
+      // rows stay skippable only if renderForkAction's cache — and every other
+      // NativeMessage prop — survives that frame.
+      const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+      act(() => {
+        useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+          ...current,
+          revision: current.revision + 1,
+          messages: [
+            ...current.messages,
+            {
+              id: "assistant-tool-1",
+              role: "assistant",
+              content: "",
+              parts: [
+                {
+                  type: "tool-invocation",
+                  content: "Read",
+                  toolName: "Read",
+                  toolUseId: "tool-read-1",
+                  toolState: "pending",
+                },
+              ],
+              createdAt: "2026-08-14T10:00:03.000Z",
+            },
+          ],
+        });
+      });
+      await waitFor(() =>
+        expect(virtualizedMessageListRenderCount).toBeGreaterThan(firstRenderCount),
+      );
+      await waitFor(() => expect(latestRenderedMessageActions.has("assistant-tool-1")).toBe(true));
+
+      expect(latestRenderedMessageActions.get("user-1")).toBe(firstUserAction);
+      expect(latestRenderedMessageActions.get("assistant-1")).toBe(firstAssistantAction);
+      expect(nativeMessageRenderCounts.get("user-1")).toBe(firstUserRenders);
+      expect(nativeMessageRenderCounts.get("assistant-1")).toBe(firstAssistantRenders);
+    });
 
     test("keeps a catalog-omitted Pi selection visible on the locked Pi picker", async () => {
       seedProjection({

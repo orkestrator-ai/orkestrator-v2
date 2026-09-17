@@ -54,7 +54,6 @@ import {
 import { toast } from "sonner";
 import type { AgentActivityState, Environment, EnvironmentType } from "@/types";
 import { useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore } from "@/stores";
-import { isActiveBuildPhase } from "@/stores/buildPipelineStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useConfigStore } from "@/stores/configStore";
 import { parseUsableAgentActivityTime, useAgentActivityStore } from "@/stores/agentActivityStore";
@@ -232,15 +231,14 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const isBuildEnvironment = useBuildPipelineStore((s) =>
     s.buildEnvironmentIds.has(environment.id),
   );
-  const hasActiveBuildPipeline = useBuildPipelineStore((s) =>
-    Array.from(s.pipelines.values()).some(
-      (pipeline) => pipeline.environmentId === environment.id && isActiveBuildPhase(pipeline.phase),
-    ),
+  const hasWorkingBuildPipeline = useBuildPipelineStore((s) =>
+    s.activeBuildEnvironmentIds.has(environment.id),
   );
   // Pipeline steps can run in sessions that do not project their activity onto
-  // the environment. The pipeline snapshot is authoritative for that work, so
-  // it must keep the environment icon in its working state between agent events.
-  const displayedActivityState = hasActiveBuildPipeline ? "working" : agentActivityState;
+  // the environment. The pipeline snapshot is authoritative for in-flight agent
+  // work, so it must keep the environment icon working between agent events.
+  // Setup phases and stallWarning fall back to the real agentActivityState.
+  const displayedActivityState = hasWorkingBuildPipeline ? "working" : agentActivityState;
   // Backend-owned, so the badge agrees across every connected client.
   const hasUnreadActivity = environment.hasUnreadWork === true;
   const messagingEnabled = useConfigStore(

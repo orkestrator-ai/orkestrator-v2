@@ -6563,6 +6563,54 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(3));
   });
 
+  test("releases the PR launch claim when the launched tab is closed", async () => {
+    currentEnvironment = { ...currentEnvironment, prUrl: null, prState: null };
+    launchNativeAgentJobMock.mockImplementationOnce(async () => ({
+      jobId: "pr-job",
+      environmentId: "env-1",
+      tabId: "agent-job-pr",
+      agent: "codex" as const,
+      logicalSessionKey: "env-env-1:agent-job-pr",
+      status: "accepted" as const,
+    }));
+    const paneEnvironments = usePaneLayoutStore.getState().environments;
+    try {
+      act(() => usePaneLayoutStore.getState().initialize(null, "env-1"));
+      render(<ActionBar />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+      await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(
+          (screen.getByRole("button", { name: "Create PR" }) as HTMLButtonElement).disabled,
+        ).toBe(true),
+      );
+
+      // The claim holds while the launched tab is open: the agent is still
+      // working towards the PR that would release it.
+      act(() =>
+        usePaneLayoutStore
+          .getState()
+          .addTab("default", { id: "agent-job-pr", type: "agent-native" }, "env-1"),
+      );
+      expect(
+        (screen.getByRole("button", { name: "Create PR" }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+
+      act(() => usePaneLayoutStore.getState().removeTab("default", "agent-job-pr", "env-1"));
+      await waitFor(() =>
+        expect(
+          (screen.getByRole("button", { name: "Create PR" }) as HTMLButtonElement).disabled,
+        ).toBe(false),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+      await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(2));
+    } finally {
+      usePaneLayoutStore.setState({ environments: paneEnvironments });
+    }
+  });
+
   test("does not create a PR from Cmd+P when one already exists", () => {
     currentEnvironment = { ...currentEnvironment, prState: "open" };
     render(<ActionBar />);

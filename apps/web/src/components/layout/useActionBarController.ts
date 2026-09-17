@@ -47,7 +47,11 @@ import { useLongPressAction } from "@/hooks/useLongPressAction";
 import { promptQueueKey } from "@/lib/prompt-queue-persistence";
 import { createSessionKey } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import {
+  usePaneLayoutStore,
+  getAllLeaves,
+  type EnvironmentPaneState,
+} from "@/stores/paneLayoutStore";
 import {
   beginPaneTabActivationRequest,
   requestPaneTabActivation,
@@ -57,6 +61,40 @@ import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { toast } from "sonner";
 import { onGlobalSettingsRequest, type GlobalSettingsSection } from "@/lib/settings-navigation";
 import type { ResolveLaunchResult } from "./ActionBar.types";
+
+/**
+ * A Create PR launch that has not yet produced a pull request.
+ *
+ * The claim exists to keep a second launch out while the first agent works, so
+ * it has to be released the moment that work can no longer finish.
+ */
+interface CreatePrLaunchClaim {
+  /** Tab the launch published; null until the backend acknowledges it. */
+  tabId: string | null;
+  /** Whether that tab has been seen in the pane layout at least once. */
+  tabSeen: boolean;
+}
+
+/**
+ * How long a claim waits for its launched tab to appear before releasing
+ * itself. The tab normally arrives immediately; this covers only the case
+ * where it never does, so Create PR can never stay disabled with no tab left
+ * to release it.
+ */
+const CREATE_PR_TAB_GRACE_MS = 60_000;
+
+/** Whether an environment's live pane layout still holds a given tab. */
+function isTabOpen(
+  environments: ReadonlyMap<string, EnvironmentPaneState>,
+  environmentId: string,
+  tabId: string,
+): boolean {
+  const environmentState = environments.get(environmentId);
+  if (!environmentState) return false;
+  return getAllLeaves(environmentState.root).some((leaf) =>
+    leaf.tabs.some((tab) => tab.id === tabId),
+  );
+}
 
 export function isEditableShortcutTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -159,10 +197,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const [prLaunchError, setPrLaunchError] = useState<string | null>(null);
   const prDialogOpen = prDialogTarget !== null;
   const createPrButtonRef = useRef<HTMLButtonElement>(null);
-  const createPrLaunchEnvironmentIdsRef = useRef(new Set<string>());
-  const [createPrLaunchEnvironmentIds, setCreatePrLaunchEnvironmentIds] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
+  const createPrLaunchClaimsRef = useRef(new Map<string, CreatePrLaunchClaim>());
+  const [createPrLaunchClaims, setCreatePrLaunchClaims] = useState<
+    ReadonlyMap<string, CreatePrLaunchClaim>
+  >(() => new Map());
   const [resolveDialogTarget, setResolveDialogTarget] = useState<{
     environmentId: string;
     projectId: string;
@@ -267,7 +305,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   const hasPR = !!prUrl;
   const createPrLaunchPending = Boolean(
-    selectedEnvironmentId && createPrLaunchEnvironmentIds.has(selectedEnvironmentId),
+    selectedEnvironmentId && createPrLaunchClaims.has(selectedEnvironmentId),
   );
   const isPRMerged = prState === "merged";
   const cleanupTargetIsMerged = cleanupTarget?.isMerged ?? isPRMerged;
@@ -281,8 +319,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   );
 
   const releaseCreatePrLaunch = useCallback((environmentId: string) => {
-    if (!createPrLaunchEnvironmentIdsRef.current.delete(environmentId)) return;
-    setCreatePrLaunchEnvironmentIds(new Set(createPrLaunchEnvironmentIdsRef.current));
+    if (!createPrLaunchClaimsRef.current.delete(environmentId)) return;
+    setCreatePrLaunchClaims(new Map(createPrLaunchClaimsRef.current));
   }, []);
 
   useEffect(() => {
@@ -290,6 +328,64 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       releaseCreatePrLaunch(selectedEnvironmentId);
     }
   }, [hasPR, releaseCreatePrLaunch, selectedEnvironmentId]);
+
+  // Change key for the claimed tabs' presence. The selector collapses the pane
+  // tree to a primitive so the pane store's unrelated writes (active tab,
+  // browser URLs, splits) cannot re-render the whole toolbar.
+  const createPrLaunchTabPresence = usePaneLayoutStore((state) =>
+    [...createPrLaunchClaims]
+      .map(([environmentId, claim]) =>
+        claim.tabId
+          ? `${environmentId}:${isTabOpen(state.environments, environmentId, claim.tabId) ? "open" : "gone"}`
+          : `${environmentId}:pending`,
+      )
+      .join(","),
+  );
+
+  // A claim survives its launch only while the tab that owns the work is open.
+  // Closing that tab evicts the agent session with it, so a claim held past the
+  // close would leave Create PR disabled for the rest of the session with
+  // nothing left running that could ever release it.
+  useEffect(() => {
+    const claims = createPrLaunchClaimsRef.current;
+    if (claims.size === 0) return;
+    const { environments } = usePaneLayoutStore.getState();
+    let changed = false;
+    for (const [environmentId, claim] of Array.from(claims)) {
+      if (!claim.tabId) continue;
+      if (isTabOpen(environments, environmentId, claim.tabId)) {
+        if (claim.tabSeen) continue;
+        claims.set(environmentId, { ...claim, tabSeen: true });
+        changed = true;
+      } else if (claim.tabSeen) {
+        claims.delete(environmentId);
+        changed = true;
+      }
+    }
+    if (changed) setCreatePrLaunchClaims(new Map(claims));
+    // `createPrLaunchTabPresence` is the trigger, not an input: the effect reads
+    // the same state it was computed from, one level below the memoized key.
+  }, [createPrLaunchTabPresence]);
+
+  // Until a claimed tab has been seen, presence cannot distinguish "not yet
+  // published" from "already closed", so an unseen claim releases itself after
+  // a bounded grace period rather than waiting on a tab that may never arrive.
+  const unseenCreatePrTabEnvironmentIds = [...createPrLaunchClaims]
+    .filter(([, claim]) => !claim.tabSeen)
+    .map(([environmentId]) => environmentId)
+    .join(",");
+  useEffect(() => {
+    if (!unseenCreatePrTabEnvironmentIds) return;
+    const timer = setTimeout(() => {
+      for (const environmentId of unseenCreatePrTabEnvironmentIds.split(",")) {
+        if (createPrLaunchClaimsRef.current.get(environmentId)?.tabSeen === false) {
+          releaseCreatePrLaunch(environmentId);
+        }
+      }
+    }, CREATE_PR_TAB_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, [releaseCreatePrLaunch, unseenCreatePrTabEnvironmentIds]);
+
   const canCreateTab = !!createTab && tabCount < MAX_TABS;
   // Workflow launches publish their own durable tab and start in the backend.
   // They must not depend on the active environment's renderer tab factory.
@@ -1358,12 +1454,15 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         tabCount >= MAX_TABS ||
         !isRunning ||
         hasPR ||
-        createPrLaunchEnvironmentIdsRef.current.has(operationEnvironmentId)
+        createPrLaunchClaimsRef.current.has(operationEnvironmentId)
       )
         return false;
 
-      createPrLaunchEnvironmentIdsRef.current.add(operationEnvironmentId);
-      setCreatePrLaunchEnvironmentIds(new Set(createPrLaunchEnvironmentIdsRef.current));
+      createPrLaunchClaimsRef.current.set(operationEnvironmentId, {
+        tabId: null,
+        tabSeen: false,
+      });
+      setCreatePrLaunchClaims(new Map(createPrLaunchClaimsRef.current));
 
       try {
         const repoConfig = config.repositories[selectedProjectId];
@@ -1409,6 +1508,16 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             description: result.error || "The agent rejected the request.",
           });
           return false;
+        }
+        // Bind the claim to the tab that now owns this launch so closing that
+        // tab releases it.
+        const claim = createPrLaunchClaimsRef.current.get(operationEnvironmentId);
+        if (claim && !claim.tabId) {
+          createPrLaunchClaimsRef.current.set(operationEnvironmentId, {
+            ...claim,
+            tabId: result.tabId,
+          });
+          setCreatePrLaunchClaims(new Map(createPrLaunchClaimsRef.current));
         }
         // Monitoring starts only after the backend owns the session and turn.
         // Keep the local launch claim until a PR appears so a fast acknowledgement

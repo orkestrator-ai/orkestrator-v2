@@ -871,7 +871,7 @@ ${INITIAL_PROMPT_PRUNE_BODY}`;
 
 export const CONTAINER_PINNED_ATTACHMENT_WRITE = String.raw`
 const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
-const [workspaceRoot, relativeDirectory, filename, expectedBytes, readyToken, writeMode, fileMode] = process.argv.slice(1);
+const [workspaceRoot, relativeDirectory, filename, expectedBytes, readyToken, writeMode, fileMode, ancestorMode] = process.argv.slice(1);
 let current = workspaceRoot;
 const root = fs.lstatSync(current);
 if (root.isSymbolicLink() || !root.isDirectory()) process.exit(73);
@@ -884,6 +884,10 @@ for (const segment of relativeDirectory.split("/")) {
     if (stat.isSymbolicLink() || !stat.isDirectory()) process.exit(73);
   } catch (error) {
     if (!error || error.code !== "ENOENT") throw error;
+    if (ancestorMode === "existing") {
+      process.stderr.write("ENOENT_ANCESTOR");
+      process.exit(77);
+    }
     try { fs.mkdirSync(segment, { mode: 0o700 }); }
     catch (mkdirError) { if (!mkdirError || mkdirError.code !== "EEXIST") throw mkdirError; }
   }
@@ -1097,6 +1101,69 @@ export async function moveLocalFile(
   }
   await moveConfinedFile(worktreePath, move.source, move.destination);
   return move.destination;
+}
+
+const MAX_WORKSPACE_FILE_NAME_BYTES = 255;
+
+/** Resolve one externally supplied leaf filename against an existing workspace directory. */
+export function resolveWorkspaceExternalFileCopy(
+  destinationDirectory: string,
+  fileName: string,
+): { directory: string; fileName: string; destination: string } {
+  if (fileName.length === 0) {
+    throw new Error("Invalid fileName: name is required");
+  }
+  if (Buffer.byteLength(fileName, "utf8") > MAX_WORKSPACE_FILE_NAME_BYTES) {
+    throw new Error(`Invalid fileName: name exceeds ${MAX_WORKSPACE_FILE_NAME_BYTES} bytes`);
+  }
+  if (fileName === "." || fileName === ".." || fileName.includes("/") || fileName.includes("\\")) {
+    throw new Error("Invalid fileName: path separators are not allowed");
+  }
+
+  const directory =
+    destinationDirectory === "."
+      ? "."
+      : validateWorkspaceMutationPath(destinationDirectory, "destinationDirectory");
+  const destination = validateWorkspaceMutationPath(
+    directory === "." ? fileName : path.posix.join(directory, fileName),
+    "destinationPath",
+  );
+  if (path.posix.basename(destination) !== fileName) {
+    throw new Error("Invalid fileName: path must stay inside the workspace");
+  }
+  return { directory, fileName, destination };
+}
+
+/** Copy one browser-supplied file into an existing local-worktree directory. */
+export async function copyExternalFileToLocalWorkspace(
+  worktreePath: string,
+  destinationDirectory: string,
+  fileName: string,
+  payload: string | Buffer,
+): Promise<string> {
+  const copy = resolveWorkspaceExternalFileCopy(destinationDirectory, fileName);
+  try {
+    await writeConfinedFile(worktreePath, copy.destination, payload, {
+      exclusive: true,
+      createAncestors: false,
+      label: "destinationPath",
+      fileMode: 0o644,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("(EEXIST)")) {
+      throw new Error(`A file already exists at ${copy.destination}`);
+    }
+    if (message.includes("(ENOENT_ANCESTOR)")) {
+      throw new Error(
+        copy.directory === "."
+          ? "Workspace root is not available"
+          : `Destination directory no longer exists: ${copy.directory}`,
+      );
+    }
+    throw error;
+  }
+  return copy.destination;
 }
 
 const MAX_FOLDER_NAME_LENGTH = 255;

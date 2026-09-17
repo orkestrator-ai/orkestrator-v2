@@ -26,6 +26,7 @@ export function FilesPanel() {
     deleteFile,
     moveFile,
     createFolder,
+    copyExternalFiles,
     fileActionPending,
     environmentId,
     isLocalEnvironment,
@@ -37,6 +38,13 @@ export function FilesPanel() {
       void moveFile(sourcePaths, destinationDirectory).catch(() => undefined);
     },
     [moveFile],
+  );
+
+  const copyFilesIntoTree = useCallback(
+    (files: File[], destinationDirectory: string) => {
+      void copyExternalFiles(files, destinationDirectory).catch(() => undefined);
+    },
+    [copyExternalFiles],
   );
 
   useEffect(() => {
@@ -101,6 +109,7 @@ export function FilesPanel() {
             onRevert={(path) => requestFileAction("revert", path)}
             onDelete={(path) => requestFileAction("delete", path)}
             onMove={moveFileInTree}
+            onCopyFiles={copyFilesIntoTree}
             onCreateFolder={createFolder}
             movePending={fileActionPending !== null}
           />

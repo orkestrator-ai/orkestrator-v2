@@ -216,6 +216,21 @@ export async function createContainerFolder(
   });
 }
 
+/** Copy a browser-selected host file into an existing environment directory. */
+export async function copyExternalFile(
+  environmentId: string,
+  destinationDirectory: string,
+  fileName: string,
+  base64Data: string,
+): Promise<string> {
+  return invoke<string>("copy_external_file", {
+    environmentId,
+    destinationDirectory,
+    fileName,
+    base64Data,
+  });
+}
+
 // --- Local Environment File Commands ---
 
 /** Get git changes for a local environment (worktree path) */

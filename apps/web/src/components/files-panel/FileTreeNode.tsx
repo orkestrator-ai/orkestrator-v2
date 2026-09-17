@@ -30,9 +30,14 @@ import {
 const EMPTY_CHANGED_PATHS: ReadonlySet<string> = new Set();
 const EMPTY_SELECTED_PATHS: ReadonlySet<string> = new Set();
 export const FILE_DRAG_TYPE = "application/x-orkestrator-workspace-file";
+export const EXTERNAL_FILE_DRAG_TYPE = "Files";
 
 export function isWorkspaceFileDrag(event: DragEvent<HTMLElement>): boolean {
   return Array.from(event.dataTransfer.types).includes(FILE_DRAG_TYPE);
+}
+
+export function isExternalFileDrag(event: DragEvent<HTMLElement>): boolean {
+  return Array.from(event.dataTransfer.types).includes(EXTERNAL_FILE_DRAG_TYPE);
 }
 
 export function workspaceParentDirectory(filePath: string): string {
@@ -55,6 +60,7 @@ interface FileTreeNodeProps {
   onRevert?: (path: string) => void;
   onDelete?: (paths: string[]) => void;
   onMove?: (sourcePaths: string[], destinationDirectory: string) => void;
+  onCopyFiles?: (files: File[], destinationDirectory: string) => void;
   onRequestMove?: (sourcePaths: string[]) => void;
   onCreateFolder?: (parentDirectory: string) => void;
   movePending?: boolean;
@@ -71,6 +77,7 @@ export const FileTreeNode = memo(function FileTreeNode({
   onRevert,
   onDelete,
   onMove,
+  onCopyFiles,
   onRequestMove,
   onCreateFolder,
   movePending = false,
@@ -91,14 +98,22 @@ export const FileTreeNode = memo(function FileTreeNode({
       <CollapsibleTrigger asChild>
         <button
           onDragEnter={(event) => {
-            if (!onMove || movePending || !isWorkspaceFileDrag(event)) return;
+            if (
+              movePending ||
+              ((!onMove || !isWorkspaceFileDrag(event)) &&
+                (!onCopyFiles || !isExternalFileDrag(event)))
+            ) {
+              return;
+            }
             event.preventDefault();
             setIsDragOver(true);
           }}
           onDragOver={(event) => {
-            if (!onMove || movePending || !isWorkspaceFileDrag(event)) return;
+            const workspaceDrag = Boolean(onMove) && isWorkspaceFileDrag(event);
+            const externalDrag = Boolean(onCopyFiles) && isExternalFileDrag(event);
+            if (movePending || (!workspaceDrag && !externalDrag)) return;
             event.preventDefault();
-            event.dataTransfer.dropEffect = "move";
+            event.dataTransfer.dropEffect = externalDrag ? "copy" : "move";
             setIsDragOver(true);
           }}
           onDragLeave={(event) => {
@@ -112,14 +127,24 @@ export const FileTreeNode = memo(function FileTreeNode({
           }}
           onDrop={(event) => {
             setIsDragOver(false);
-            if (!onMove || movePending) return;
-            const sourcePaths = decodeWorkspaceFileDrag(
-              event.dataTransfer.getData(FILE_DRAG_TYPE),
-            ).filter((sourcePath) => workspaceParentDirectory(sourcePath) !== item.path);
-            if (sourcePaths.length === 0) return;
-            event.preventDefault();
-            setFolderExpanded(item.path, true);
-            onMove(sourcePaths, item.path);
+            if (movePending) return;
+            if (onMove && isWorkspaceFileDrag(event)) {
+              const sourcePaths = decodeWorkspaceFileDrag(
+                event.dataTransfer.getData(FILE_DRAG_TYPE),
+              ).filter((sourcePath) => workspaceParentDirectory(sourcePath) !== item.path);
+              if (sourcePaths.length === 0) return;
+              event.preventDefault();
+              setFolderExpanded(item.path, true);
+              onMove(sourcePaths, item.path);
+              return;
+            }
+            if (onCopyFiles && isExternalFileDrag(event)) {
+              const files = Array.from(event.dataTransfer.files);
+              if (files.length === 0) return;
+              event.preventDefault();
+              setFolderExpanded(item.path, true);
+              onCopyFiles(files, item.path);
+            }
           }}
           className={cn(
             "flex w-full items-center gap-1.5 rounded-sm py-1 text-sm text-foreground transition-colors hover:bg-accent/50",
@@ -182,6 +207,7 @@ export const FileTreeNode = memo(function FileTreeNode({
               onRevert={onRevert}
               onDelete={onDelete}
               onMove={onMove}
+              onCopyFiles={onCopyFiles}
               onRequestMove={onRequestMove}
               onCreateFolder={onCreateFolder}
               movePending={movePending}

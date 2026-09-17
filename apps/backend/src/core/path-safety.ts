@@ -479,6 +479,8 @@ type ConfinedWriteOptions = {
    * publish a fully-written sibling over the prior entry.
    */
   exclusive?: boolean;
+  /** Require every parent directory to exist instead of creating missing ones. */
+  createAncestors?: boolean;
   /** Label used in path validation errors. */
   label?: string;
   /** Dedicated command-owned artifacts may have a larger audited budget. */
@@ -493,7 +495,7 @@ type ConfinedWriteOptions = {
 // pathname lookup can reach a replacement directory outside the worktree.
 const PINNED_CWD_WRITE_HELPER = String.raw`
 const fs = require("node:fs");
-const [targetPath, mode, expectedDev, expectedIno, expectedBytes, fileMode] = process.argv.slice(1);
+const [targetPath, mode, expectedDev, expectedIno, expectedBytes, fileMode, ancestorMode] = process.argv.slice(1);
 const invalidAncestor = () => { process.stderr.write("symlink or non-directory ancestor"); process.exit(73); };
 const cwd = fs.statSync(".");
 if (String(cwd.dev) !== expectedDev || String(cwd.ino) !== expectedIno) invalidAncestor();
@@ -505,6 +507,10 @@ for (const segment of segments) {
     if (stat.isSymbolicLink() || !stat.isDirectory()) invalidAncestor();
   } catch (error) {
     if (!error || error.code !== "ENOENT") throw error;
+    if (ancestorMode === "existing") {
+      process.stderr.write("ENOENT_ANCESTOR");
+      process.exit(77);
+    }
     try { fs.mkdirSync(segment, { mode: 0o700 }); }
     catch (mkdirError) { if (!mkdirError || mkdirError.code !== "EEXIST") throw mkdirError; }
   }
@@ -581,6 +587,7 @@ async function writeFromPinnedRoot(
   content: Buffer,
   exclusive: boolean,
   fileMode: number,
+  createAncestors: boolean,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(
@@ -594,6 +601,7 @@ async function writeFromPinnedRoot(
         String(rootStats.ino),
         String(content.byteLength),
         String(fileMode),
+        createAncestors ? "create" : "existing",
       ],
       {
         cwd: rootPath,
@@ -696,6 +704,7 @@ export async function writeConfinedFile(
     content,
     options.exclusive !== false,
     fileMode,
+    options.createAncestors !== false,
   );
   let current = canonicalRoot;
   for (const segment of target.split("/").slice(0, -1)) {

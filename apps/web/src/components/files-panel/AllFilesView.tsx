@@ -11,6 +11,7 @@ import { useTerminalContext } from "@/contexts";
 import {
   FILE_DRAG_TYPE,
   FileTreeNode,
+  isExternalFileDrag,
   isWorkspaceFileDrag,
   workspaceParentDirectory,
 } from "./FileTreeNode";
@@ -51,6 +52,7 @@ interface AllFilesViewProps {
   onRevert?: (path: string) => void;
   onDelete?: (paths: string[]) => void;
   onMove?: (sourcePaths: string[], destinationDirectory: string) => void;
+  onCopyFiles?: (files: File[], destinationDirectory: string) => void;
   onCreateFolder?: (parentDirectory: string, folderName: string) => Promise<string>;
   movePending?: boolean;
 }
@@ -83,6 +85,7 @@ export function AllFilesView({
   onRevert,
   onDelete,
   onMove,
+  onCopyFiles,
   onCreateFolder,
   movePending = false,
 }: AllFilesViewProps = {}) {
@@ -186,13 +189,22 @@ export function AllFilesView({
 
   const handleRootDrop = (event: DragEvent<HTMLDivElement>) => {
     setIsRootDragOver(false);
-    if (!onMove || movePending) return;
-    const sourcePaths = decodeWorkspaceFileDrag(event.dataTransfer.getData(FILE_DRAG_TYPE)).filter(
-      (sourcePath) => workspaceParentDirectory(sourcePath) !== ".",
-    );
-    if (sourcePaths.length === 0) return;
-    event.preventDefault();
-    onMove(sourcePaths, ".");
+    if (movePending) return;
+    if (onMove && isWorkspaceFileDrag(event)) {
+      const sourcePaths = decodeWorkspaceFileDrag(
+        event.dataTransfer.getData(FILE_DRAG_TYPE),
+      ).filter((sourcePath) => workspaceParentDirectory(sourcePath) !== ".");
+      if (sourcePaths.length === 0) return;
+      event.preventDefault();
+      onMove(sourcePaths, ".");
+      return;
+    }
+    if (onCopyFiles && isExternalFileDrag(event)) {
+      const files = Array.from(event.dataTransfer.files);
+      if (files.length === 0) return;
+      event.preventDefault();
+      onCopyFiles(files, ".");
+    }
   };
 
   const destinationDisabled = (destinationDirectory: string) =>
@@ -213,7 +225,26 @@ export function AllFilesView({
     return (
       <>
         <WorkspaceCreateFolderMenu disabled={movePending} onRequest={requestCreateFolder}>
-          <div className="flex min-h-40 flex-col items-center justify-center py-8 text-muted-foreground">
+          <div
+            aria-label={onCopyFiles ? "Workspace root drop target" : undefined}
+            onDragEnter={(event) => {
+              if (movePending || !onCopyFiles || !isExternalFileDrag(event)) return;
+              event.preventDefault();
+              setIsRootDragOver(true);
+            }}
+            onDragOver={(event) => {
+              if (movePending || !onCopyFiles || !isExternalFileDrag(event)) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "copy";
+              setIsRootDragOver(true);
+            }}
+            onDragLeave={() => setIsRootDragOver(false)}
+            onDrop={handleRootDrop}
+            className={cn(
+              "flex min-h-40 flex-col items-center justify-center py-8 text-muted-foreground",
+              isRootDragOver && "bg-primary/15 ring-1 ring-inset ring-primary/60",
+            )}
+          >
             <FolderTree className="mb-2 h-8 w-8 opacity-50" />
             <p className="text-sm">No files found</p>
           </div>
@@ -232,31 +263,36 @@ export function AllFilesView({
   const moveSubject =
     moveCount === 1 ? moveSourcePaths?.[0]?.split("/").at(-1) : `${moveCount} files`;
 
-  const workspaceRootTarget = onMove ? (
-    <div
-      aria-label="Workspace root drop target"
-      onDragEnter={(event) => {
-        if (movePending || !isWorkspaceFileDrag(event)) return;
-        event.preventDefault();
-        setIsRootDragOver(true);
-      }}
-      onDragOver={(event) => {
-        if (movePending || !isWorkspaceFileDrag(event)) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "move";
-        setIsRootDragOver(true);
-      }}
-      onDragLeave={() => setIsRootDragOver(false)}
-      onDrop={handleRootDrop}
-      className={cn(
-        "mb-1 flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-muted-foreground",
-        isRootDragOver && "bg-primary/15 ring-1 ring-inset ring-primary/60",
-      )}
-    >
-      <Folder className="h-3.5 w-3.5" />
-      Workspace root
-    </div>
-  ) : null;
+  const workspaceRootTarget =
+    onMove || onCopyFiles ? (
+      <div
+        aria-label="Workspace root drop target"
+        onDragEnter={(event) => {
+          const workspaceDrag = Boolean(onMove) && isWorkspaceFileDrag(event);
+          const externalDrag = Boolean(onCopyFiles) && isExternalFileDrag(event);
+          if (movePending || (!workspaceDrag && !externalDrag)) return;
+          event.preventDefault();
+          setIsRootDragOver(true);
+        }}
+        onDragOver={(event) => {
+          const workspaceDrag = Boolean(onMove) && isWorkspaceFileDrag(event);
+          const externalDrag = Boolean(onCopyFiles) && isExternalFileDrag(event);
+          if (movePending || (!workspaceDrag && !externalDrag)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = externalDrag ? "copy" : "move";
+          setIsRootDragOver(true);
+        }}
+        onDragLeave={() => setIsRootDragOver(false)}
+        onDrop={handleRootDrop}
+        className={cn(
+          "mb-1 flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-muted-foreground",
+          isRootDragOver && "bg-primary/15 ring-1 ring-inset ring-primary/60",
+        )}
+      >
+        <Folder className="h-3.5 w-3.5" />
+        Workspace root
+      </div>
+    ) : null;
 
   return (
     <>
@@ -279,6 +315,7 @@ export function AllFilesView({
             onRevert={onRevert}
             onDelete={onDelete}
             onMove={onMove}
+            onCopyFiles={onCopyFiles}
             onRequestMove={onMove ? setMoveSourcePaths : undefined}
             onCreateFolder={requestCreateFolder}
             movePending={movePending}

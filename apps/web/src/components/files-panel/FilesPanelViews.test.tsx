@@ -84,14 +84,14 @@ const multiFileTree: FileNode[] = [
   { name: "README.md", path: "README.md", isDirectory: false },
 ];
 
-function createDataTransfer(): DataTransfer {
+function createDataTransfer(files: File[] = []): DataTransfer {
   const values = new Map<string, string>();
   return {
     dropEffect: "none",
     effectAllowed: "uninitialized",
-    files: [] as unknown as FileList,
+    files: files as unknown as FileList,
     items: [] as unknown as DataTransferItemList,
-    types: [],
+    types: files.length > 0 ? ["Files"] : [],
     clearData: (type?: string) => {
       if (type) values.delete(type);
       else values.clear();
@@ -315,6 +315,30 @@ describe("files panel views", () => {
     expect(rootTarget.className).toContain("ring-primary/60");
     fireDrag(rootTarget, "drop", rootTransfer);
     expect(onMove).toHaveBeenCalledWith(["src/App.tsx"], ".");
+  });
+
+  test("copies files dragged from the operating system into folders and the workspace root", () => {
+    const onCopyFiles = mock(() => undefined);
+    const first = new File(["hello"], "notes.txt", { type: "text/plain" });
+    const second = new File([new Uint8Array([0, 1, 255])], "image.bin");
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onCopyFiles={onCopyFiles} />);
+
+    const destination = screen.getByRole("button", { name: "archive" });
+    const folderTransfer = createDataTransfer([first, second]);
+    fireDrag(destination, "dragover", folderTransfer);
+    expect(folderTransfer.dropEffect).toBe("copy");
+    expect(destination.className).toContain("ring-primary/60");
+    fireDrag(destination, "drop", folderTransfer);
+    expect(onCopyFiles).toHaveBeenCalledWith([first, second], "archive");
+    expect(useFilesPanelStore.getState().expandedFolders).toContain("archive");
+
+    const rootTransfer = createDataTransfer([first]);
+    const rootTarget = screen.getByLabelText("Workspace root drop target");
+    fireDrag(rootTarget, "dragover", rootTransfer);
+    expect(rootTransfer.dropEffect).toBe("copy");
+    fireDrag(rootTarget, "drop", rootTransfer);
+    expect(onCopyFiles).toHaveBeenLastCalledWith([first], ".");
   });
 
   test("ignores foreign drags, clears hover state, and disables moves while pending", async () => {

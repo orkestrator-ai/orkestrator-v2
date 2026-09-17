@@ -135,6 +135,71 @@ function isRecord(value: unknown): value is JsonRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function coordinatorLaunchBaseFromStatus(
+  status: JsonRecord | null,
+  failureReason?: string,
+): JsonRecord {
+  const branch = nonEmptyString(status?.branch);
+  const commit = nonEmptyString(status?.headCommit);
+  const available = Boolean(branch && commit);
+  let unavailableReason = failureReason;
+  if (!unavailableReason && !available) {
+    if (!status) unavailableReason = "Repository status is not available yet";
+    else if (status.unborn === true) unavailableReason = "unborn repository";
+    else if (status.detached === true || !branch) unavailableReason = "detached HEAD";
+    else unavailableReason = "checkout has no HEAD commit";
+  }
+  return {
+    baseBranch: branch,
+    baseCommit: commit,
+    available,
+    ...(unavailableReason ? { unavailableReason } : {}),
+    requiredFor: "launch_environment",
+    guidance: available
+      ? "Pass baseBranch and baseCommit unchanged to launch_environment. Refresh launch options before retrying if the repository context changed."
+      : `The current checkout does not expose a launchable branch and commit${unavailableReason ? ` (${unavailableReason})` : ""}. Report this blocked state instead of guessing.`,
+  };
+}
+
+function assertCoordinatorLaunchBaseMatchesCheckout(
+  input: { baseBranch?: string; baseCommit?: string },
+  repository: unknown,
+): asserts repository is JsonRecord {
+  if (!input.baseBranch || !input.baseCommit) {
+    throw new Error("Coordinator launches require an explicit baseBranch and baseCommit");
+  }
+  if (!isRecord(repository)) {
+    throw new Error(
+      "The current checkout has no launchable branch and commit. Refresh get_launch_options and retry.",
+    );
+  }
+  const liveBranch = nonEmptyString(repository.branch);
+  const liveCommit = nonEmptyString(repository.headCommit);
+  if (!liveBranch || !liveCommit) {
+    const reason =
+      repository.unborn === true
+        ? "unborn repository"
+        : repository.detached === true || !liveBranch
+          ? "detached HEAD"
+          : "checkout has no HEAD commit";
+    throw new Error(
+      `The current checkout has no launchable branch and commit (${reason}). Refresh get_launch_options and retry.`,
+    );
+  }
+  if (
+    input.baseBranch !== liveBranch ||
+    input.baseCommit.toLowerCase() !== liveCommit.toLowerCase()
+  ) {
+    throw new Error(
+      `Coordinator launch base does not match the current checkout (${liveBranch} @ ${liveCommit}). Refresh get_launch_options and retry.`,
+    );
+  }
+}
+
 function asArray(value: unknown): JsonRecord[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
 }
@@ -666,7 +731,7 @@ async function createControlMcp(
         "Use launch_environment for a new workspace and launch_job for an independent " +
         "agent tab in an existing ready environment. " +
         (coordinatorScope
-          ? "Prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review is a backend-only recovery primitive. Use open_multi_review or open_multi_review_fix to focus saved work. "
+          ? "Every launch_environment call requires baseBranch and baseCommit; copy the current values returned by get_launch_options. Prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review is a backend-only recovery primitive. Use open_multi_review or open_multi_review_fix to focus saved work. "
           : "") +
         "Reuse requestId when retrying mutations." +
         (coordinatorScope ? ` ${COORDINATOR_ASYNC_CONTRACT}` : ""),
@@ -702,7 +767,32 @@ async function createControlMcp(
     },
     async ({ projectId, environmentId }) => {
       const options = await launchOptions(invoke, projectId, environmentId);
-      return toolResult(options as unknown as JsonRecord);
+      if (!coordinatorScope) return toolResult(options as unknown as JsonRecord);
+      // Discovery stays read-only: reuse the persisted coordinator snapshot
+      // rather than running a lock-serialized, workspace-mutating git status.
+      try {
+        const snapshot = await invoke<unknown>("get_project_coordinator", {
+          projectId: coordinatorScope.projectId,
+        });
+        const workspace =
+          isRecord(snapshot) && isRecord(snapshot.workspace) ? snapshot.workspace : null;
+        const status =
+          workspace && isRecord(workspace.repositoryStatus) ? workspace.repositoryStatus : null;
+        return toolResult({
+          ...(options as unknown as JsonRecord),
+          coordinatorBase: coordinatorLaunchBaseFromStatus(status),
+        });
+      } catch (error) {
+        return toolResult({
+          ...(options as unknown as JsonRecord),
+          coordinatorBase: coordinatorLaunchBaseFromStatus(
+            null,
+            `Repository status is unavailable: ${
+              error instanceof Error ? error.message : "coordinator snapshot failed"
+            }`,
+          ),
+        });
+      }
     },
   );
 
@@ -1020,7 +1110,11 @@ async function createControlMcp(
     {
       title: "Launch an agent environment",
       description:
-        "Create, configure, and start an autonomous coding agent that can execute commands, modify workspace files, and use allowed network access. Reuse requestId when retrying.",
+        "Create, configure, and start an autonomous coding agent that can execute commands, modify workspace files, and use allowed network access. " +
+        (coordinatorScope
+          ? "Coordinator launches require baseBranch and baseCommit from get_launch_options. "
+          : "") +
+        "Reuse requestId when retrying.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         projectId: z.string().trim().min(1).max(200),
@@ -1033,11 +1127,25 @@ async function createControlMcp(
         conversationMode: z.enum(["plan", "build"]).default("build"),
         prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
         networkAccessMode: z.enum(["restricted", "full"]).optional(),
-        baseBranch: z.string().trim().min(1).max(500).optional(),
-        baseCommit: z
-          .string()
-          .regex(/^[0-9a-f]{40}$/i)
-          .optional(),
+        baseBranch: (coordinatorScope
+          ? z.string().trim().min(1).max(500)
+          : z.string().trim().min(1).max(500).optional()
+        ).describe(
+          coordinatorScope
+            ? "Required coordinator base branch; copy coordinatorBase.baseBranch from get_launch_options."
+            : "Optional branch to use as the environment base.",
+        ),
+        baseCommit: (coordinatorScope
+          ? z.string().regex(/^[0-9a-f]{40}$/i)
+          : z
+              .string()
+              .regex(/^[0-9a-f]{40}$/i)
+              .optional()
+        ).describe(
+          coordinatorScope
+            ? "Required coordinator base commit; copy coordinatorBase.baseCommit from get_launch_options."
+            : "Optional 40-character commit to use as the environment base.",
+        ),
       }),
       annotations: {
         readOnlyHint: false,
@@ -1050,11 +1158,21 @@ async function createControlMcp(
       if (coordinatorScope && (!input.baseBranch || !input.baseCommit)) {
         throw new Error("Coordinator launches require an explicit baseBranch and baseCommit");
       }
-      const repository = coordinatorScope
-        ? await invoke<unknown>("get_project_git_status", {
+      let repository: unknown = null;
+      if (coordinatorScope) {
+        try {
+          repository = await invoke<unknown>("get_project_git_status", {
             projectId: coordinatorScope.projectId,
-          })
-        : null;
+          });
+        } catch (error) {
+          throw new Error(
+            `Coordinator launch base could not be verified: ${
+              error instanceof Error ? error.message : "git status failed"
+            }. Refresh get_launch_options and retry.`,
+          );
+        }
+        assertCoordinatorLaunchBaseMatchesCheckout(input, repository);
+      }
       await validateSelection(invoke, input);
       const createInput = {
         projectId: input.projectId,

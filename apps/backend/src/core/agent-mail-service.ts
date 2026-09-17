@@ -43,6 +43,9 @@ function mayInjectMessage(mailbox: MailboxDescriptor, message: AgentMailMessageS
 
 export class AgentMailService {
   private drainTask: Promise<void> | null = null;
+  private drainRequested = false;
+  private drainIncludeDeferred = false;
+  private injectorMutating = false;
   private recovered = false;
   private readonly presence = new Map<string, { presence: MailboxPresence; at: number }>();
   private unsubscribe: (() => void) | null = null;
@@ -94,6 +97,21 @@ export class AgentMailService {
     await this.storage.synchronizeAgentMailboxes();
     await this.refreshPresence();
     this.unsubscribe ??= this.storage.addResourceChangeListener((change) => {
+      if (change.resource === "agent-mail") {
+        // Durable mail is the authority. Wake the backend dispatcher from the
+        // storage event so a worker report starts the coordinator's next turn
+        // without a mounted renderer or a lucky activity-poll ordering. The
+        // periodic sweep remains the recovery path for a missed event.
+        if (this.recovered && !this.injectorMutating) {
+          // Begin/finish writes announce agent-mail too. Those are injector
+          // settlement, not newly injectable mail, so they must not wake a
+          // pass that would clear the backoff the finish just stored.
+          void this.drainInjects({ includeDeferred: false }).catch((error) => {
+            console.warn("[agent-mail] Failed to drain newly received mail:", error);
+          });
+        }
+        return;
+      }
       if (
         ![
           "pane-layout",
@@ -136,10 +154,12 @@ export class AgentMailService {
       } catch {
         dispatched = false;
       }
-      await this.storage.finishAgentMailInject(
-        mailbox.mailboxId,
-        message.id,
-        dispatched ? { outcome: "accepted" } : { outcome: "failed", reason: "ambiguous" },
+      await this.applyInjectorMutation(() =>
+        this.storage.finishAgentMailInject(
+          mailbox.mailboxId,
+          message.id,
+          dispatched ? { outcome: "accepted" } : { outcome: "failed", reason: "ambiguous" },
+        ),
       );
     }
     await this.storage.recoverInterruptedAgentMailInjects();
@@ -242,21 +262,41 @@ export class AgentMailService {
     }
   }
 
-  drainInjects(): Promise<void> {
-    if (this.drainTask) return this.drainTask;
-    this.drainTask = this.drainInjectsOnce().finally(() => {
+  drainInjects(options?: { includeDeferred?: boolean }): Promise<void> {
+    const includeDeferred = options?.includeDeferred !== false;
+    if (this.drainTask) {
+      this.drainRequested = true;
+      if (includeDeferred) this.drainIncludeDeferred = true;
+      return this.drainTask;
+    }
+    this.drainTask = (async () => {
+      this.drainIncludeDeferred = includeDeferred;
+      do {
+        const deferred = this.drainIncludeDeferred;
+        this.drainRequested = false;
+        this.drainIncludeDeferred = false;
+        await this.drainInjectsOnce(deferred);
+      } while (this.drainRequested);
+    })().finally(() => {
       this.drainTask = null;
     });
     return this.drainTask;
   }
 
-  private async drainInjectsOnce(): Promise<void> {
+  private applyInjectorMutation<T>(work: () => Promise<T>): Promise<T> {
+    this.injectorMutating = true;
+    return work().finally(() => {
+      this.injectorMutating = false;
+    });
+  }
+
+  private async drainInjectsOnce(includeDeferred = true): Promise<void> {
     if (!this.recovered) await this.init();
     const config = await this.storage.loadConfig();
     const settings = config.global.agentMessaging;
     if (!settings?.enabled || settings.paused) return;
     const pending = await this.storage.listPendingAgentMailInjects(100, {
-      includeDeferred: true,
+      includeDeferred,
     });
     for (const { mailbox, message, deferredUntil } of pending) {
       if (!mayInjectMessage(mailbox, message)) continue;
@@ -324,10 +364,8 @@ export class AgentMailService {
       } else {
         continue;
       }
-      const claimed = await this.storage.beginAgentMailInject(
-        mailbox.mailboxId,
-        message.id,
-        mailbox.incarnationId,
+      const claimed = await this.applyInjectorMutation(() =>
+        this.storage.beginAgentMailInject(mailbox.mailboxId, message.id, mailbox.incarnationId),
       );
       if (!claimed) continue;
       /*
@@ -349,10 +387,12 @@ export class AgentMailService {
         // exchange may bypass an inherited-off policy while a plain sibling in
         // the same pending snapshot must remain queued.
         if (!mayInjectMessage(sibling.mailbox, sibling.message)) continue;
-        const siblingClaim = await this.storage.beginAgentMailInject(
-          mailbox.mailboxId,
-          sibling.message.id,
-          mailbox.incarnationId,
+        const siblingClaim = await this.applyInjectorMutation(() =>
+          this.storage.beginAgentMailInject(
+            mailbox.mailboxId,
+            sibling.message.id,
+            mailbox.incarnationId,
+          ),
         );
         if (!siblingClaim) continue;
         const rendered = renderAgentMailCarrier(siblingClaim);
@@ -360,10 +400,12 @@ export class AgentMailService {
         if (carrierBytes + renderedBytes > MAX_MAIL_INJECT_BATCH_BYTES) {
           // Over budget: give it back rather than carry it, so the next pass
           // delivers it as its own turn instead of dropping it.
-          await this.storage.finishAgentMailInject(mailbox.mailboxId, sibling.message.id, {
-            outcome: "held",
-            reason: "batch-full",
-          });
+          await this.applyInjectorMutation(() =>
+            this.storage.finishAgentMailInject(mailbox.mailboxId, sibling.message.id, {
+              outcome: "held",
+              reason: "batch-full",
+            }),
+          );
           break;
         }
         carrierBytes += renderedBytes;
@@ -378,7 +420,9 @@ export class AgentMailService {
           | { outcome: "failed"; reason: "ambiguous" | "rejected" },
       ): Promise<void> => {
         for (const entry of batched) {
-          await this.storage.finishAgentMailInject(mailbox.mailboxId, entry.id, result);
+          await this.applyInjectorMutation(() =>
+            this.storage.finishAgentMailInject(mailbox.mailboxId, entry.id, result),
+          );
         }
       };
       let outcome:

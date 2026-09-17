@@ -1217,6 +1217,12 @@ describe("Orkestrator control MCP server", () => {
         conversations: [
           { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
         ],
+        repositoryStatus: {
+          branch: "main",
+          headCommit: "a".repeat(40),
+          detached: false,
+          unborn: false,
+        },
       },
     }));
     overrides.set("get_project_git_status", () => ({
@@ -1248,6 +1254,47 @@ describe("Orkestrator control MCP server", () => {
       mailboxIncarnationId: "incarnation-1",
       capabilities: ["discovery", "environments", "jobs", "mail"],
     });
+
+    const listed = await rpc(credential.url, credential.token, "tools/list");
+    const launchTool = listed.body.result?.tools?.find(
+      (tool) => tool.name === "launch_environment",
+    ) as
+      | {
+          description?: string;
+          inputSchema?: {
+            required?: string[];
+            properties?: Record<string, { description?: string }>;
+          };
+        }
+      | undefined;
+    expect(launchTool?.description).toContain(
+      "Coordinator launches require baseBranch and baseCommit from get_launch_options",
+    );
+    expect(launchTool?.inputSchema?.required).toEqual(
+      expect.arrayContaining(["baseBranch", "baseCommit"]),
+    );
+    expect(launchTool?.inputSchema?.properties?.baseBranch?.description).toContain(
+      "coordinatorBase.baseBranch",
+    );
+
+    const gitStatusBeforeLaunchOptions = invocations.filter(
+      ({ command }) => command === "get_project_git_status",
+    ).length;
+    const launchOptions = await rpc(credential.url, credential.token, "tools/call", {
+      name: "get_launch_options",
+      arguments: { projectId: "project-1" },
+    });
+    expect(launchOptions.body.result?.structuredContent).toMatchObject({
+      coordinatorBase: {
+        baseBranch: "main",
+        baseCommit: "a".repeat(40),
+        available: true,
+        requiredFor: "launch_environment",
+      },
+    });
+    expect(
+      invocations.filter(({ command }) => command === "get_project_git_status"),
+    ).toHaveLength(gitStatusBeforeLaunchOptions);
 
     const launched = await rpc(credential.url, credential.token, "tools/call", {
       name: "launch_environment",
@@ -1430,5 +1477,196 @@ describe("Orkestrator control MCP server", () => {
       },
     });
     expect(launchWithoutWake.body.result?.structuredContent).not.toHaveProperty("delivery");
+  });
+
+  test("reports an unavailable coordinator launch base without calling git status", async () => {
+    const issue = (workspace: Record<string, unknown>) => {
+      overrides.set("get_project_coordinator", () => ({ workspace }));
+      return server.issueCoordinatorCredential({
+        role: "coordinator",
+        projectId: "project-1",
+        coordinatorId: "coordinator-1",
+        conversationId: "conversation-1",
+        mailboxIncarnationId: "incarnation-1",
+        capabilities: ["discovery", "environments"],
+      });
+    };
+    const callLaunchOptions = async (workspace: Record<string, unknown>) => {
+      const credential = issue(workspace);
+      const gitStatusBefore = invocations.filter(
+        ({ command }) => command === "get_project_git_status",
+      ).length;
+      const result = await rpc(credential.url, credential.token, "tools/call", {
+        name: "get_launch_options",
+        arguments: { projectId: "project-1" },
+      });
+      expect(
+        invocations.filter(({ command }) => command === "get_project_git_status"),
+      ).toHaveLength(gitStatusBefore);
+      return result.body.result?.structuredContent;
+    };
+
+    expect(
+      await callLaunchOptions({
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+        repositoryStatus: {
+          branch: null,
+          headCommit: "a".repeat(40),
+          detached: true,
+          unborn: false,
+        },
+      }),
+    ).toMatchObject({
+      enabledAgents: ["codex"],
+      coordinatorBase: {
+        baseBranch: null,
+        baseCommit: "a".repeat(40),
+        available: false,
+        unavailableReason: "detached HEAD",
+        requiredFor: "launch_environment",
+      },
+    });
+
+    expect(
+      await callLaunchOptions({
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+        repositoryStatus: {
+          branch: "main",
+          headCommit: null,
+          detached: false,
+          unborn: true,
+        },
+      }),
+    ).toMatchObject({
+      enabledAgents: ["codex"],
+      coordinatorBase: {
+        baseBranch: "main",
+        baseCommit: null,
+        available: false,
+        unavailableReason: "unborn repository",
+        requiredFor: "launch_environment",
+      },
+    });
+
+    let coordinatorReads = 0;
+    overrides.set("get_project_coordinator", () => {
+      coordinatorReads += 1;
+      if (coordinatorReads > 1) throw new Error("Project Git is unavailable");
+      return {
+        workspace: {
+          id: "coordinator-1",
+          lifecycleState: "ready",
+          conversations: [
+            {
+              id: "conversation-1",
+              tabId: "coordinator-tab",
+              mailboxIncarnationId: "incarnation-1",
+            },
+          ],
+        },
+      };
+    });
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["discovery", "environments"],
+    });
+    const failed = await rpc(credential.url, credential.token, "tools/call", {
+      name: "get_launch_options",
+      arguments: { projectId: "project-1" },
+    });
+    expect(failed.body.result?.isError).not.toBe(true);
+    expect(failed.body.result?.structuredContent).toMatchObject({
+      enabledAgents: ["codex"],
+      coordinatorBase: {
+        baseBranch: null,
+        baseCommit: null,
+        available: false,
+        unavailableReason: "Repository status is unavailable: Project Git is unavailable",
+        requiredFor: "launch_environment",
+      },
+    });
+  });
+
+  test("rejects coordinator launches whose base does not match the current checkout", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+        repositoryStatus: {
+          branch: "main",
+          headCommit: "a".repeat(40),
+          detached: false,
+          unborn: false,
+        },
+      },
+    }));
+    overrides.set("get_project_git_status", () => ({
+      branch: "main",
+      headCommit: "a".repeat(40),
+      trackedChanges: 0,
+      untrackedChanges: 0,
+    }));
+    let launched = 0;
+    overrides.set("launch_coordinator_environment", () => {
+      launched += 1;
+      return {
+        environment: { id: "env-worker", projectId: "project-1", status: "running" },
+        coordinatorDelegationOpened: true,
+      };
+    });
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["discovery", "environments"],
+    });
+    const launch = (baseBranch: string, baseCommit: string) =>
+      rpc(credential.url, credential.token, "tools/call", {
+        name: "launch_environment",
+        arguments: {
+          requestId: `launch-${baseBranch}-${baseCommit.slice(0, 8)}`,
+          projectId: "project-1",
+          agent: "codex",
+          prompt: "Fix the failing test.",
+          baseBranch,
+          baseCommit,
+        },
+      });
+
+    const staleCommit = await launch("main", "b".repeat(40));
+    expect(staleCommit.body.result?.isError).toBe(true);
+    expect(JSON.stringify(staleCommit.body)).toContain("Refresh get_launch_options");
+
+    const staleBranch = await launch("another", "a".repeat(40));
+    expect(staleBranch.body.result?.isError).toBe(true);
+    expect(JSON.stringify(staleBranch.body)).toContain("Refresh get_launch_options");
+    expect(launched).toBe(0);
+    expect(
+      invocations.filter(({ command }) => command === "launch_coordinator_environment"),
+    ).toHaveLength(0);
+
+    const matched = await launch("main", "A".repeat(40));
+    expect(matched.body.result?.isError).not.toBe(true);
+    expect(matched.body.result?.structuredContent).toMatchObject({
+      environmentId: "env-worker",
+    });
+    expect(launched).toBe(1);
   });
 });

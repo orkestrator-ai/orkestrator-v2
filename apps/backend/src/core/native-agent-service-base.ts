@@ -473,11 +473,20 @@ export abstract class NativeAgentServiceBase {
       !(COORDINATOR_CONTEXT_APPLIED in input)
     ) {
       const status = workspace.repositoryStatus;
+      const hasLaunchBase =
+        typeof status?.branch === "string" &&
+        status.branch.length > 0 &&
+        typeof status.headCommit === "string" &&
+        status.headCommit.length > 0;
+      const launchBaseLine = hasLaunchBase
+        ? `Launch base: every launch_environment call must include baseBranch and baseCommit exactly as shown in the repository context below. get_launch_options repeats these required values.\n`
+        : `Launch base: the current checkout has no launchable branch and commit, so launch_environment is blocked until the repository is on a named branch with a HEAD commit. Report this blocked state instead of guessing values.\n`;
       const delegation = this.options.coordinatorDelegationAvailable?.(
         coordinator.conversation.agent,
       )
         ? `Delegation: create workers with the Orkestrator launch_environment tool. Provider sub-agents remain inside this coordinator session and are not worker environments. Report a worker as created only after launch_environment returns its environment id.\n` +
           `Actions: prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review starts backend work only and does not open a tab. Use open_multi_review and open_multi_review_fix to present saved work. Reuse requestId on retry, and inspect outcome, ui and recovery before reporting completion.\n` +
+          launchBaseLine +
           `${COORDINATOR_ASYNC_CONTRACT}\n`
         : `Delegation: Orkestrator worker controls are unavailable in this session. Provider sub-agents remain inside this coordinator session and are not worker environments; do not report them as workers.\n`;
       return {

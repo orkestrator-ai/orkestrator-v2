@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import type { CommandContext } from "./commands-context.js";
 import {
+  os,
   path,
   randomUUID,
   pathExists,
@@ -116,6 +118,43 @@ import {
   resumeTerminalHistory,
   resizeTerminalHistory,
 } from "./terminal-history.js";
+
+const TEMPORARY_PREVIEW_IMAGE_EXTENSIONS = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".avif",
+  ".svg",
+  ".bmp",
+  ".ico",
+  ".tif",
+  ".tiff",
+]);
+
+/**
+ * Host roots available to a renderer image preview.
+ *
+ * General binary reads remain confined to workspace storage. Codex can also
+ * produce an `imageView` for an image it wrote below the process temp root, so
+ * image-shaped paths additionally admit the OS temp directory. `/tmp` is kept
+ * as a separate lexical root on Unix because macOS commonly reports a private
+ * per-user `os.tmpdir()` while command-line tools still write to `/tmp`.
+ * `readFileBase64` applies the bounded, regular-file and no-symlink checks.
+ */
+function readableHostRoots(filePath: string, context: CommandContext): string[] {
+  const roots = [getWorktreeBaseDir(context)];
+  if (!TEMPORARY_PREVIEW_IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
+    return roots;
+  }
+
+  roots.push(os.tmpdir());
+  if (process.platform !== "win32" && os.tmpdir() !== "/tmp") {
+    roots.push("/tmp");
+  }
+  return roots;
+}
 
 function resizeTerminalHistoryBestEffort(sessionId: string, cols: number, rows: number): void {
   try {
@@ -743,9 +782,10 @@ export function registerTerminalCommands(
       asString(branch, "branch"),
     ),
   );
-  register("read_file_base64", ({ filePath }, context) =>
-    readFileBase64(asString(filePath, "filePath"), [getWorktreeBaseDir(context)]),
-  );
+  register("read_file_base64", ({ filePath }, context) => {
+    const requestedPath = asString(filePath, "filePath");
+    return readFileBase64(requestedPath, readableHostRoots(requestedPath, context));
+  });
   register("write_local_file", ({ worktreePath, filePath, base64Data }) =>
     writeFileBase64(
       asString(worktreePath, "worktreePath"),

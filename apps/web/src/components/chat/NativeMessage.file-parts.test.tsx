@@ -35,11 +35,12 @@ describe("canLoadImagePreview on the host", () => {
     expect(canLoadImagePreview("~/shot.png", undefined, undefined)).toBe(false);
   });
 
-  test("is only a pre-filter: an absolute path outside the worktree still passes", () => {
-    // The renderer does not know the worktree root the backend confines
-    // `read_file_base64` to, so this cannot be exact. `ImageReadPreview` drops
-    // the row when the load then fails; see NativeMessage.test.tsx.
-    expect(canLoadImagePreview("/tmp/shot.png", undefined, undefined)).toBe(true);
+  test("is only a pre-filter: an absolute path outside the readable roots still passes", () => {
+    // The renderer does not know the workspace and temp roots the backend
+    // confines `read_file_base64` to, so this cannot be exact.
+    // `ImageReadPreview` drops the row when the load then fails; see
+    // NativeMessage.test.tsx.
+    expect(canLoadImagePreview("/Users/ada/Downloads/shot.png", undefined, undefined)).toBe(true);
   });
 });
 

@@ -610,9 +610,10 @@ describe("NativeMessage", () => {
   });
 
   test("drops a recovered preview whose host read the backend refuses", async () => {
-    // `read_file_base64` is confined to the worktree base directory and will
-    // not traverse a symbolic link, so an absolute path is not proof of a
-    // readable file. The tool row must be what survives, not a red badge.
+    // `read_file_base64` is confined to workspace storage and supported temp
+    // images, and will not traverse a symbolic link, so an absolute path is not
+    // proof of a readable file. The tool row must be what survives, not a red
+    // badge.
     mockReadFileBase64.mockImplementation(async () => {
       throw new Error("Invalid file path: file is outside Orkestrator workspace storage");
     });
@@ -627,7 +628,7 @@ describe("NativeMessage", () => {
           content: "Read",
           toolName: "Read",
           toolState: "success",
-          toolArgs: { file_path: "/tmp/outside.png" },
+          toolArgs: { file_path: "/Users/ada/Downloads/outside.png" },
         },
       ],
     };
@@ -635,7 +636,7 @@ describe("NativeMessage", () => {
     render(<NativeMessage message={message} />);
 
     await waitFor(() => {
-      expect(mockReadFileBase64).toHaveBeenCalledWith("/tmp/outside.png");
+      expect(mockReadFileBase64).toHaveBeenCalledWith("/Users/ada/Downloads/outside.png");
     });
     await waitFor(() => {
       expect(screen.queryByText("Image read") === null).toBe(true);
@@ -664,7 +665,7 @@ describe("NativeMessage", () => {
           content: "Read",
           toolName: "Read",
           toolState: "success",
-          toolArgs: { file_path: "/tmp/outside-twice.png" },
+          toolArgs: { file_path: "/Users/ada/Downloads/outside-twice.png" },
         },
       ],
     };

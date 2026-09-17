@@ -557,11 +557,63 @@ describe("backend command I/O coverage", () => {
       Buffer.from("profile-image").toString("base64"),
     );
 
-    const outsideFile = path.join(path.dirname(profileWorktrees), "outside-profile.png");
+    const outsideFile = path.join(path.dirname(profileWorktrees), "outside-profile.bin");
     await fs.writeFile(outsideFile, "private");
     await expect(
       commands.get("read_file_base64")?.({ filePath: outsideFile }, context),
     ).rejects.toThrow("file is outside Orkestrator workspace storage");
+  });
+
+  test("reads image previews from temporary storage without opening other temp files", async () => {
+    const temporaryDirectory = await createTempDir("ork-temp-image-preview-");
+    const imagePath = path.join(temporaryDirectory, "montage.PNG");
+    const nonImagePath = path.join(temporaryDirectory, "credentials.txt");
+    await fs.writeFile(imagePath, Buffer.from("temporary-image"));
+    await fs.writeFile(nonImagePath, Buffer.from("not-an-image"));
+
+    const commands = createCommandRegistry();
+    const context = {
+      ...createContext(),
+      worktreeDir: await createTempDir("ork-temp-image-worktrees-"),
+    };
+
+    await expect(
+      commands.get("read_file_base64")?.({ filePath: imagePath }, context),
+    ).resolves.toBe(Buffer.from("temporary-image").toString("base64"));
+    await expect(
+      commands.get("read_file_base64")?.({ filePath: nonImagePath }, context),
+    ).rejects.toThrow("file is outside Orkestrator workspace storage");
+
+    const linkedImage = path.join(temporaryDirectory, "linked.png");
+    await fs.symlink(imagePath, linkedImage);
+    await expect(
+      commands.get("read_file_base64")?.({ filePath: linkedImage }, context),
+    ).rejects.toThrow("symbolic links are not allowed");
+
+    const outsideDirectory = await createTempDir(".ork-temp-image-outside-", os.homedir());
+    const outsideImage = path.join(outsideDirectory, "outside.png");
+    await fs.writeFile(outsideImage, Buffer.from("outside-image"));
+    await expect(
+      commands.get("read_file_base64")?.({ filePath: outsideImage }, context),
+    ).rejects.toThrow("file is outside Orkestrator workspace storage");
+  });
+
+  test("reads image previews from the conventional Unix /tmp directory", async () => {
+    if (process.platform === "win32") return;
+
+    const temporaryDirectory = await createTempDir("ork-unix-temp-image-preview-", "/tmp");
+    const imagePath = path.join(temporaryDirectory, "montage.webp");
+    await fs.writeFile(imagePath, Buffer.from("unix-temporary-image"));
+
+    const commands = createCommandRegistry();
+    const context = {
+      ...createContext(),
+      worktreeDir: await createTempDir("ork-unix-temp-image-worktrees-"),
+    };
+
+    await expect(
+      commands.get("read_file_base64")?.({ filePath: imagePath }, context),
+    ).resolves.toBe(Buffer.from("unix-temporary-image").toString("base64"));
   });
 
   test("container base64 reader uses one bounded no-follow file snapshot", async () => {

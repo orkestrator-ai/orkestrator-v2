@@ -167,10 +167,11 @@ function getSafeContainerRelativePath(path: string): string | null {
  * A cheap pre-filter, not a guarantee. Inside a container it is exact, because
  * it runs the same containment the loader will. On the host it can only see
  * that the path is absolute: the renderer does not know the worktree root, and
- * the backend confines `read_file_base64` to it and refuses to traverse a
- * symbolic link, so an absolute path can still turn out to be unreadable. The
- * authoritative answer arrives with the load, which is why the caller also
- * passes `onLoadUnavailable` and drops the preview when it fires.
+ * the backend confines `read_file_base64` to workspace storage plus supported
+ * images in the OS temp directory, and refuses to traverse a symbolic link, so
+ * an absolute path can still turn out to be unreadable. The authoritative
+ * answer arrives with the load, which is why the caller also passes
+ * `onLoadUnavailable` and drops the preview when it fires.
  */
 export function canLoadImagePreview(
   path: string,

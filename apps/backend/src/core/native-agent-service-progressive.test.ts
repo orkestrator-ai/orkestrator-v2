@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
 import {
@@ -27,6 +28,147 @@ function progressiveMessages(count: number, prefix = "m") {
 }
 
 describe("native agent progressive remainder", () => {
+  test.each([
+    { name: "disjoint preview", epoch: "epoch-1", ids: ["other"], expected: ["other"] },
+    { name: "reordered overlap", epoch: "epoch-1", ids: ["m1", "m0"], expected: ["m1", "m0"] },
+    { name: "unversioned history", epoch: undefined, ids: ["m1"], expected: ["m1"] },
+    {
+      name: "count-bounded tail",
+      epoch: "epoch-1",
+      ids: Array.from({ length: liveWindow.messages }, (_, index) => `m${index + 1}`),
+      expected: Array.from({ length: liveWindow.messages }, (_, index) => `m${index + 1}`),
+    },
+  ])("does not retain an unsafe or oversized prefix: $name", async ({ epoch, ids, expected }) => {
+    let streaming = false;
+    const stub = createProviderStub("codex", {
+      transcriptSnapshot: async () => ({
+        messages: (streaming ? ids : ["m0", "m1"]).map((id) => progressiveMessage(id)),
+        complete: !streaming,
+        historyEpoch: epoch,
+        sourceToken: streaming ? "source-2" : "source-1",
+        freshness: "current" as const,
+      }),
+      messages: async () => [],
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-prefix-bounds-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:prefix-bounds",
+        };
+        await service.ensureSession(identity);
+        const input = { ...identity, viewVersion: 1 as const, liveWindow, forceSnapshot: true };
+        await service.getTranscriptUpdate(input);
+        streaming = true;
+        const next = await service.getTranscriptUpdate(input);
+        if (next.status !== "snapshot") throw new Error("expected snapshot");
+        expect(next.value.messages.map((message) => (message as { id: string }).id)).toEqual(
+          Array.from(expected),
+        );
+        expect(next.value.historyComplete).toBe(false);
+        expect(next.value.messages.length).toBeLessThanOrEqual(liveWindow.messages);
+      },
+    );
+  });
+
+  test("keeps a recovered initial attachment visible across byte-trimmed streaming previews", async () => {
+    const prompt = {
+      ...progressiveMessage("prompt", "Inspect this screenshot"),
+      role: "user",
+      parts: [
+        {
+          type: "file",
+          content: "/workspace/screenshot.png",
+          fileUrl: `data:image/png;base64,${"a".repeat(200 * 1024)}`,
+        },
+      ],
+    };
+    let revision = 1;
+    let contentEpoch = 1;
+    let includePrompt = true;
+    let largeOutput = true;
+    const response = () => ({
+      ...progressiveMessage("response", `Update ${revision}`),
+      parts: [
+        { type: "tool-invocation", toolOutput: largeOutput ? "x".repeat(400 * 1024) : "done" },
+      ],
+    });
+    const messages = mock(async () => [...(includePrompt ? [prompt] : []), response()]);
+    const stub = createProviderStub("codex", {
+      messages,
+      transcriptSnapshot: async () => {
+        const update = bridgeTranscriptUpdate([...(includePrompt ? [prompt] : []), response()], {
+          sessionIdentity: "session-1",
+          generation: 1,
+          contentEpoch,
+          revision,
+          limit: liveWindow.messages,
+          targetBytes: liveWindow.targetBytes,
+          complete: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected bridge snapshot");
+        return { ...update.value, sourceToken: update.token, historyEpoch: `1:${contentEpoch}` };
+      },
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-streaming-prefix-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:streaming-prefix",
+        };
+        await service.ensureSession(identity);
+        const read = () =>
+          service.getTranscriptUpdate({
+            ...identity,
+            viewVersion: 1,
+            liveWindow,
+            forceSnapshot: true,
+          });
+        const preview = await read();
+        expect(preview.status).toBe("snapshot");
+        if (preview.status !== "snapshot") throw new Error("expected snapshot");
+        expect(preview.value.messages).toMatchObject([{ id: "response" }]);
+        await waitForCondition(async () => {
+          const hydrated = await read();
+          return hydrated.status === "snapshot" && hydrated.value.messages.length === 2;
+        });
+        for (revision = 2; revision <= 4; revision += 1) {
+          // Read before the next asynchronous full-history recovery can finish.
+          const streaming = await read();
+          expect(streaming.status).toBe("snapshot");
+          if (streaming.status !== "snapshot") throw new Error("expected snapshot");
+          expect(streaming.value.messages).toMatchObject([
+            { id: "prompt", parts: [{ type: "file", content: "/workspace/screenshot.png" }] },
+            { id: "response", content: `Update ${revision}` },
+          ]);
+          expect(streaming.value.historyComplete).toBe(true);
+          expect(JSON.stringify(streaming.value).length).toBeLessThan(liveWindow.targetBytes);
+        }
+        // A rewritten history cannot inherit the old prompt, even with overlap.
+        contentEpoch += 1;
+        revision += 1;
+        const replaced = await read();
+        if (replaced.status !== "snapshot") throw new Error("expected snapshot");
+        expect(replaced.value.messages).toMatchObject([{ id: "response" }]);
+        await waitForCondition(async () => {
+          const hydrated = await read();
+          return hydrated.status === "snapshot" && hydrated.value.messages.length === 2;
+        });
+        // A complete authoritative snapshot must still be allowed to delete it.
+        includePrompt = false;
+        largeOutput = false;
+        revision += 1;
+        const deleted = await read();
+        if (deleted.status !== "snapshot") throw new Error("expected snapshot");
+        expect(deleted.value.messages).toMatchObject([{ id: "response" }]);
+      },
+    );
+  });
+
   test("shows a provider-trimmed first prompt when the full turn still fits", async () => {
     const prompt = {
       id: "prompt",

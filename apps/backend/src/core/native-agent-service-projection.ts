@@ -1658,8 +1658,48 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       initialPromptPresentation,
       Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
     );
+    let projectedMessages = normalized.messages;
+    let sourceComplete = snapshot.complete;
+    /*
+     * A bridge bounds raw tool output and inline attachments before we move
+     * them behind detail references. Its preview can therefore omit the first
+     * prompt even when the projected conversation fits comfortably here.
+     * Hydration recovers that prefix, but each streaming revision changes the
+     * hydration token. Do not publish the smaller preview again while its next
+     * recovery is pending: that removes and reinserts the prompt every poll.
+     *
+     * Carry only an overlapping prefix from the same explicit history epoch
+     * and runtime identity. The entire old suffix must match the new prefix in
+     * order; new rows always supply the live content. Complete snapshots,
+     * rewritten histories and disjoint windows remain authoritative replacements.
+     * Reapply the normal count/byte bounds after joining the projected rows.
+     */
+    if (
+      snapshot.complete === false &&
+      snapshot.historyEpoch !== undefined &&
+      previous?.value.historyEpoch === snapshot.historyEpoch &&
+      previous.value.identity.providerSessionId === providerSessionId &&
+      previous.value.identity.sourceGeneration === identity.sourceGeneration &&
+      projectedMessages.length > 0
+    ) {
+      const id = (message: unknown) => (message as { id: string }).id;
+      const earlier = previous.value.messages;
+      const overlap = earlier.findIndex((message) => id(message) === id(projectedMessages[0]));
+      const liveIds = new Set(projectedMessages.map(id));
+      if (
+        overlap > 0 &&
+        earlier.slice(0, overlap).every((message) => !liveIds.has(id(message))) &&
+        earlier.length - overlap <= projectedMessages.length &&
+        earlier
+          .slice(overlap)
+          .every((message, index) => id(message) === id(projectedMessages[index]))
+      ) {
+        projectedMessages = [...earlier.slice(0, overlap), ...projectedMessages];
+        sourceComplete = previous.value.historyComplete;
+      }
+    }
     const bounded = this.boundedProjectedMessages(
-      normalized.messages,
+      projectedMessages,
       input.liveWindow.messages,
       input.liveWindow.targetBytes,
     );
@@ -1670,11 +1710,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     // local count slice, so incompleteness itself is the remainder signal.
     const pageable =
       localPageable ||
-      (snapshot.complete === false && bounded.messages.length >= input.liveWindow.messages);
+      (sourceComplete === false && bounded.messages.length >= input.liveWindow.messages);
     const truncated =
-      Boolean(bounded.window.truncated || normalized.window.truncated) ||
-      snapshot.complete === false;
-    const complete = !pageable && snapshot.complete !== false;
+      Boolean(bounded.window.truncated || normalized.window.truncated) || sourceComplete === false;
+    const complete = !pageable && sourceComplete !== false;
     const historyEpoch =
       snapshot.historyEpoch ??
       (previous?.value.identity.providerSessionId === providerSessionId

@@ -4,7 +4,7 @@
  * Every provider exercises the shared authoritative-projection path.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { StrictMode, useEffect, type ReactNode } from "react";
+import { isValidElement, StrictMode, useEffect, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -66,6 +66,8 @@ const realPaneLayoutPersistenceSnapshot = { ...realPaneLayoutPersistence };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 const realNativeComposeBarPasteSnapshot = { ...realNativeComposeBarPaste };
 let renderVirtualizedMessages = false;
+let virtualizedMessageListRenderCount = 0;
+let latestRenderedMessageActions = new Map<string, ReactNode>();
 let latestTranscriptAnnotationProps:
   | {
       enabled: boolean;
@@ -77,28 +79,34 @@ let latestTranscriptAnnotationProps:
 mock.module("@/components/chat/VirtualizedMessageList", () => ({
   ...realVirtualizedMessageListSnapshot,
   VirtualizedMessageList: (props: any) => {
+    virtualizedMessageListRenderCount += 1;
     latestTranscriptAnnotationProps = props.annotation;
     if (!renderVirtualizedMessages) {
       const RealVirtualizedMessageList = realVirtualizedMessageListSnapshot.VirtualizedMessageList;
       return <RealVirtualizedMessageList {...props} />;
     }
+    latestRenderedMessageActions = new Map();
+    const renderedMessages = props.messages.map((message: NativeMessage, index: number) => {
+      const rendered = props.renderMessage(
+        index,
+        message,
+        props.resolvePreviousMessage
+          ? props.resolvePreviousMessage(props.messages, index)
+          : index > 0
+            ? props.messages[index - 1]
+            : null,
+      );
+      latestRenderedMessageActions.set(
+        message.id,
+        isValidElement<{ actions?: ReactNode }>(rendered) ? rendered.props.actions : undefined,
+      );
+      return <div key={props.computeItemKey(index, message)}>{rendered}</div>;
+    });
     return (
       <div data-testid="native-agent-transcript-test-list">
         {props.header}
         {props.messages.length === 0 ? props.emptyState : null}
-        {props.messages.map((message: NativeMessage, index: number) => (
-          <div key={props.computeItemKey(index, message)}>
-            {props.renderMessage(
-              index,
-              message,
-              props.resolvePreviousMessage
-                ? props.resolvePreviousMessage(props.messages, index)
-                : index > 0
-                  ? props.messages[index - 1]
-                  : null,
-            )}
-          </div>
-        ))}
+        {renderedMessages}
         {props.footer}
       </div>
     );
@@ -420,6 +428,8 @@ afterEach(() => {
   saveComposeDraftMock.mockClear();
   deleteComposeDraftMock.mockClear();
   composeDraftRecords.clear();
+  virtualizedMessageListRenderCount = 0;
+  latestRenderedMessageActions = new Map();
   latestPasteOptions = null;
   useEnvironmentStore.setState({ environments: [] });
   useConfigStore.getState().updateGlobalConfig({
@@ -6797,6 +6807,48 @@ describe("AgentNativeTab", () => {
         generation: "test-generation",
       }));
     }
+
+    test("keeps existing transcript actions stable across unrelated controller renders", async () => {
+      renderVirtualizedMessages = true;
+      const tabId = "tab-stable-transcript-actions";
+      const sessionKey = createSessionKey("env-1", tabId);
+      seedProjection({
+        phase: "running",
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: "Inspect the renderer",
+            parts: [{ type: "text", content: "Inspect the renderer" }],
+            createdAt: "2026-08-14T10:00:00.000Z",
+          },
+          {
+            id: "assistant-1",
+            role: "assistant",
+            content: "I am checking it.",
+            parts: [{ type: "text", content: "I am checking it." }],
+            createdAt: "2026-08-14T10:00:01.000Z",
+          },
+        ],
+      });
+      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+
+      await waitFor(() => expect(latestRenderedMessageActions.get("user-1")).toBeTruthy());
+      const firstAction = latestRenderedMessageActions.get("user-1");
+      const firstRenderCount = virtualizedMessageListRenderCount;
+
+      // Draft edits and transcript frames both re-render the controller. The
+      // already-rendered rows must retain their action element so NativeMessage's
+      // shallow memo can skip them instead of repainting the whole transcript.
+      act(() => {
+        useNativeComposeStore.getState().updateDraft(sessionKey, { text: "A draft update" });
+      });
+      await waitFor(() =>
+        expect(virtualizedMessageListRenderCount).toBeGreaterThan(firstRenderCount),
+      );
+
+      expect(latestRenderedMessageActions.get("user-1")).toBe(firstAction);
+    });
 
     test("keeps a catalog-omitted Pi selection visible on the locked Pi picker", async () => {
       seedProjection({

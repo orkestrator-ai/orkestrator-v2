@@ -1553,13 +1553,27 @@ export function SharedNativeAgentController({
     },
     [data, fork, label, platform, projection?.sessionId, projection?.title, updateDraft],
   );
+  const handleForkAction = useCallback(
+    (messageId: string, kind: MessageForkKind) => {
+      void handleFork(messageId, kind);
+    },
+    [handleFork],
+  );
+  // useMessageForkAction retains one element per message, which is what lets
+  // memo(NativeMessage) skip old rows while a new tool call streams. An inline
+  // callback here would invalidate that whole cache on every controller render.
   const renderForkAction = useMessageForkAction({
     agentLabel: label,
     disabled: forkInFlight || phase === "running" || phase === "recovering",
-    onFork: (messageId, kind) => {
-      void handleFork(messageId, kind);
-    },
+    onFork: handleForkAction,
   });
+  const renderMessageActions = useCallback(
+    (message: NativeMessage) => {
+      const planned = forkPlan.get(message.id);
+      return planned ? renderForkAction(message.id, planned.kind) : null;
+    },
+    [forkPlan, renderForkAction],
+  );
   const latestIsPlanReview =
     latestAssistantMessage?.planReview === true ||
     (platform === "cursor" &&
@@ -2093,12 +2107,7 @@ export function SharedNativeAgentController({
       onAddAnnotation={addTranscriptAnnotation}
       onUpdateAnnotationComment={updateTranscriptAnnotationComment}
       messageActions={
-        adapter.capabilities.fork && !isReadOnlyCoordinator
-          ? (message) => {
-              const planned = forkPlan.get(message.id);
-              return planned ? renderForkAction(message.id, planned.kind) : null;
-            }
-          : undefined
+        adapter.capabilities.fork && !isReadOnlyCoordinator ? renderMessageActions : undefined
       }
       onResumeClick={
         adapter.capabilities.resume && !isReadOnlyCoordinator

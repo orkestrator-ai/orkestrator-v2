@@ -138,6 +138,27 @@ export function publicApprovals(state: SessionState): unknown[] {
   }));
 }
 
+export function publicInteractions(state: SessionState): unknown[] {
+  return [...state.interactions.values()].map((interaction) =>
+    interaction.kind === "plan-approval"
+      ? {
+          id: interaction.id,
+          kind: interaction.kind,
+          plan: interaction.plan,
+          planTruncated: interaction.planTruncated,
+          requestedAt: interaction.requestedAt,
+          expiresAt: interaction.expiresAt,
+        }
+      : {
+          id: interaction.id,
+          kind: interaction.kind,
+          questions: interaction.questions,
+          requestedAt: interaction.requestedAt,
+          expiresAt: interaction.expiresAt,
+        },
+  );
+}
+
 export function setStructuredResult(state: SessionState, requestId: string, value: unknown): void {
   if (!state.structured.has(requestId) && state.structured.size >= MAX_STRUCTURED_RESULTS) {
     const oldest = state.structured.keys().next().value;

@@ -260,11 +260,14 @@ export class AppServerRuntimeTail extends AppServerRuntimePrompt {
    * appearing after the migration.
    */
   async listSessions(): Promise<{
-    sessions: Array<{ id: string; title?: string; updatedAt: string }>;
+    sessions: Array<{ id: string; title?: string; detail?: string; updatedAt: string }>;
     cwd: string;
   }> {
     const cwd = getWorkingDirectory(this.options.cwd);
-    const merged = new Map<string, { id: string; title?: string; updatedAt: string }>();
+    const merged = new Map<
+      string,
+      { id: string; title?: string; detail?: string; updatedAt: string }
+    >();
 
     try {
       const { threads } = await this.options.engine.listThreads({ cwd });
@@ -273,6 +276,7 @@ export class AppServerRuntimeTail extends AppServerRuntimePrompt {
         merged.set(thread.id, {
           id: thread.id,
           title: thread.name ?? thread.preview ?? undefined,
+          ...(thread.originator ? { detail: `Created by ${thread.originator.slice(0, 120)}` } : {}),
           updatedAt: thread.updatedAt ?? new Date(this.now()).toISOString(),
         });
       }

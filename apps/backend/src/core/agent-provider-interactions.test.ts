@@ -14,6 +14,7 @@ import {
 } from "./native-agent-provider.js";
 import {
   codexConnection,
+  grokConnection,
   httpProvider,
   waitUntil,
   deferred,
@@ -25,6 +26,69 @@ import {
 } from "./agent-provider-test-support.js";
 
 describe("provider-neutral interaction adapters", () => {
+  test("normalizes Grok plan and question requests and maps their exact outcomes", async () => {
+    const requestedAt = Date.now();
+    const expiresAt = requestedAt + 60_000;
+    let interactions: Array<Record<string, unknown>> = [
+      {
+        id: "plan-call",
+        kind: "plan-approval",
+        plan: "# Plan\n\nShip the adapter.",
+        planTruncated: false,
+        requestedAt,
+        expiresAt,
+      },
+      {
+        id: "question-call",
+        kind: "question",
+        requestedAt,
+        expiresAt,
+        questions: [
+          {
+            id: "language",
+            question: "Which language?",
+            multiple: false,
+            options: [{ id: "typescript", label: "TypeScript" }],
+          },
+        ],
+      },
+    ];
+    const writes: Array<{ url: string; body: unknown }> = [];
+    const { provider } = httpProvider(async (url, init) => {
+      if (url.endsWith("/approvals")) return Response.json({ approvals: [] });
+      if (url.endsWith("/interactions")) return Response.json({ interactions });
+      if (url.includes("/interactions/")) {
+        writes.push({ url, body: JSON.parse(String(init.body)) });
+        const id = decodeURIComponent(url.split("/").at(-1)!);
+        interactions = interactions.filter((entry) => entry.id !== id);
+        return Response.json({ resolved: true });
+      }
+      return Response.json({ status: "idle" });
+    }, grokConnection);
+
+    const snapshot = await provider.interactions!.listPendingInteractions("session-1");
+    expect(snapshot.requests.map(({ kind }) => kind)).toEqual(["plan-approval", "question"]);
+    const plan = snapshot.requests[0]!;
+    const question = snapshot.requests[1]!;
+    await expect(
+      provider.interactions!.resolveInteraction("session-1", plan.id, {
+        ...declineResolution(plan),
+        feedback: "Add rollback steps",
+      }),
+    ).resolves.toMatchObject({ result: "applied" });
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        question.id,
+        answerResolution(question),
+      ),
+    ).resolves.toMatchObject({ result: "applied" });
+    expect(writes.map(({ body }) => body)).toEqual([
+      { action: "revise", feedback: "Add rollback steps" },
+      { action: "accept", answers: { language: ["typescript"] } },
+    ]);
+  });
+
   test("Claude snapshots and exact response mapping satisfy the shared contract", async () => {
     const expiresAt = Date.now() + 60_000;
     let questions: Array<Record<string, unknown>> = [

@@ -1393,9 +1393,9 @@ describe("build pipeline multi-model review", () => {
 
       expect(retried.phase).toBe("reviewing");
       expect(retried.reviewFanout?.reviewers).toHaveLength(4);
-      expect(retried.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "pending")).toBe(
-        true,
-      );
+      expect(
+        retried.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "pending"),
+      ).toBe(true);
       expect(retried.reviewFanout?.consolidation).toBeUndefined();
 
       await service.advanceNow(started.id);
@@ -1409,18 +1409,18 @@ describe("build pipeline multi-model review", () => {
       const started = await service.start(startInput(fourReviewers()));
 
       const failed = await advanceUntil(service, read, started.id, "failed", 20);
-      expect(failed.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "completed")).toBe(
-        true,
-      );
+      expect(
+        failed.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "completed"),
+      ).toBe(true);
       expect(failed.reviewFanout?.consolidation).toBeUndefined();
       expect(reviewerSessionCreates(provider)).toHaveLength(4);
 
       provider.failingCreateLabels.clear();
       const retried = await service.retryStage(started.id);
 
-      expect(retried.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "pending")).toBe(
-        true,
-      );
+      expect(
+        retried.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "pending"),
+      ).toBe(true);
       expect(retried.reviewFanout?.consolidation).toBeUndefined();
 
       await service.advanceNow(started.id);
@@ -1445,9 +1445,9 @@ describe("build pipeline multi-model review", () => {
       provider.failingModels.clear();
       const retried = await service.retryStage(started.id);
 
-      expect(retried.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "pending")).toBe(
-        true,
-      );
+      expect(
+        retried.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "pending"),
+      ).toBe(true);
 
       await service.advanceNow(started.id);
       expect(reviewerSessionCreates(provider)).toHaveLength(8);
@@ -1469,13 +1469,15 @@ describe("build pipeline multi-model review", () => {
         provider.runningConsolidation = true;
         const retried = await service.retryStage(started.id);
 
-        expect(retried.reviewFanout?.reviewers.map((reviewer) => reviewer.providerSessionId)).toEqual(
-          failed.reviewFanout!.reviewers.map((reviewer) => reviewer.providerSessionId),
-        );
+        expect(
+          retried.reviewFanout?.reviewers.map((reviewer) => reviewer.providerSessionId),
+        ).toEqual(failed.reviewFanout!.reviewers.map((reviewer) => reviewer.providerSessionId));
         expect(retried.reviewFanout?.consolidation?.providerSessionId).not.toBe(
           firstConsolidation.providerSessionId,
         );
-        expect(retried.reviewFanout?.consolidation?.requestId).not.toBe(firstConsolidation.requestId);
+        expect(retried.reviewFanout?.consolidation?.requestId).not.toBe(
+          firstConsolidation.requestId,
+        );
         expect(retried.reviewFanout?.consolidation?.resultTransport).toBe("tool-v1");
         expect(
           await workflowResults!.status(

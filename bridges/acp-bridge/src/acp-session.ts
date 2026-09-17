@@ -86,6 +86,7 @@ import { emptySessionConfig } from "./acp-persistence.js";
 import { persistState, schedulePersist } from "./acp-persist-writer.js";
 import { applyGrokInterjectionBroadcast } from "./grok-interjection.js";
 import { effectiveTurnExecutionPolicy } from "./acp-policy.js";
+import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 
 export async function listResumableSessions(): Promise<JsonObject[]> {
   if (sessionListProbe) return sessionListProbe;
@@ -268,6 +269,7 @@ export async function resumeSessionReserved(
       promptJournal: new Map(),
       grokInterjectionJournal: new Map(),
       approvals: new Map(),
+      interactions: new Map(),
       outputTruncated: false,
       uncheckedTranscriptBytes: 0,
       currentTurnOutput: null,
@@ -432,6 +434,7 @@ export async function createSessionReserved(
       promptJournal: new Map(),
       grokInterjectionJournal: new Map(),
       approvals: new Map(),
+      interactions: new Map(),
       outputTruncated: false,
       uncheckedTranscriptBytes: 0,
       currentTurnOutput: null,
@@ -501,6 +504,23 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
       return;
     }
     parkPermission(state, child, requestId, params);
+  };
+  child.onInteraction = (requestId, method, params) => {
+    if (provider !== "grok") return false;
+    if (
+      method !== "x.ai/exit_plan_mode" &&
+      method !== "_x.ai/exit_plan_mode" &&
+      method !== "x.ai/ask_user_question" &&
+      method !== "_x.ai/ask_user_question"
+    ) {
+      return false;
+    }
+    if (state.child !== child || sessions.get(state.id) !== state) {
+      child.respond(requestId, { outcome: "cancelled" });
+      return true;
+    }
+    parkGrokInteraction(state, child, requestId, method, params);
+    return true;
   };
   child.onClose = (error) => {
     // Only the currently attached child owns this session's approvals. A
@@ -647,6 +667,121 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
 export function clearApprovals(state: SessionState): void {
   for (const approval of state.approvals.values()) clearTimeout(approval.timer);
   state.approvals.clear();
+  clearInteractions(state);
+}
+
+export function clearInteractions(state: SessionState): void {
+  for (const interaction of state.interactions.values()) clearTimeout(interaction.timer);
+  state.interactions.clear();
+}
+
+export function parkGrokInteraction(
+  state: SessionState,
+  child: AcpProcess,
+  requestId: number,
+  method: string,
+  params: JsonObject,
+): void {
+  const cancelled = () => child.respond(requestId, { outcome: "cancelled" });
+  const toolCallId = typeof params.toolCallId === "string" ? params.toolCallId.trim() : "";
+  if (
+    params.sessionId !== state.acpSessionId ||
+    !toolCallId ||
+    toolCallId.length > AGENT_INTERACTION_LIMITS.maxIdLength ||
+    state.interactions.size >= AGENT_INTERACTION_LIMITS.maxPendingRequests
+  ) {
+    cancelled();
+    return;
+  }
+
+  const existing = state.interactions.get(toolCallId);
+  if (existing) existing.respond({ outcome: "cancelled" });
+  const requestedAt = Date.now();
+  const expiresAt = requestedAt + 5 * 60_000;
+  const finish = (result: JsonObject) => {
+    const interaction = state.interactions.get(toolCallId);
+    if (!interaction) return;
+    clearTimeout(interaction.timer);
+    state.interactions.delete(toolCallId);
+    child.respond(requestId, result);
+    state.revision += 1;
+    schedulePersist();
+  };
+  const timer = setTimeout(() => finish({ outcome: "cancelled" }), expiresAt - requestedAt);
+  timer.unref();
+
+  if (method.endsWith("exit_plan_mode")) {
+    const rawPlan = typeof params.planContent === "string" ? params.planContent : "";
+    const plan = rawPlan.slice(0, AGENT_INTERACTION_LIMITS.maxTextLength);
+    state.interactions.set(toolCallId, {
+      id: toolCallId,
+      kind: "plan-approval",
+      plan,
+      planTruncated: plan.length < rawPlan.length,
+      requestedAt,
+      expiresAt,
+      respond: finish,
+      timer,
+    });
+  } else {
+    const rawQuestions = Array.isArray(params.questions) ? params.questions : [];
+    const questions = rawQuestions
+      .slice(0, AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest)
+      .flatMap((candidate, questionIndex) => {
+        if (!isObject(candidate) || typeof candidate.question !== "string") return [];
+        const id =
+          typeof candidate.id === "string" && candidate.id.trim()
+            ? candidate.id.slice(0, AGENT_INTERACTION_LIMITS.maxIdLength)
+            : `q${questionIndex}`;
+        const options = (Array.isArray(candidate.options) ? candidate.options : [])
+          .slice(0, AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion)
+          .flatMap((rawOption, optionIndex) => {
+            if (!isObject(rawOption) || typeof rawOption.label !== "string") return [];
+            return [
+              {
+                id:
+                  typeof rawOption.id === "string" && rawOption.id.trim()
+                    ? rawOption.id.slice(0, AGENT_INTERACTION_LIMITS.maxProviderValueLength)
+                    : `o${optionIndex}`,
+                label: rawOption.label.slice(0, AGENT_INTERACTION_LIMITS.maxTextLength),
+                ...(typeof rawOption.description === "string"
+                  ? {
+                      description: rawOption.description.slice(
+                        0,
+                        AGENT_INTERACTION_LIMITS.maxTextLength,
+                      ),
+                    }
+                  : {}),
+              },
+            ];
+          });
+        return [
+          {
+            id,
+            question: candidate.question.slice(0, AGENT_INTERACTION_LIMITS.maxTextLength),
+            multiple: candidate.multiSelect === true,
+            options,
+          },
+        ];
+      });
+    const questionIds = questions.map((question) => question.id);
+    if (questions.length === 0 || new Set(questionIds).size !== questionIds.length) {
+      clearTimeout(timer);
+      cancelled();
+      return;
+    }
+    state.interactions.set(toolCallId, {
+      id: toolCallId,
+      kind: "question",
+      questions,
+      requestedAt,
+      expiresAt,
+      respond: finish,
+      timer,
+    });
+  }
+  state.revision += 1;
+  schedulePersist();
 }
 
 export function parkPermission(

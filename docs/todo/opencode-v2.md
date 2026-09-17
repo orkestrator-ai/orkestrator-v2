@@ -1,9 +1,9 @@
 # OpenCode V2 session protocol migration checkpoint
 
 Status: Deferred — do not migrate production OpenCode sessions yet.  
-Recorded: 2026-08-28; pin refreshed 2026-09-11.  
+Recorded: 2026-08-28; pin refreshed 2026-09-17.
 Code reviewed: `3962f549`  
-Orkestrator OpenCode SDK and CLI pin: `1.18.29`  
+Orkestrator OpenCode SDK and CLI pin: `1.18.31`
 The Session v2 protocol is still unused. Production stays on
 `@opencode-ai/sdk/v2/client` with the legacy `client.session.*` API. Re-run
 the live probe before treating any upstream claim as current.

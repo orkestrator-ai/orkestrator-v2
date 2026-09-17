@@ -623,7 +623,9 @@ function codexRateLimitLabel({
   const bucket =
     typeof snapshot.limitName === "string" && snapshot.limitName.trim().length > 0
       ? snapshot.limitName.trim()
-      : limitId;
+      : typeof snapshot.normalModelSlug === "string" && snapshot.normalModelSlug.trim().length > 0
+        ? snapshot.normalModelSlug.trim()
+        : limitId;
   if (multiBucket && bucket) return `${bucket} · ${duration ?? fallback}`;
   if (slot === "primary" && bucket) return bucket;
   return duration ?? (slot === "primary" ? "Usage limit" : "Secondary limit");

@@ -619,6 +619,28 @@ describe("deltas", () => {
     ]);
   });
 
+  test("projects provider reasoning changes from raw configuration updates", () => {
+    expect(
+      reduce("rawResponseItem/completed", {
+        threadId: "t1",
+        turnId: "turn-1",
+        item: {
+          type: "configuration_update",
+          reasoning: { effort: "high" },
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "turn.configuration.updated",
+        threadId: "t1",
+        turnId: "turn-1",
+        reasoningEffort: "high",
+        engineGeneration: 1,
+        handle: "handle-1",
+      },
+    ]);
+  });
+
   test("raw non-patch calls are not introduced as duplicate transcript items", () => {
     expect(
       reduce("rawResponseItem/completed", {

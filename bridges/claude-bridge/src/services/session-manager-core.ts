@@ -937,6 +937,9 @@ export async function buildClaudeUsageSnapshot(
     costUsd: (previous?.costUsd ?? 0) + (result.total_cost_usd ?? totals.cost),
     durationMs: (previous?.durationMs ?? 0) + (result.duration_ms ?? 0),
     apiDurationMs: (previous?.apiDurationMs ?? 0) + (result.duration_api_ms ?? 0),
+    ...(previous?.linesAdded !== undefined ? { linesAdded: previous.linesAdded } : {}),
+    ...(previous?.linesRemoved !== undefined ? { linesRemoved: previous.linesRemoved } : {}),
+    ...(previous?.credits ? { credits: previous.credits } : {}),
     permissionDenials:
       (previous?.permissionDenials ?? 0) + (result.permission_denials?.length ?? 0),
     ...(permissionDenialDetails.length > 0 ? { permissionDenialDetails } : {}),

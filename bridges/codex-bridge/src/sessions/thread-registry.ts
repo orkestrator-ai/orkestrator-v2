@@ -95,6 +95,8 @@ export interface BridgeSession {
   /** Null until the first prompt materializes a Codex thread. */
   threadId: string | null;
   config: EngineTurnConfig;
+  /** Guards provider-side configuration updates against a newer user edit. */
+  configurationRevision: number;
   title?: string;
   titleSource?: SessionTitleSource;
   titleGenerationAttempted?: boolean;
@@ -280,6 +282,7 @@ export class ThreadRegistry {
       | "localMessages"
       | "localMessagesTrimmed"
       | "messageRevision"
+      | "configurationRevision"
       | "contentEpoch"
       | "asyncQuestionItemIds"
       | "recoveredContextPending"
@@ -293,6 +296,7 @@ export class ThreadRegistry {
       localMessagesTrimmed: false,
       asyncQuestionItemIds: [],
       messageRevision: 0,
+      configurationRevision: 0,
       contentEpoch: 0,
       recoveredContextPending: false,
       lastAccessed: this.now(),
@@ -317,6 +321,7 @@ export class ThreadRegistry {
       | "localMessages"
       | "localMessagesTrimmed"
       | "messageRevision"
+      | "configurationRevision"
       | "contentEpoch"
       | "asyncQuestionItemIds"
       | "recoveredContextPending"
@@ -330,6 +335,7 @@ export class ThreadRegistry {
       localMessagesTrimmed: false,
       asyncQuestionItemIds: [...(session.asyncQuestionItemIds ?? [])],
       messageRevision: 0,
+      configurationRevision: 0,
       contentEpoch: 0,
       recoveredContextPending: false,
       createdAt: session.lastAccessed,

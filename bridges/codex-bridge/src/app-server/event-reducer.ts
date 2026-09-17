@@ -526,11 +526,27 @@ export function reduceNotification(
     }
 
     case "rawResponseItem/completed": {
-      if (!isRecord(params) || !turnId || !isRecord(params.item)) {
+      if (!isRecord(params) || !threadId || !turnId || !isRecord(params.item)) {
         return { events: [] };
       }
       const rawItem = params.item;
       const payloadType = str(rawItem.type);
+      if (payloadType === "configuration_update") {
+        const reasoning = isRecord(rawItem.reasoning) ? rawItem.reasoning : undefined;
+        const reasoningEffort = reasoning ? str(reasoning.effort)?.trim() : undefined;
+        if (!reasoningEffort) return { events: [] };
+        return {
+          events: [
+            {
+              kind: "turn.configuration.updated",
+              threadId,
+              turnId,
+              reasoningEffort,
+              ...base,
+            },
+          ],
+        };
+      }
       const callId = str(rawItem.call_id);
       if (!callId) return { events: [] };
 

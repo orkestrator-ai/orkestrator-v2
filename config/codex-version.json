@@ -11,9 +11,9 @@
     "  bun scripts/generate-codex-app-server-protocol.ts",
     "and verify in CI with `--check`."
   ],
-  "version": "0.153.4",
+  "version": "0.154.0",
   "appServerProtocol": {
-    "generatedFrom": "0.153.4",
+    "generatedFrom": "0.154.0",
     "outputDir": "bridges/codex-bridge/src/app-server/generated"
   }
 }

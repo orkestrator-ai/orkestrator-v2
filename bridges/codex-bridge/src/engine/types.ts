@@ -153,6 +153,8 @@ export interface EngineThread {
   name?: string | null;
   preview?: string;
   source?: string;
+  /** Provider-reported client that created the thread, for resume diagnostics. */
+  originator?: string;
   parentThreadId?: string | null;
   updatedAt?: string;
   createdAt?: string;
@@ -349,6 +351,12 @@ export type EngineEvent = EngineEventMeta &
     | { kind: "thread.started"; threadId: string }
     | { kind: "thread.model.updated"; threadId: string; model: string }
     | { kind: "turn.model.updated"; threadId: string; turnId: string; model: string }
+    | {
+        kind: "turn.configuration.updated";
+        threadId: string;
+        turnId: string;
+        reasoningEffort: string;
+      }
     | { kind: "turn.started"; threadId: string | null; turnId: string }
     | {
         kind: "item.started";

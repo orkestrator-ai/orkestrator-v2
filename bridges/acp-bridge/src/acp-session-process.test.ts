@@ -1,7 +1,8 @@
 import "./testing/unit-test-env.js";
 import { describe, expect, test } from "bun:test";
 import { sessions, type AcpProcess, type SessionState } from "./acp-context.js";
-import { attachChild, ensureSessionProcess } from "./acp-session.js";
+import { attachChild, ensureSessionProcess, parkGrokInteraction } from "./acp-session.js";
+import { publicInteractions } from "./acp-public.js";
 
 describe("ensureSessionProcess fingerprint", () => {
   test("a session created without agentMcp keeps the same child", async () => {
@@ -14,6 +15,7 @@ describe("ensureSessionProcess fingerprint", () => {
     const state = {
       child,
       approvals: new Map(),
+      interactions: new Map(),
       status: "idle",
     } as SessionState;
 
@@ -40,6 +42,7 @@ describe("ACP child generations", () => {
       acpSessionId: "vendor-session",
       child: oldChild,
       approvals: new Map(),
+      interactions: new Map(),
       status: "idle",
     } as SessionState;
     sessions.set(state.id, state);
@@ -58,5 +61,42 @@ describe("ACP child generations", () => {
     } finally {
       sessions.delete(state.id);
     }
+  });
+});
+
+describe("Grok reverse interactions", () => {
+  test("parks plan mode exits under the provider tool-call id and resolves exactly once", () => {
+    const responses: Array<{ id: number; result: unknown }> = [];
+    const child = {
+      respond: (id: number, result: unknown) => responses.push({ id, result }),
+    } as AcpProcess;
+    const state = {
+      id: "grok-test",
+      acpSessionId: "vendor-session",
+      child,
+      approvals: new Map(),
+      interactions: new Map(),
+      revision: 0,
+      status: "running",
+    } as SessionState;
+
+    parkGrokInteraction(state, child, 17, "x.ai/exit_plan_mode", {
+      sessionId: state.acpSessionId,
+      toolCallId: "tool-plan-1",
+      planContent: "# Plan\n\nImplement the adapter.",
+    });
+
+    expect(publicInteractions(state)).toEqual([
+      expect.objectContaining({
+        id: "tool-plan-1",
+        kind: "plan-approval",
+        plan: "# Plan\n\nImplement the adapter.",
+        planTruncated: false,
+      }),
+    ]);
+    state.interactions.get("tool-plan-1")!.respond({ outcome: "approved" });
+    state.interactions.get("tool-plan-1")?.respond({ outcome: "cancelled" });
+    expect(responses).toEqual([{ id: 17, result: { outcome: "approved" } }]);
+    expect(state.interactions).toHaveLength(0);
   });
 });

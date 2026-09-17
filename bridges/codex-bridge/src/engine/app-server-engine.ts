@@ -131,6 +131,7 @@ function allowlistRuntimeInventory(
       const name = optionalPublicString(entry.name);
       if (!name) continue;
       const serverInfo = objectRecord(entry.serverInfo);
+      const toolsError = optionalPublicString(entry.toolsError);
       allowed.push({
         name,
         ...(optionalPublicString(entry.status)
@@ -151,6 +152,7 @@ function allowlistRuntimeInventory(
         ...(entry.tools && typeof entry.tools === "object"
           ? { tools: allowlistToolInventory(entry.tools) }
           : {}),
+        ...(toolsError ? { toolsError } : {}),
       });
       continue;
     }
@@ -240,6 +242,8 @@ function allowlistRateLimitSnapshot(value: unknown): Record<string, unknown> {
   const rateLimits: Record<string, unknown> = {};
   const limitName = optionalPublicString(raw.limitName);
   if (limitName) rateLimits.limitName = limitName;
+  const normalModelSlug = optionalPublicString(raw.normalModelSlug);
+  if (normalModelSlug) rateLimits.normalModelSlug = normalModelSlug;
   for (const key of ["primary", "secondary"] as const) {
     const window = objectRecord(raw[key]);
     const allowed: Record<string, number> = {};
@@ -278,6 +282,9 @@ function allowlistRateLimits(value: unknown): Record<string, unknown> | { error:
   );
   return {
     rateLimits,
+    ...(typeof response.ordinaryUsageAllowed === "boolean"
+      ? { ordinaryUsageAllowed: response.ordinaryUsageAllowed }
+      : {}),
     ...(Object.keys(rateLimitsByLimitId).length > 0 ? { rateLimitsByLimitId } : {}),
   };
 }
@@ -301,6 +308,7 @@ export function rateLimitWindowsFromRead(value: unknown): EngineRateLimitWindow[
   const response = objectRecord(value);
   const snapshot = allowlistRateLimitSnapshot(response.rateLimits);
   const planLabel = optionalPublicString(snapshot.limitName);
+  const normalModelSlug = optionalPublicString(snapshot.normalModelSlug);
   const windows: EngineRateLimitWindow[] = [];
   for (const slot of ["primary", "secondary"] as const) {
     if (!Object.hasOwn(snapshot, slot)) continue;
@@ -319,7 +327,7 @@ export function rateLimitWindowsFromRead(value: unknown): EngineRateLimitWindow[
     const resetsAt = resetsAtMs !== undefined ? new Date(resetsAtMs).toISOString() : undefined;
     windows.push({
       slot,
-      label: slot === "primary" ? (planLabel ?? "Primary") : "Secondary",
+      label: slot === "primary" ? (planLabel ?? normalModelSlug ?? "Primary") : "Secondary",
       ...(usedPercent !== undefined ? { usedPercent } : {}),
       ...(resetsAt !== undefined ? { resetsAt } : {}),
       ...(windowMinutes !== undefined ? { windowMinutes } : {}),
@@ -1198,6 +1206,8 @@ export class AppServerEngine implements CodexEngine {
       result.status === "fulfilled" ? result.value : { error: "Unavailable" };
     const engine = this.getHealth();
     const mcpStatuses = mcpRuntimeStatus(value(mcp));
+    const rateLimitValue = value(rateLimits);
+    const ordinaryUsageAllowed = objectRecord(rateLimitValue).ordinaryUsageAllowed;
     return {
       engine: {
         state: engine.state,
@@ -1215,27 +1225,43 @@ export class AppServerEngine implements CodexEngine {
       mcp: allowlistRuntimeInventory(value(mcp), "mcp"),
       skills: allowlistRuntimeInventory(value(skills), "skills"),
       hooks: allowlistRuntimeInventory(value(hooks), "hooks"),
-      notices: this.runtimeNotices
-        .filter((notice) => threadId === undefined || notice.global || notice.threadId === threadId)
-        .filter((notice) => {
-          if (notice.method !== "mcpServer/startupStatus/updated" || !notice.subject) return true;
-          if (!mcpStatuses) return true;
-          if (!mcpStatuses.has(notice.subject)) return false;
-          return mcpStatusKeepsFailure(mcpStatuses.get(notice.subject));
-        })
-        .map((notice) => ({
-          method: notice.method,
-          message:
-            notice.method === "mcpServer/startupStatus/updated" && notice.subject
-              ? mcpRuntimeNoticeMessage(notice, mcpStatuses?.get(notice.subject))
-              : `Codex reported ${notice.method.replaceAll("/", " ")}`,
-          severity: notice.severity,
-          ...(notice.id ? { id: notice.id } : {}),
-          ...(notice.subject ? { subject: notice.subject } : {}),
-          ...(notice.detail ? { detail: notice.detail } : {}),
-          receivedAt: notice.receivedAt,
-        })),
-      rateLimits: allowlistRateLimits(value(rateLimits)),
+      notices: [
+        ...this.runtimeNotices
+          .filter(
+            (notice) => threadId === undefined || notice.global || notice.threadId === threadId,
+          )
+          .filter((notice) => {
+            if (notice.method !== "mcpServer/startupStatus/updated" || !notice.subject) return true;
+            if (!mcpStatuses) return true;
+            if (!mcpStatuses.has(notice.subject)) return false;
+            return mcpStatusKeepsFailure(mcpStatuses.get(notice.subject));
+          })
+          .map((notice) => ({
+            method: notice.method,
+            message:
+              notice.method === "mcpServer/startupStatus/updated" && notice.subject
+                ? mcpRuntimeNoticeMessage(notice, mcpStatuses?.get(notice.subject))
+                : `Codex reported ${notice.method.replaceAll("/", " ")}`,
+            severity: notice.severity,
+            ...(notice.id ? { id: notice.id } : {}),
+            ...(notice.subject ? { subject: notice.subject } : {}),
+            ...(notice.detail ? { detail: notice.detail } : {}),
+            receivedAt: notice.receivedAt,
+          })),
+        ...(ordinaryUsageAllowed === false
+          ? [
+              {
+                method: "account/rateLimits/read",
+                message:
+                  "Included Codex usage is unavailable for this account; configured credits may still be used.",
+                severity: "warning" as const,
+                id: "account:ordinary-usage-unavailable",
+                receivedAt: new Date().toISOString(),
+              },
+            ]
+          : []),
+      ],
+      rateLimits: allowlistRateLimits(rateLimitValue),
     };
   }
 
@@ -1428,6 +1454,7 @@ export class AppServerEngine implements CodexEngine {
       name: typeof thread.name === "string" ? thread.name : null,
       preview: typeof thread.preview === "string" ? thread.preview : undefined,
       source: describeSource(thread.source),
+      originator: optionalPublicString(thread.originator),
       parentThreadId: typeof thread.parentThreadId === "string" ? thread.parentThreadId : null,
       updatedAt: secondsToIso(thread.updatedAt),
       createdAt: secondsToIso(thread.createdAt),

@@ -872,6 +872,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         turnId: review.turnId,
         engineGeneration: this.options.engine.info().generation,
         assistantMessageId: assistantMessage.id,
+        configurationRevision: session.configurationRevision,
         expectsStructuredOutput: false,
         startedAt: context.turnStartedAt,
       });
@@ -1068,6 +1069,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     }
 
     session.config = nextConfig;
+    session.configurationRevision += 1;
     this.registry.touch(sessionId);
     return (await this.persistSessionVerified(session)) ? "updated" : "memory-only";
   }

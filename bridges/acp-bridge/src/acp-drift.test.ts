@@ -37,6 +37,7 @@ function state(): SessionState {
     promptJournal: new Map(),
     grokInterjectionJournal: new Map(),
     approvals: new Map(),
+    interactions: new Map(),
     outputTruncated: false,
     uncheckedTranscriptBytes: 0,
     currentTurnOutput: null,

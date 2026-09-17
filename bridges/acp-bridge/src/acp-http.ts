@@ -59,6 +59,7 @@ import {
   messageWindow,
   parseFromIndex,
   publicApprovals,
+  publicInteractions,
   publicContextUsage,
   publicSession,
   publicSessionReference,
@@ -177,7 +178,7 @@ export async function route(
     return json(response, 201, publicSession(state));
   }
   const match =
-    /^\/session\/([^/]+)(?:\/(messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|commands|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
+    /^\/session\/([^/]+)(?:\/(messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+)?|config|commands|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
       url.pathname,
     );
   if (!match) return json(response, 404, { error: "Not found" });
@@ -321,7 +322,10 @@ export async function route(
   if (action === "approvals" && request.method === "GET")
     return json(response, 200, { approvals: publicApprovals(state), revision: state.revision });
   if (action === "interactions" && request.method === "GET")
-    return json(response, 200, { interactions: [], revision: state.revision });
+    return json(response, 200, {
+      interactions: publicInteractions(state),
+      revision: state.revision,
+    });
   if (action?.startsWith("approvals/") && request.method === "POST") {
     const approval = state.approvals.get(decodeURIComponent(action.slice("approvals/".length)));
     if (!approval) return json(response, 404, { error: "Approval not found" });
@@ -336,6 +340,44 @@ export async function route(
             approval.options.find((option) => option.kind?.startsWith("reject"))?.optionId)
           : undefined;
     approval.respond(explicitOption ?? selectedByDecision);
+    return json(response, 200, { resolved: true });
+  }
+  if (action?.startsWith("interactions/") && request.method === "POST") {
+    const interaction = state.interactions.get(
+      decodeURIComponent(action.slice("interactions/".length)),
+    );
+    if (!interaction) return json(response, 404, { error: "Interaction not found" });
+    const body = await readJson(request);
+    if (interaction.kind === "plan-approval") {
+      const outcome =
+        body.action === "approve"
+          ? "approved"
+          : body.action === "abandon"
+            ? "abandoned"
+            : "cancelled";
+      interaction.respond({
+        outcome,
+        ...(outcome === "cancelled" && typeof body.feedback === "string"
+          ? { feedback: body.feedback.slice(0, 16_384) }
+          : {}),
+      });
+    } else if (body.action === "accept" && isObject(body.answers)) {
+      const submittedAnswers = body.answers;
+      const answers = Object.fromEntries(
+        interaction.questions.map((question) => {
+          const submitted = submittedAnswers[question.id];
+          return [
+            question.id,
+            Array.isArray(submitted)
+              ? submitted.filter((value): value is string => typeof value === "string").slice(0, 64)
+              : [],
+          ];
+        }),
+      );
+      interaction.respond({ outcome: "accepted", answers });
+    } else {
+      interaction.respond({ outcome: "cancelled" });
+    }
     return json(response, 200, { resolved: true });
   }
   if (action === "structured-output" && request.method === "GET") {

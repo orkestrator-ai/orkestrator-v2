@@ -143,7 +143,15 @@ export class OrkestratorBackend {
           projectId: string,
           target: "host" | "container",
           resultKey: string,
-        ) => this.agentTools.workflowResultConnection!(environmentId, projectId, target, resultKey)
+          provider?: import("@orkestrator/protocol/structured-output").StructuredOutputProvider,
+        ) =>
+          this.agentTools.workflowResultConnection!(
+            environmentId,
+            projectId,
+            target,
+            resultKey,
+            provider,
+          )
       : undefined;
     this.controlMcp =
       options.controlMcp ??

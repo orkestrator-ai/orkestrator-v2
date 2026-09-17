@@ -4,13 +4,18 @@ import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { AGENT_MAIL_MAX_LIST_LIMIT } from "@orkestrator/protocol/agent-mail";
+import type { StructuredOutputProvider } from "@orkestrator/protocol/structured-output";
+import { WORKFLOW_RESULT_MCP_SERVER_NAME } from "@orkestrator/protocol/workflow-results";
 import type { KanbanStatus, KanbanTask, StorageService } from "./storage.js";
 import {
   registerAgentMessagingTools,
   type AgentMessagingRateLimitKind,
 } from "./agent-tools-messaging.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
-import { registerWorkflowResultTools } from "./workflow-result-tools.js";
+import {
+  registerWorkflowResultBrokerTools,
+  registerWorkflowResultTools,
+} from "./workflow-result-tools.js";
 
 const MAX_MCP_REQUEST_BYTES = 512 * 1024;
 const MAX_TITLE_LENGTH = 500;
@@ -32,6 +37,8 @@ export const ORKESTRATOR_AGENT_MCP_SERVER_NAME = "orkestrator";
 export type AgentToolConnection = {
   url: string;
   token: string;
+  /** Signed one-attempt argument used with the persistent OpenCode broker. */
+  workflowResultCapability?: string;
 };
 
 export type AgentToolScope = {
@@ -39,6 +46,7 @@ export type AgentToolScope = {
   projectId: string;
   tabId?: string;
   workflowResultKey?: string;
+  workflowResultBroker?: boolean;
 };
 
 type StoredCredential = AgentToolScope & {
@@ -239,6 +247,21 @@ async function createAgentToolServer(
   consumeRateLimit: (kind: AgentMessagingRateLimitKind) => void,
   workflowResults?: WorkflowResultService,
 ): Promise<McpServer> {
+  if (scope.workflowResultBroker) {
+    const server = new McpServer(
+      { name: WORKFLOW_RESULT_MCP_SERVER_NAME, version: "1.0.0" },
+      {
+        instructions:
+          "Use only the result tool named by the current workflow instructions. Every call requires the resultKey and signed capability from those instructions.",
+      },
+    );
+    if (!workflowResults) throw new Error("Workflow result tools are unavailable");
+    registerWorkflowResultBrokerTools(server, workflowResults, {
+      environmentId: scope.environmentId,
+      projectId: scope.projectId,
+    });
+    return server;
+  }
   if (scope.workflowResultKey) {
     const server = new McpServer(
       { name: "orkestrator-workflow-result", version: "1.0.0" },
@@ -563,14 +586,45 @@ export class AgentToolsServer {
     projectId: string,
     target: "host" | "container",
     resultKey: string,
+    provider?: StructuredOutputProvider,
   ): AgentToolConnection {
     if (!this.server || !this.port) throw new Error("Agent tools server is not running");
     if (!this.workflowResults) throw new Error("Workflow result tools are unavailable");
-    const token = this.workflowResults.capabilityToken({ environmentId, projectId }, resultKey);
     const hostname = target === "container" ? "host.docker.internal" : "127.0.0.1";
+    const capability = this.workflowResults.capabilityToken(
+      { environmentId, projectId },
+      resultKey,
+    );
+    if (provider === "opencode") {
+      const credentialKey = `${environmentId}\0broker\0workflow-result`;
+      let credential = this.credentialsByEnvironment.get(credentialKey);
+      if (credential && credential.projectId !== projectId) {
+        this.revokeEnvironment(environmentId);
+        credential = undefined;
+      }
+      if (!credential) {
+        credential = {
+          environmentId,
+          projectId,
+          workflowResultBroker: true,
+          token: randomBytes(32).toString("base64url"),
+        };
+        this.credentialsByEnvironment.set(credentialKey, credential);
+        this.scopesByDigest.set(credentialDigest(credential.token), {
+          environmentId,
+          projectId,
+          workflowResultBroker: true,
+        });
+      }
+      return {
+        url: `http://${hostname}:${this.port}${AGENT_MCP_PATH}`,
+        token: credential.token,
+        workflowResultCapability: capability,
+      };
+    }
     return {
       url: `http://${hostname}:${this.port}${AGENT_MCP_PATH}`,
-      token,
+      token: capability,
     };
   }
 

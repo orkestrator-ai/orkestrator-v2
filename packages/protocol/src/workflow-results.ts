@@ -10,6 +10,7 @@ export const WORKFLOW_RESULT_MAX_REJECTIONS = 4;
 export const WORKFLOW_RESULT_MAX_PENDING_CALLS = 64;
 export const WORKFLOW_RESULT_MAX_PENDING_BYTES = 8 * 1024 * 1024;
 export const WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY = 2;
+export const WORKFLOW_RESULT_MCP_SERVER_NAME = "orkestrator_workflow_result";
 
 export const WORKFLOW_RESULT_KINDS = [
   "feature-plan-state",
@@ -125,9 +126,16 @@ export function workflowResultToolName(kind: WorkflowResultKind): string {
   return WORKFLOW_RESULT_TOOL_NAMES[kind];
 }
 
-export function workflowResultInstruction(kind: WorkflowResultKind, resultKey: string): string {
+export function workflowResultInstruction(
+  kind: WorkflowResultKind,
+  resultKey: string,
+  options: { capability?: string } = {},
+): string {
+  const capabilityArgument = options.capability
+    ? ` and capability ${JSON.stringify(options.capability)}`
+    : "";
   return wrapSystemInstructions(
-    `The following result-tool instructions replace any earlier instruction to emit final JSON, a tagged state block, or a provider-enforced schema for this turn. When your work is complete, call the Orkestrator \`${workflowResultToolName(kind)}\` tool with resultKey ${JSON.stringify(resultKey)} and the complete ${kind.replaceAll("-", " ")} in \`result\`. If the tool rejects the result, correct only the reported contract problems and call it again. If delivery is uncertain, call \`get_workflow_result_status\` with the same resultKey before resubmitting. After the tool accepts the result, finish with a concise prose response. Do not print the result as JSON in your final response. The backend decides when the workflow advances.`,
+    `The following result-tool instructions replace any earlier instruction to emit final JSON, a tagged state block, or a provider-enforced schema for this turn. When your work is complete, call the Orkestrator \`${workflowResultToolName(kind)}\` tool with resultKey ${JSON.stringify(resultKey)}${capabilityArgument} and the complete ${kind.replaceAll("-", " ")} in \`result\`. If the tool rejects the result, correct only the reported contract problems and call it again. If delivery is uncertain, call \`get_workflow_result_status\` with the same resultKey${capabilityArgument} before resubmitting. After the tool accepts the result, finish with a concise prose response. Do not print the result as JSON in your final response. The backend decides when the workflow advances.`,
   );
 }
 
@@ -189,10 +197,14 @@ export function workflowResultSubmissionLabel(
   return `${noun[0]!.toUpperCase()}${noun.slice(1)} needs attention`;
 }
 
-/** Providers with a qualified per-turn tool attachment and reconnect story. */
+/** Providers with qualified result-tool delivery and reconnect behavior. */
 export const QUALIFIED_WORKFLOW_RESULT_TOOL_PROVIDERS: readonly StructuredOutputProvider[] = [
   "claude",
   "codex",
+  "cursor",
+  "grok",
+  "opencode",
+  "pi",
 ];
 
 /**

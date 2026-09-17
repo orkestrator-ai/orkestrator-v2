@@ -9,6 +9,8 @@ import {
   effectiveOpenCodePolicy,
   openCodePermissionRules,
   openCodeReviewPermissionRules,
+  openCodeWorkflowResultPermissionRules,
+  openCodeWorkflowResultTurnTools,
 } from "./opencode-provider-helpers.js";
 
 const liveTest = process.env.RUN_LIVE_OPENCODE_COMPATIBILITY === "1" ? test : test.skip;
@@ -227,6 +229,88 @@ liveTest(
       expect(transcript).toContain("prevents you from using this specific tool call");
     } finally {
       modelServer.stop(true);
+      if (server && server.exitCode === null) {
+        server.kill();
+        await Promise.race([server.exited, Bun.sleep(2_000)]);
+        if (server.exitCode === null) server.kill("SIGKILL");
+      }
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  30_000,
+);
+
+liveTest(
+  "a partial prompt tools map replaces session.permission; omitting tools keeps the review suffix",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "ork-opencode-workflow-tools-mask-"));
+    const port = await availableLoopbackPort();
+    const cliPath = process.env.OPENCODE_CLI_PATH?.trim() || "opencode";
+    let server: ReturnType<typeof Bun.spawn> | undefined;
+    try {
+      const config = join(root, "config");
+      const data = join(root, "data");
+      const state = join(root, "state");
+      const cache = join(root, "cache");
+      await Promise.all([config, data, state, cache].map((directory) => mkdir(directory)));
+      await writeFile(join(root, "opencode.json"), JSON.stringify({}));
+      server = Bun.spawn(
+        [cliPath, "serve", "--pure", "--hostname", "127.0.0.1", "--port", String(port)],
+        {
+          cwd: root,
+          env: {
+            ...process.env,
+            XDG_CONFIG_HOME: config,
+            XDG_DATA_HOME: data,
+            XDG_STATE_HOME: state,
+            XDG_CACHE_HOME: cache,
+          },
+          stdout: "ignore",
+          stderr: "ignore",
+        },
+      );
+      const baseUrl = `http://127.0.0.1:${port}`;
+      await waitForHealth(baseUrl, server);
+      const client = createOpencodeClient({ baseUrl });
+      const policy = effectiveOpenCodePolicy(
+        resolveNativeAgentExecutionPolicy(
+          { environmentType: "local", networkAccessMode: "full" },
+          "looped-review",
+        ),
+      );
+      const created = await client.session.create({
+        title: "Workflow tools mask probe",
+        permission: openCodePermissionRules(policy),
+      });
+      if (created.error || !created.data?.id) throw new Error("OpenCode did not create a session");
+      const sessionId = created.data.id;
+      const workflow = openCodeWorkflowResultPermissionRules("submit_review_report");
+      const review = openCodeReviewPermissionRules(policy);
+      const updated = await client.session.update({
+        sessionID: sessionId,
+        permission: [...workflow, ...review],
+      });
+      if (updated.error) throw new Error("OpenCode did not update permissions");
+      const afterUpdate = await client.session.get({ sessionID: sessionId });
+      expect(afterUpdate.data?.permission?.slice(-review.length)).toEqual(review);
+
+      const withoutTools = await client.session.promptAsync({
+        sessionID: sessionId,
+        parts: [{ type: "text", text: "Do not call tools." }],
+      });
+      if (withoutTools.error) throw new Error("OpenCode rejected the unmasked prompt");
+      const preserved = await client.session.get({ sessionID: sessionId });
+      expect(preserved.data?.permission?.slice(-review.length)).toEqual(review);
+
+      const masked = await client.session.promptAsync({
+        sessionID: sessionId,
+        tools: openCodeWorkflowResultTurnTools("submit_review_report"),
+        parts: [{ type: "text", text: "Do not call tools." }],
+      });
+      if (masked.error) throw new Error("OpenCode rejected the masked prompt");
+      const replaced = await client.session.get({ sessionID: sessionId });
+      expect(replaced.data?.permission?.slice(-review.length)).not.toEqual(review);
+    } finally {
       if (server && server.exitCode === null) {
         server.kill();
         await Promise.race([server.exited, Bun.sleep(2_000)]);

@@ -121,6 +121,20 @@ export class ProviderUnreachableError extends ProviderUnavailableError {
   }
 }
 
+/**
+ * Provider setup failed before the prompt request was written.
+ *
+ * MCP registration and permission preparation happen outside the prompt
+ * request. A failure here is unambiguously retryable: callers may reset a
+ * durable `dispatching` marker and send the same request id again.
+ */
+export class ProviderDispatchPreparationError extends ProviderUnavailableError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ProviderDispatchPreparationError";
+  }
+}
+
 export class ProviderSessionFailedError extends Error {
   readonly agent: ProviderAgent;
   readonly detail: string;
@@ -220,6 +234,8 @@ export interface ProviderSendOptions {
    * Resupplied on dispatch, but applied only to a durably marked reviewer.
    */
   reviewShellPolicy?: NativeAgentExecutionPolicy;
+  /** Exact workflow-result MCP tool to expose for this turn, when present. */
+  workflowResultTool?: string;
   requestId: string;
   attachments?: PromptAttachment[];
   images?: ProviderPromptImage[];
@@ -235,9 +251,27 @@ export interface ProviderSendOptions {
   parameterValues?: Record<string, string | boolean>;
   persistDefaults?: boolean;
   allowProviderCommands?: boolean;
-  /** Per-session Orkestrator MCP credential; consumed by Claude and Codex. */
-  agentMcp?: { url: string; token: string };
+  /** Scoped Orkestrator MCP connection for providers with a qualified delivery path. */
+  agentMcp?: {
+    url: string;
+    token: string;
+    /** Signed one-attempt argument for providers using a persistent MCP broker. */
+    workflowResultCapability?: string;
+  };
 }
+
+export type ProviderPrepareDispatchOptions = {
+  /**
+   * The tab-scoped Orkestrator MCP credential this turn will use.
+   *
+   * Supplied so a warm-up attach can connect the right identity instead of
+   * the process-env one, which would force the prompt to rebuild the
+   * session. Best-effort, like the attach itself.
+   */
+  agentMcp?: ProviderSendOptions["agentMcp"];
+  /** Exact workflow-result MCP tool this turn will expose, when present. */
+  workflowResultTool?: string;
+};
 
 export interface ProviderInteractiveSnapshot {
   status: ProviderStatus;
@@ -335,19 +369,7 @@ export interface AgentSessionProvider {
    * a failure must never block the dispatch that follows, because the prompt
    * request performs the same work itself.
    */
-  prepareDispatch?(
-    sessionId: string,
-    options?: {
-      /**
-       * The tab-scoped Orkestrator MCP credential this turn will use.
-       *
-       * Supplied so a warm-up attach can connect the right identity instead of
-       * the process-env one, which would force the prompt to rebuild the
-       * session. Best-effort, like the attach itself.
-       */
-      agentMcp?: { url: string; token: string };
-    },
-  ): Promise<void>;
+  prepareDispatch?(sessionId: string, options?: ProviderPrepareDispatchOptions): Promise<void>;
   /**
    * Ask whether the provider already holds this request id.
    *

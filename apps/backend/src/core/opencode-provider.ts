@@ -41,9 +41,11 @@ import {
   type ProviderSessionStateSnapshot,
   type ProviderTranscriptSnapshot,
   type ProviderInteractionObservationEvent,
+  type ProviderPrepareDispatchOptions,
   type ProviderSendOptions,
   type ProviderSessionRegistration,
   type ProviderStatus,
+  ProviderDispatchPreparationError,
   ProviderUnavailableError,
   type ProviderRuntimeHealth,
 } from "./agent-provider-contract.js";
@@ -93,6 +95,7 @@ import {
   DEFAULT_MONITOR_RETRY_MS,
   DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS,
   effectiveOpenCodePolicy,
+  isOpenCodeWorkflowResultToolName,
   openCodeAgentFor,
   listOpenCodeResumableSessions,
   type OpenCodeProviderDependencies,
@@ -114,12 +117,12 @@ import {
   waitForOpenCodeRetry,
 } from "./opencode-provider-helpers.js";
 import { OpenCodeReviewSessionPermissions } from "./opencode-review-session-permissions.js";
+import { OpenCodeWorkflowResultBroker } from "./opencode-workflow-result-broker.js";
 import { readOpenCodeStructuredOutput } from "./opencode-structured-output.js";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 const defaultOpenCodeMessageIds = new OpenCodeMessageIdCoordinator();
 export type { OpenCodeProviderDependencies } from "./opencode-provider-helpers.js";
-
 export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   readonly agent = "opencode" as const;
   private readonly client: OpencodeClient;
@@ -169,6 +172,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private readonly blockedSessions = new Set<string>();
   private readonly failedQuestionSessions = new Set<string>();
   private readonly sessionPolicies = new Map<string, NativeAgentExecutionPolicy>();
+  private readonly workflowResults: OpenCodeWorkflowResultBroker;
   private readonly reviewPermissions: OpenCodeReviewSessionPermissions;
   private readonly monitorController = new AbortController();
   private readonly monitorRetryMs: number;
@@ -220,6 +224,11 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       connection.directory,
       () => this.requestOptions(),
       (sessionId, policy) => this.sessionPolicies.set(sessionId, policy),
+    );
+    this.workflowResults = new OpenCodeWorkflowResultBroker(
+      this.client,
+      connection.directory,
+      () => this.requestOptions(),
     );
     this.capabilitiesAdapter = new OpenCodeCapabilities(this.client, connection.directory, () =>
       this.requestOptions(),
@@ -686,7 +695,25 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     }
   }
 
+  prepareDispatch(sessionId: string, options: ProviderPrepareDispatchOptions = {}): Promise<void> {
+    return this.workflowResults.prepare(sessionId, options);
+  }
+
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
+    const workflowResultCapability = options.agentMcp?.workflowResultCapability;
+    if (
+      Boolean(options.workflowResultTool) !== Boolean(workflowResultCapability) ||
+      (options.workflowResultTool !== undefined &&
+        !isOpenCodeWorkflowResultToolName(options.workflowResultTool))
+    ) {
+      throw new ProviderDispatchPreparationError(
+        "OpenCode workflow-result tool configuration is incomplete",
+      );
+    }
+    await this.workflowResults.prepare(sessionId, {
+      agentMcp: options.agentMcp,
+      workflowResultTool: options.workflowResultTool,
+    });
     const shapedPrompt = options.schema ? openCodeStructuredPrompt(prompt, options.schema) : prompt;
     const parts = openCodePromptParts(shapedPrompt, options);
     const selectedModel = options.model ?? this.connection.model;
@@ -720,6 +747,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         });
       }
       const messageID = this.messageIds.resolve(scope, history, options.requestId);
+      await this.workflowResults.enableForTurn(sessionId, options.workflowResultTool);
       const reviewShellEnabled = await this.reviewPermissions.enableForTurn(sessionId, options);
       const dispatchStartedAt = this.now();
       this.streamState.beginTurn(sessionId, dispatchStartedAt);
@@ -823,6 +851,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       }
       if (lifecycle === "running") return "running";
       if (lifecycle === "missing") return "missing";
+      await this.workflowResults.restore(sessionId);
       await this.reviewPermissions.restoreIfNeeded(sessionId);
       if (lifecycle === "idle") return "idle";
       return "error";

@@ -7,9 +7,14 @@ import {
   AmbiguousPromptDispatchError,
   createNativeAgentProvider,
   PromptRejectedError,
+  ProviderDispatchPreparationError,
   ProviderUnavailableError,
 } from "./native-agent-provider.js";
 import { openCodeIncompleteTurnRequestId } from "./opencode-turn-recovery.js";
+import {
+  openCodeWorkflowResultDenyPermissionRules,
+  openCodeWorkflowResultToolId,
+} from "./opencode-provider-helpers.js";
 import {
   deferred,
   expectedOpenCodeMessageId,
@@ -19,6 +24,291 @@ import {
 } from "./agent-provider-test-support.js";
 
 describe("OpenCode provider dispatch", () => {
+  test("registers the persistent result broker during attach and isolates tools via session rules", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    const agentMcp = {
+      url: "http://127.0.0.1:43123/mcp",
+      token: "broker-token",
+      workflowResultCapability: "signed-attempt-capability",
+    };
+    try {
+      await provider.prepareDispatch?.("owned-session", {
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
+      expect(fake.mcpAddCalls).toEqual([
+        {
+          directory: "/workspace",
+          name: "orkestrator_workflow_result",
+          config: {
+            type: "remote",
+            url: agentMcp.url,
+            headers: { Authorization: "Bearer broker-token" },
+            oauth: false,
+          },
+        },
+      ]);
+      const selected = openCodeWorkflowResultToolId("submit_review_report");
+      const other = openCodeWorkflowResultToolId("submit_fix_result");
+      const status = openCodeWorkflowResultToolId("get_workflow_result_status");
+      expect(fake.updateCalls[0]?.permission).toEqual([
+        { permission: selected, pattern: "*", action: "allow" },
+        { permission: status, pattern: "*", action: "allow" },
+      ]);
+
+      await provider.send("owned-session", "prompt", {
+        requestId: "request-1",
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
+      expect(fake.mcpAddCalls).toHaveLength(1);
+      expect(fake.promptCalls[0]?.tools).toBeUndefined();
+      await expect(provider.status("owned-session")).resolves.toBe("idle");
+      await provider.send("owned-session", "ordinary prompt", { requestId: "request-2" });
+
+      expect(fake.promptCalls[1]?.tools).toBeUndefined();
+      expect(fake.updateCalls[1]?.permission).toEqual(openCodeWorkflowResultDenyPermissionRules());
+      expect(fake.updateCalls[1]?.permission).toEqual(
+        expect.arrayContaining([
+          { permission: selected, pattern: "*", action: "deny" },
+          { permission: other, pattern: "*", action: "deny" },
+          { permission: status, pattern: "*", action: "deny" },
+        ]),
+      );
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("a pre-prompt MCP failure stays retryable and does not write a prompt", async () => {
+    const fake = openCodeFake();
+    fake.setMcpAddError(new Error("mcp add failed"));
+    const provider = openCodeProvider(fake);
+    const agentMcp = {
+      url: "http://127.0.0.1:43123/mcp",
+      token: "broker-token",
+      workflowResultCapability: "signed-attempt-capability",
+    };
+    try {
+      await expect(
+        provider.send("owned-session", "prompt", {
+          requestId: "request-1",
+          agentMcp,
+          workflowResultTool: "submit_review_report",
+        }),
+      ).rejects.toBeInstanceOf(ProviderDispatchPreparationError);
+      expect(fake.promptCalls).toHaveLength(0);
+
+      fake.setMcpAddError(null);
+      await provider.send("owned-session", "prompt", {
+        requestId: "request-1",
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
+      expect(fake.promptCalls).toHaveLength(1);
+      expect(fake.mcpAddCalls).toHaveLength(2);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("a pre-prompt session.update failure stays retryable and does not write a prompt", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    const agentMcp = {
+      url: "http://127.0.0.1:43123/mcp",
+      token: "broker-token",
+      workflowResultCapability: "signed-attempt-capability",
+    };
+    try {
+      fake.setUpdateResponse({ error: { message: "update failed" } });
+      await expect(
+        provider.send("owned-session", "prompt", {
+          requestId: "request-1",
+          agentMcp,
+          workflowResultTool: "submit_review_report",
+        }),
+      ).rejects.toBeInstanceOf(ProviderDispatchPreparationError);
+      expect(fake.promptCalls).toHaveLength(0);
+
+      fake.setUpdateResponse({ data: { id: "owned-session" } });
+      await provider.send("owned-session", "prompt", {
+        requestId: "request-1",
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
+      expect(fake.promptCalls).toHaveLength(1);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("shares one MCP registration across concurrent sends and re-registers after a token rotation", async () => {
+    const fake = openCodeFake();
+    const gate = deferred();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    fake.setMcpAddHandler(async (parameters) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await gate.promise;
+      inFlight -= 1;
+      return { data: true, parameters };
+    });
+    const provider = openCodeProvider(fake);
+    const agentMcp = {
+      url: "http://127.0.0.1:43123/mcp",
+      token: "broker-token",
+      workflowResultCapability: "signed-attempt-capability",
+    };
+    try {
+      const first = provider.send("owned-session", "one", {
+        requestId: "request-1",
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
+      const second = provider.send("other-session", "two", {
+        requestId: "request-2",
+        agentMcp,
+        workflowResultTool: "submit_fix_result",
+      });
+      await waitUntil(() => fake.mcpAddCalls.length === 1);
+      gate.resolve();
+      await Promise.all([first, second]);
+      expect(fake.mcpAddCalls).toHaveLength(1);
+      expect(maxInFlight).toBe(1);
+
+      await provider.send("owned-session", "rotated", {
+        requestId: "request-3",
+        agentMcp: { ...agentMcp, token: "rotated-token" },
+        workflowResultTool: "submit_review_report",
+      });
+      expect(fake.mcpAddCalls).toHaveLength(2);
+      expect(fake.mcpAddCalls[1]).toMatchObject({
+        config: { headers: { Authorization: "Bearer rotated-token" } },
+      });
+    } finally {
+      gate.resolve();
+      await provider.dispose?.();
+    }
+  });
+
+  test("a failed MCP registration leaves the broker unset so the next send retries", async () => {
+    const fake = openCodeFake();
+    fake.setMcpAddError(new Error("first add failed"));
+    const provider = openCodeProvider(fake);
+    const agentMcp = {
+      url: "http://127.0.0.1:43123/mcp",
+      token: "broker-token",
+      workflowResultCapability: "signed-attempt-capability",
+    };
+    try {
+      await expect(
+        provider.prepareDispatch?.("owned-session", {
+          agentMcp,
+          workflowResultTool: "submit_review_report",
+        }),
+      ).rejects.toBeInstanceOf(ProviderDispatchPreparationError);
+      expect(fake.mcpAddCalls).toHaveLength(1);
+
+      fake.setMcpAddError(null);
+      await provider.prepareDispatch?.("owned-session", {
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
+      expect(fake.mcpAddCalls).toHaveLength(2);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("idle restore after a recreated provider stays a single deny set", async () => {
+    const fake = openCodeFake();
+    const agentMcp = {
+      url: "http://127.0.0.1:43123/mcp",
+      token: "broker-token",
+      workflowResultCapability: "signed-attempt-capability",
+    };
+    const first = openCodeProvider(fake);
+    try {
+      await first.send("owned-session", "prompt", {
+        requestId: "request-1",
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
+      await expect(first.status("owned-session")).resolves.toBe("idle");
+    } finally {
+      await first.dispose?.();
+    }
+    const restored = openCodeProvider(fake);
+    try {
+      const before = (
+        ((await fake.client.session.get({ sessionID: "owned-session" })).data as {
+          permission?: unknown[];
+        }) ?? {}
+      ).permission;
+      const startingLength = Array.isArray(before) ? before.length : 0;
+      await restored.send("owned-session", "again", {
+        requestId: "request-2",
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
+      await expect(restored.status("owned-session")).resolves.toBe("idle");
+      const afterFirst = (
+        ((await fake.client.session.get({ sessionID: "owned-session" })).data as {
+          permission?: unknown[];
+        }) ?? {}
+      ).permission;
+      await restored.send("owned-session", "third", {
+        requestId: "request-3",
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
+      await expect(restored.status("owned-session")).resolves.toBe("idle");
+      const afterSecond = (
+        ((await fake.client.session.get({ sessionID: "owned-session" })).data as {
+          permission?: unknown[];
+        }) ?? {}
+      ).permission;
+      const deny = openCodeWorkflowResultDenyPermissionRules();
+      const idleRestores = fake.updateCalls.filter(
+        (update) =>
+          Array.isArray(update.permission) &&
+          JSON.stringify(update.permission) === JSON.stringify(deny),
+      );
+      expect(idleRestores.length).toBeGreaterThanOrEqual(2);
+      expect(Array.isArray(afterFirst) && afterFirst.length - startingLength).toBe(deny.length + 2);
+      expect(Array.isArray(afterSecond) && afterSecond.length - (afterFirst as unknown[]).length).toBe(
+        deny.length + 2,
+      );
+    } finally {
+      await restored.dispose?.();
+    }
+  });
+
+  test("rejects a workflow capability paired with a non-result tool before registration", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await expect(
+        provider.send("owned-session", "prompt", {
+          requestId: "request-1",
+          agentMcp: {
+            url: "http://127.0.0.1:43123/mcp",
+            token: "broker-token",
+            workflowResultCapability: "signed-attempt-capability",
+          },
+          workflowResultTool: "list_tickets",
+        }),
+      ).rejects.toThrow("OpenCode workflow-result tool configuration is incomplete");
+      expect(fake.mcpAddCalls).toHaveLength(0);
+      expect(fake.promptCalls).toHaveLength(0);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("rejects a disconnected model before creating a user-only turn", async () => {
     const fake = openCodeFake();
     Object.assign(fake.client as object, {

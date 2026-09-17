@@ -301,6 +301,141 @@ describe("agent Kanban tools", () => {
     });
   });
 
+  test("exposes a stable OpenCode broker while requiring a signed capability per attempt", async () => {
+    await server.stop();
+    const workflowResults = new WorkflowResultService(dataDir);
+    server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
+    await server.start();
+    const firstKey = crypto.randomUUID();
+    const secondKey = crypto.randomUUID();
+    for (const resultKey of [firstKey, secondKey]) {
+      await workflowResults.prepare({
+        resultKey,
+        kind: "feature-plan-state",
+        environmentId: "env-1",
+        projectId: "project-1",
+        provider: "opencode",
+      });
+    }
+    const first = server.workflowResultConnection(
+      "env-1",
+      "project-1",
+      "host",
+      firstKey,
+      "opencode",
+    );
+    const second = server.workflowResultConnection(
+      "env-1",
+      "project-1",
+      "host",
+      secondKey,
+      "opencode",
+    );
+    expect(second.token).toBe(first.token);
+    expect(second.workflowResultCapability).not.toBe(first.workflowResultCapability);
+
+    const listed = await rpc(first.url, first.token, "tools/list");
+    expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual([
+      ...WORKFLOW_RESULT_KINDS.map(workflowResultToolName),
+      "get_workflow_result_status",
+    ]);
+    expect(listed.body.result?.tools?.[0]?.inputSchema).toMatchObject({
+      required: ["resultKey", "capability", "result"],
+    });
+
+    const crossed = await rpc(first.url, first.token, "tools/call", {
+      name: "submit_feature_plan_state",
+      arguments: {
+        resultKey: firstKey,
+        capability: second.workflowResultCapability,
+        result: { phase: "collecting", title: "Tools", summary: "" },
+      },
+    });
+    expect(crossed.body.result).toMatchObject({
+      isError: true,
+      structuredContent: { ok: false, error: { code: "capability_denied" } },
+    });
+
+    const accepted = await rpc(first.url, first.token, "tools/call", {
+      name: "submit_feature_plan_state",
+      arguments: {
+        resultKey: firstKey,
+        capability: first.workflowResultCapability,
+        result: { phase: "collecting", title: "Tools", summary: "" },
+      },
+    });
+    expect(accepted.body.result?.structuredContent).toMatchObject({
+      ok: true,
+      lifecycle: "accepted",
+    });
+
+    const statusDenied = await rpc(first.url, first.token, "tools/call", {
+      name: "get_workflow_result_status",
+      arguments: {
+        resultKey: firstKey,
+        capability: second.workflowResultCapability,
+      },
+    });
+    expect(statusDenied.body.result).toMatchObject({
+      isError: true,
+      structuredContent: { ok: false, error: { code: "capability_denied" } },
+    });
+
+    const kindMismatch = await rpc(first.url, first.token, "tools/call", {
+      name: "submit_fix_result",
+      arguments: {
+        resultKey: firstKey,
+        capability: first.workflowResultCapability,
+        result: {
+          complete: true,
+          summary: "Wrong tool.",
+          filesChanged: [],
+          commandsRun: [],
+          notes: [],
+          limitations: [],
+        },
+      },
+    });
+    expect(kindMismatch.body.result).toMatchObject({
+      isError: true,
+      structuredContent: { ok: false, error: { code: "capability_denied" } },
+    });
+  });
+
+  test("reports storage failure from the OpenCode broker status tool", async () => {
+    await server.stop();
+    const workflowResults = new WorkflowResultService(dataDir);
+    server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
+    await server.start();
+    const resultKey = crypto.randomUUID();
+    await workflowResults.prepare({
+      resultKey,
+      kind: "feature-plan-state",
+      environmentId: "env-1",
+      projectId: "project-1",
+      provider: "opencode",
+    });
+    const connection = server.workflowResultConnection(
+      "env-1",
+      "project-1",
+      "host",
+      resultKey,
+      "opencode",
+    );
+    await writeFile(join(dataDir, "workflow-results.json"), "{not-json");
+    const failed = await rpc(connection.url, connection.token, "tools/call", {
+      name: "get_workflow_result_status",
+      arguments: {
+        resultKey,
+        capability: connection.workflowResultCapability,
+      },
+    });
+    expect(failed.body.result).toMatchObject({
+      isError: true,
+      structuredContent: { ok: false, error: { code: "storage_unavailable" } },
+    });
+  });
+
   test("starts ordinary tools after regenerating a truncated workflow capability identity", async () => {
     await server.stop();
     await writeFile(join(dataDir, "workflow-result-tools.json"), "");

@@ -54,12 +54,14 @@ import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/s
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
   workflowResultInstruction,
+  workflowResultToolName,
   type WorkflowResultKind,
 } from "@orkestrator/protocol/workflow-results";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import {
   AmbiguousPromptDispatchError,
+  ProviderDispatchPreparationError,
   readProviderStatus,
   type BuildPipelineProvider,
 } from "./build-pipeline-provider.js";
@@ -131,7 +133,11 @@ export interface BuildPipelineReviewFanoutDeps {
   workflowResults?: WorkflowResultService;
   /** Backend-owned admission gate, evaluated once per attempt. */
   workflowToolEnabled?(agent: ReviewerRecord["agent"], kind: WorkflowResultKind): boolean;
-  agentMcp?(pipeline: BuildPipeline, resultKey: string): AgentToolConnection | undefined;
+  agentMcp?(
+    pipeline: BuildPipeline,
+    resultKey: string,
+    provider?: BuildPipelineAgent,
+  ): AgentToolConnection | undefined;
 }
 
 /** What the supervisor should do after one fan-out pass. */
@@ -257,7 +263,8 @@ export class BuildPipelineReviewFanout {
       sessionLabelFor: (_reviewer, index) => pipelineIndependentReviewLabel(index),
       provider: (selection) => this.deps.provider(pipeline, selection.agent as BuildPipelineAgent),
       executionPolicy: () => this.deps.executionPolicy(pipeline),
-      agentMcp: async (_selection, resultKey) => this.deps.agentMcp?.(pipeline, resultKey),
+      agentMcp: async (selection, resultKey) =>
+        this.deps.agentMcp?.(pipeline, resultKey, selection.agent),
       ...(this.deps.workflowResults && this.deps.agentMcp
         ? {
             supportsToolResult: (selection: ReviewerRecord) =>
@@ -596,10 +603,9 @@ export class BuildPipelineReviewFanout {
           reports: consolidationReports(state.reviewers),
         });
       }
-      await attachAgentBeforeDispatch(provider, consolidation.providerSessionId);
       const agentMcp =
         consolidation.resultTransport === "tool-v1"
-          ? this.deps.agentMcp?.(pipeline, consolidation.requestId)
+          ? this.deps.agentMcp?.(pipeline, consolidation.requestId, consolidation.agent)
           : undefined;
       if (consolidation.resultTransport === "tool-v1" && this.deps.workflowResults) {
         await this.deps.workflowResults.prepare({
@@ -612,13 +618,29 @@ export class BuildPipelineReviewFanout {
           context: consolidationResultContext(state.reviewers),
         });
       }
+      await attachAgentBeforeDispatch(
+        provider,
+        consolidation.providerSessionId,
+        agentMcp
+          ? {
+              agentMcp,
+              ...(agentMcp.workflowResultCapability
+                ? { workflowResultTool: workflowResultToolName("consolidated-review") }
+                : {}),
+            }
+          : undefined,
+      );
       consolidation.state = "dispatching";
       await this.deps.save(pipeline);
       try {
         await provider.send(
           consolidation.providerSessionId,
           consolidation.resultTransport === "tool-v1"
-            ? `${prompt}\n\n${workflowResultInstruction("consolidated-review", consolidation.requestId)}`
+            ? `${prompt}\n\n${workflowResultInstruction(
+                "consolidated-review",
+                consolidation.requestId,
+                { capability: agentMcp?.workflowResultCapability },
+              )}`
             : prompt,
           {
             requestId: consolidation.requestId,
@@ -633,10 +655,16 @@ export class BuildPipelineReviewFanout {
               ? { fastMode: consolidation.fastMode }
               : {}),
             ...(agentMcp ? { agentMcp } : {}),
+            ...(agentMcp?.workflowResultCapability
+              ? { workflowResultTool: workflowResultToolName("consolidated-review") }
+              : {}),
           },
         );
       } catch (error) {
         if (error instanceof AmbiguousPromptDispatchError) return { kind: "working" };
+        consolidation.state = "prepared";
+        await this.deps.save(pipeline);
+        if (error instanceof ProviderDispatchPreparationError) return { kind: "working" };
         throw error;
       }
       consolidation.state = "sent";

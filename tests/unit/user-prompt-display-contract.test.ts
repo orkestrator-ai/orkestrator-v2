@@ -188,12 +188,14 @@ describe("backend prompt display contract", () => {
   });
 
   test("hides the default tool-v1 discovery dispatch including the result-tool paragraph", () => {
-    const source = `${withUnattendedPolicy(reviewValidationDiscoveryPrompt("main"))}\n\n${workflowResultInstruction("validation-plan", "k")}`;
+    const capability = "signed-attempt-capability";
+    const source = `${withUnattendedPolicy(reviewValidationDiscoveryPrompt("main"))}\n\n${workflowResultInstruction("validation-plan", "k", { capability })}`;
     const multiReview = `${reviewValidationDiscoveryPrompt("main")}\n\n${workflowResultInstruction("validation-plan", "k")}`;
 
     expect(userPromptDisplayText(source)).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
     expect(userPromptDisplayText(multiReview)).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
     expect(userPromptDisplayText(source)).not.toContain("submit_validation_plan");
+    expect(userPromptDisplayText(source)).not.toContain(capability);
     expect(userPromptDisplayText(multiReview)).not.toContain("result-tool instructions");
   });
 

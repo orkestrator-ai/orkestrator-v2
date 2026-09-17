@@ -23,8 +23,10 @@ import {
 } from "@orkestrator/protocol/feature-planning";
 import {
   workflowResultInstruction,
+  workflowResultToolName,
   type WorkflowResultKind,
 } from "@orkestrator/protocol/workflow-results";
+import type { StructuredOutputProvider } from "@orkestrator/protocol/structured-output";
 import {
   AmbiguousPromptDispatchError,
   createBuildPipelineProvider,
@@ -184,6 +186,7 @@ export interface FeaturePlanningServiceOptions {
     projectId: string,
     target: "host" | "container",
     resultKey: string,
+    provider?: StructuredOutputProvider,
   ) => AgentToolConnection;
 }
 
@@ -549,9 +552,23 @@ export class FeaturePlanningService {
       const agentMcp = toolMode
         ? this.agentMcp(environment, record.projectId, requestId)
         : undefined;
+      try {
+        await provider.prepareDispatch?.(sessionId, {
+          ...(agentMcp ? { agentMcp } : {}),
+          ...(agentMcp?.workflowResultCapability
+            ? { workflowResultTool: workflowResultToolName(resultKind) }
+            : {}),
+        });
+      } catch {
+        // Best-effort: send performs the same registration.
+      }
       await provider.send(
         sessionId,
-        toolMode ? `${prompt}\n\n${workflowResultInstruction(resultKind, requestId)}` : prompt,
+        toolMode
+          ? `${prompt}\n\n${workflowResultInstruction(resultKind, requestId, {
+              capability: agentMcp?.workflowResultCapability,
+            })}`
+          : prompt,
         {
           requestId,
           mode: "plan",
@@ -561,6 +578,9 @@ export class FeaturePlanningService {
             ? { fastMode: launchSettings.fastMode }
             : {}),
           ...(agentMcp ? { agentMcp } : {}),
+          ...(agentMcp?.workflowResultCapability
+            ? { workflowResultTool: workflowResultToolName(resultKind) }
+            : {}),
         },
       );
     } catch (error) {
@@ -1067,6 +1087,7 @@ export class FeaturePlanningService {
       projectId,
       environment.environmentType === "local" ? "host" : "container",
       resultKey,
+      "codex",
     );
   }
 

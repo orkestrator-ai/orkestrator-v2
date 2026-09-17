@@ -29,7 +29,10 @@ import {
   stripStructuredReviewProvenance,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
-import { workflowResultInstruction } from "@orkestrator/protocol/workflow-results";
+import {
+  workflowResultInstruction,
+  workflowResultToolName,
+} from "@orkestrator/protocol/workflow-results";
 import type { ReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { Environment } from "./models.js";
@@ -131,7 +134,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         workflowResults: this.options.workflowResults,
         workflowToolEnabled: (agent, kind) =>
           this.workflowToolEnabled(agent as BuildPipelineAgent, kind),
-        agentMcp: (pipeline, resultKey) => this.workflowAgentMcp(pipeline, resultKey),
+        agentMcp: (pipeline, resultKey, provider) =>
+          this.workflowAgentMcp(pipeline, resultKey, provider),
       });
     }
     return this.reviewFanoutRunner;
@@ -1232,14 +1236,27 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         schema,
       });
     }
-    await attachBeforeDispatch(provider, sessionId);
     const agentMcp =
-      resultTransport === "tool-v1" ? this.workflowAgentMcp(pipeline, requestId) : undefined;
+      resultTransport === "tool-v1" ? this.workflowAgentMcp(pipeline, requestId, agent) : undefined;
+    await attachBeforeDispatch(
+      provider,
+      sessionId,
+      agentMcp
+        ? {
+            agentMcp,
+            ...(agentMcp.workflowResultCapability && resultKind
+              ? { workflowResultTool: workflowResultToolName(resultKind) }
+              : {}),
+          }
+        : undefined,
+    );
     try {
       await provider.send(
         sessionId,
         resultTransport === "tool-v1" && resultKind
-          ? `${prompt}\n\n${workflowResultInstruction(resultKind, requestId)}`
+          ? `${prompt}\n\n${workflowResultInstruction(resultKind, requestId, {
+              capability: agentMcp?.workflowResultCapability,
+            })}`
           : prompt,
         {
           requestId,
@@ -1250,6 +1267,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           ...(typeof fastMode === "boolean" ? { fastMode } : {}),
           mode,
           ...(agentMcp ? { agentMcp } : {}),
+          ...(agentMcp?.workflowResultCapability && resultKind
+            ? { workflowResultTool: workflowResultToolName(resultKind) }
+            : {}),
         },
       );
       delete pipeline.pendingPromptAttempt;
@@ -1329,16 +1349,29 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     const mode =
       executionModeOverrideForPhase(attempt.phase) ??
       (sessionPhase && step ? executionModeForSessionPhase(sessionPhase, step.agent) : undefined);
-    await attachBeforeDispatch(provider, attempt.sessionId);
     const agentMcp =
       attempt.resultTransport === "tool-v1"
-        ? this.workflowAgentMcp(pipeline, attempt.requestId)
+        ? this.workflowAgentMcp(pipeline, attempt.requestId, step?.agent)
         : undefined;
+    await attachBeforeDispatch(
+      provider,
+      attempt.sessionId,
+      agentMcp
+        ? {
+            agentMcp,
+            ...(agentMcp.workflowResultCapability && resultKind
+              ? { workflowResultTool: workflowResultToolName(resultKind) }
+              : {}),
+          }
+        : undefined,
+    );
     try {
       await provider.send(
         attempt.sessionId,
         attempt.resultTransport === "tool-v1" && resultKind
-          ? `${attempt.prompt}\n\n${workflowResultInstruction(resultKind, attempt.requestId)}`
+          ? `${attempt.prompt}\n\n${workflowResultInstruction(resultKind, attempt.requestId, {
+              capability: agentMcp?.workflowResultCapability,
+            })}`
           : attempt.prompt,
         {
           requestId: attempt.requestId,
@@ -1349,6 +1382,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           effort: step?.effort,
           ...(typeof step?.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
           ...(agentMcp ? { agentMcp } : {}),
+          ...(agentMcp?.workflowResultCapability && resultKind
+            ? { workflowResultTool: workflowResultToolName(resultKind) }
+            : {}),
         },
       );
       const dispatchedSession = pipeline.sessions.find(

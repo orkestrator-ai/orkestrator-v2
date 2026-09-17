@@ -40,10 +40,15 @@ import {
   type ReviewFindingPool,
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
-import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import type {
+  JsonSchema,
+  StructuredOutputProvider,
+  StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   workflowResultInstruction,
+  workflowResultToolName,
   type WorkflowResultKind,
 } from "@orkestrator/protocol/workflow-results";
 import type { Environment, PersistedLoopedReviewWorkflow } from "./models.js";
@@ -53,6 +58,7 @@ import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
   AmbiguousPromptDispatchError,
+  ProviderDispatchPreparationError,
   createBuildPipelineProvider,
   ProviderUnavailableError,
   readProviderStatus,
@@ -339,6 +345,7 @@ export interface LoopedReviewServiceOptions {
     projectId: string,
     target: "host" | "container",
     resultKey: string,
+    provider?: StructuredOutputProvider,
   ) => AgentToolConnection;
   onInteractionObservation?: (
     event: ProviderInteractionObservationEvent & {
@@ -779,7 +786,7 @@ export class LoopedReviewService {
       const resultKind = this.workflowResultKind(dispatch.kind);
       const agentMcp =
         dispatch.resultTransport === "tool-v1"
-          ? await this.workflowAgentMcp(workflow, dispatch.requestId)
+          ? await this.workflowAgentMcp(workflow, dispatch.requestId, workflow.agent)
           : undefined;
       if (dispatch.resultTransport === "tool-v1" && this.options.workflowResults) {
         const reconciliationReport =
@@ -809,6 +816,16 @@ export class LoopedReviewService {
             : {}),
         });
       }
+      try {
+        await provider.prepareDispatch?.(session.providerSessionId, {
+          ...(agentMcp ? { agentMcp } : {}),
+          ...(agentMcp?.workflowResultCapability
+            ? { workflowResultTool: workflowResultToolName(resultKind) }
+            : {}),
+        });
+      } catch {
+        // Best-effort: send performs the same registration.
+      }
       dispatch.state = "dispatching";
       await this.save(workflow, lease.token);
       await this.assertFence(workflow.id, lease.token);
@@ -817,7 +834,9 @@ export class LoopedReviewService {
           session.providerSessionId,
           `${material.prompt}\n\n${UNATTENDED_POLICY_INSTRUCTION}${
             dispatch.resultTransport === "tool-v1"
-              ? `\n\n${workflowResultInstruction(resultKind, dispatch.requestId)}`
+              ? `\n\n${workflowResultInstruction(resultKind, dispatch.requestId, {
+                  capability: agentMcp?.workflowResultCapability,
+                })}`
               : ""
           }`,
           {
@@ -828,10 +847,18 @@ export class LoopedReviewService {
             effort: workflow.reasoningEffort,
             ...(typeof workflow.fastMode === "boolean" ? { fastMode: workflow.fastMode } : {}),
             ...(agentMcp ? { agentMcp } : {}),
+            ...(agentMcp?.workflowResultCapability
+              ? { workflowResultTool: workflowResultToolName(resultKind) }
+              : {}),
           },
         );
       } catch (error) {
         if (error instanceof AmbiguousPromptDispatchError) return;
+        if (error instanceof ProviderDispatchPreparationError) {
+          dispatch.state = "prepared";
+          await this.save(workflow, lease.token);
+          return;
+        }
         throw new DefiniteDispatchError(message(error));
       }
       await this.assertFence(workflow.id, lease.token);
@@ -1188,6 +1215,7 @@ export class LoopedReviewService {
   private async workflowAgentMcp(
     workflow: LoopedReviewWorkflow,
     resultKey: string,
+    provider?: StructuredOutputProvider,
   ): Promise<AgentToolConnection | undefined> {
     if (!this.options.resolveAgentToolConnection) return undefined;
     const environment = await this.storage.getEnvironment(workflow.environmentId);
@@ -1197,6 +1225,7 @@ export class LoopedReviewService {
       workflow.projectId,
       environment.environmentType === "local" ? "host" : "container",
       resultKey,
+      provider,
     );
   }
 

@@ -35,9 +35,14 @@ import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   type ReviewContractValidationIssue,
 } from "@orkestrator/protocol/structured-review";
-import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import type {
+  JsonSchema,
+  StructuredOutputProvider,
+  StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
 import {
   workflowResultInstruction,
+  workflowResultToolName,
   type WorkflowResultKind,
 } from "@orkestrator/protocol/workflow-results";
 import type { AppConfig, Environment } from "./models.js";
@@ -47,6 +52,7 @@ import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
   AmbiguousPromptDispatchError,
+  ProviderDispatchPreparationError,
   createBuildPipelineProvider,
   readProviderStatus,
   type BridgeConnection,
@@ -268,6 +274,7 @@ export interface MultiReviewServiceOptions {
     projectId: string,
     target: "host" | "container",
     resultKey: string,
+    provider?: StructuredOutputProvider,
   ) => AgentToolConnection;
   /**
    * Delivers the durable interactive handoff after {@link address} records it.
@@ -1682,7 +1689,8 @@ export class MultiReviewService {
       sessionLabelFor: (_reviewer, index) => `Multi Review · Reviewer ${index + 1}`,
       provider: (selection) => this.provider(workflow, selection),
       executionPolicy: () => this.executionPolicy(workflow),
-      agentMcp: (_selection, resultKey) => this.workflowAgentMcp(workflow, resultKey),
+      agentMcp: (selection, resultKey) =>
+        this.workflowAgentMcp(workflow, resultKey, selection.agent),
       ...(this.options.workflowResults
         ? {
             supportsToolResult: (selection: MultiReviewModelSelection) =>
@@ -2105,9 +2113,6 @@ export class MultiReviewService {
           prompt = addressPrompt(workflow.consolidatedReport!);
         }
       }
-      // Same reason as the reviewer dispatch: pay the cold start before the
-      // at-most-once window rather than inside it.
-      await attachAgentBeforeDispatch(provider, session.providerSessionId);
       await this.assertFence(workflow.id, token);
       const schema =
         request.kind === "prepare"
@@ -2123,7 +2128,7 @@ export class MultiReviewService {
             : "fix-result";
       const agentMcp =
         request.resultTransport === "tool-v1"
-          ? await this.workflowAgentMcp(workflow, request.requestId)
+          ? await this.workflowAgentMcp(workflow, request.requestId, selection.agent)
           : undefined;
       if (request.resultTransport === "tool-v1" && this.options.workflowResults) {
         await this.options.workflowResults.prepare({
@@ -2138,13 +2143,29 @@ export class MultiReviewService {
             : {}),
         });
       }
+      // Same reason as the reviewer dispatch: pay the cold start before the
+      // at-most-once window rather than inside it.
+      await attachAgentBeforeDispatch(
+        provider,
+        session.providerSessionId,
+        agentMcp
+          ? {
+              agentMcp,
+              ...(agentMcp.workflowResultCapability
+                ? { workflowResultTool: workflowResultToolName(resultKind) }
+                : {}),
+            }
+          : undefined,
+      );
       request.state = "dispatching";
       await this.save(workflow, token);
       try {
         await provider.send(
           session.providerSessionId,
           request.resultTransport === "tool-v1"
-            ? `${prompt}\n\n${workflowResultInstruction(resultKind, request.requestId)}`
+            ? `${prompt}\n\n${workflowResultInstruction(resultKind, request.requestId, {
+                capability: agentMcp?.workflowResultCapability,
+              })}`
             : prompt,
           {
             requestId: request.requestId,
@@ -2156,10 +2177,16 @@ export class MultiReviewService {
             effort: selection.reasoningEffort,
             ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
             ...(agentMcp ? { agentMcp } : {}),
+            ...(agentMcp?.workflowResultCapability
+              ? { workflowResultTool: workflowResultToolName(resultKind) }
+              : {}),
           },
         );
       } catch (error) {
         if (error instanceof AmbiguousPromptDispatchError) return;
+        request.state = "prepared";
+        await this.save(workflow, token);
+        if (error instanceof ProviderDispatchPreparationError) return;
         throw error;
       }
       await this.assertFence(workflow.id, token);
@@ -2800,6 +2827,7 @@ export class MultiReviewService {
   private async workflowAgentMcp(
     workflow: MultiReviewWorkflow,
     resultKey: string,
+    provider?: StructuredOutputProvider,
   ): Promise<AgentToolConnection | undefined> {
     if (!this.options.resolveAgentToolConnection) return undefined;
     const environment = await this.storage.getEnvironment(workflow.environmentId);
@@ -2809,6 +2837,7 @@ export class MultiReviewService {
       workflow.projectId,
       environment.environmentType === "local" ? "host" : "container",
       resultKey,
+      provider,
     );
   }
 

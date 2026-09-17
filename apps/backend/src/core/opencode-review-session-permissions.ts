@@ -42,10 +42,19 @@ function reviewSessionPolicy(value: unknown): NativeAgentExecutionPolicy | undef
   return marker.policy;
 }
 
-/** OpenCode appends update rules, so the newest complete suffix is authoritative. */
-function endsWithPermissionRules(left: unknown, right: unknown): boolean {
-  if (!Array.isArray(left) || !Array.isArray(right) || left.length < right.length) return false;
-  return JSON.stringify(left.slice(-right.length)) === JSON.stringify(right);
+/**
+ * OpenCode appends update rules. The reviewer-shell block is authoritative when
+ * it is present anywhere in the tail, not only as the newest suffix — a later
+ * workflow-result deny or allow set must not hide an active shell grant.
+ */
+function containsPermissionRules(left: unknown, right: unknown): boolean {
+  if (!Array.isArray(left) || !Array.isArray(right) || right.length === 0) return false;
+  if (left.length < right.length) return false;
+  const needle = JSON.stringify(right);
+  for (let offset = 0; offset <= left.length - right.length; offset += 1) {
+    if (JSON.stringify(left.slice(offset, offset + right.length)) === needle) return true;
+  }
+  return false;
 }
 
 /**
@@ -184,7 +193,7 @@ export class OpenCodeReviewSessionPermissions {
     this.policies.set(sessionId, policy);
     this.onPolicy(sessionId, policy);
     if (
-      endsWithPermissionRules(
+      containsPermissionRules(
         asRecord(response.data)?.permission,
         openCodeReviewPermissionRules(policy),
       )

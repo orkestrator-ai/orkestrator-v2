@@ -7,8 +7,10 @@ describe("WorkflowResultRollout", () => {
     const rollout = new WorkflowResultRollout(async () => undefined);
     expect(rollout.allows("codex", "review-report")).toBe(true);
     expect(rollout.allows("claude", "feature-plan-state")).toBe(true);
-    expect(rollout.allows("opencode", "review-report")).toBe(false);
-    expect(rollout.allows("cursor", "fix-result")).toBe(false);
+    expect(rollout.allows("cursor", "fix-result")).toBe(true);
+    expect(rollout.allows("grok", "consolidated-review")).toBe(true);
+    expect(rollout.allows("pi", "verification-result")).toBe(true);
+    expect(rollout.allows("opencode", "review-report")).toBe(true);
   });
 
   test("the master switch closes admission for every combination", async () => {
@@ -18,19 +20,17 @@ describe("WorkflowResultRollout", () => {
     expect(rollout.allows("claude", "verification-result")).toBe(false);
   });
 
-  test("configuration cannot enable a provider the code has not qualified", async () => {
+  test("configuration admits every qualified provider", async () => {
     const rollout = new WorkflowResultRollout(async () => ({
       enabled: true,
       providers: ["opencode", "cursor", "grok", "pi", "codex"],
       kinds: ["review-report"],
     }));
     await rollout.refresh();
-    // These four have no per-turn capability channel. Admitting them would
-    // dispatch a turn the model could never submit against.
-    expect(rollout.allows("opencode", "review-report")).toBe(false);
-    expect(rollout.allows("cursor", "review-report")).toBe(false);
-    expect(rollout.allows("grok", "review-report")).toBe(false);
-    expect(rollout.allows("pi", "review-report")).toBe(false);
+    expect(rollout.allows("opencode", "review-report")).toBe(true);
+    expect(rollout.allows("cursor", "review-report")).toBe(true);
+    expect(rollout.allows("grok", "review-report")).toBe(true);
+    expect(rollout.allows("pi", "review-report")).toBe(true);
     expect(rollout.allows("codex", "review-report")).toBe(true);
   });
 

@@ -564,57 +564,55 @@ describe("backend command I/O coverage", () => {
     ).rejects.toThrow("file is outside Orkestrator workspace storage");
   });
 
-  test("reads image previews from temporary storage without opening other temp files", async () => {
+  test("does not widen generic reads to image-named files in shared temporary storage", async () => {
     const temporaryDirectory = await createTempDir("ork-temp-image-preview-");
-    const imagePath = path.join(temporaryDirectory, "montage.PNG");
-    const nonImagePath = path.join(temporaryDirectory, "credentials.txt");
-    await fs.writeFile(imagePath, Buffer.from("temporary-image"));
-    await fs.writeFile(nonImagePath, Buffer.from("not-an-image"));
-
     const commands = createCommandRegistry();
     const context = {
       ...createContext(),
       worktreeDir: await createTempDir("ork-temp-image-worktrees-"),
     };
+    const extensions = [
+      "png",
+      "jpg",
+      "jpeg",
+      "gif",
+      "webp",
+      "avif",
+      "svg",
+      "bmp",
+      "ico",
+      "tif",
+      "tiff",
+    ];
+    for (const extension of [...extensions, "png.txt"]) {
+      const imagePath = path.join(temporaryDirectory, `unregistered.${extension}`);
+      await fs.writeFile(imagePath, Buffer.from("unregistered-temporary-file"));
+      await expect(
+        commands.get("read_file_base64")?.({ filePath: imagePath }, context),
+      ).rejects.toThrow("file is outside Orkestrator workspace storage");
+    }
 
+    const canonicalDirectory = await fs.realpath(temporaryDirectory);
     await expect(
-      commands.get("read_file_base64")?.({ filePath: imagePath }, context),
-    ).resolves.toBe(Buffer.from("temporary-image").toString("base64"));
-    await expect(
-      commands.get("read_file_base64")?.({ filePath: nonImagePath }, context),
-    ).rejects.toThrow("file is outside Orkestrator workspace storage");
-
-    const linkedImage = path.join(temporaryDirectory, "linked.png");
-    await fs.symlink(imagePath, linkedImage);
-    await expect(
-      commands.get("read_file_base64")?.({ filePath: linkedImage }, context),
-    ).rejects.toThrow("symbolic links are not allowed");
-
-    const outsideDirectory = await createTempDir(".ork-temp-image-outside-", os.homedir());
-    const outsideImage = path.join(outsideDirectory, "outside.png");
-    await fs.writeFile(outsideImage, Buffer.from("outside-image"));
-    await expect(
-      commands.get("read_file_base64")?.({ filePath: outsideImage }, context),
+      commands.get("read_file_base64")?.(
+        { filePath: path.join(canonicalDirectory, "unregistered.png") },
+        context,
+      ),
     ).rejects.toThrow("file is outside Orkestrator workspace storage");
   });
 
-  test("reads image previews from the conventional Unix /tmp directory", async () => {
+  test("rejects an image-named FIFO promptly without waiting for a writer", async () => {
     if (process.platform === "win32") return;
-
-    const temporaryDirectory = await createTempDir("ork-unix-temp-image-preview-", "/tmp");
-    const imagePath = path.join(temporaryDirectory, "montage.webp");
-    await fs.writeFile(imagePath, Buffer.from("unix-temporary-image"));
-
+    const workspaceStorage = path.join(os.homedir(), APP_SLUG, "workspaces");
+    const allowedRoot = await createTempDir("commands-io-fifo-", workspaceStorage);
+    const fifoPath = path.join(allowedRoot, "blocked.png");
+    await runCommand("mkfifo", [fifoPath]);
     const commands = createCommandRegistry();
-    const context = {
-      ...createContext(),
-      worktreeDir: await createTempDir("ork-unix-temp-image-worktrees-"),
-    };
 
     await expect(
-      commands.get("read_file_base64")?.({ filePath: imagePath }, context),
-    ).resolves.toBe(Buffer.from("unix-temporary-image").toString("base64"));
-  });
+      commands.get("read_file_base64")?.({ filePath: fifoPath }, createContext()),
+    ).rejects.toThrow("not a stable regular file");
+  }, 2_000);
 
   test("container base64 reader uses one bounded no-follow file snapshot", async () => {
     const directory = await createTempDir("ork-container-reader-");

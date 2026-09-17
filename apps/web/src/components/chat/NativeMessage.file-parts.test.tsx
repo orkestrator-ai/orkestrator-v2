@@ -31,6 +31,7 @@ describe("canLoadImagePreview inside a container", () => {
 describe("canLoadImagePreview on the host", () => {
   test("requires an absolute path, because a relative one has no root to resolve against", () => {
     expect(canLoadImagePreview("/home/ada/work/shot.png", undefined, undefined)).toBe(true);
+    expect(canLoadImagePreview("C:\\Users\\Ada\\shot.png", undefined, undefined)).toBe(true);
     expect(canLoadImagePreview("screens/shot.png", undefined, undefined)).toBe(false);
     expect(canLoadImagePreview("~/shot.png", undefined, undefined)).toBe(false);
   });

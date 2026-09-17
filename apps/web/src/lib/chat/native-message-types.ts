@@ -69,6 +69,8 @@ export interface NativeBasePart {
   content: string;
   /** Opaque backend-owned reference for heavy output/diff fields. */
   detailRef?: string;
+  /** Opaque session-scoped reference for an exact provider-reported image path. */
+  imageDetailRef?: string;
   /** Original attachment name when the readable path uses a staged/generated name. */
   filename?: string;
   /** Provider timestamp for when this individual message part first arrived. */

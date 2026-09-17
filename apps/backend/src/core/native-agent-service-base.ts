@@ -189,6 +189,8 @@ export abstract class NativeAgentServiceBase {
       sessionKey: string;
       details: NativeAgentToolDetails;
       bytes: number;
+      /** Exact provider-reported image path; never supplied by the renderer. */
+      localImagePath?: string;
     }
   >();
   /** Entries temporarily protected while an authoritative refresh recreates them. */

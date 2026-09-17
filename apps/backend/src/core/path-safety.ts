@@ -790,7 +790,13 @@ export async function readReadableHostFile(
   },
 ): Promise<Buffer> {
   const { canonicalRoot, targetPath } = await resolveReadableHostTarget(filePath, allowedRoots);
-  const handle = await fs.open(targetPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  // A FIFO blocks during a read-only open until a writer appears. Open every
+  // candidate nonblocking, then let the handle-backed regular-file check below
+  // reject FIFOs, devices, and sockets without tying up a libuv worker.
+  const handle = await fs.open(
+    targetPath,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+  );
 
   try {
     const initialStats = await handle.stat();

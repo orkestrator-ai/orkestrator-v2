@@ -130,6 +130,10 @@ function isRemoteImageUrl(fileUrl?: string): boolean {
   return typeof fileUrl === "string" && /^https?:\/\//i.test(fileUrl);
 }
 
+function isAbsoluteHostPath(path: string): boolean {
+  return path.startsWith("/") || /^[a-z]:[\\/]/i.test(path) || path.startsWith("\\\\");
+}
+
 function getSafeContainerRelativePath(path: string): string | null {
   if (!path || path.includes("\0") || path.includes("\n") || path.includes("\r")) {
     return null;
@@ -167,11 +171,12 @@ function getSafeContainerRelativePath(path: string): string | null {
  * A cheap pre-filter, not a guarantee. Inside a container it is exact, because
  * it runs the same containment the loader will. On the host it can only see
  * that the path is absolute: the renderer does not know the worktree root, and
- * the backend confines `read_file_base64` to workspace storage plus supported
- * images in the OS temp directory, and refuses to traverse a symbolic link, so
- * an absolute path can still turn out to be unreadable. The authoritative
- * answer arrives with the load, which is why the caller also passes
- * `onLoadUnavailable` and drops the preview when it fires.
+ * the backend confines `read_file_base64` to workspace storage. A normalized
+ * agent event can additionally carry a session-scoped exact-image reference;
+ * either path can still turn out to be unreadable if it disappears or becomes
+ * a symbolic link. The authoritative answer arrives with the load, which is
+ * why the caller also passes `onLoadUnavailable` and drops the preview when it
+ * fires.
  */
 export function canLoadImagePreview(
   path: string,
@@ -186,7 +191,7 @@ export function canLoadImagePreview(
     return getSafeContainerRelativePath(localFilePath ?? path) !== null;
   }
 
-  return Boolean(localFilePath ?? (path.startsWith("/") ? path : null));
+  return Boolean(localFilePath ?? (isAbsoluteHostPath(path) ? path : null));
 }
 
 export function FilePart({
@@ -267,7 +272,14 @@ export function FilePart({
         // No path and no inline copy on the part: the bytes live behind the
         // deferred detail reference. Fetch them before choosing a source.
         let resolvedFileUrl = fileUrl;
-        if (!resolvedFileUrl && detailRef && loadToolDetails) {
+        if (
+          detailRef &&
+          loadToolDetails &&
+          (!resolvedFileUrl ||
+            (!containerId &&
+              !resolvedFileUrl.startsWith("data:") &&
+              !isRemoteImageUrl(resolvedFileUrl)))
+        ) {
           let details = cachedToolDetails(detailRef);
           if (!details) {
             details = await loadToolDetails(detailRef);
@@ -302,7 +314,7 @@ export function FilePart({
           return dataUrl;
         }
 
-        const filePath = localFilePath ?? (path.startsWith("/") ? path : null);
+        const filePath = localFilePath ?? (isAbsoluteHostPath(path) ? path : null);
 
         if (!filePath) {
           throw new Error("No readable local image path available");

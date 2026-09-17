@@ -7,10 +7,13 @@ import {
   armWindowStartupAgentActivation,
   clearStoredPaneSelection,
   clearWindowBuildPipelineActivation,
+  clearWindowBuildPipelineHandoffResolutions,
   clearWindowStartupAgentActivation,
   consumeWindowBuildPipelineActivation,
   consumeWindowStartupAgentActivation,
   getWindowBuildPipelineActivation,
+  hasWindowBuildPipelineHandoffResolved,
+  markWindowBuildPipelineHandoffResolved,
   readStoredPaneSelection,
   wasWindowBuildPipelineSetupReadyAtArm,
   readWindowPaneSelection,
@@ -113,6 +116,37 @@ describe("read/clear", () => {
 
     consumeWindowBuildPipelineActivation("env-1", "pipeline-1");
     expect(wasWindowBuildPipelineSetupReadyAtArm("env-1")).toBe(false);
+  });
+
+  test("records a backend-driven pipeline handoff and keeps the latest per environment", () => {
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-1")).toBe(false);
+
+    markWindowBuildPipelineHandoffResolved("env-1", "pipeline-1");
+    markWindowBuildPipelineHandoffResolved("env-2", "pipeline-2");
+    markWindowBuildPipelineHandoffResolved("env-1", "pipeline-new");
+
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-1")).toBe(false);
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-new")).toBe(true);
+    expect(hasWindowBuildPipelineHandoffResolved("env-2", "pipeline-2")).toBe(true);
+    expect(hasWindowBuildPipelineHandoffResolved("env-unknown", "pipeline-1")).toBe(false);
+  });
+
+  test("clears backend-driven handoff resolutions only for the named environment", () => {
+    markWindowBuildPipelineHandoffResolved("env-1", "pipeline-1");
+    markWindowBuildPipelineHandoffResolved("env-2", "pipeline-2");
+
+    clearWindowBuildPipelineHandoffResolutions("env-1");
+
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "pipeline-1")).toBe(false);
+    expect(hasWindowBuildPipelineHandoffResolved("env-2", "pipeline-2")).toBe(true);
+  });
+
+  test("ignores blank identifiers when recording a handoff resolution", () => {
+    markWindowBuildPipelineHandoffResolved("", "pipeline-1");
+    markWindowBuildPipelineHandoffResolved("env-1", "");
+
+    expect(hasWindowBuildPipelineHandoffResolved("", "pipeline-1")).toBe(false);
+    expect(hasWindowBuildPipelineHandoffResolved("env-1", "")).toBe(false);
   });
 
   test("stores current window selection separately from legacy migration state", () => {

@@ -18,6 +18,7 @@ const STORAGE_KEY = "orkestrator.pane-selection.v1";
 const WINDOW_STORAGE_KEY = "orkestrator.window-pane-selection.v1";
 const WINDOW_STARTUP_AGENT_ACTIVATION_KEY = "orkestrator.window-startup-agent-activation.v1";
 const WINDOW_BUILD_PIPELINE_ACTIVATION_KEY = "orkestrator.window-build-pipeline-activation.v1";
+const WINDOW_BUILD_PIPELINE_HANDOFF_KEY = "orkestrator.window-build-pipeline-handoff.v1";
 
 /** Bounds on the record, so an app that has opened many environments over its
  * lifetime cannot grow this without limit. Oldest-written entries are evicted
@@ -103,6 +104,51 @@ function writeBuildPipelineActivations(entries: BuildPipelineActivation[]): void
   } catch {
     // Best-effort window presentation state. The pipeline keeps running even
     // when this client cannot remember to focus its tab after setup.
+  }
+}
+
+interface BuildPipelineHandoffResolution {
+  environmentId: string;
+  pipelineId: string;
+}
+
+function parseBuildPipelineHandoffResolution(
+  value: unknown,
+): BuildPipelineHandoffResolution | null {
+  if (!isRecord(value)) return null;
+  const { environmentId, pipelineId } = value;
+  if (typeof environmentId !== "string" || environmentId.length === 0) return null;
+  if (typeof pipelineId !== "string" || pipelineId.length === 0) return null;
+  return { environmentId, pipelineId };
+}
+
+function readBuildPipelineHandoffResolutions(): BuildPipelineHandoffResolution[] {
+  const store = storage();
+  if (!store) return [];
+  try {
+    const raw = store.getItem(desktopConnectionStorageKey(WINDOW_BUILD_PIPELINE_HANDOFF_KEY));
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed) || !Array.isArray(parsed.entries)) return [];
+    return parsed.entries
+      .map(parseBuildPipelineHandoffResolution)
+      .filter((entry): entry is BuildPipelineHandoffResolution => entry !== null);
+  } catch {
+    return [];
+  }
+}
+
+function writeBuildPipelineHandoffResolutions(entries: BuildPipelineHandoffResolution[]): void {
+  const store = storage();
+  if (!store) return;
+  try {
+    store.setItem(
+      desktopConnectionStorageKey(WINDOW_BUILD_PIPELINE_HANDOFF_KEY),
+      JSON.stringify({ version: 1, entries: entries.slice(-MAX_ENVIRONMENTS) }),
+    );
+  } catch {
+    // Best-effort window presentation state. Losing it costs at most one
+    // repeated focus change after setup, never the pipeline itself.
   }
 }
 
@@ -323,6 +369,47 @@ export function clearWindowBuildPipelineActivation(environmentId: string): void 
   const remaining = entries.filter((candidate) => candidate.environmentId !== environmentId);
   if (remaining.length === entries.length) return;
   writeBuildPipelineActivations(remaining);
+}
+
+/**
+ * Record that this window already followed a backend-published build tab for a
+ * pipeline it did not launch itself.
+ *
+ * A window that never armed a one-shot — the pipeline was started by an agent,
+ * a coordinator, another window or the web client — otherwise has no way to
+ * distinguish "the backend just handed selection to this pipeline" from "the
+ * user deliberately chose the setup terminal again". Keeping the latest resolved
+ * pipeline per environment lets the backend-driven handoff fire exactly once,
+ * while a later pipeline into the same environment still takes focus.
+ */
+export function markWindowBuildPipelineHandoffResolved(
+  environmentId: string,
+  pipelineId: string,
+): void {
+  if (!environmentId || !pipelineId) return;
+  const entries = readBuildPipelineHandoffResolutions().filter(
+    (candidate) => candidate.environmentId !== environmentId,
+  );
+  entries.push({ environmentId, pipelineId });
+  writeBuildPipelineHandoffResolutions(entries);
+}
+
+/** Whether this window already resolved the backend handoff for this pipeline. */
+export function hasWindowBuildPipelineHandoffResolved(
+  environmentId: string,
+  pipelineId: string,
+): boolean {
+  return readBuildPipelineHandoffResolutions().some(
+    (candidate) => candidate.environmentId === environmentId && candidate.pipelineId === pipelineId,
+  );
+}
+
+/** Drop remembered handoff resolutions when their environment is deleted. */
+export function clearWindowBuildPipelineHandoffResolutions(environmentId: string): void {
+  const entries = readBuildPipelineHandoffResolutions();
+  const remaining = entries.filter((candidate) => candidate.environmentId !== environmentId);
+  if (remaining.length === entries.length) return;
+  writeBuildPipelineHandoffResolutions(remaining);
 }
 
 /**

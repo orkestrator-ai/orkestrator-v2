@@ -23,11 +23,14 @@ import {
   armWindowBuildPipelineActivation,
   armWindowStartupAgentActivation,
   clearWindowBuildPipelineActivation,
+  clearWindowBuildPipelineHandoffResolutions,
   clearWindowStartupAgentActivation,
   consumeWindowBuildPipelineActivation,
   consumeWindowStartupAgentActivation,
   getWindowBuildPipelineActivation,
+  hasWindowBuildPipelineHandoffResolved,
   hasWindowStartupAgentActivation,
+  markWindowBuildPipelineHandoffResolved,
   readWindowPaneSelection,
   wasWindowBuildPipelineSetupReadyAtArm,
 } from "@/lib/pane-selection-storage";
@@ -222,13 +225,47 @@ function paneSelectionAllowsPipelineHandoff(
   );
 }
 
-/** Apply a launching Electron window's one-shot setup-to-pipeline handoff. */
+/**
+ * The build pipeline whose tab the backend made authoritative in this snapshot.
+ *
+ * A window that did not initiate the pipeline has no renderer-local one-shot, so
+ * the authoritative selection itself is the only signal it can follow. Reading
+ * it from the focused pane the handoff policy also inspects keeps an open but
+ * unselected build tab from stealing focus.
+ */
+function authoritativeActiveBuildPipelineId(state: EnvironmentPaneState): string | null {
+  const activeLeaf = findLeaf(state.root, (leaf) => leaf.id === state.activePaneId);
+  if (!activeLeaf) return null;
+  const activeTab = activeLeaf.tabs.find((tab) => tab.id === activeLeaf.activeTabId);
+  const pipelineId =
+    activeTab?.type === "claude-build" ? activeTab.buildTabData?.pipelineId : undefined;
+  return typeof pipelineId === "string" && pipelineId.trim().length > 0 ? pipelineId : null;
+}
+
+/**
+ * The pipeline this window should still hand off to without a local one-shot.
+ *
+ * Only a pipeline this window has not already resolved qualifies, so a user who
+ * deliberately returns to the setup terminal after the backend moved focus is
+ * not yanked back on every reconcile.
+ */
+function unhandledBackendBuildPipelineId(
+  environmentId: string,
+  authoritative: EnvironmentPaneState,
+): string | null {
+  const pipelineId = authoritativeActiveBuildPipelineId(authoritative);
+  if (!pipelineId) return null;
+  if (hasWindowBuildPipelineHandoffResolved(environmentId, pipelineId)) return null;
+  return pipelineId;
+}
+
+/** Apply this Electron window's setup-to-pipeline handoff for one pipeline. */
 function applyBuildPipelineSetupHandoff(
   environmentId: string,
   authoritative: EnvironmentPaneState,
   selected: EnvironmentPaneState,
+  pipelineId: string | null,
 ): { state: EnvironmentPaneState; pipelineId: string | null } {
-  const pipelineId = getWindowBuildPipelineActivation(environmentId);
   if (
     !pipelineId ||
     !environmentIsReadyForSetupHandoff(
@@ -316,6 +353,7 @@ export function armBuildPipelineTabActivation(environmentId: string, pipelineId:
 export function clearBuildPipelineTabActivation(environmentId: string): void {
   if (!window.orkestrator?.isolatedViewState) return;
   clearWindowBuildPipelineActivation(environmentId);
+  clearWindowBuildPipelineHandoffResolutions(environmentId);
 }
 
 /**
@@ -341,6 +379,11 @@ export function commitBuildPipelineSetupHandoff(
   if (!commit || commit.environmentId !== environmentId) return;
   buildPipelineActivationCommits.delete(state);
   consumeWindowBuildPipelineActivation(commit.environmentId, commit.pipelineId);
+  // Remember the decision regardless of whether an armed one-shot drove it. The
+  // armed one-shot is consumed here, so without this a later authoritative frame
+  // still selecting this pipeline would re-derive it and yank a user who had
+  // deliberately returned to the setup terminal.
+  markWindowBuildPipelineHandoffResolved(commit.environmentId, commit.pipelineId);
 }
 
 /**
@@ -546,8 +589,17 @@ export function reconcileAuthoritativePaneLayout(
       readWindowPaneSelection(environmentId),
     );
     // Apply the pipeline handoff first so a Start Build during setup wins over
-    // the automatic startup-agent landing in the same reconcile frame.
-    const buildHandoff = applyBuildPipelineSetupHandoff(environmentId, restored, selected);
+    // the automatic startup-agent landing in the same reconcile frame. A window
+    // that did not launch the pipeline has no one-shot, so fall back to the
+    // build tab the backend itself made authoritative. An armed window keeps
+    // following the pipeline it started, even when the backend selects another.
+    const armedPipelineId = getWindowBuildPipelineActivation(environmentId);
+    const buildHandoff = applyBuildPipelineSetupHandoff(
+      environmentId,
+      restored,
+      selected,
+      armedPipelineId ?? unhandledBackendBuildPipelineId(environmentId, restored),
+    );
     const startupHandoff = applyStartupAgentSetupHandoff(
       environmentId,
       restored,

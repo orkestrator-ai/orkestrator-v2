@@ -666,7 +666,7 @@ async function createControlMcp(
         "Use launch_environment for a new workspace and launch_job for an independent " +
         "agent tab in an existing ready environment. " +
         (coordinatorScope
-          ? "Prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review is a backend-only recovery primitive. Use open_multi_review or open_multi_review_fix to focus saved work. "
+          ? "Every launch_environment call requires baseBranch and baseCommit; copy the current values returned by get_launch_options. Prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review is a backend-only recovery primitive. Use open_multi_review or open_multi_review_fix to focus saved work. "
           : "") +
         "Reuse requestId when retrying mutations." +
         (coordinatorScope ? ` ${COORDINATOR_ASYNC_CONTRACT}` : ""),
@@ -702,7 +702,22 @@ async function createControlMcp(
     },
     async ({ projectId, environmentId }) => {
       const options = await launchOptions(invoke, projectId, environmentId);
-      return toolResult(options as unknown as JsonRecord);
+      if (!coordinatorScope) return toolResult(options as unknown as JsonRecord);
+      const repository = await invoke<unknown>("get_project_git_status", {
+        projectId: coordinatorScope.projectId,
+      });
+      const baseBranch = isRecord(repository) ? repository.branch : undefined;
+      const baseCommit = isRecord(repository) ? repository.headCommit : undefined;
+      return toolResult({
+        ...(options as unknown as JsonRecord),
+        coordinatorBase: {
+          ...(typeof baseBranch === "string" && baseBranch ? { baseBranch } : {}),
+          ...(typeof baseCommit === "string" && baseCommit ? { baseCommit } : {}),
+          requiredFor: "launch_environment",
+          guidance:
+            "Pass baseBranch and baseCommit unchanged to launch_environment. Refresh launch options before retrying if the repository context changed.",
+        },
+      });
     },
   );
 
@@ -1020,7 +1035,11 @@ async function createControlMcp(
     {
       title: "Launch an agent environment",
       description:
-        "Create, configure, and start an autonomous coding agent that can execute commands, modify workspace files, and use allowed network access. Reuse requestId when retrying.",
+        "Create, configure, and start an autonomous coding agent that can execute commands, modify workspace files, and use allowed network access. " +
+        (coordinatorScope
+          ? "Coordinator launches require baseBranch and baseCommit from get_launch_options. "
+          : "") +
+        "Reuse requestId when retrying.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         projectId: z.string().trim().min(1).max(200),
@@ -1033,11 +1052,25 @@ async function createControlMcp(
         conversationMode: z.enum(["plan", "build"]).default("build"),
         prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
         networkAccessMode: z.enum(["restricted", "full"]).optional(),
-        baseBranch: z.string().trim().min(1).max(500).optional(),
-        baseCommit: z
-          .string()
-          .regex(/^[0-9a-f]{40}$/i)
-          .optional(),
+        baseBranch: (coordinatorScope
+          ? z.string().trim().min(1).max(500)
+          : z.string().trim().min(1).max(500).optional()
+        ).describe(
+          coordinatorScope
+            ? "Required coordinator base branch; copy coordinatorBase.baseBranch from get_launch_options."
+            : "Optional branch to use as the environment base.",
+        ),
+        baseCommit: (coordinatorScope
+          ? z.string().regex(/^[0-9a-f]{40}$/i)
+          : z
+              .string()
+              .regex(/^[0-9a-f]{40}$/i)
+              .optional()
+        ).describe(
+          coordinatorScope
+            ? "Required coordinator base commit; copy coordinatorBase.baseCommit from get_launch_options."
+            : "Optional 40-character commit to use as the environment base.",
+        ),
       }),
       annotations: {
         readOnlyHint: false,

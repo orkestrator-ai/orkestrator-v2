@@ -43,6 +43,7 @@ function mayInjectMessage(mailbox: MailboxDescriptor, message: AgentMailMessageS
 
 export class AgentMailService {
   private drainTask: Promise<void> | null = null;
+  private drainRequested = false;
   private recovered = false;
   private readonly presence = new Map<string, { presence: MailboxPresence; at: number }>();
   private unsubscribe: (() => void) | null = null;
@@ -94,6 +95,18 @@ export class AgentMailService {
     await this.storage.synchronizeAgentMailboxes();
     await this.refreshPresence();
     this.unsubscribe ??= this.storage.addResourceChangeListener((change) => {
+      if (change.resource === "agent-mail") {
+        // Durable mail is the authority. Wake the backend dispatcher from the
+        // storage event so a worker report starts the coordinator's next turn
+        // without a mounted renderer or a lucky activity-poll ordering. The
+        // periodic sweep remains the recovery path for a missed event.
+        if (this.recovered) {
+          void this.drainInjects().catch((error) => {
+            console.warn("[agent-mail] Failed to drain newly received mail:", error);
+          });
+        }
+        return;
+      }
       if (
         ![
           "pane-layout",
@@ -243,8 +256,16 @@ export class AgentMailService {
   }
 
   drainInjects(): Promise<void> {
-    if (this.drainTask) return this.drainTask;
-    this.drainTask = this.drainInjectsOnce().finally(() => {
+    if (this.drainTask) {
+      this.drainRequested = true;
+      return this.drainTask;
+    }
+    this.drainTask = (async () => {
+      do {
+        this.drainRequested = false;
+        await this.drainInjectsOnce();
+      } while (this.drainRequested);
+    })().finally(() => {
       this.drainTask = null;
     });
     return this.drainTask;

@@ -1249,6 +1249,40 @@ describe("Orkestrator control MCP server", () => {
       capabilities: ["discovery", "environments", "jobs", "mail"],
     });
 
+    const listed = await rpc(credential.url, credential.token, "tools/list");
+    const launchTool = listed.body.result?.tools?.find(
+      (tool) => tool.name === "launch_environment",
+    ) as
+      | {
+          description?: string;
+          inputSchema?: {
+            required?: string[];
+            properties?: Record<string, { description?: string }>;
+          };
+        }
+      | undefined;
+    expect(launchTool?.description).toContain(
+      "Coordinator launches require baseBranch and baseCommit from get_launch_options",
+    );
+    expect(launchTool?.inputSchema?.required).toEqual(
+      expect.arrayContaining(["baseBranch", "baseCommit"]),
+    );
+    expect(launchTool?.inputSchema?.properties?.baseBranch?.description).toContain(
+      "coordinatorBase.baseBranch",
+    );
+
+    const launchOptions = await rpc(credential.url, credential.token, "tools/call", {
+      name: "get_launch_options",
+      arguments: { projectId: "project-1" },
+    });
+    expect(launchOptions.body.result?.structuredContent).toMatchObject({
+      coordinatorBase: {
+        baseBranch: "main",
+        baseCommit: "a".repeat(40),
+        requiredFor: "launch_environment",
+      },
+    });
+
     const launched = await rpc(credential.url, credential.token, "tools/call", {
       name: "launch_environment",
       arguments: {

@@ -9,6 +9,13 @@ import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
 
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import {
+  COORDINATOR_CONTEXT_CLOSE_TAG,
+  COORDINATOR_CONTEXT_OPEN_TAG,
+  COORDINATOR_EXECUTION_POLICY,
+  COORDINATOR_WORKSPACE_VERSION,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
+import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
   createCoordinatorDelegatedPrompt,
@@ -784,6 +791,86 @@ describe("NativeAgentService", () => {
             promptPresentation: COORDINATOR_DELEGATION_PRESENTATION,
           }),
           expect.not.objectContaining({ promptPresentation: expect.anything() }),
+        ]);
+      },
+    );
+  });
+
+  test("projects coordinator user prompts without the server-authored context", async () => {
+    const source = [
+      COORDINATOR_CONTEXT_OPEN_TAG,
+      "Project: project-1",
+      "Coordinator: coordinator-1",
+      "Role: read-only coordinator.",
+      COORDINATOR_CONTEXT_CLOSE_TAG,
+      "",
+      "Inspect the package inventory.",
+    ].join("\n");
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: source,
+            parts: [{ type: "text", content: source }],
+            createdAt: "2026-09-17T10:00:00.000Z",
+          },
+        ],
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-coordinator-context-projection-",
+        provider: async () => stub.provider,
+      },
+      async ({ storage, service }) => {
+        const project = await storage.addProject({
+          id: "project-1",
+          name: "Project",
+          gitUrl: "https://example.invalid/project.git",
+          localPath: "/tmp/project-1",
+          addedAt: new Date(0).toISOString(),
+          order: 0,
+        });
+        const now = new Date(0).toISOString();
+        await storage.mutateCoordinatorWorkspace(project.id, () => ({
+          version: COORDINATOR_WORKSPACE_VERSION,
+          id: "coordinator-1",
+          projectId: project.id,
+          executionPolicy: COORDINATOR_EXECUTION_POLICY,
+          lifecycleState: "ready",
+          conversations: [
+            {
+              id: "conversation-1",
+              tabId: "coordinator-tab",
+              logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+              agent: "codex",
+              title: "Coordinator",
+              createdAt: now,
+              mailboxIncarnationId: "incarnation-1",
+            },
+          ],
+          selectedConversationId: "conversation-1",
+          repositoryContextRevision: 0,
+          createdAt: now,
+          updatedAt: now,
+        }));
+        const identity = {
+          environmentId: coordinatorRuntimeId("coordinator-1", "conversation-1"),
+          agent: "codex" as const,
+          logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+        };
+        await service.ensureSession(identity);
+
+        const projection = await service.getProjection(identity);
+        expect(projection?.messages).toEqual([
+          expect.objectContaining({
+            role: "user",
+            content: "Inspect the package inventory.",
+            parts: [{ type: "text", content: "Inspect the package inventory." }],
+          }),
         ]);
       },
     );

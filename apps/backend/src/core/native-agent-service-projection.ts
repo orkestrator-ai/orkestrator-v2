@@ -25,6 +25,10 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { parseCoordinatorDelegatedPrompt } from "@orkestrator/protocol/review-evidence-frames";
 import {
+  coordinatorIdFromRuntimeId,
+  stripCoordinatorContext,
+} from "@orkestrator/protocol/coordinator";
+import {
   NATIVE_DISCOVERY_RETRY_MS,
   NATIVE_AUTH_STATUS_CACHE_LIMIT,
   NATIVE_AUTH_STATUS_TTL_MS,
@@ -518,6 +522,31 @@ function normalizedProgressiveMessages(value: unknown): unknown[] | null {
   return value;
 }
 
+function coordinatorDisplayMessage<T>(raw: T): T {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const message = raw as Record<string, unknown>;
+  if (message.role !== "user") return raw;
+  const projected: Record<string, unknown> = { ...message };
+  if (typeof message.content === "string") {
+    projected.content = stripCoordinatorContext(message.content);
+  }
+  if (Array.isArray(message.parts)) {
+    let stripped = false;
+    projected.parts = message.parts.map((rawPart) => {
+      if (stripped || !rawPart || typeof rawPart !== "object" || Array.isArray(rawPart)) {
+        return rawPart;
+      }
+      const part = rawPart as Record<string, unknown>;
+      if (part.type !== "text" || typeof part.content !== "string") return rawPart;
+      const content = stripCoordinatorContext(part.content);
+      if (content === part.content) return rawPart;
+      stripped = true;
+      return { ...part, content };
+    });
+  }
+  return projected as T;
+}
+
 function progressiveHydrationToken(snapshot: ProviderTranscriptSnapshot): string {
   if (snapshot.sourceToken) return snapshot.sourceToken;
   const first = snapshot.messages[0] as { id?: unknown } | undefined;
@@ -867,6 +896,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     limit: number,
     maximumBytes = NATIVE_PROJECTION_MAX_BYTES,
     initialPromptPresentation?: PersistedNativeAgentSession["initialPromptPresentation"],
+    coordinatorTranscript = false,
   ): { messages: unknown[]; window: NativeAgentMessageWindow } {
     const firstUserMessageIndex = messages.findIndex(
       (candidate) =>
@@ -900,21 +930,23 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         initialPromptPresentation && parsedDelegation?.frame === initialPromptPresentation.frame
           ? initialPromptPresentation.kind
           : undefined;
-      return {
+      const projectedParts = attachProgressToToolRows(
+        message.parts.map((part, index) =>
+          this.projectionPart(sessionKey, message.id as string, part, String(index)),
+        ),
+      );
+      const projectedMessage = {
         id: message.id,
         role,
         content: message.content,
-        parts: attachProgressToToolRows(
-          message.parts.map((part, index) =>
-            this.projectionPart(sessionKey, message.id as string, part, String(index)),
-          ),
-        ),
+        parts: projectedParts,
         createdAt: message.createdAt,
         ...(typeof message.modelId === "string" ? { modelId: message.modelId } : {}),
         ...(typeof message.turnId === "string" ? { turnId: message.turnId } : {}),
         ...(typeof message.planReview === "boolean" ? { planReview: message.planReview } : {}),
         ...(promptPresentation ? { promptPresentation } : {}),
       };
+      return coordinatorTranscript ? coordinatorDisplayMessage(projectedMessage) : projectedMessage;
     });
     let boundedTranscript;
     try {
@@ -1624,6 +1656,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       input.liveWindow.messages,
       NATIVE_SYNC_MAX_SNAPSHOT_BYTES,
       initialPromptPresentation,
+      Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
     );
     const bounded = this.boundedProjectedMessages(
       normalized.messages,
@@ -1839,7 +1872,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
               `in-process:${input.agent}`,
           ),
           freshness: persisted.messages.length === 0 ? "empty" : "cached",
-          messages: persisted.messages,
+          messages: coordinatorIdFromRuntimeId(input.environmentId)
+            ? persisted.messages.map(coordinatorDisplayMessage)
+            : persisted.messages,
           historyEpoch: persisted.historyEpoch,
           // v1 tails and any write that omitted remainder metadata cannot
           // prove the start of history. Claim complete only when persisted.
@@ -3419,6 +3454,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         input.representation === "sync-v1" ? NATIVE_PROJECTION_MAX_WINDOW_MESSAGES : messageLimit,
         NATIVE_PROJECTION_MAX_BYTES,
         resolved.session.initialPromptPresentation,
+        resolved.session.owner?.kind === "coordinator",
       );
       const transcript =
         input.representation === "sync-v1"

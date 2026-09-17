@@ -200,6 +200,50 @@ describe("native agent progressive remainder", () => {
     );
   });
 
+  test("marks a byte-capped incomplete tail non-pageable without declaring history complete", async () => {
+    const tail = progressiveMessages(liveWindow.messages).map((message) => ({
+      ...message,
+      content: `${message.id}:${"x".repeat(8 * 1024)}`,
+    }));
+    const stub = createProviderStub("cursor", {
+      transcriptSnapshot: async () => ({
+        messages: tail,
+        complete: false,
+        freshness: "current" as const,
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-progressive-byte-capped-incomplete-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-byte-capped-incomplete",
+        };
+        await service.ensureSession(identity);
+        const preview = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(preview.status).toBe("snapshot");
+        if (preview.status !== "snapshot") throw new Error("expected snapshot");
+
+        expect(preview.value.messages.length).toBeLessThan(liveWindow.messages);
+        expect(preview.value.historyComplete).toBe(false);
+        expect(preview.value.messageWindow).toMatchObject({
+          truncated: true,
+          truncationReason: "bytes",
+          canLoadEarlier: false,
+        });
+        expect(preview.value.messageWindow?.omittedMessages).toBeGreaterThan(0);
+      },
+    );
+  });
+
   test("shares one legacy interactive snapshot between transcript and state", async () => {
     const interactiveSnapshot = mock(async () => ({
       status: "idle" as const,

@@ -47,7 +47,11 @@ import { useLongPressAction } from "@/hooks/useLongPressAction";
 import { promptQueueKey } from "@/lib/prompt-queue-persistence";
 import { createSessionKey } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import {
+  usePaneLayoutStore,
+  getAllLeaves,
+  type EnvironmentPaneState,
+} from "@/stores/paneLayoutStore";
 import {
   beginPaneTabActivationRequest,
   requestPaneTabActivation,
@@ -57,6 +61,50 @@ import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { toast } from "sonner";
 import { onGlobalSettingsRequest, type GlobalSettingsSection } from "@/lib/settings-navigation";
 import type { ResolveLaunchResult } from "./ActionBar.types";
+
+/**
+ * A Create PR launch that has not yet produced a pull request.
+ *
+ * The claim exists to keep a second launch out while the first agent works, so
+ * it has to be released the moment that work can no longer finish.
+ */
+interface CreatePrLaunchClaim {
+  /** Tab the launch published; null until the backend acknowledges it. */
+  tabId: string | null;
+  /** Whether that tab has been seen in the pane layout at least once. */
+  tabSeen: boolean;
+  /** Wall-clock when this environment's claim was first taken. */
+  claimedAt: number;
+  /** Whether the backend accepted the launch and now owns a live session. */
+  acknowledged: boolean;
+}
+
+/**
+ * How long an unacknowledged claim waits before releasing itself. This covers
+ * a hung `launchNativeAgentJob` only. Once the backend accepts the launch the
+ * claim stays until a PR appears, the launched tab is closed, or the tab is
+ * known to have appeared and already been torn down.
+ */
+export const CREATE_PR_TAB_GRACE_MS = 60_000;
+
+/** Tab ids currently published in an environment's live pane layout. */
+function listEnvironmentTabIds(
+  environments: ReadonlyMap<string, EnvironmentPaneState>,
+  environmentId: string,
+): string[] {
+  const environmentState = environments.get(environmentId);
+  if (!environmentState) return [];
+  return getAllLeaves(environmentState.root).flatMap((leaf) => leaf.tabs.map((tab) => tab.id));
+}
+
+/** Whether an environment's live pane layout still holds a given tab. */
+function isTabOpen(
+  environments: ReadonlyMap<string, EnvironmentPaneState>,
+  environmentId: string,
+  tabId: string,
+): boolean {
+  return listEnvironmentTabIds(environments, environmentId).includes(tabId);
+}
 
 export function isEditableShortcutTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -159,10 +207,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const [prLaunchError, setPrLaunchError] = useState<string | null>(null);
   const prDialogOpen = prDialogTarget !== null;
   const createPrButtonRef = useRef<HTMLButtonElement>(null);
-  const createPrLaunchEnvironmentIdsRef = useRef(new Set<string>());
-  const [createPrLaunchEnvironmentIds, setCreatePrLaunchEnvironmentIds] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
+  const createPrLaunchClaimsRef = useRef(new Map<string, CreatePrLaunchClaim>());
+  const [createPrLaunchClaims, setCreatePrLaunchClaims] = useState<
+    ReadonlyMap<string, CreatePrLaunchClaim>
+  >(() => new Map());
+  /** Tab ids observed in an environment while its claim was still unbound. */
+  const pendingSeenTabIdsRef = useRef(new Map<string, Set<string>>());
+  /** One grace timer per unacknowledged claim; later claims must not reset it. */
+  const createPrGraceTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const [resolveDialogTarget, setResolveDialogTarget] = useState<{
     environmentId: string;
     projectId: string;
@@ -267,7 +319,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   const hasPR = !!prUrl;
   const createPrLaunchPending = Boolean(
-    selectedEnvironmentId && createPrLaunchEnvironmentIds.has(selectedEnvironmentId),
+    selectedEnvironmentId && createPrLaunchClaims.has(selectedEnvironmentId),
   );
   const isPRMerged = prState === "merged";
   const cleanupTargetIsMerged = cleanupTarget?.isMerged ?? isPRMerged;
@@ -281,15 +333,149 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   );
 
   const releaseCreatePrLaunch = useCallback((environmentId: string) => {
-    if (!createPrLaunchEnvironmentIdsRef.current.delete(environmentId)) return;
-    setCreatePrLaunchEnvironmentIds(new Set(createPrLaunchEnvironmentIdsRef.current));
+    pendingSeenTabIdsRef.current.delete(environmentId);
+    const timer = createPrGraceTimersRef.current.get(environmentId);
+    if (timer) {
+      clearTimeout(timer);
+      createPrGraceTimersRef.current.delete(environmentId);
+    }
+    if (!createPrLaunchClaimsRef.current.delete(environmentId)) return;
+    setCreatePrLaunchClaims(new Map(createPrLaunchClaimsRef.current));
   }, []);
+
+  const bindCreatePrLaunchTab = useCallback(
+    (environmentId: string, tabId: string) => {
+      const { environments } = usePaneLayoutStore.getState();
+      const tabOpen = isTabOpen(environments, environmentId, tabId);
+      const seenDuringPending =
+        pendingSeenTabIdsRef.current.get(environmentId)?.has(tabId) ?? false;
+      pendingSeenTabIdsRef.current.delete(environmentId);
+
+      // The tab appeared and left while launchNativeAgentJob was still in
+      // flight. Presence could not bind it then, so treat it as already torn
+      // down instead of waiting out the grace period.
+      if (!tabOpen && seenDuringPending) {
+        releaseCreatePrLaunch(environmentId);
+        return;
+      }
+
+      const existing = createPrLaunchClaimsRef.current.get(environmentId);
+      createPrLaunchClaimsRef.current.set(environmentId, {
+        tabId,
+        tabSeen: tabOpen,
+        claimedAt: existing?.claimedAt ?? Date.now(),
+        acknowledged: true,
+      });
+      setCreatePrLaunchClaims(new Map(createPrLaunchClaimsRef.current));
+    },
+    [releaseCreatePrLaunch],
+  );
 
   useEffect(() => {
     if (hasPR && selectedEnvironmentId) {
       releaseCreatePrLaunch(selectedEnvironmentId);
     }
   }, [hasPR, releaseCreatePrLaunch, selectedEnvironmentId]);
+
+  // Change key for the claimed tabs' presence. The selector collapses the pane
+  // tree to a primitive so the pane store's unrelated writes (active tab,
+  // browser URLs, splits) cannot re-render the whole toolbar. Pending claims
+  // stay a constant token: their tabs are recorded by a store subscription
+  // that does not need to render.
+  const createPrLaunchTabPresence = usePaneLayoutStore((state) =>
+    [...createPrLaunchClaims]
+      .map(([environmentId, claim]) =>
+        claim.tabId
+          ? `${environmentId}:${isTabOpen(state.environments, environmentId, claim.tabId) ? "open" : "gone"}`
+          : `${environmentId}:pending`,
+      )
+      .join(","),
+  );
+
+  // Remember every tab that appears while a claim is still unbound so bind can
+  // tell "published then closed" from "not published yet".
+  useEffect(() => {
+    if (createPrLaunchClaims.size === 0) return;
+    const recordPendingSeenTabs = () => {
+      const { environments } = usePaneLayoutStore.getState();
+      for (const [environmentId, claim] of createPrLaunchClaimsRef.current) {
+        if (claim.tabId) continue;
+        let seen = pendingSeenTabIdsRef.current.get(environmentId);
+        if (!seen) {
+          seen = new Set();
+          pendingSeenTabIdsRef.current.set(environmentId, seen);
+        }
+        for (const tabId of listEnvironmentTabIds(environments, environmentId)) {
+          seen.add(tabId);
+        }
+      }
+    };
+    recordPendingSeenTabs();
+    return usePaneLayoutStore.subscribe(recordPendingSeenTabs);
+  }, [createPrLaunchClaims]);
+
+  // A claim survives its launch only while the tab that owns the work is open.
+  // Closing that tab tears the session down (Codex interrupt included), so a
+  // claim held past the close would leave Create PR disabled with nothing left
+  // running that could ever release it.
+  useEffect(() => {
+    const claims = createPrLaunchClaimsRef.current;
+    if (claims.size === 0) return;
+    const { environments } = usePaneLayoutStore.getState();
+    let changed = false;
+    for (const [environmentId, claim] of Array.from(claims)) {
+      if (!claim.tabId) continue;
+      if (isTabOpen(environments, environmentId, claim.tabId)) {
+        if (claim.tabSeen) continue;
+        claims.set(environmentId, { ...claim, tabSeen: true });
+        changed = true;
+      } else if (claim.tabSeen) {
+        claims.delete(environmentId);
+        pendingSeenTabIdsRef.current.delete(environmentId);
+        changed = true;
+      }
+    }
+    if (changed) setCreatePrLaunchClaims(new Map(claims));
+    // `createPrLaunchTabPresence` is the trigger, not an input: the effect reads
+    // the same state it was computed from, one level below the memoized key.
+  }, [createPrLaunchTabPresence]);
+
+  // One timer per unacknowledged claim, keyed by that claim's own claimedAt.
+  // A later Create PR in another environment must not restart this one, and an
+  // accepted launch is never released by wall-clock alone.
+  useEffect(() => {
+    const timers = createPrGraceTimersRef.current;
+    const claims = createPrLaunchClaimsRef.current;
+    for (const [environmentId, timer] of Array.from(timers)) {
+      const claim = claims.get(environmentId);
+      if (!claim || claim.acknowledged || claim.tabSeen) {
+        clearTimeout(timer);
+        timers.delete(environmentId);
+      }
+    }
+    for (const [environmentId, claim] of claims) {
+      if (claim.acknowledged || claim.tabSeen || timers.has(environmentId)) continue;
+      const remaining = Math.max(0, claim.claimedAt + CREATE_PR_TAB_GRACE_MS - Date.now());
+      timers.set(
+        environmentId,
+        setTimeout(() => {
+          timers.delete(environmentId);
+          const current = createPrLaunchClaimsRef.current.get(environmentId);
+          if (current && !current.acknowledged && !current.tabSeen) {
+            releaseCreatePrLaunch(environmentId);
+          }
+        }, remaining),
+      );
+    }
+  }, [createPrLaunchClaims, releaseCreatePrLaunch]);
+
+  useEffect(() => {
+    return () => {
+      for (const timer of createPrGraceTimersRef.current.values()) clearTimeout(timer);
+      createPrGraceTimersRef.current.clear();
+    };
+  }, []);
+
   const canCreateTab = !!createTab && tabCount < MAX_TABS;
   // Workflow launches publish their own durable tab and start in the backend.
   // They must not depend on the active environment's renderer tab factory.
@@ -1358,12 +1544,17 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         tabCount >= MAX_TABS ||
         !isRunning ||
         hasPR ||
-        createPrLaunchEnvironmentIdsRef.current.has(operationEnvironmentId)
+        createPrLaunchClaimsRef.current.has(operationEnvironmentId)
       )
         return false;
 
-      createPrLaunchEnvironmentIdsRef.current.add(operationEnvironmentId);
-      setCreatePrLaunchEnvironmentIds(new Set(createPrLaunchEnvironmentIdsRef.current));
+      createPrLaunchClaimsRef.current.set(operationEnvironmentId, {
+        tabId: null,
+        tabSeen: false,
+        claimedAt: Date.now(),
+        acknowledged: false,
+      });
+      setCreatePrLaunchClaims(new Map(createPrLaunchClaimsRef.current));
 
       try {
         const repoConfig = config.repositories[selectedProjectId];
@@ -1410,6 +1601,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           });
           return false;
         }
+        // Bind or re-arm the claim onto the accepted tab. Grace may have
+        // released an in-flight entry; the backend still owns the session.
+        bindCreatePrLaunchTab(operationEnvironmentId, result.tabId);
         // Monitoring starts only after the backend owns the session and turn.
         // Keep the local launch claim until a PR appears so a fast acknowledgement
         // cannot reopen the duplicate-launch window while the agent is still working.
@@ -1425,6 +1619,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     },
     [
       actionDefaultFor,
+      bindCreatePrLaunchTab,
       config.repositories,
       hasPR,
       isRunning,

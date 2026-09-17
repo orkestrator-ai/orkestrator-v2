@@ -1347,6 +1347,16 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     const session = this.registry.getSession(sessionId);
     if (!session) return false;
 
+    const context = this.registry.getThreadForSession(sessionId);
+    const turn = context?.activeTurn;
+    // Last tab: stop the turn before detaching. DELETE used to only
+    // unsubscribe, so Codex kept editing the worktree after the UI closed.
+    if (context && turn && context.bridgeSessionIds.size === 1) {
+      await this.options.engine
+        .interruptTurn(context.engineHandle, turn.turnId)
+        .catch(() => undefined);
+    }
+
     // Answered before the registry drops the thread, so the router can still map
     // the approval to a session and the pending turn is not left waiting on a
     // prompt whose UI has gone away.

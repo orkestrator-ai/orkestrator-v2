@@ -28,6 +28,7 @@ import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment, PrState, Project } from "@/types";
 import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
+import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 import type { KanbanTask } from "@/lib/backend";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import {
@@ -226,6 +227,7 @@ const selectedProject: Project = {
 };
 
 let currentEnvironment: Environment = selectedEnvironment;
+let currentCheckSummary: PrCheckSummary | null = null;
 let currentSelectedEnvironmentId: string | null = selectedEnvironment.id;
 let currentClaudeModel = "claude-default-model";
 let currentCodexModel = "codex-default-model";
@@ -721,6 +723,7 @@ mock.module("@/hooks", () => ({
     prUrl: currentEnvironment.prUrl,
     prState: currentEnvironment.prState,
     hasMergeConflicts: currentEnvironment.hasMergeConflicts,
+    checkSummary: currentCheckSummary,
     viewPR: viewPRMock,
     setModeCreatePending: setModeCreatePendingMock,
     setModeMergePending: setModeMergePendingMock,
@@ -968,6 +971,7 @@ beforeEach(() => {
     configurable: true,
   });
   currentEnvironment = { ...selectedEnvironment };
+  currentCheckSummary = null;
   currentSelectedEnvironmentId = currentEnvironment.id;
   currentSelectedProjectId = selectedProject.id;
   currentOtherEnvironments = [];
@@ -5695,6 +5699,50 @@ describe("ActionBar configured action defaults", () => {
 });
 
 describe("ActionBar pull request actions", () => {
+  test.each([
+    {
+      name: "running",
+      summary: { passed: 2, total: 4, pending: 2 },
+      label: "2 of 4 CI checks passed; 2 still running",
+      colorClass: "text-orange-600",
+    },
+    {
+      name: "passed",
+      summary: { passed: 4, total: 4, pending: 0 },
+      label: "4 of 4 CI checks passed; all checks complete",
+      colorClass: "text-green-600",
+    },
+    {
+      name: "failed",
+      summary: { passed: 3, total: 4, pending: 0 },
+      label: "3 of 4 CI checks passed; all checks complete",
+      colorClass: "text-red-600",
+    },
+  ])("shows $name CI checks between the PR actions", ({ summary, label, colorClass }) => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    currentCheckSummary = summary;
+    render(<ActionBar />);
+
+    const status = screen.getByRole("status", { name: label });
+    expect(status.textContent).toBe(`${summary.passed}/${summary.total} checks`);
+    expect(status.classList.contains(colorClass)).toBe(true);
+    expect(status.classList.contains("bg-transparent")).toBe(true);
+
+    const toolbarText = Array.from(status.parentElement?.children ?? []).map(
+      (element) => element.textContent,
+    );
+    expect(toolbarText.indexOf("View PR")).toBeLessThan(toolbarText.indexOf(status.textContent));
+    expect(toolbarText.indexOf(status.textContent)).toBeLessThan(toolbarText.indexOf("Merge PR"));
+  });
+
+  test("does not show a CI indicator before GitHub reports checks", () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    currentCheckSummary = { passed: 0, total: 0, pending: 0 };
+    render(<ActionBar />);
+
+    expect(screen.queryByRole("status") === null).toBe(true);
+  });
+
   test("hides Push Changes for every terminal pull request state", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "merged" };
     const view = render(<ActionBar />);

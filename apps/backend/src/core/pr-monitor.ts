@@ -6,6 +6,7 @@ import {
   type PrMonitorEvent,
   type PrMonitorMode,
   type PrMonitorTransition,
+  type PrCheckSummary,
   type PrState,
 } from "@orkestrator/protocol/pr-monitor";
 
@@ -57,6 +58,7 @@ export interface PrDetection {
   state: PrState;
   /** Null means GitHub has not determined mergeability yet. */
   hasMergeConflicts: boolean | null;
+  checkSummary: PrCheckSummary;
 }
 
 /** The slice of a kanban task the reconciliation side effects need. */
@@ -138,6 +140,8 @@ interface PrMonitorEntry {
   reconciliation: Map<string, Set<ReconciliationStep>>;
   /** Latest successfully observed PR identity, including failed persist attempts. */
   observedPr: { url: string; state: PrState } | null;
+  /** Latest check rollup; intentionally runtime state so every UI rehydrates from the monitor. */
+  checkSummary: PrCheckSummary | null;
   /** Last emitted state; suppresses byte-identical events. */
   lastEmitted?: PrMonitorEnvironmentState;
 }
@@ -363,6 +367,7 @@ export class PrMonitorService {
       reconciliation: new Map(),
       observedPr:
         target.prUrl && target.prState ? { url: target.prUrl, state: target.prState } : null,
+      checkSummary: null,
     };
     this.entries.set(target.environmentId, entry);
     // Probes stay unannounced until they find something, so a probe that finds
@@ -597,6 +602,10 @@ export class PrMonitorService {
     if (observedChanged) {
       entry.observedPr = { url: detection.url, state: detection.state };
     }
+    // An empty rollup means GitHub has no CI information to present. Keep it
+    // equivalent to the pre-fetch state so uneventful polls do not wake every
+    // renderer just to exchange null for 0/0.
+    entry.checkSummary = detection.checkSummary.total > 0 ? detection.checkSummary : null;
     return transition;
   }
 
@@ -608,6 +617,7 @@ export class PrMonitorService {
       // to retain a provisional background poller forever.
       entry.persistencePending = false;
       entry.observedPr = null;
+      entry.checkSummary = null;
       return;
     }
     // After a merge with --delete-branch the environment checks out the base
@@ -620,6 +630,7 @@ export class PrMonitorService {
       entry.target = { ...entry.target, prUrl: null, prState: null, hasMergeConflicts: null };
       entry.persistencePending = false;
       entry.observedPr = null;
+      entry.checkSummary = null;
     } catch (error) {
       entry.persistencePending = true;
       entry.consecutiveErrors += 1;
@@ -788,6 +799,7 @@ export class PrMonitorService {
       prUrl: entry.target.prUrl,
       prState: entry.target.prState,
       hasMergeConflicts: entry.target.hasMergeConflicts,
+      checkSummary: entry.checkSummary,
     };
   }
 
@@ -850,6 +862,17 @@ function isSameTarget(a: PrMonitorTarget, b: PrMonitorTarget): boolean {
   );
 }
 
+function isSameCheckSummary(a: PrCheckSummary | null, b: PrCheckSummary | null): boolean {
+  return (
+    a === b ||
+    (a !== null &&
+      b !== null &&
+      a.passed === b.passed &&
+      a.total === b.total &&
+      a.pending === b.pending)
+  );
+}
+
 function isSameObservableState(
   a: PrMonitorEnvironmentState,
   b: PrMonitorEnvironmentState,
@@ -859,6 +882,7 @@ function isSameObservableState(
     a.consecutiveErrors === b.consecutiveErrors &&
     a.prUrl === b.prUrl &&
     a.prState === b.prState &&
-    a.hasMergeConflicts === b.hasMergeConflicts
+    a.hasMergeConflicts === b.hasMergeConflicts &&
+    isSameCheckSummary(a.checkSummary, b.checkSummary)
   );
 }

@@ -6003,7 +6003,7 @@ describe("pr monitor commands", () => {
       "--limit",
       "30",
       "--json",
-      "url,state,mergeable,updatedAt",
+      "url,state,mergeable,updatedAt,statusCheckRollup",
     ]);
     expect(discovery.knownPrUrl).toBeNull();
 
@@ -6022,10 +6022,10 @@ describe("pr monitor commands", () => {
       "view",
       "https://github.com/acme/repo/pull/7",
       "--json",
-      "url,state,mergeable",
+      "url,state,mergeable,statusCheckRollup",
     ]);
     expect(known.shellCommand).toBe(
-      "gh pr view 'https://github.com/acme/repo/pull/7' --json url,state,mergeable",
+      "gh pr view 'https://github.com/acme/repo/pull/7' --json url,state,mergeable,statusCheckRollup",
     );
     expect(
       parsePrMonitorDetectionResponse(
@@ -6034,12 +6034,19 @@ describe("pr monitor commands", () => {
           url: "https://github.com/acme/repo/pull/7",
           state: "MERGED",
           mergeable: "UNKNOWN",
+          statusCheckRollup: [
+            { status: "COMPLETED", conclusion: "SUCCESS" },
+            { state: "SUCCESS" },
+            { status: "IN_PROGRESS", conclusion: null },
+            { status: "COMPLETED", conclusion: "FAILURE" },
+          ],
         }),
       ),
     ).toEqual({
       url: "https://github.com/acme/repo/pull/7",
       state: "merged",
       hasMergeConflicts: null,
+      checkSummary: { passed: 2, total: 4, pending: 1 },
     });
     expect(
       parsePrMonitorDetectionResponse(
@@ -6053,6 +6060,7 @@ describe("pr monitor commands", () => {
       url: "https://github.com/acme/repo/pull/7",
       state: "open",
       hasMergeConflicts: null,
+      checkSummary: { passed: 0, total: 0, pending: 0 },
     });
     expect(() =>
       parsePrMonitorDetectionResponse(

@@ -25,6 +25,16 @@ export const PR_MONITOR_CHANGED_EVENT = "pr-monitor-changed";
  */
 export type PrState = "open" | "merged" | "closed";
 
+/** Aggregate state of the GitHub checks attached to a pull request. */
+export interface PrCheckSummary {
+  /** Checks with a successful, neutral, or skipped terminal outcome. */
+  passed: number;
+  /** Every check GitHub currently reports for the pull request. */
+  total: number;
+  /** Checks that have not reached a terminal outcome yet. */
+  pending: number;
+}
+
 /**
  * Polling cadence for one monitored environment.
  * - normal: an open PR being tracked for merge/close
@@ -94,6 +104,8 @@ export interface PrMonitorEnvironmentState {
   prUrl: string | null;
   prState: PrState | null;
   hasMergeConflicts: boolean | null;
+  /** Null until GitHub has returned check-rollup data for this PR. */
+  checkSummary: PrCheckSummary | null;
 }
 
 /**
@@ -137,6 +149,22 @@ function isPrStateOrNull(value: unknown): value is PrState | null {
   return value === null || (typeof value === "string" && PR_STATES.has(value));
 }
 
+export function isPrCheckSummary(value: unknown): value is PrCheckSummary {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  if (
+    !Number.isSafeInteger(candidate.passed) ||
+    !Number.isSafeInteger(candidate.total) ||
+    !Number.isSafeInteger(candidate.pending)
+  ) {
+    return false;
+  }
+  const passed = candidate.passed as number;
+  const total = candidate.total as number;
+  const pending = candidate.pending as number;
+  return passed >= 0 && total >= 0 && pending >= 0 && passed + pending <= total;
+}
+
 export function isPrMonitorEnvironmentState(value: unknown): value is PrMonitorEnvironmentState {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
@@ -150,7 +178,8 @@ export function isPrMonitorEnvironmentState(value: unknown): value is PrMonitorE
     (candidate.lastCheckAt === null || typeof candidate.lastCheckAt === "string") &&
     (candidate.prUrl === null || typeof candidate.prUrl === "string") &&
     isPrStateOrNull(candidate.prState) &&
-    (candidate.hasMergeConflicts === null || typeof candidate.hasMergeConflicts === "boolean")
+    (candidate.hasMergeConflicts === null || typeof candidate.hasMergeConflicts === "boolean") &&
+    (candidate.checkSummary === null || isPrCheckSummary(candidate.checkSummary))
   );
 }
 

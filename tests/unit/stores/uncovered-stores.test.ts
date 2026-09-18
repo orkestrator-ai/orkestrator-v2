@@ -128,6 +128,7 @@ describe("prMonitorStore", () => {
     environmentId,
     mode: "normal" as const,
     checkInProgress: false,
+    checkSummary: null,
     consecutiveErrors: 0,
     lastCheckAt: null,
     prUrl: null,
@@ -146,6 +147,7 @@ describe("prMonitorStore", () => {
     expect(usePrMonitorStore.getState().getMonitoringState("env-1")).toMatchObject({
       mode: "merge-pending",
       checkInProgress: false,
+      checkSummary: null,
       consecutiveErrors: 1,
     });
 

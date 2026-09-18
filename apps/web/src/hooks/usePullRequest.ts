@@ -13,6 +13,7 @@ import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import type { PrState } from "@/types";
+import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 
 interface UsePullRequestOptions {
   environmentId: string | null;
@@ -22,6 +23,7 @@ interface UsePullRequestReturn {
   prUrl: string | null;
   prState: PrState | null;
   hasMergeConflicts: boolean | null;
+  checkSummary: PrCheckSummary | null;
   isDetecting: boolean;
   error: string | null;
   /** Open the PR in the default browser */
@@ -54,6 +56,7 @@ export function usePullRequest({ environmentId }: UsePullRequestOptions): UsePul
     environmentId ? (state.states.get(environmentId) ?? null) : null,
   );
   const isDetecting = monitorState?.checkInProgress ?? false;
+  const checkSummary = monitorState?.checkSummary ?? null;
 
   // View the PR in the default browser
   const viewPR = useCallback(async () => {
@@ -140,6 +143,7 @@ export function usePullRequest({ environmentId }: UsePullRequestOptions): UsePul
     prUrl,
     prState,
     hasMergeConflicts,
+    checkSummary,
     isDetecting,
     error,
     viewPR,

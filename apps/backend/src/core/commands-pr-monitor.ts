@@ -156,10 +156,10 @@ export interface PrMonitorDetectionRequest {
 export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitorDetectionRequest {
   const headBranch = validatePrDetectionBranch(target.branch);
   if (target.prUrl && target.prState !== "merged" && target.prState !== "closed") {
-    const args = ["pr", "view", target.prUrl, "--json", "url,state,mergeable"];
+    const args = ["pr", "view", target.prUrl, "--json", "url,state,mergeable,statusCheckRollup"];
     return {
       args,
-      shellCommand: `gh pr view ${quoteShell(target.prUrl)} --json url,state,mergeable`,
+      shellCommand: `gh pr view ${quoteShell(target.prUrl)} --json url,state,mergeable,statusCheckRollup`,
       knownPrUrl: target.prUrl,
       branch: headBranch,
     };
@@ -174,11 +174,11 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
     "--limit",
     "30",
     "--json",
-    "url,state,mergeable,updatedAt",
+    "url,state,mergeable,updatedAt,statusCheckRollup",
   ];
   return {
     args,
-    shellCommand: `gh pr list --head ${quoteShell(headBranch)} --state all --limit 30 --json url,state,mergeable,updatedAt`,
+    shellCommand: `gh pr list --head ${quoteShell(headBranch)} --state all --limit 30 --json url,state,mergeable,updatedAt,statusCheckRollup`,
     knownPrUrl: null,
     branch: headBranch,
   };
@@ -353,6 +353,7 @@ export async function reconcileConfirmedMerge(
     url: environment.prUrl,
     state: "merged",
     hasMergeConflicts: false,
+    checkSummary: { passed: 0, total: 0, pending: 0 },
   });
 }
 

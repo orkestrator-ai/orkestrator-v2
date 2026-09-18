@@ -45,6 +45,7 @@ function monitorState(
     prUrl: null,
     prState: null,
     hasMergeConflicts: null,
+    checkSummary: null,
     ...overrides,
   };
 }
@@ -128,6 +129,7 @@ describe("usePullRequest", () => {
       prUrl: "https://github.com/test/repo/pull/789",
       prState: "open",
       hasMergeConflicts: true,
+      checkSummary: null,
       isDetecting: true,
     });
   });
@@ -351,6 +353,34 @@ describe("usePullRequest", () => {
     const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
 
     expect(result.current.isDetecting).toBe(true);
+  });
+
+  test("returns the authoritative CI check summary from the monitor", () => {
+    useEnvironmentStore.setState({
+      environments: [
+        createMockEnvironment({
+          id: "env-1",
+          prUrl: "https://github.com/test/repo/pull/789",
+          prState: "open",
+        }),
+      ],
+      isLoading: false,
+      error: null,
+    });
+    usePrMonitorStore.setState({
+      states: new Map([
+        [
+          "env-1",
+          monitorState("env-1", {
+            checkSummary: { passed: 2, total: 3, pending: 1 },
+          }),
+        ],
+      ]),
+    });
+
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    expect(result.current.checkSummary).toEqual({ passed: 2, total: 3, pending: 1 });
   });
 
   test("isDetecting is false for an unmonitored environment", () => {

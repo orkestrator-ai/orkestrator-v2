@@ -76,6 +76,7 @@ function makeState(
     prUrl: "https://github.com/org/repo/pull/1",
     prState: "open",
     hasMergeConflicts: false,
+    checkSummary: null,
     ...overrides,
   };
 }

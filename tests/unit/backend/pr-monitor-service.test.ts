@@ -212,6 +212,7 @@ function detection(overrides: Partial<PrDetection> = {}): PrDetection {
     url: "https://github.com/org/repo/pull/1",
     state: "open",
     hasMergeConflicts: false,
+    checkSummary: { passed: 0, total: 0, pending: 0 },
     ...overrides,
   };
 }
@@ -263,6 +264,39 @@ describe("PrMonitorService", () => {
     expect(harness.service.snapshot()[0]).toMatchObject({
       environmentId: "env-1",
       prState: "open",
+    });
+  });
+
+  test("publishes changing CI check summaries through events and snapshots", async () => {
+    const harness = createHarness();
+    harness.setDetect(async () => detection({ checkSummary: { passed: 2, total: 4, pending: 2 } }));
+    harness.service.sync([openPr()]);
+
+    await harness.fireNext();
+
+    expect(harness.service.snapshot()[0]?.checkSummary).toEqual({
+      passed: 2,
+      total: 4,
+      pending: 2,
+    });
+    expect(harness.stateEvents().at(-1)?.state.checkSummary).toEqual({
+      passed: 2,
+      total: 4,
+      pending: 2,
+    });
+
+    harness.setDetect(async () => detection({ checkSummary: { passed: 4, total: 4, pending: 0 } }));
+    await harness.fireNext();
+
+    expect(harness.service.snapshot()[0]?.checkSummary).toEqual({
+      passed: 4,
+      total: 4,
+      pending: 0,
+    });
+    expect(harness.stateEvents().at(-1)?.state.checkSummary).toEqual({
+      passed: 4,
+      total: 4,
+      pending: 0,
     });
   });
 

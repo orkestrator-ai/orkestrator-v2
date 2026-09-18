@@ -13,6 +13,7 @@ import {
   resolveGitHubRepository,
 } from "./commands-dependencies.js";
 import type { Environment, PrState } from "./commands-dependencies.js";
+import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 import {
   REVIEW_PACKAGE_FORMAT,
   REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX,
@@ -46,6 +47,7 @@ export type PrDetectionResult = {
   url: string;
   state: PrState;
   hasMergeConflicts: boolean | null;
+  checkSummary: PrCheckSummary;
 };
 
 export type MergePrResult = {
@@ -62,6 +64,7 @@ export type GhPrListEntry = {
   state?: unknown;
   mergeable?: unknown;
   updatedAt?: unknown;
+  statusCheckRollup?: unknown;
 };
 
 export type GitHubPullRequestRef = {
@@ -1235,6 +1238,38 @@ export function isValidPrUrl(value: unknown): value is string {
   );
 }
 
+const PASSING_CHECK_OUTCOMES = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+const PENDING_CHECK_STATES = new Set(["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING"]);
+
+/** Reduces GraphQL CheckRun and StatusContext entries into one stable UI summary. */
+export function parsePrCheckSummary(value: unknown): PrCheckSummary {
+  if (!Array.isArray(value)) return { passed: 0, total: 0, pending: 0 };
+
+  let passed = 0;
+  let pending = 0;
+  for (const raw of value) {
+    const check = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+    const conclusion = typeof check.conclusion === "string" ? check.conclusion.toUpperCase() : null;
+    const status = typeof check.status === "string" ? check.status.toUpperCase() : null;
+    const state = typeof check.state === "string" ? check.state.toUpperCase() : null;
+
+    if (
+      (conclusion && PASSING_CHECK_OUTCOMES.has(conclusion)) ||
+      (state && PASSING_CHECK_OUTCOMES.has(state))
+    ) {
+      passed += 1;
+    } else if (
+      (status !== null && status !== "COMPLETED") ||
+      (state !== null && PENDING_CHECK_STATES.has(state)) ||
+      (status === null && state === null && conclusion === null)
+    ) {
+      pending += 1;
+    }
+  }
+
+  return { passed, total: value.length, pending };
+}
+
 export function buildPrDetectionCandidate(
   entry: GhPrListEntry,
 ): { rank: number; updatedAt: string; result: PrDetectionResult } | null {
@@ -1249,6 +1284,7 @@ export function buildPrDetectionCandidate(
       state,
       hasMergeConflicts:
         mergeable === "CONFLICTING" ? true : mergeable === "MERGEABLE" ? false : null,
+      checkSummary: parsePrCheckSummary(entry.statusCheckRollup),
     },
   };
 }

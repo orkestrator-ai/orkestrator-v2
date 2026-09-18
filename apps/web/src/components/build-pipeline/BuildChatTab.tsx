@@ -1322,71 +1322,69 @@ export function BuildChatTab({
         </div>
       </div>
 
-      {transcriptVisible &&
-        !validationSelected &&
-        (canSendMessage || !isAtBottom) && (
-          // The native tabs dock their composer as a floating card rather than a
-          // bordered footer strip, so this matches that shape instead of drawing
-          // another rule across the pane. It addresses the transcript, so on a
-          // phone it goes with it rather than eating a third of the stage list.
-          <div className="shrink-0 px-3 pt-2 pb-4">
-            {!isAtBottom && (
-              <div className="mx-auto mb-1 flex w-full max-w-[56rem] justify-end">
-                <button
-                  type="button"
-                  onClick={scrollToBottom}
-                  className="flex shrink-0 items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
-                  aria-label="Scroll to bottom of transcript"
-                >
-                  <ArrowDown className="h-3.5 w-3.5" />
-                  <span>Scroll down</span>
-                </button>
-              </div>
-            )}
-            {canSendMessage && (
-              <div className="mx-auto w-full max-w-[56rem] rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20">
-                {queuedMessages > 0 && (
-                  <div className="mb-1.5 text-[11px] text-muted-foreground">
-                    {queuedMessages === 1
-                      ? "1 message queued — it will be delivered when the agent is next idle."
-                      : `${queuedMessages} messages queued — they will be delivered one at a time as the agent goes idle.`}
-                  </div>
-                )}
-                <div className="flex items-end gap-2">
-                  <Textarea
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                    maxLength={MAX_PIPELINE_USER_MESSAGE_LENGTH}
-                    rows={2}
-                    className="min-h-0 resize-none border-none bg-transparent px-1 py-1 shadow-none focus-visible:ring-0"
-                    placeholder="Send a message to the agent..."
-                    aria-label="Send a message to the agent"
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter" || event.shiftKey) return;
-                      event.preventDefault();
-                      void sendMessage();
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    size="icon"
-                    className="h-7 w-7 rounded-lg transition-colors"
-                    title="Send message"
-                    aria-label="Send message"
-                    disabled={sendPending || draft.trim().length === 0}
-                    onClick={() => void sendMessage()}
-                  >
-                    {sendPending ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <ArrowUp className="h-4 w-4" />
-                    )}
-                  </Button>
+      {transcriptVisible && !validationSelected && (canSendMessage || !isAtBottom) && (
+        // The native tabs dock their composer as a floating card rather than a
+        // bordered footer strip, so this matches that shape instead of drawing
+        // another rule across the pane. It addresses the transcript, so on a
+        // phone it goes with it rather than eating a third of the stage list.
+        <div className="shrink-0 px-3 pt-2 pb-4">
+          {!isAtBottom && (
+            <div className="mx-auto mb-1 flex w-full max-w-[56rem] justify-end">
+              <button
+                type="button"
+                onClick={scrollToBottom}
+                className="flex shrink-0 items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
+                aria-label="Scroll to bottom of transcript"
+              >
+                <ArrowDown className="h-3.5 w-3.5" />
+                <span>Scroll down</span>
+              </button>
+            </div>
+          )}
+          {canSendMessage && (
+            <div className="mx-auto w-full max-w-[56rem] rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20">
+              {queuedMessages > 0 && (
+                <div className="mb-1.5 text-[11px] text-muted-foreground">
+                  {queuedMessages === 1
+                    ? "1 message queued — it will be delivered when the agent is next idle."
+                    : `${queuedMessages} messages queued — they will be delivered one at a time as the agent goes idle.`}
                 </div>
+              )}
+              <div className="flex items-end gap-2">
+                <Textarea
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  maxLength={MAX_PIPELINE_USER_MESSAGE_LENGTH}
+                  rows={2}
+                  className="min-h-0 resize-none border-none bg-transparent px-1 py-1 shadow-none focus-visible:ring-0"
+                  placeholder="Send a message to the agent..."
+                  aria-label="Send a message to the agent"
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" || event.shiftKey) return;
+                    event.preventDefault();
+                    void sendMessage();
+                  }}
+                />
+                <Button
+                  type="button"
+                  size="icon"
+                  className="h-7 w-7 rounded-lg transition-colors"
+                  title="Send message"
+                  aria-label="Send message"
+                  disabled={sendPending || draft.trim().length === 0}
+                  onClick={() => void sendMessage()}
+                >
+                  {sendPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <ArrowUp className="h-4 w-4" />
+                  )}
+                </Button>
               </div>
-            )}
-          </div>
-        )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -938,16 +938,19 @@ function NativeRefreshShimmerFixture() {
   const [generation, setGeneration] = useState(0);
   const [settled, setSettled] = useState(false);
 
-  useEffect(() => {
-    setSettled(false);
-    const timer = window.setTimeout(() => setSettled(true), 200);
-    return () => window.clearTimeout(timer);
-  }, [generation]);
-
   return (
     <main className="h-screen bg-background text-foreground">
-      <button type="button" onClick={() => setGeneration((value) => value + 1)}>
+      <button
+        type="button"
+        onClick={() => {
+          setSettled(false);
+          setGeneration((value) => value + 1);
+        }}
+      >
         Remount session
+      </button>
+      <button type="button" onClick={() => setSettled(true)}>
+        Settle session
       </button>
       <section data-testid="native-refresh-shimmer-shell" className="h-[32rem]">
         <NativeChatShell

@@ -225,10 +225,8 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       () => this.requestOptions(),
       (sessionId, policy) => this.sessionPolicies.set(sessionId, policy),
     );
-    this.workflowResults = new OpenCodeWorkflowResultBroker(
-      this.client,
-      connection.directory,
-      () => this.requestOptions(),
+    this.workflowResults = new OpenCodeWorkflowResultBroker(this.client, connection.directory, () =>
+      this.requestOptions(),
     );
     this.capabilitiesAdapter = new OpenCodeCapabilities(this.client, connection.directory, () =>
       this.requestOptions(),

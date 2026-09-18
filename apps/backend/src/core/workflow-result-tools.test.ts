@@ -267,11 +267,10 @@ describe("workflow result broker tools", () => {
       },
     };
     const { registerWorkflowResultBrokerTools } = await import("./workflow-result-tools.js");
-    registerWorkflowResultBrokerTools(
-      server as never,
-      workflowResults as never,
-      { environmentId: "env-1", projectId: "project-1" },
-    );
+    registerWorkflowResultBrokerTools(server as never, workflowResults as never, {
+      environmentId: "env-1",
+      projectId: "project-1",
+    });
     const status = handlers.get("get_workflow_result_status");
     if (!status) throw new Error("missing status tool");
     expect(await status({ resultKey: "known-key", capability: "denied" })).toMatchObject({
@@ -314,11 +313,10 @@ describe("workflow result broker tools", () => {
       },
     };
     const { registerWorkflowResultBrokerTools } = await import("./workflow-result-tools.js");
-    registerWorkflowResultBrokerTools(
-      server as never,
-      workflowResults as never,
-      { environmentId: "env-1", projectId: "project-1" },
-    );
+    registerWorkflowResultBrokerTools(server as never, workflowResults as never, {
+      environmentId: "env-1",
+      projectId: "project-1",
+    });
     const submitFix = handlers.get("submit_fix_result");
     if (!submitFix) throw new Error("missing submit_fix_result");
     expect(

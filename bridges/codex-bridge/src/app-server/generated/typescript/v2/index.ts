@@ -469,6 +469,16 @@ export type { ThreadApproveGuardianDeniedActionResponse } from "./ThreadApproveG
 export type { ThreadArchiveParams } from "./ThreadArchiveParams.js";
 export type { ThreadArchiveResponse } from "./ThreadArchiveResponse.js";
 export type { ThreadArchivedNotification } from "./ThreadArchivedNotification.js";
+export type { ThreadAttachment } from "./ThreadAttachment.js";
+export type { ThreadAttachmentAddOutcome } from "./ThreadAttachmentAddOutcome.js";
+export type { ThreadAttachmentAddParams } from "./ThreadAttachmentAddParams.js";
+export type { ThreadAttachmentAddResponse } from "./ThreadAttachmentAddResponse.js";
+export type { ThreadAttachmentListParams } from "./ThreadAttachmentListParams.js";
+export type { ThreadAttachmentListResponse } from "./ThreadAttachmentListResponse.js";
+export type { ThreadAttachmentOperation } from "./ThreadAttachmentOperation.js";
+export type { ThreadAttachmentRemoveParams } from "./ThreadAttachmentRemoveParams.js";
+export type { ThreadAttachmentRemoveResponse } from "./ThreadAttachmentRemoveResponse.js";
+export type { ThreadAttachmentUpdatedNotification } from "./ThreadAttachmentUpdatedNotification.js";
 export type { ThreadClosedNotification } from "./ThreadClosedNotification.js";
 export type { ThreadCompactStartParams } from "./ThreadCompactStartParams.js";
 export type { ThreadCompactStartResponse } from "./ThreadCompactStartResponse.js";

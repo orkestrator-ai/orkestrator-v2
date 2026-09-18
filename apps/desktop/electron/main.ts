@@ -171,11 +171,17 @@ function setConnectionTitle(window: BrowserWindow, scope: string): void {
 }
 
 function menuWindowList() {
-  return projectMenuWindows(windowContexts, BrowserWindow.getFocusedWindow());
+  return projectMenuWindows(windowContexts, focusedContext()?.window);
 }
 
 function focusDesktopWindow(id: number): void {
   focusWindowById(windowContexts, id);
+  const context = windowContexts.get(id);
+  if (!context || context.window.isDestroyed()) return;
+  // Some Linux window managers do not synchronously report native focus back
+  // to Electron. The explicit menu choice is still authoritative.
+  lastFocusedWindowId = id;
+  createMenu();
 }
 
 function createWindowBrowserPreviews(

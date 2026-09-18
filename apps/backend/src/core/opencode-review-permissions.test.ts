@@ -384,9 +384,7 @@ describe("OpenCode reviewer shell permissions", () => {
     try {
       await expect(restoredProvider.status("review-session")).resolves.toBe("idle");
       const restore = fake.updateCalls.at(-1)!;
-      expect(restore.permission).toEqual(
-        openCodePermissionRules(effectiveOpenCodePolicy(policy)),
-      );
+      expect(restore.permission).toEqual(openCodePermissionRules(effectiveOpenCodePolicy(policy)));
       expect(actionFor(restore, "edit")).toBe("allow");
       expect(actionFor(restore, "bash", "git commit -am later")).toBe("allow");
     } finally {

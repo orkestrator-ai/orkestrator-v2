@@ -101,7 +101,11 @@ test("real Electron main process shares one backend across independent windows",
     await expect(window).toHaveTitle(profile.electronTitle);
     await expect
       .poll(() =>
-        app.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()?.getTitle() ?? null),
+        app.evaluate(
+          ({ BrowserWindow }) =>
+            (BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0])?.getTitle() ??
+            null,
+        ),
       )
       .toBe(`${profile.electronTitle} — Local`);
     const userData = await app.evaluate(({ app: electronApp }) => electronApp.getPath("userData"));
@@ -141,12 +145,16 @@ test("real Electron main process shares one backend across independent windows",
     await window.bringToFront();
     await expect
       .poll(() =>
-        app.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()?.getTitle() ?? null),
+        app.evaluate(
+          ({ BrowserWindow }) =>
+            (BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0])?.getTitle() ??
+            null,
+        ),
       )
       .toBe(`${profile.electronTitle} — Local`);
     const invokeNewWindowAccelerator = () =>
       app.evaluate(({ BrowserWindow, Menu }) => {
-        const focusedWindow = BrowserWindow.getFocusedWindow();
+        const focusedWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
         const fileMenu = Menu.getApplicationMenu()?.items.find((item) => item.label === "File");
         const newWindow = fileMenu?.submenu?.items.find((item) => item.label === "New Window");
         if (!focusedWindow || !newWindow?.click) {
@@ -229,7 +237,7 @@ test("real Electron main process shares one backend across independent windows",
       const target = windowMenu?.submenu?.items.find(
         (item) => item.type === "radio" && item.label === label,
       );
-      const focusedWindow = BrowserWindow.getFocusedWindow();
+      const focusedWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
       if (!target?.click || !focusedWindow) {
         throw new Error("Window menu switch target is unavailable");
       }

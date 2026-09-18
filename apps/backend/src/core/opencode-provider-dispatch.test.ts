@@ -279,9 +279,9 @@ describe("OpenCode provider dispatch", () => {
       );
       expect(idleRestores.length).toBeGreaterThanOrEqual(2);
       expect(Array.isArray(afterFirst) && afterFirst.length - startingLength).toBe(deny.length + 2);
-      expect(Array.isArray(afterSecond) && afterSecond.length - (afterFirst as unknown[]).length).toBe(
-        deny.length + 2,
-      );
+      expect(
+        Array.isArray(afterSecond) && afterSecond.length - (afterFirst as unknown[]).length,
+      ).toBe(deny.length + 2);
     } finally {
       await restored.dispose?.();
     }

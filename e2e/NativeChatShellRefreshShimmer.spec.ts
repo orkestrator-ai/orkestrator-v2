@@ -16,7 +16,8 @@ test("remounting a cached transcript keeps the visible shimmer until it settles"
   await expect(shell.getByTestId("session-refresh-shimmer-pinned")).toHaveCount(0);
   await expect(shell.getByText("Cached answer")).toBeVisible();
 
-  await expect(transcriptShimmer).toHaveAttribute("data-active", "false", { timeout: 2_000 });
+  await page.getByRole("button", { name: "Settle session" }).click();
+  await expect(transcriptShimmer).toHaveAttribute("data-active", "false");
   await expect(shell.getByText("Refreshing Codex session…")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Remount session" }).click();
@@ -24,6 +25,7 @@ test("remounting a cached transcript keeps the visible shimmer until it settles"
   await expect(shell.getByText("Refreshing Codex session…")).toBeVisible();
   await expect(shell.getByText("Cached answer")).toBeVisible();
 
-  await expect(transcriptShimmer).toHaveAttribute("data-active", "false", { timeout: 2_000 });
+  await page.getByRole("button", { name: "Settle session" }).click();
+  await expect(transcriptShimmer).toHaveAttribute("data-active", "false");
   await expect(shell.getByText("Refreshing Codex session…")).toHaveCount(0);
 });

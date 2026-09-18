@@ -47,7 +47,7 @@ export type PrDetectionResult = {
   url: string;
   state: PrState;
   hasMergeConflicts: boolean | null;
-  checkSummary: PrCheckSummary;
+  checkSummary: PrCheckSummary | null;
 };
 
 export type MergePrResult = {
@@ -64,7 +64,6 @@ export type GhPrListEntry = {
   state?: unknown;
   mergeable?: unknown;
   updatedAt?: unknown;
-  statusCheckRollup?: unknown;
 };
 
 export type GitHubPullRequestRef = {
@@ -1288,7 +1287,7 @@ export function buildPrDetectionCandidate(
       state,
       hasMergeConflicts:
         mergeable === "CONFLICTING" ? true : mergeable === "MERGEABLE" ? false : null,
-      checkSummary: parsePrCheckSummary(entry.statusCheckRollup),
+      checkSummary: null,
     },
   };
 }

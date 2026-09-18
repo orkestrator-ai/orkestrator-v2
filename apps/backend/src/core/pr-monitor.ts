@@ -58,7 +58,13 @@ export interface PrDetection {
   state: PrState;
   /** Null means GitHub has not determined mergeability yet. */
   hasMergeConflicts: boolean | null;
-  checkSummary: PrCheckSummary;
+  /** Null means the rollup was not fetched or could not be fetched. */
+  checkSummary: PrCheckSummary | null;
+}
+
+export interface PrMonitorDetectionOptions {
+  /** Whether this detection should also pay for the separate check-rollup query. */
+  includeCheckSummary: boolean;
 }
 
 /** The slice of a kanban task the reconciliation side effects need. */
@@ -78,7 +84,10 @@ export interface PrMonitorKanbanTask {
  */
 export interface PrMonitorEffects {
   /** Returns the PR for the branch, null when none exists, throws on failure. */
-  detect: (target: PrMonitorTarget) => Promise<PrDetection | null>;
+  detect: (
+    target: PrMonitorTarget,
+    options: PrMonitorDetectionOptions,
+  ) => Promise<PrDetection | null>;
   persistPr: (environmentId: string, detection: PrDetection) => Promise<void>;
   clearPr: (environmentId: string) => Promise<void>;
   findTaskForEnvironment: (environmentId: string) => Promise<PrMonitorKanbanTask | null>;
@@ -104,6 +113,7 @@ export interface PrMonitorServiceOptions {
 
 export const PR_MERGED_COMMENT = "🎉 PR merged";
 export const PR_CLOSED_COMMENT = "❌ PR closed";
+export const PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS = 60_000;
 
 type ReconciliationStep = "status" | "link" | "comment" | "metadata";
 
@@ -142,6 +152,8 @@ interface PrMonitorEntry {
   observedPr: { url: string; state: PrState } | null;
   /** Latest check rollup; intentionally runtime state so every UI rehydrates from the monitor. */
   checkSummary: PrCheckSummary | null;
+  /** Last rollup-query attempt; limits GitHub traffic independently of PR-state polling. */
+  lastCheckSummaryAt: number | null;
   /** Last emitted state; suppresses byte-identical events. */
   lastEmitted?: PrMonitorEnvironmentState;
 }
@@ -375,6 +387,7 @@ export class PrMonitorService {
       observedPr:
         target.prUrl && target.prState ? { url: target.prUrl, state: target.prState } : null,
       checkSummary: null,
+      lastCheckSummaryAt: null,
     };
     this.entries.set(target.environmentId, entry);
     // Probes stay unannounced until they find something, so a probe that finds
@@ -443,7 +456,13 @@ export class PrMonitorService {
       let detection: PrDetection | null = null;
       let failed = false;
       try {
-        detection = await this.options.effects.detect(detectionTarget);
+        const now = this.options.monotonicNow();
+        const includeCheckSummary =
+          entry.mode === "normal" &&
+          (entry.lastCheckSummaryAt === null ||
+            now - entry.lastCheckSummaryAt >= PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS);
+        if (includeCheckSummary) entry.lastCheckSummaryAt = now;
+        detection = await this.options.effects.detect(detectionTarget, { includeCheckSummary });
       } catch (error) {
         failed = true;
         this.warn(`PR detection failed for ${entry.target.environmentId}`, error);
@@ -609,10 +628,16 @@ export class PrMonitorService {
     if (observedChanged) {
       entry.observedPr = { url: detection.url, state: detection.state };
     }
-    // An empty rollup means GitHub has no CI information to present. Keep it
-    // equivalent to the pre-fetch state so uneventful polls do not wake every
-    // renderer just to exchange null for 0/0.
-    entry.checkSummary = detection.checkSummary.total > 0 ? detection.checkSummary : null;
+    // A null summary means this cycle skipped the separately throttled query or
+    // that query failed. Preserve the last good reading for the same open PR.
+    // A successful empty rollup still clears the badge, and terminal/replaced
+    // PRs must never retain a summary that no longer describes what is shown.
+    if (detection.url !== previous.prUrl || detection.state !== "open") {
+      entry.checkSummary = null;
+    }
+    if (detection.checkSummary !== null) {
+      entry.checkSummary = detection.checkSummary.total > 0 ? detection.checkSummary : null;
+    }
     return transition;
   }
 
@@ -815,7 +840,10 @@ export class PrMonitorService {
     if (changed) {
       // A summary belongs to one immutable PR URL. Keep it through readiness
       // and state changes for that PR, but never let it leak onto a replacement.
-      if (entry.target.prUrl !== target.prUrl) entry.checkSummary = null;
+      if (entry.target.prUrl !== target.prUrl) {
+        entry.checkSummary = null;
+        entry.lastCheckSummaryAt = null;
+      }
       entry.generation += 1;
       if (entry.checkInProgress) entry.recheckRequested = true;
     }

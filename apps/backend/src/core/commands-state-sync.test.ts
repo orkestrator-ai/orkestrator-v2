@@ -6044,7 +6044,7 @@ describe("pr monitor commands", () => {
       url: "https://github.com/acme/repo/pull/7",
       state: "merged",
       hasMergeConflicts: null,
-      checkSummary: { passed: 0, total: 0, pending: 0 },
+      checkSummary: null,
     });
     const checks = getPrMonitorCheckRequest("https://github.com/acme/repo/pull/7");
     expect(checks.args).toEqual([
@@ -6081,7 +6081,7 @@ describe("pr monitor commands", () => {
       url: "https://github.com/acme/repo/pull/7",
       state: "open",
       hasMergeConflicts: null,
-      checkSummary: { passed: 0, total: 0, pending: 0 },
+      checkSummary: null,
     });
     expect(() =>
       parsePrMonitorDetectionResponse(

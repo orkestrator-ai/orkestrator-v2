@@ -5724,7 +5724,7 @@ describe("ActionBar pull request actions", () => {
       name: "passed",
       summary: { passed: 4, total: 4, pending: 0 },
       label: "4 of 4 CI checks passed; all checks complete",
-      colorClass: "text-red-600",
+      colorClass: "text-green-600",
       borderClass: "border-green-600",
       liveText: "4/4 checks; all checks complete",
     },
@@ -5747,6 +5747,9 @@ describe("ActionBar pull request actions", () => {
       expect(status.textContent).toBe(liveText);
       expect(status.classList.contains(colorClass)).toBe(true);
       expect(status.classList.contains(borderClass)).toBe(true);
+      if (summary.passed === summary.total && summary.pending === 0) {
+        expect(status.classList.contains("text-red-600")).toBe(false);
+      }
       expect(status.classList.contains("bg-transparent")).toBe(true);
 
       const toolbarText = Array.from(status.parentElement?.children ?? []).map(

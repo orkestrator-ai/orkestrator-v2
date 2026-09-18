@@ -205,7 +205,7 @@ printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/5","state":"OPEN","me
           url: "https://github.com/acme/repo/pull/5",
           state: "open",
           hasMergeConflicts: false,
-          checkSummary: { passed: 0, total: 0, pending: 0 },
+          checkSummary: null,
         });
 
         expect((await fs.readFile(logPath, "utf8")).trim().split("\n")).toEqual([
@@ -299,7 +299,7 @@ printf '%s\n' '[{"url":"https://github.com/acme/repo/pull/3","state":"OPEN"${com
             url: "https://github.com/acme/repo/pull/3",
             state: "open",
             hasMergeConflicts: expected,
-            checkSummary: { passed: 0, total: 0, pending: 0 },
+            checkSummary: null,
           });
         },
       );
@@ -405,7 +405,7 @@ exit 0
           url: "https://github.com/acme/repo/pull/9",
           state: "merged",
           hasMergeConflicts: false,
-          checkSummary: { passed: 0, total: 0, pending: 0 },
+          checkSummary: null,
         });
 
         const execLog = await fs.readFile(logs.exec, "utf8");
@@ -458,7 +458,7 @@ exit 0
           url: "https://github.com/acme/repo/pull/12",
           state: "open",
           hasMergeConflicts: false,
-          checkSummary: { passed: 0, total: 0, pending: 0 },
+          checkSummary: null,
         });
 
         const execLog = await fs.readFile(logs.exec, "utf8");

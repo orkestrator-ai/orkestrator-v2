@@ -5,9 +5,11 @@ import {
 } from "@orkestrator/protocol/pr-monitor";
 import {
   PR_CLOSED_COMMENT,
+  PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS,
   PR_MERGED_COMMENT,
   PrMonitorService,
   type PrDetection,
+  type PrMonitorDetectionOptions,
   type PrMonitorTarget,
 } from "../../../apps/backend/src/core/pr-monitor";
 
@@ -27,7 +29,10 @@ function createHarness() {
   let nextTimerId = 1;
   const timers = new Map<number, { callback: () => void; delayMs: number }>();
 
-  let detect: (target: PrMonitorTarget) => Promise<PrDetection | null> = async () => null;
+  let detect: (
+    target: PrMonitorTarget,
+    options: PrMonitorDetectionOptions,
+  ) => Promise<PrDetection | null> = async () => null;
   let persistError: Error | null = null;
   let clearError: Error | null = null;
   let taskLookupError: Error | null = null;
@@ -36,6 +41,7 @@ function createHarness() {
 
   const calls = {
     detect: [] as PrMonitorTarget[],
+    detectOptions: [] as PrMonitorDetectionOptions[],
     persist: [] as Array<{ environmentId: string; detection: PrDetection }>,
     clear: [] as string[],
     review: [] as string[],
@@ -57,9 +63,10 @@ function createHarness() {
       timers.delete(timer as number);
     },
     effects: {
-      detect: (target) => {
+      detect: (target, options) => {
         calls.detect.push(target);
-        return detect(target);
+        calls.detectOptions.push(options);
+        return detect(target, options);
       },
       persistPr: async (environmentId, detection) => {
         if (persistError) {
@@ -212,7 +219,7 @@ function detection(overrides: Partial<PrDetection> = {}): PrDetection {
     url: "https://github.com/org/repo/pull/1",
     state: "open",
     hasMergeConflicts: false,
-    checkSummary: { passed: 0, total: 0, pending: 0 },
+    checkSummary: null,
     ...overrides,
   };
 }
@@ -289,6 +296,7 @@ describe("PrMonitorService", () => {
     await harness.fireNext();
     expect(harness.stateEvents()).toHaveLength(eventsAfterRunning);
 
+    harness.clock.value += PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS;
     harness.setDetect(async () => detection({ checkSummary: { passed: 4, total: 4, pending: 0 } }));
     await harness.fireNext();
 
@@ -303,11 +311,73 @@ describe("PrMonitorService", () => {
       pending: 0,
     });
 
-    harness.setDetect(async () => detection());
+    harness.clock.value += PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS;
+    harness.setDetect(async () => detection({ checkSummary: { passed: 0, total: 0, pending: 0 } }));
     await harness.fireNext();
 
     expect(harness.service.snapshot()[0]?.checkSummary).toBeNull();
     expect(harness.stateEvents().at(-1)?.state.checkSummary).toBeNull();
+  });
+
+  test("retains the last CI summary when a later rollup fetch fails", async () => {
+    const harness = createHarness();
+    harness.setDetect(async () => detection({ checkSummary: { passed: 2, total: 4, pending: 2 } }));
+    harness.service.sync([openPr()]);
+    await harness.fireNext();
+
+    const eventsAfterSummary = harness.stateEvents().length;
+    harness.clock.value += PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS;
+    harness.setDetect(async () => detection({ checkSummary: null }));
+    await harness.fireNext();
+
+    expect(harness.service.snapshot()[0]?.checkSummary).toEqual({
+      passed: 2,
+      total: 4,
+      pending: 2,
+    });
+    expect(harness.stateEvents()).toHaveLength(eventsAfterSummary);
+
+    harness.clock.value += PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS;
+    harness.setDetect(async () => detection({ checkSummary: { passed: 0, total: 0, pending: 0 } }));
+    await harness.fireNext();
+
+    expect(harness.service.snapshot()[0]?.checkSummary).toBeNull();
+    expect(harness.stateEvents().at(-1)?.state.checkSummary).toBeNull();
+  });
+
+  test("throttles CI rollups in normal mode and skips them in pending modes", async () => {
+    const harness = createHarness();
+    harness.setDetect(async (_target, options) =>
+      detection({
+        checkSummary: options.includeCheckSummary ? { passed: 1, total: 2, pending: 1 } : null,
+      }),
+    );
+    harness.service.sync([openPr()]);
+
+    await harness.fireNext();
+    harness.clock.value += 20_000;
+    await harness.fireNext();
+    harness.clock.value += 20_000;
+    await harness.fireNext();
+    harness.clock.value += 20_000;
+    await harness.fireNext();
+
+    expect(harness.calls.detectOptions.map((options) => options.includeCheckSummary)).toEqual([
+      true,
+      false,
+      false,
+      true,
+    ]);
+
+    harness.service.requestMode(openPr(), "merge-pending");
+    await harness.fireNext();
+    expect(harness.calls.detectOptions.at(-1)?.includeCheckSummary).toBe(false);
+
+    const createHarnessInstance = createHarness();
+    createHarnessInstance.setDetect(async () => null);
+    createHarnessInstance.service.requestMode(target(), "create-pending");
+    await createHarnessInstance.fireNext();
+    expect(createHarnessInstance.calls.detectOptions).toEqual([{ includeCheckSummary: false }]);
   });
 
   test("clears a CI summary for a replacement PR before its first detection", async () => {

@@ -262,6 +262,7 @@ export async function resolvePrDetectionBranch(target: PrMonitorTarget): Promise
 /** Runs immutable lookup for known PRs and branch discovery for unknown PRs. */
 export async function detectEnvironmentPullRequest(
   target: PrMonitorTarget,
+  options: { includeCheckSummary?: boolean } = {},
 ): Promise<PrDetection | null> {
   const detectionTarget =
     target.prUrl && target.prState !== "merged" && target.prState !== "closed"
@@ -275,7 +276,9 @@ export async function detectEnvironmentPullRequest(
       timeoutMs: 30_000,
     });
     const detection = parsePrMonitorDetectionResponse(request, stdout);
-    if (!detection || detection.state !== "open") return detection;
+    if (!detection || detection.state !== "open" || options.includeCheckSummary === false) {
+      return detection;
+    }
     const checkRequest = getPrMonitorCheckRequest(detection.url);
     try {
       const result = await runCommand("gh", checkRequest.args, {
@@ -293,7 +296,9 @@ export async function detectEnvironmentPullRequest(
     withContainerRuntimeCredential(request.shellCommand),
   );
   const detection = parsePrMonitorDetectionResponse(request, output);
-  if (!detection || detection.state !== "open") return detection;
+  if (!detection || detection.state !== "open" || options.includeCheckSummary === false) {
+    return detection;
+  }
   const checkRequest = getPrMonitorCheckRequest(detection.url);
   try {
     const checks = await dockerExec(
@@ -310,7 +315,7 @@ export async function detectEnvironmentPullRequest(
 export const prMonitorService = new PrMonitorService({
   emit: (event, payload) => prMonitorEmit?.(event, payload),
   effects: {
-    detect: (target) => detectEnvironmentPullRequest(target),
+    detect: (target, options) => detectEnvironmentPullRequest(target, options),
     persistPr: async (environmentId, detection) => {
       await requirePrMonitorStorage().updateEnvironment(environmentId, {
         prUrl: detection.url,
@@ -408,7 +413,7 @@ export async function reconcileConfirmedMerge(
     url: environment.prUrl,
     state: "merged",
     hasMergeConflicts: false,
-    checkSummary: { passed: 0, total: 0, pending: 0 },
+    checkSummary: null,
   });
 }
 

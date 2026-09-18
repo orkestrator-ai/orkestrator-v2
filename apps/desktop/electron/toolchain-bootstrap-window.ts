@@ -7,13 +7,36 @@ import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent
 type BrowserWindowConstructor = new (options: BrowserWindowConstructorOptions) => BrowserWindowType;
 
 // Both pages below centre their content with `margin: auto` on a flex child.
-// The fixed size these windows ask for is only a request: a tiling compositor
-// (Hyprland, sway) ignores it and hands the window the whole tile, which left a
-// narrow column of content stranded at the top of an otherwise empty screen and
-// the button far from where anyone would look for it. Auto margins centre in
-// whatever surface actually arrives, and — unlike `place-items: center` —
-// degrade to top-aligned instead of clipping the top out of reach when the
-// surface is shorter than the content.
+// On Linux the initial size is only a request: tiling compositors such as
+// Hyprland and sway own the final surface dimensions. Equal min/max constraints
+// also expose an Electron native-Wayland fractional-scaling bug where Chromium
+// paints an unscaled buffer inside the compositor's scaled frame. Leave Linux
+// windows resizable so the compositor can configure the complete surface; keep
+// the existing fixed dialogs on macOS and Windows. Auto margins centre in
+// whatever surface actually arrives and degrade to top-aligned instead of
+// clipping the top out of reach when the surface is shorter than the content.
+
+type BootstrapWindowSizing = Pick<
+  BrowserWindowConstructorOptions,
+  "width" | "height" | "minWidth" | "minHeight" | "maxWidth" | "maxHeight" | "resizable"
+>;
+
+function bootstrapWindowSizing(
+  platform: NodeJS.Platform,
+  width: number,
+  height: number,
+): BootstrapWindowSizing {
+  if (platform === "linux") return { width, height, resizable: true };
+  return {
+    width,
+    height,
+    minWidth: width,
+    minHeight: height,
+    maxWidth: width,
+    maxHeight: height,
+    resizable: false,
+  };
+}
 
 export const BOOTSTRAP_HTML = `<!doctype html>
 <html lang="en">
@@ -95,16 +118,11 @@ export const PLATFORM_SELECTION_HTML = `<!doctype html>
 export async function chooseAgentPlatforms(options: {
   BrowserWindowCtor: BrowserWindowConstructor;
   dirname: string;
+  platform?: NodeJS.Platform;
 }): Promise<AgentPlatform[]> {
   const window = new options.BrowserWindowCtor({
     title: `${PRODUCT_NAME} — Choose agent platforms`,
-    width: 650,
-    height: 600,
-    minWidth: 650,
-    minHeight: 600,
-    maxWidth: 650,
-    maxHeight: 600,
-    resizable: false,
+    ...bootstrapWindowSizing(options.platform ?? process.platform, 650, 600),
     fullscreenable: false,
     backgroundColor: "#101012",
     webPreferences: {
@@ -186,16 +204,11 @@ async function createBootstrapHtmlWindow(options: {
   dirname: string;
   title: string;
   html: string;
+  platform?: NodeJS.Platform;
 }): Promise<BrowserWindowType> {
   const window = new options.BrowserWindowCtor({
     title: options.title,
-    width: 520,
-    height: 300,
-    minWidth: 520,
-    minHeight: 300,
-    maxWidth: 520,
-    maxHeight: 300,
-    resizable: false,
+    ...bootstrapWindowSizing(options.platform ?? process.platform, 520, 300),
     fullscreenable: false,
     backgroundColor: "#111113",
     webPreferences: {
@@ -228,6 +241,7 @@ async function createBootstrapHtmlWindow(options: {
 export async function createToolchainBootstrapWindow(options: {
   BrowserWindowCtor: BrowserWindowConstructor;
   dirname: string;
+  platform?: NodeJS.Platform;
 }): Promise<BrowserWindowType> {
   return createBootstrapHtmlWindow({
     ...options,
@@ -239,6 +253,7 @@ export async function createToolchainBootstrapWindow(options: {
 export async function createMacOsPermissionSplashWindow(options: {
   BrowserWindowCtor: BrowserWindowConstructor;
   dirname: string;
+  platform?: NodeJS.Platform;
 }): Promise<BrowserWindowType> {
   return createBootstrapHtmlWindow({
     ...options,

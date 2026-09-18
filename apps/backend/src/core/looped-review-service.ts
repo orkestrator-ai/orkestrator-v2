@@ -819,9 +819,7 @@ export class LoopedReviewService {
       try {
         await provider.prepareDispatch?.(session.providerSessionId, {
           ...(agentMcp ? { agentMcp } : {}),
-          ...(agentMcp?.workflowResultCapability
-            ? { workflowResultTool: workflowResultToolName(resultKind) }
-            : {}),
+          ...(agentMcp ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
         });
       } catch {
         // Best-effort: send performs the same registration.
@@ -847,9 +845,7 @@ export class LoopedReviewService {
             effort: workflow.reasoningEffort,
             ...(typeof workflow.fastMode === "boolean" ? { fastMode: workflow.fastMode } : {}),
             ...(agentMcp ? { agentMcp } : {}),
-            ...(agentMcp?.workflowResultCapability
-              ? { workflowResultTool: workflowResultToolName(resultKind) }
-              : {}),
+            ...(agentMcp ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
           },
         );
       } catch (error) {

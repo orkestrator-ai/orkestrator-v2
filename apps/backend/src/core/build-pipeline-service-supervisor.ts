@@ -1244,9 +1244,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       agentMcp
         ? {
             agentMcp,
-            ...(agentMcp.workflowResultCapability && resultKind
-              ? { workflowResultTool: workflowResultToolName(resultKind) }
-              : {}),
+            ...(resultKind ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
           }
         : undefined,
     );
@@ -1267,7 +1265,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           ...(typeof fastMode === "boolean" ? { fastMode } : {}),
           mode,
           ...(agentMcp ? { agentMcp } : {}),
-          ...(agentMcp?.workflowResultCapability && resultKind
+          ...(agentMcp && resultKind
             ? { workflowResultTool: workflowResultToolName(resultKind) }
             : {}),
         },
@@ -1359,9 +1357,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       agentMcp
         ? {
             agentMcp,
-            ...(agentMcp.workflowResultCapability && resultKind
-              ? { workflowResultTool: workflowResultToolName(resultKind) }
-              : {}),
+            ...(resultKind ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
           }
         : undefined,
     );
@@ -1382,7 +1378,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           effort: step?.effort,
           ...(typeof step?.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
           ...(agentMcp ? { agentMcp } : {}),
-          ...(agentMcp?.workflowResultCapability && resultKind
+          ...(agentMcp && resultKind
             ? { workflowResultTool: workflowResultToolName(resultKind) }
             : {}),
         },

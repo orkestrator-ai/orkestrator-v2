@@ -1648,7 +1648,9 @@ describe("OpenCode provider runtime", () => {
         Array.from({ length: 5 }, () => ({ directory: "/workspace" })),
       );
       expect(fake.sessionListCallCount).toBe(0);
-      expect(fake.sessionGetCallCount).toBe(1);
+      // The owned idle session is reconciled once for a stale workflow-result
+      // allow; the missing session still uses its ordinary existence probe.
+      expect(fake.sessionGetCallCount).toBe(2);
 
       fake.setPromptResponse({ error: { message: "rejected" } });
       await expect(

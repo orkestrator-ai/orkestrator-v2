@@ -669,8 +669,10 @@ describe("ensureAgent", () => {
     });
     expect(state.mcpServerNames).toEqual(["orkestrator"]);
     expect(state.hostedMcpClose).toBeFunction();
+    expect(state.hostedMcpTools?.launch_environment).toBeDefined();
     await detachAgent(state);
     expect(state.hostedMcpClose).toBeUndefined();
+    expect(state.hostedMcpTools).toBeUndefined();
   });
 
   test("a read-only attach drops repository MCP servers even when project settings are opted in", async () => {
@@ -870,6 +872,7 @@ describe("ensureAgent", () => {
     try {
       await expect(ensureAgent(state)).rejects.toThrow("SDK create failed");
       expect(state.hostedMcpClose).toBeUndefined();
+      expect(state.hostedMcpTools).toBeUndefined();
       expect(state.agent).toBeNull();
       expect(closed).toBe(1);
     } finally {
@@ -1080,6 +1083,23 @@ describe("resumeSession", () => {
     ).toEqual([adopted]);
   });
 
+  test("rejects overlapping resumes of the same agent under different MCP scopes", async () => {
+    const first = resumeSession("agent-mcp-race", undefined, permissivePolicy, {
+      url: "http://127.0.0.1:4567/mcp",
+      token: "attempt-a",
+    });
+    const second = resumeSession("agent-mcp-race", undefined, permissivePolicy, {
+      url: "http://127.0.0.1:4567/mcp",
+      token: "attempt-b",
+    });
+    await expect(second).rejects.toBeInstanceOf(SessionConflictError);
+    const adopted = await first;
+    expect(adopted.agentMcp).toEqual({
+      url: "http://127.0.0.1:4567/mcp",
+      token: "attempt-a",
+    });
+  });
+
   test("rejects a later resume that asks for different composer controls", async () => {
     const first = await resumeSession("agent-composer-share", { modelId: "composer-2" });
     await expect(
@@ -1199,6 +1219,71 @@ describe("resumeSession", () => {
     const state = await resumeSession("agent-1", undefined);
     expect(state.status).toBe("idle");
     expect(state.recoveringRun).toBeUndefined();
+  });
+
+  test("re-adopts a recovering run with hosted workflow tool callbacks", async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    setCursorMcpTransportForTests({
+      async connect() {
+        return {
+          tools: [{ name: "submit_review_report", description: "Submit the review" }],
+          async call() {
+            return { content: [{ type: "text", text: "accepted" }] };
+          },
+          async close() {},
+        };
+      },
+    });
+    runs = {
+      items: [
+        {
+          id: "run-recovered-tools",
+          status: "running",
+          createdAt: Date.now(),
+          supports: () => false,
+          async *stream() {
+            await hold;
+            yield {};
+          },
+          wait: async () => {
+            await hold;
+            return { status: "finished" };
+          },
+          cancel: async () => undefined,
+          onDidChangeStatus: () => () => undefined,
+        },
+      ],
+    };
+
+    const state = await resumeSession(
+      "agent-1",
+      undefined,
+      {
+        id: "coordinator-read-only",
+        sandbox: "provider",
+        approvals: "deny",
+        projectResources: false,
+        networkAccess: "restricted",
+      },
+      { url: "http://127.0.0.1:4567/mcp", token: "attempt-secret" },
+    );
+
+    expect(resumed).toEqual(["agent-1"]);
+    expect(resumedOptions[0]).toMatchObject({
+      local: {
+        cwd: expect.any(String),
+        sandboxOptions: { enabled: true },
+        customTools: {
+          submit_review_report: expect.objectContaining({ execute: expect.any(Function) }),
+        },
+      },
+    });
+    expect(state.hostedMcpTools?.submit_review_report).toBeDefined();
+    release();
+    await state.recoveringRun;
   });
 
   test("applies live stream updates while recovering a still-running run", async () => {

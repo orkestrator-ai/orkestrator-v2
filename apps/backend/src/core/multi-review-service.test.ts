@@ -2124,7 +2124,7 @@ async function waitUntil(
   }
 }
 
-test.each(["grok", "cursor", "pi"] as const)(
+test.each(["grok", "cursor", "pi", "codex"] as const)(
   "MultiReviewService delivers %s reviewer and consolidation reports through MCP tools",
   async (agent) => {
     const provider = new Provider(false);
@@ -2145,6 +2145,7 @@ test.each(["grok", "cursor", "pi"] as const)(
         const reviewerDispatch = provider.sends.get(reviewerRequestId);
         expect(reviewerDispatch?.prompt).toContain("submit_review_report");
         expect(reviewerDispatch?.options.schema).toBeUndefined();
+        expect(reviewerDispatch?.options.workflowResultTool).toBe("submit_review_report");
         expect(reviewerDispatch?.options.agentMcp).toEqual({
           url: "http://127.0.0.1:1234/mcp",
           token: "test-token",
@@ -2178,6 +2179,9 @@ test.each(["grok", "cursor", "pi"] as const)(
         const consolidationDispatch = provider.sends.get(consolidationRequestId);
         expect(consolidationDispatch?.prompt).toContain("submit_consolidated_review");
         expect(consolidationDispatch?.options.schema).toBeUndefined();
+        expect(consolidationDispatch?.options.workflowResultTool).toBe(
+          "submit_consolidated_review",
+        );
         expect(consolidationDispatch?.options.agentMcp).toEqual({
           url: "http://127.0.0.1:1234/mcp",
           token: "test-token",

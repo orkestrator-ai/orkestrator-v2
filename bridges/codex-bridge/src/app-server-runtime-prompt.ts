@@ -149,6 +149,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       outputSchema?: JsonSchema;
       readOnly?: boolean;
       agentMcp?: { url: string; token: string };
+      workflowResultTool?: string;
     },
   ): Promise<
     | { ok: true; result: PromptAcceptedResult }
@@ -200,6 +201,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       outputSchema?: JsonSchema;
       readOnly?: boolean;
       agentMcp?: { url: string; token: string };
+      workflowResultTool?: string;
     },
   ): Promise<
     | { ok: true; result: PromptAcceptedResult }
@@ -350,9 +352,18 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     const parsed = parseSlashCommandPrompt(executionPrompt);
     const bypassModeWrapper = !!parsed && isCodexCliNativeSlashCommand(parsed.name);
     const isPlanReview = session.config.mode === "plan" && !bypassModeWrapper;
+    // Consolidation is a structured report turn, not a planning turn. Keep the
+    // reusable Fix session in build mode while applying the read-only boundary
+    // and workflow-result approval only to this dispatch.
+    const promptConfig = (): EngineTurnConfig => ({
+      ...session.config,
+      ...(input.readOnly ? { sandbox: "read-only", approvalPolicy: "never" } : {}),
+      ...(input.workflowResultTool ? { workflowResultTool: input.workflowResultTool } : {}),
+    });
+    const hadAttachedContext = context !== undefined;
     // 4. Lazily create the Codex thread on first prompt.
     if (!context) {
-      const thread = await this.options.engine.startThread({ config: session.config });
+      const thread = await this.options.engine.startThread({ config: promptConfig() });
       if (!thread.id) return { ok: false, status: 503, error: "Codex did not return a thread id" };
       // A new thread means a new rollout on disk; the next /session/list must
       // not answer from a catalog scanned before it existed.
@@ -365,6 +376,15 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         transcriptHydrated: true,
       });
       await this.persistSession(session);
+    }
+    // Re-read after thread/start: updateConfig can be accepted while that RPC is
+    // in flight, and turn/start must use the configuration that won that race.
+    const turnConfig = promptConfig();
+    if (hadAttachedContext && input.workflowResultTool) {
+      // app-server's turn/start protocol has no `config` field. Re-resume an
+      // already attached thread so the attempt-scoped MCP server and its narrow
+      // approval mode are applied before the result turn starts.
+      context = await this.resumeThreadForPrompt(session.id, context, turnConfig);
     }
 
     context.dispatchInFlight = true;
@@ -436,13 +456,6 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         : wrapPromptForConversationMode(promptWithRecoveredContext, session.config.mode),
       input.attachments,
     );
-    // Consolidation is a structured report turn, not a planning turn. Apply
-    // the read-only boundary to this turn's sandbox without changing the
-    // conversation mode or persisting it onto the reusable Fix session.
-    const turnConfig: EngineTurnConfig = input.readOnly
-      ? { ...session.config, sandbox: "read-only", approvalPolicy: "never" }
-      : session.config;
-
     try {
       // 5. Journal *before* the write: everything from here to `markAccepted` is
       //    the ambiguous window.
@@ -562,7 +575,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         } else {
           let thread;
           try {
-            thread = await this.options.engine.startThread({ config: session.config });
+            thread = await this.options.engine.startThread({ config: turnConfig });
           } catch (error) {
             const message =
               error instanceof Error
@@ -593,6 +606,12 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
           if (thread.model) {
             assistantMessage.modelId = thread.model;
           }
+        }
+        if (input.workflowResultTool && context === reboundContext) {
+          // Generation recovery resumes with the durable session config, which
+          // intentionally omits this one-turn approval. Reapply it before the
+          // retry enters the ambiguous turn/start window.
+          context = await this.resumeThreadForPrompt(session.id, context, turnConfig);
         }
         // Close the overlap window before the first await below, exactly as the
         // main dispatch path does. Recovery leaves a re-attached thread `idle`
@@ -786,6 +805,23 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       });
       return { ok: false, status: 503, error: classified.engineError.message };
     }
+  }
+
+  private async resumeThreadForPrompt(
+    sessionId: string,
+    context: ThreadContext,
+    config: EngineTurnConfig,
+  ): Promise<ThreadContext> {
+    const thread = await this.options.engine.resumeThread(context.threadId, { config });
+    if (!thread.id) throw new Error("Codex did not return a thread id");
+    return this.registry.attach(sessionId, thread.id, {
+      engineHandle: thread.handle,
+      engineGeneration: this.options.engine.info().generation,
+      cwd: thread.cwd ?? context.cwd,
+      name: thread.name ?? context.name,
+      modelId: thread.model ?? context.modelId,
+      transcriptHydrated: context.transcriptHydrated,
+    });
   }
 
   /**

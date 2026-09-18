@@ -555,9 +555,7 @@ export class FeaturePlanningService {
       try {
         await provider.prepareDispatch?.(sessionId, {
           ...(agentMcp ? { agentMcp } : {}),
-          ...(agentMcp?.workflowResultCapability
-            ? { workflowResultTool: workflowResultToolName(resultKind) }
-            : {}),
+          ...(agentMcp ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
         });
       } catch {
         // Best-effort: send performs the same registration.
@@ -578,9 +576,7 @@ export class FeaturePlanningService {
             ? { fastMode: launchSettings.fastMode }
             : {}),
           ...(agentMcp ? { agentMcp } : {}),
-          ...(agentMcp?.workflowResultCapability
-            ? { workflowResultTool: workflowResultToolName(resultKind) }
-            : {}),
+          ...(agentMcp ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
         },
       );
     } catch (error) {

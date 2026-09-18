@@ -84,6 +84,27 @@ describe("HTTP bridge provider", () => {
     },
   );
 
+  test("forwards Codex's selected workflow-result tool with its attempt connection", async () => {
+    const agentMcp = {
+      url: "http://127.0.0.1:4567/mcp",
+      token: "attempt-token",
+    };
+    const sent = httpProvider(() => Response.json({ status: "processing" }), codexConnection);
+
+    await sent.provider.send("session-1", "report", {
+      requestId: "request-1",
+      readOnly: true,
+      agentMcp,
+      workflowResultTool: "submit_consolidated_review",
+    });
+
+    expect(JSON.parse(String(sent.requests[0]!.init.body))).toMatchObject({
+      readOnly: true,
+      agentMcp,
+      workflowResultTool: "submit_consolidated_review",
+    });
+  });
+
   test("uses the connection speed default for session creation and prompt dispatch", async () => {
     const cursor = httpProvider(() => Response.json({ sessionId: "cursor-session" }), {
       ...cursorConnection,

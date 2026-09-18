@@ -5,7 +5,7 @@ import {
   type ProviderPrepareDispatchOptions,
   type ProviderSendOptions,
 } from "./agent-provider-contract.js";
-import { assertSdkResponse } from "./agent-provider-runtime.js";
+import { asRecord, assertSdkResponse } from "./agent-provider-runtime.js";
 import {
   openCodeWorkflowResultDenyPermissionRules,
   openCodeWorkflowResultPermissionRules,
@@ -30,6 +30,8 @@ export class OpenCodeWorkflowResultBroker {
     string,
     ReturnType<typeof openCodeWorkflowResultDenyPermissionRules>
   >();
+  /** Sessions whose persisted workflow-result rules were reconciled by this provider instance. */
+  private readonly reconciled = new Set<string>();
 
   constructor(
     private readonly client: OpencodeClient,
@@ -104,11 +106,24 @@ export class OpenCodeWorkflowResultBroker {
     }
     this.permissionRestore.set(sessionId, openCodeWorkflowResultDenyPermissionRules());
     this.enabled.set(sessionId, selectedTool);
+    this.reconciled.add(sessionId);
   }
 
   async restore(sessionId: string, afterReviewerRestore = false): Promise<void> {
-    const permission = this.permissionRestore.get(sessionId);
-    if (!permission && !afterReviewerRestore) return;
+    let permission = this.permissionRestore.get(sessionId);
+    if (!permission && !afterReviewerRestore) {
+      if (this.reconciled.has(sessionId)) return;
+      const response = await this.client.session.get(
+        { sessionID: sessionId, directory: this.directory },
+        this.requestOptions(),
+      );
+      assertSdkResponse(response, "OpenCode workflow-result permission reconciliation");
+      if (!hasEnabledWorkflowResultPermission(asRecord(response.data)?.permission)) {
+        this.reconciled.add(sessionId);
+        return;
+      }
+      permission = openCodeWorkflowResultDenyPermissionRules();
+    }
     const response = await this.client.session.update(
       {
         sessionID: sessionId,
@@ -118,7 +133,27 @@ export class OpenCodeWorkflowResultBroker {
       this.requestOptions(),
     );
     assertSdkResponse(response, "OpenCode workflow-result permission restore");
+    this.reconciled.add(sessionId);
     this.permissionRestore.delete(sessionId);
     this.enabled.delete(sessionId);
   }
+}
+
+/**
+ * OpenCode appends permission updates, so the last rule for a tool is the
+ * effective one. Recover only a persisted allow that has not already been
+ * superseded by this broker's deny set.
+ */
+function hasEnabledWorkflowResultPermission(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  const workflowPermissions = new Set(
+    openCodeWorkflowResultDenyPermissionRules().map((rule) => rule.permission),
+  );
+  const effective = new Map<string, unknown>();
+  for (const raw of value) {
+    const rule = asRecord(raw);
+    if (typeof rule?.permission !== "string" || !workflowPermissions.has(rule.permission)) continue;
+    effective.set(rule.permission, rule.action);
+  }
+  return Array.from(effective.values()).some((action) => action === "allow");
 }

@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { reloadAfterConnectionChange } from "@/lib/client-platform";
 import { subscribeToConnections } from "@/lib/connections";
 
 type ConnectionsApi = NonNullable<NonNullable<Window["orkestrator"]>["connections"]>;
@@ -197,7 +198,7 @@ export function ServerConnectionSwitcher() {
     setSwitchingId(connection.id);
     try {
       await api.use(connection.id);
-      window.location.reload();
+      reloadAfterConnectionChange();
     } catch (caught) {
       toast.error("Could not switch servers", { description: errorMessage(caught) });
       setSwitchingId(null);
@@ -213,7 +214,7 @@ export function ServerConnectionSwitcher() {
     try {
       await api.connect({ address, token });
       setToken("");
-      window.location.reload();
+      reloadAfterConnectionChange();
     } catch (caught) {
       setError(errorMessage(caught));
       setConnecting(false);

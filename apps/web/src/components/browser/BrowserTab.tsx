@@ -15,6 +15,7 @@ import type {
   BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
 import { Button } from "@/components/ui/button";
+import { isWkWebViewClient } from "@/lib/client-platform";
 import { isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { cn } from "@/lib/utils";
 import { resolveBrowserAddress } from "@/lib/browser-address";
@@ -516,10 +517,7 @@ export function BrowserTab({
   const canGoForward = nativeBrowserPreview
     ? Boolean(nativeState?.canGoForward)
     : historyIndex >= 0 && historyIndex < history.length - 1;
-  const isIosClient =
-    window.__orkestratorClientPlatform === "ios-wkwebview" ||
-    window.__orkestratorClientPlatform === "ipad-wkwebview" ||
-    window.__orkestratorClientPlatform === "iphone-wkwebview";
+  const isIosClient = isWkWebViewClient();
 
   if (!browserPreviewSupported) {
     return (

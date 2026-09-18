@@ -5,6 +5,7 @@ import { mockToastError, resetSonnerMocks } from "../../../../../tests/mocks/son
 import { ConnectionsSettings } from "./ConnectionsSettings";
 
 const originalReload = window.location.reload;
+const originalClientPlatform = window.__orkestratorClientPlatform;
 
 const initialList: ConnectionList = {
   activeConnectionId: "local",
@@ -79,6 +80,7 @@ afterEach(() => {
   resetSonnerMocks();
   delete window.orkestrator;
   window.location.reload = originalReload;
+  window.__orkestratorClientPlatform = originalClientPlatform;
 });
 
 describe("ConnectionsSettings", () => {
@@ -142,6 +144,50 @@ describe("ConnectionsSettings", () => {
       }),
     );
   });
+
+  test("keeps the add flow busy while the native client navigates", async () => {
+    const api = installConnections();
+    const reload = mock(() => undefined);
+    window.__orkestratorClientPlatform = "ios-wkwebview";
+    window.location.reload = reload as unknown as typeof window.location.reload;
+    render(<ConnectionsSettings />);
+    await screen.findByText("desk.tailnet.ts.net");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
+    fireEvent.change(screen.getByLabelText("Machine name or HTTPS address"), {
+      target: { value: "workstation" },
+    });
+    fireEvent.change(screen.getByLabelText("Gateway token"), {
+      target: { value: "gateway-token-123456" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    await waitFor(() => expect(api.connect).toHaveBeenCalledTimes(1));
+    expect(reload).not.toHaveBeenCalled();
+    expect(
+      (screen.getByRole("button", { name: "Connecting…" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  test.each(["ios-wkwebview", "ipad-wkwebview", "iphone-wkwebview"] as const)(
+    "lets the native client navigate after switching from settings on %s",
+    async (platform) => {
+      const api = installConnections();
+      const reload = mock(() => undefined);
+      window.__orkestratorClientPlatform = platform;
+      window.location.reload = reload as unknown as typeof window.location.reload;
+      render(<ConnectionsSettings />);
+      await screen.findByText("desk.tailnet.ts.net");
+
+      fireEvent.click(screen.getByRole("button", { name: "Use" }));
+
+      await waitFor(() => expect(api.use).toHaveBeenCalledWith("remote-1"));
+      expect(reload).not.toHaveBeenCalled();
+      expect((screen.getByRole("button", { name: "Use" }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+    },
+  );
 
   test("opens a saved connection in a new window without switching this one", async () => {
     const api = installConnections();
@@ -211,6 +257,30 @@ describe("ConnectionsSettings", () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
+  test("lets the native client navigate after a token-and-switch flow", async () => {
+    const requiresTokenList: ConnectionList = {
+      ...initialList,
+      connections: initialList.connections.map((connection) =>
+        connection.id === "remote-1" ? { ...connection, requiresToken: true } : connection,
+      ),
+    };
+    const api = installConnections(requiresTokenList);
+    const reload = mock(() => undefined);
+    window.__orkestratorClientPlatform = "ios-wkwebview";
+    window.location.reload = reload as unknown as typeof window.location.reload;
+    render(<ConnectionsSettings />);
+    await screen.findByText("Token required");
+
+    fireEvent.click(screen.getByRole("button", { name: "Enter token" }));
+    fireEvent.change(screen.getByLabelText("New gateway token"), {
+      target: { value: "replacement-token-123456" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    await waitFor(() => expect(api.use).toHaveBeenCalledWith("remote-1"));
+    expect(reload).not.toHaveBeenCalled();
+  });
+
   test("shows token update errors and re-enables the form", async () => {
     const api = installConnections(initialList, {
       updateToken: async () => {
@@ -267,6 +337,29 @@ describe("ConnectionsSettings", () => {
 
     await waitFor(() => expect(api.forget).toHaveBeenCalledWith("remote-1"));
     await waitFor(() => expect(screen.queryByText("desk.tailnet.ts.net") === null).toBe(true));
+  });
+
+  test("lets the native client navigate after removing the active connection", async () => {
+    const activeRemoteList: ConnectionList = {
+      ...initialList,
+      activeConnectionId: "remote-1",
+      connections: initialList.connections.map((connection) => ({
+        ...connection,
+        active: connection.id === "remote-1",
+      })),
+    };
+    const api = installConnections(activeRemoteList);
+    const reload = mock(() => undefined);
+    window.__orkestratorClientPlatform = "ios-wkwebview";
+    window.location.reload = reload as unknown as typeof window.location.reload;
+    render(<ConnectionsSettings />);
+    await screen.findByText("desk.tailnet.ts.net");
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove desk.tailnet.ts.net" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove connection" }));
+
+    await waitFor(() => expect(api.forget).toHaveBeenCalledWith("remote-1"));
+    expect(reload).not.toHaveBeenCalled();
   });
 
   test("reports a failed removal and leaves the connection visible", async () => {

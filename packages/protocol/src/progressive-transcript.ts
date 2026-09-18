@@ -70,6 +70,8 @@ export function bridgeTranscriptUpdate<T extends { content: string; parts: unkno
       token: string;
       value: {
         messages: T[];
+        /** Absolute position of the first returned message within contentEpoch. */
+        startIndex: number;
         complete: boolean;
         messageWindow: {
           truncated: boolean;
@@ -120,6 +122,7 @@ export function bridgeTranscriptUpdate<T extends { content: string; parts: unkno
     token,
     value: {
       messages: bounded.messages,
+      startIndex: messages.length - bounded.messages.length,
       complete: options.complete && !windowTruncated,
       messageWindow: {
         truncated,

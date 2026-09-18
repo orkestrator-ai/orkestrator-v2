@@ -239,6 +239,7 @@ export function internals(service: NativeAgentService) {
     projectionEpochs: Map<string, number>;
     projectionRefreshes: Map<string, Promise<unknown>>;
     progressiveTranscriptCache: Map<string, { token: string; value: unknown }>;
+    providerConnections: Map<string, string>;
     progressiveReads: Map<string, Promise<unknown>>;
     progressiveDirtyFollowUps: Map<string, number>;
     progressiveTrailing: Map<string, Promise<unknown>>;

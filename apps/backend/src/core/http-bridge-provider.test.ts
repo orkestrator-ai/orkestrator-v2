@@ -63,26 +63,26 @@ describe("HTTP bridge provider", () => {
     ["cursor" as const, cursorConnection],
     ["pi" as const, piConnection],
     ["grok" as const, grokConnection],
-  ])("forwards the per-attempt %s workflow-result MCP connection on prompt and attach", async (
-    _agent,
-    connection,
-  ) => {
-    const agentMcp = {
-      url: "http://127.0.0.1:4567/mcp",
-      token: "attempt-token",
-      workflowResultCapability: "signed-attempt-capability",
-    };
-    const sent = httpProvider(() => Response.json({ status: "processing" }), connection);
-    await sent.provider.send("session-1", "work", { requestId: "request-1", agentMcp });
-    expect(JSON.parse(String(sent.requests[0]!.init.body)).agentMcp).toEqual(agentMcp);
+  ])(
+    "forwards the per-attempt %s workflow-result MCP connection on prompt and attach",
+    async (_agent, connection) => {
+      const agentMcp = {
+        url: "http://127.0.0.1:4567/mcp",
+        token: "attempt-token",
+        workflowResultCapability: "signed-attempt-capability",
+      };
+      const sent = httpProvider(() => Response.json({ status: "processing" }), connection);
+      await sent.provider.send("session-1", "work", { requestId: "request-1", agentMcp });
+      expect(JSON.parse(String(sent.requests[0]!.init.body)).agentMcp).toEqual(agentMcp);
 
-    const attached = httpProvider(() => Response.json({ status: "idle" }), connection);
-    await attached.provider.prepareDispatch?.("session-1", {
-      agentMcp,
-      workflowResultTool: "submit_review_report",
-    });
-    expect(JSON.parse(String(attached.requests[0]!.init.body)).agentMcp).toEqual(agentMcp);
-  });
+      const attached = httpProvider(() => Response.json({ status: "idle" }), connection);
+      await attached.provider.prepareDispatch?.("session-1", {
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
+      expect(JSON.parse(String(attached.requests[0]!.init.body)).agentMcp).toEqual(agentMcp);
+    },
+  );
 
   test("uses the connection speed default for session creation and prompt dispatch", async () => {
     const cursor = httpProvider(() => Response.json({ sessionId: "cursor-session" }), {
@@ -1969,6 +1969,7 @@ describe("HTTP bridge progressive transcript", () => {
           token: "bt1.def",
           value: {
             messages: [{ id: "m1", content: "hello", parts: [] }],
+            startIndex: 3,
             complete: true,
             generation: 4,
             contentEpoch: 2,
@@ -1983,6 +1984,7 @@ describe("HTTP bridge progressive transcript", () => {
     const snapshot = await provider.transcriptSnapshot!("session-1", transcriptOptions);
     if ("unchanged" in snapshot) throw new Error("expected a snapshot");
     expect(snapshot.historyEpoch).toBe("4:2");
+    expect(snapshot.historyStartIndex).toBe(3);
     expect(snapshot.sourceToken).toBe("bt1.def");
     expect(snapshot.title).toBe("Titled");
     expect(snapshot.revision).toBe(9);

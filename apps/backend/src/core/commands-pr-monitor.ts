@@ -174,11 +174,11 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
     "--limit",
     "30",
     "--json",
-    "url,state,mergeable,updatedAt,statusCheckRollup",
+    "url,state,mergeable,updatedAt",
   ];
   return {
     args,
-    shellCommand: `gh pr list --head ${quoteShell(headBranch)} --state all --limit 30 --json url,state,mergeable,updatedAt,statusCheckRollup`,
+    shellCommand: `gh pr list --head ${quoteShell(headBranch)} --state all --limit 30 --json url,state,mergeable,updatedAt`,
     knownPrUrl: null,
     branch: headBranch,
   };

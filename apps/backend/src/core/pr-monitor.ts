@@ -189,7 +189,8 @@ export class PrMonitorService {
       if (entry) {
         // Storage is authoritative for the persisted PR fields; the entry's
         // copy exists so a check can see what the previous reading was.
-        this.replaceTarget(entry, target);
+        const targetChanged = this.replaceTarget(entry, target);
+        if (targetChanged) this.emitState(entry);
         if (!target.ready && entry.active) this.pause(target.environmentId);
         else if (target.ready && !entry.active) {
           entry.active = true;
@@ -224,7 +225,7 @@ export class PrMonitorService {
       this.track(target, mode, { immediate: true, paused: !target.ready });
       return;
     }
-    this.replaceTarget(entry, target);
+    const targetChanged = this.replaceTarget(entry, target);
     entry.provisional = false;
     if (entry.mode !== mode) {
       entry.mode = mode;
@@ -232,6 +233,7 @@ export class PrMonitorService {
       this.emitState(entry);
     } else {
       entry.modeStartedAt = this.options.monotonicNow();
+      if (targetChanged) this.emitState(entry);
     }
     if (target.ready && !entry.active) entry.active = true;
     if (entry.active) this.scheduleNext(entry, 0);
@@ -266,7 +268,8 @@ export class PrMonitorService {
     let entry = this.entries.get(target.environmentId);
     let restorePaused = false;
     if (entry) {
-      this.replaceTarget(entry, reconciledTarget);
+      const targetChanged = this.replaceTarget(entry, reconciledTarget);
+      if (targetChanged) this.emitState(entry);
       if (!entry.active) {
         entry.active = true;
         restorePaused = true;
@@ -297,7 +300,8 @@ export class PrMonitorService {
   probe(target: PrMonitorTarget): void {
     const entry = this.entries.get(target.environmentId);
     if (entry) {
-      this.replaceTarget(entry, target);
+      const targetChanged = this.replaceTarget(entry, target);
+      if (targetChanged) this.emitState(entry);
       if (entry.active) this.scheduleNext(entry, 0);
       return;
     }
@@ -803,12 +807,17 @@ export class PrMonitorService {
     };
   }
 
-  private replaceTarget(entry: PrMonitorEntry, target: PrMonitorTarget): void {
-    if (!isSameTarget(entry.target, target)) {
+  private replaceTarget(entry: PrMonitorEntry, target: PrMonitorTarget): boolean {
+    const changed = !isSameTarget(entry.target, target);
+    if (changed) {
+      // A summary belongs to one immutable PR URL. Keep it through readiness
+      // and state changes for that PR, but never let it leak onto a replacement.
+      if (entry.target.prUrl !== target.prUrl) entry.checkSummary = null;
       entry.generation += 1;
       if (entry.checkInProgress) entry.recheckRequested = true;
     }
     entry.target = target;
+    return changed;
   }
 
   private isCurrent(entry: PrMonitorEntry, generation: number): boolean {

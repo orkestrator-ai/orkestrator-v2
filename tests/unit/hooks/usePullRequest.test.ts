@@ -355,7 +355,7 @@ describe("usePullRequest", () => {
     expect(result.current.isDetecting).toBe(true);
   });
 
-  test("returns the authoritative CI check summary from the monitor", () => {
+  test("reacts to authoritative CI check summary events from the monitor store", () => {
     useEnvironmentStore.setState({
       environments: [
         createMockEnvironment({
@@ -367,18 +367,18 @@ describe("usePullRequest", () => {
       isLoading: false,
       error: null,
     });
-    usePrMonitorStore.setState({
-      states: new Map([
-        [
-          "env-1",
-          monitorState("env-1", {
-            checkSummary: { passed: 2, total: 3, pending: 1 },
-          }),
-        ],
-      ]),
-    });
-
     const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    expect(result.current.checkSummary).toBeNull();
+
+    act(() => {
+      usePrMonitorStore.getState().applyEvent({
+        environmentId: "env-1",
+        state: monitorState("env-1", {
+          checkSummary: { passed: 2, total: 3, pending: 1 },
+        }),
+      });
+    });
 
     expect(result.current.checkSummary).toEqual({ passed: 2, total: 3, pending: 1 });
   });

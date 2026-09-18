@@ -18,6 +18,7 @@ import {
   toClientEnvironment,
   type CommandContext,
 } from "./commands.js";
+import { parsePrCheckSummary } from "./commands-review.js";
 import {
   FIRST_USE_BRIDGE_READY_TIMEOUT_MS,
   FIRST_USE_CATALOG_BUDGET_MS,
@@ -6003,9 +6004,10 @@ describe("pr monitor commands", () => {
       "--limit",
       "30",
       "--json",
-      "url,state,mergeable,updatedAt,statusCheckRollup",
+      "url,state,mergeable,updatedAt",
     ]);
     expect(discovery.knownPrUrl).toBeNull();
+    expect(discovery.shellCommand).not.toContain("statusCheckRollup");
 
     const known = getPrMonitorDetectionRequest({
       environmentId: "e1",
@@ -6086,6 +6088,30 @@ describe("pr monitor commands", () => {
     expect(terminal.knownPrUrl).toBeNull();
     expect(terminal.args.slice(0, 4)).toEqual(["pr", "list", "--head", "feature/pr-monitor"]);
   });
+
+  test.each([
+    ["pending", { state: "PENDING" }, { passed: 0, total: 1, pending: 1 }],
+    ["expected", { state: "EXPECTED" }, { passed: 0, total: 1, pending: 1 }],
+    ["queued", { state: "QUEUED" }, { passed: 0, total: 1, pending: 1 }],
+    ["waiting", { state: "WAITING" }, { passed: 0, total: 1, pending: 1 }],
+    ["in-progress status", { status: "IN_PROGRESS" }, { passed: 0, total: 1, pending: 1 }],
+    ["empty entry", {}, { passed: 0, total: 1, pending: 1 }],
+    ["neutral", { conclusion: "NEUTRAL" }, { passed: 1, total: 1, pending: 0 }],
+    ["lowercase skipped", { conclusion: "skipped" }, { passed: 1, total: 1, pending: 0 }],
+    ["cancelled", { conclusion: "CANCELLED" }, { passed: 0, total: 1, pending: 0 }],
+    ["timed out", { conclusion: "TIMED_OUT" }, { passed: 0, total: 1, pending: 0 }],
+    ["action required", { conclusion: "ACTION_REQUIRED" }, { passed: 0, total: 1, pending: 0 }],
+    ["error", { state: "ERROR" }, { passed: 0, total: 1, pending: 0 }],
+  ] as const)("classifies %s PR check rollups", (_name, check, expected) => {
+    expect(parsePrCheckSummary([check])).toEqual(expected);
+  });
+
+  test.each([undefined, null, {}, "not-a-rollup"])(
+    "collapses non-array PR check rollups to an empty summary",
+    (rollup) => {
+      expect(parsePrCheckSummary(rollup)).toEqual({ passed: 0, total: 0, pending: 0 });
+    },
+  );
 
   test("production task lookup resolves direct and build-pipeline environment links", async () => {
     await withCommands(async (_invoke, storage) => {

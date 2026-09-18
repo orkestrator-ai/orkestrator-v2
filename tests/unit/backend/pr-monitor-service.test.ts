@@ -267,7 +267,7 @@ describe("PrMonitorService", () => {
     });
   });
 
-  test("publishes changing CI check summaries through events and snapshots", async () => {
+  test("publishes changed CI summaries, suppresses identical ones, and collapses empty ones", async () => {
     const harness = createHarness();
     harness.setDetect(async () => detection({ checkSummary: { passed: 2, total: 4, pending: 2 } }));
     harness.service.sync([openPr()]);
@@ -285,6 +285,10 @@ describe("PrMonitorService", () => {
       pending: 2,
     });
 
+    const eventsAfterRunning = harness.stateEvents().length;
+    await harness.fireNext();
+    expect(harness.stateEvents()).toHaveLength(eventsAfterRunning);
+
     harness.setDetect(async () => detection({ checkSummary: { passed: 4, total: 4, pending: 0 } }));
     await harness.fireNext();
 
@@ -297,6 +301,51 @@ describe("PrMonitorService", () => {
       passed: 4,
       total: 4,
       pending: 0,
+    });
+
+    harness.setDetect(async () => detection());
+    await harness.fireNext();
+
+    expect(harness.service.snapshot()[0]?.checkSummary).toBeNull();
+    expect(harness.stateEvents().at(-1)?.state.checkSummary).toBeNull();
+  });
+
+  test("clears a CI summary for a replacement PR before its first detection", async () => {
+    const harness = createHarness();
+    harness.setDetect(async () => detection({ checkSummary: { passed: 4, total: 4, pending: 0 } }));
+    harness.service.sync([openPr()]);
+    await harness.fireNext();
+
+    harness.service.sync([
+      openPr({
+        prUrl: "https://github.com/org/repo/pull/2",
+        hasMergeConflicts: null,
+      }),
+    ]);
+
+    expect(harness.service.snapshot()[0]).toMatchObject({
+      prUrl: "https://github.com/org/repo/pull/2",
+      checkSummary: null,
+    });
+    expect(harness.stateEvents().at(-1)?.state).toMatchObject({
+      prUrl: "https://github.com/org/repo/pull/2",
+      checkSummary: null,
+    });
+  });
+
+  test("retains a CI summary while the same PR is paused", async () => {
+    const harness = createHarness();
+    harness.setDetect(async () => detection({ checkSummary: { passed: 2, total: 3, pending: 1 } }));
+    harness.service.sync([openPr()]);
+    await harness.fireNext();
+
+    harness.service.sync([openPr({ ready: false })]);
+
+    expect(harness.pendingDelays()).toEqual([]);
+    expect(harness.service.snapshot()[0]?.checkSummary).toEqual({
+      passed: 2,
+      total: 3,
+      pending: 1,
     });
   });
 

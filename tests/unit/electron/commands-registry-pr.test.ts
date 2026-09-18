@@ -164,10 +164,11 @@ printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/1","state":"CLOSED","
           url: "https://github.com/acme/repo/pull/2",
           state: "open",
           hasMergeConflicts: true,
+          checkSummary: { passed: 0, total: 0, pending: 0 },
         });
 
         const ghLog = await fs.readFile(logPath, "utf8");
-        expect(ghLog).toContain(
+        expect(ghLog.trim()).toBe(
           "pr list --head feature/pr --state all --limit 30 --json url,state,mergeable,updatedAt",
         );
       },
@@ -257,6 +258,7 @@ printf '%s\n' '[{"url":"https://github.com/acme/repo/pull/3","state":"OPEN"${com
             url: "https://github.com/acme/repo/pull/3",
             state: "open",
             hasMergeConflicts: expected,
+            checkSummary: { passed: 0, total: 0, pending: 0 },
           });
         },
       );
@@ -362,12 +364,14 @@ exit 0
           url: "https://github.com/acme/repo/pull/9",
           state: "merged",
           hasMergeConflicts: false,
+          checkSummary: { passed: 0, total: 0, pending: 0 },
         });
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).toContain(
           "gh pr list --head 'feature/container-pr' --state all --limit 30 --json url,state,mergeable,updatedAt",
         );
+        expect(execLog).not.toContain("statusCheckRollup");
         expect(execLog).toContain("source /usr/local/bin/orkestrator-runtime-env.sh");
         expect(execLog).toContain("orkestrator_source_runtime_env");
         expect(execLog).not.toContain("gh pr view");

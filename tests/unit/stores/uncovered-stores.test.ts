@@ -182,6 +182,32 @@ describe("prMonitorStore", () => {
     state.applyEvent({ environmentId: "env-9", removed: true });
     expect(usePrMonitorStore.getState().states).toBe(before);
   });
+
+  test("publishes null-to-populated and populated-to-changed CI summaries", () => {
+    const state = usePrMonitorStore.getState();
+    state.applySnapshot([monitorEntry("env-1")]);
+    const emptyMap = usePrMonitorStore.getState().states;
+
+    state.applyEvent({
+      environmentId: "env-1",
+      state: monitorEntry("env-1", {
+        checkSummary: { passed: 1, total: 2, pending: 1 },
+      }),
+    });
+    const runningMap = usePrMonitorStore.getState().states;
+    expect(runningMap).not.toBe(emptyMap);
+    expect(runningMap.get("env-1")?.checkSummary).toEqual({ passed: 1, total: 2, pending: 1 });
+
+    state.applyEvent({
+      environmentId: "env-1",
+      state: monitorEntry("env-1", {
+        checkSummary: { passed: 1, total: 2, pending: 0 },
+      }),
+    });
+    const completeMap = usePrMonitorStore.getState().states;
+    expect(completeMap).not.toBe(runningMap);
+    expect(completeMap.get("env-1")?.checkSummary).toEqual({ passed: 1, total: 2, pending: 0 });
+  });
 });
 
 describe("local session and terminal portal state", () => {

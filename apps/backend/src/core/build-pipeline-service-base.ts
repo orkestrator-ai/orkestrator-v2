@@ -928,11 +928,7 @@ export abstract class BuildPipelineServiceBase {
 
       const restart = candidate.restartRequest;
       const selectedPhase =
-        restart.kind === "session"
-          ? restart.phase
-          : restart.kind === "validation"
-            ? "review"
-            : restart.implementationPhase;
+        restart.kind === "session" ? restart.phase : restart.implementationPhase;
       const selectedOrder = {
         build: 0,
         fix: 0,

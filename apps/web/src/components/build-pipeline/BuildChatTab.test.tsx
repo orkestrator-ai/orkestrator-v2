@@ -322,6 +322,42 @@ describe("BuildChatTab backend projection", () => {
     expect(mockToastSuccess).toHaveBeenCalledWith("Stage restarted");
   });
 
+  test("offers validation restart from a touch long press", async () => {
+    const withValidation = {
+      ...pipeline,
+      validationRun: validationRun({ id: "validation-long-press" }),
+    };
+    useBuildPipelineStore.getState().replacePipeline(withValidation);
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    const testsTab = screen.getByRole("tab", { name: /^Tests,/ });
+    fireEvent.pointerDown(testsTab, {
+      pointerType: "touch",
+      pointerId: 71,
+      isPrimary: true,
+      button: 0,
+      clientX: 20,
+      clientY: 20,
+    });
+    await act(async () => {
+      await Bun.sleep(710);
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
+
+    await waitFor(() =>
+      expect(restartStepMock).toHaveBeenCalledWith(pipeline.id, "validation:validation-long-press"),
+    );
+  });
+
   test("renders loading and empty-stage states from incomplete snapshots", () => {
     useBuildPipelineStore.setState({
       pipelines: new Map(),

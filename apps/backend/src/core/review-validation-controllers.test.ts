@@ -111,6 +111,9 @@ async function harness() {
     finish: () => {
       finish = true;
     },
+    keepRunning: () => {
+      finish = false;
+    },
     cleanup: () => rm(directory, { recursive: true, force: true }),
   };
 }
@@ -252,6 +255,169 @@ test("pipeline separates implementation from fresh discovery and waits for backe
     expect(h.calls.filter((call) => call.name === "generate_looped_review_package")).toHaveLength(
       1,
     );
+  } finally {
+    await service.shutdown();
+    await h.cleanup();
+  }
+});
+
+test("pipeline validation restart discards stale evidence and keeps polling the new run", async () => {
+  const h = await harness();
+  const service = new BuildPipelineService(h.storage, h.invoke, {
+    autoAdvance: false,
+    provider: async () => h.provider,
+  });
+  try {
+    const started = await service.start({
+      taskId: "task-validation-restart",
+      projectId: "project-1",
+      existingEnvironmentId: "env-1",
+      environmentType: "local",
+      agentType: "claude",
+      taskTitle: "validation restart",
+      taskSnapshot: {
+        title: "validation restart",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+    });
+    const read = async () =>
+      (await h.storage.getBuildPipeline(started.id))!.snapshot as BuildPipeline;
+    for (let pass = 0; pass < 8 && (await read()).validationRun?.status !== "running"; pass += 1) {
+      await service.advanceNow(started.id);
+    }
+    h.finish();
+    await service.advanceNow(started.id);
+    const sealed = await read();
+    const originalRunId = sealed.validationRun!.id;
+    expect(sealed.reviewPackage?.id).toBe(originalRunId);
+
+    h.keepRunning();
+    const sendsBeforeRestart = h.sends.length;
+    const restarted = await service.restartStep(started.id, `validation:${originalRunId}`);
+    const restartedRunId = restarted.validationRun!.id;
+    expect(restartedRunId).not.toBe(originalRunId);
+    expect(restarted.validationRun?.status).toBe("running");
+    expect(restarted.reviewPackage).toBeUndefined();
+
+    await service.advanceNow(started.id);
+    await service.advanceNow(started.id);
+    const stillRunning = await read();
+    expect(stillRunning.validationRun).toMatchObject({ id: restartedRunId, status: "running" });
+    expect(stillRunning.reviewPackage).toBeUndefined();
+    expect(h.sends).toHaveLength(sendsBeforeRestart);
+    expect(
+      h.calls.filter(
+        (call) =>
+          call.name === "status_review_validation" &&
+          (call.args.run as ReviewValidationRun).id === restartedRunId,
+      ).length,
+    ).toBeGreaterThanOrEqual(2);
+  } finally {
+    await service.shutdown();
+    await h.cleanup();
+  }
+});
+
+test("replacement pipeline controller consumes a durable restart request", async () => {
+  const h = await harness();
+  let service = new BuildPipelineService(h.storage, h.invoke, {
+    autoAdvance: false,
+    provider: async () => h.provider,
+  });
+  try {
+    const started = await service.start({
+      taskId: "task-durable-restart",
+      projectId: "project-1",
+      existingEnvironmentId: "env-1",
+      environmentType: "local",
+      agentType: "claude",
+      taskTitle: "durable restart",
+      taskSnapshot: {
+        title: "durable restart",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+    });
+    await service.shutdown();
+    const record = (await h.storage.getBuildPipeline(started.id))!;
+    const snapshot = record.snapshot as BuildPipeline;
+    snapshot.phase = "verifying";
+    snapshot.restartRequest = { kind: "session", phase: "verify" };
+    await h.storage.saveBuildPipeline(
+      snapshot.id,
+      snapshot.projectId,
+      snapshot.environmentId,
+      record.version,
+      snapshot,
+      record.revision,
+    );
+
+    service = new BuildPipelineService(h.storage, h.invoke, {
+      autoAdvance: false,
+      provider: async () => h.provider,
+    });
+    await service.advanceNow(started.id);
+    const restored = (await h.storage.getBuildPipeline(started.id))!.snapshot as BuildPipeline;
+    expect(restored.restartRequest).toBeUndefined();
+    expect(restored.sessions.at(-1)).toMatchObject({ phase: "verify", status: "running" });
+  } finally {
+    await service.shutdown();
+    await h.cleanup();
+  }
+});
+
+test("pipeline fails a corrupt validation restart without a retained plan", async () => {
+  const h = await harness();
+  let service = new BuildPipelineService(h.storage, h.invoke, {
+    autoAdvance: false,
+    provider: async () => h.provider,
+  });
+  try {
+    const started = await service.start({
+      taskId: "task-missing-validation-plan",
+      projectId: "project-1",
+      existingEnvironmentId: "env-1",
+      environmentType: "local",
+      agentType: "claude",
+      taskTitle: "missing validation plan",
+      taskSnapshot: {
+        title: "missing validation plan",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+    });
+    await service.shutdown();
+    const record = (await h.storage.getBuildPipeline(started.id))!;
+    const snapshot = record.snapshot as BuildPipeline;
+    snapshot.phase = "building";
+    snapshot.restartRequest = { kind: "validation", implementationPhase: "build" };
+    delete snapshot.validationRun;
+    await h.storage.saveBuildPipeline(
+      snapshot.id,
+      snapshot.projectId,
+      snapshot.environmentId,
+      record.version,
+      snapshot,
+      record.revision,
+    );
+
+    service = new BuildPipelineService(h.storage, h.invoke, {
+      autoAdvance: false,
+      provider: async () => h.provider,
+    });
+    await service.advanceNow(started.id);
+    const failed = (await h.storage.getBuildPipeline(started.id))!.snapshot as BuildPipeline;
+    expect(failed).toMatchObject({
+      phase: "failed",
+      error: "Validation restart plan is missing",
+    });
   } finally {
     await service.shutdown();
     await h.cleanup();

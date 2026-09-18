@@ -13,6 +13,7 @@ import type {
 } from "@orkestrator/protocol/build-pipeline";
 
 import { isBuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import { isReviewPackagePreparationSession } from "@orkestrator/protocol/build-pipeline";
 
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
@@ -105,6 +106,8 @@ class FakeProvider implements BuildPipelineProvider {
     interaction?: ProviderSessionRegistration;
   }> = [];
   readonly aborted: string[] = [];
+  readonly runningPhases = new Set<PipelineSessionPhase>();
+  statusValue: ProviderStatus = "idle";
   private counter = 0;
 
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
@@ -136,8 +139,9 @@ class FakeProvider implements BuildPipelineProvider {
     });
   }
 
-  async status(_sessionId: string): Promise<ProviderStatus> {
-    return "idle";
+  async status(sessionId: string): Promise<ProviderStatus> {
+    if (this.runningPhases.has(this.phases.get(sessionId)!)) return "running";
+    return this.statusValue;
   }
 
   async messages(sessionId: string): Promise<unknown[]> {
@@ -1037,7 +1041,7 @@ describe("BuildPipelineService", () => {
   });
 
   test("restarts a selected pipeline stage and runs every downstream stage again", async () => {
-    await withService(async (service, storage, provider) => {
+    await withService(async (service, storage) => {
       const started = await service.start(startInput());
       for (let pass = 0; pass < 6; pass += 1) {
         await service.advanceNow(started.id);
@@ -1074,6 +1078,141 @@ describe("BuildPipelineService", () => {
           !originalDownstream.some((old) => old.sessionKey === session.sessionKey),
       );
       expect(replacementDownstream.map((session) => session.phase)).toEqual(["verify", "pr"]);
+    });
+  });
+
+  test("aborts a still-running stage before starting its replacement", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      for (let pass = 0; pass < 6; pass += 1) await service.advanceNow(started.id);
+      let completed = await pipeline(storage, started.id);
+      const verificationIndex = completed.sessions.findIndex(
+        (session) => session.phase === "verify",
+      );
+      completed = await mutateStored(storage, started.id, (snapshot) => {
+        snapshot.phase = "verifying";
+        snapshot.currentSessionIndex = verificationIndex;
+        snapshot.sessions[verificationIndex]!.status = "running";
+        delete snapshot.sessions[verificationIndex]!.completedAt;
+      });
+      const session = completed.sessions[verificationIndex]!;
+
+      const restarted = await service.restartStep(started.id, session.sdkSessionId);
+
+      expect(provider.aborted).toContain(session.sdkSessionId);
+      expect(restarted.sessions.at(-1)).toMatchObject({
+        phase: "verify",
+        status: "running",
+      });
+      expect(restarted.sessions.at(-1)?.sdkSessionId).not.toBe(session.sdkSessionId);
+    });
+  });
+
+  test("restarts review-package preparation as a first-class stage", async () => {
+    await withService(async (service, storage) => {
+      const started = await service.start(startInput());
+      for (let pass = 0; pass < 6; pass += 1) await service.advanceNow(started.id);
+      const completed = await pipeline(storage, started.id);
+      const preparation = completed.sessions.find((session) =>
+        isReviewPackagePreparationSession(session, completed),
+      )!;
+      expect(preparation).toBeDefined();
+
+      const restarted = await service.restartStep(started.id, preparation.sdkSessionId);
+
+      expect(restarted.reviewPackage).toBeUndefined();
+      expect(restarted.validationRun).toBeUndefined();
+      expect(restarted.sessions.at(-1)).toMatchObject({
+        phase: "fix",
+        status: "running",
+      });
+      expect(isReviewPackagePreparationSession(restarted.sessions.at(-1), restarted)).toBe(true);
+    });
+  });
+
+  test.each(["build", "fix", "verify", "pr", "resolve-conflicts"] as const)(
+    "restarts a completed %s stage through the durable supervisor request",
+    async (phase) => {
+      await withService(async (service, storage) => {
+        const started = await service.start(startInput());
+        for (let pass = 0; pass < 6; pass += 1) await service.advanceNow(started.id);
+        let completed = await pipeline(storage, started.id);
+        let target = completed.sessions.find(
+          (session) =>
+            session.phase === phase && !isReviewPackagePreparationSession(session, completed),
+        );
+        if (!target) {
+          completed = await mutateStored(storage, started.id, (snapshot) => {
+            snapshot.sessions.push({
+              phase,
+              agent: "claude",
+              iteration: snapshot.iteration,
+              sessionKey: `synthetic-${phase}`,
+              sdkSessionId: `synthetic-${phase}`,
+              status: "idle",
+              startedAt: new Date().toISOString(),
+              completedAt: new Date().toISOString(),
+              label: `${phase} session`,
+            });
+            if (phase === "fix") snapshot.verificationFeedback = "Apply the requested repair";
+          });
+          target = completed.sessions.at(-1)!;
+        }
+
+        const restarted = await service.restartStep(started.id, target.sdkSessionId);
+
+        expect(restarted.restartRequest).toBeUndefined();
+        expect(restarted.sessions.at(-1)).toMatchObject({ phase, status: "running" });
+        expect(restarted.sessions.at(-1)?.sdkSessionId).not.toBe(target.sdkSessionId);
+      });
+    },
+  );
+
+  test("restarts a fan-out review and abandons every prior reviewer session", async () => {
+    await withService(async (service, storage, provider) => {
+      provider.runningPhases.add("review");
+      const started = await service.start(
+        startInput({
+          reviewers: [
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+          ],
+        }),
+      );
+      let reviewing = await pipeline(storage, started.id);
+      for (let pass = 0; pass < 12; pass += 1) {
+        const projectedSessionIds = new Set(
+          reviewing.sessions.map((session) => session.sdkSessionId),
+        );
+        const reviewerSessionIds =
+          reviewing.reviewFanout?.reviewers
+            .map((reviewer) => reviewer.providerSessionId)
+            .filter((id): id is string => id !== undefined) ?? [];
+        if (
+          reviewerSessionIds.length === 2 &&
+          reviewerSessionIds.every((id) => projectedSessionIds.has(id))
+        ) {
+          break;
+        }
+        await service.advanceNow(started.id);
+        reviewing = await pipeline(storage, started.id);
+      }
+      expect(reviewing.reviewFanout).toBeDefined();
+      const oldReviewerSessionIds = reviewing
+        .reviewFanout!.reviewers.map((reviewer) => reviewer.providerSessionId)
+        .filter((id): id is string => id !== undefined);
+      const target = reviewing.sessions.find(
+        (session) => session.sdkSessionId === oldReviewerSessionIds[0],
+      )!;
+
+      const restarted = await service.restartStep(started.id, target.sdkSessionId);
+
+      expect(provider.aborted).toEqual(expect.arrayContaining(oldReviewerSessionIds));
+      expect(restarted.phase).toBe("reviewing");
+      expect(restarted.reviewFanout).toBeDefined();
+      expect(
+        restarted.reviewFanout?.reviewers.map((reviewer) => reviewer.providerSessionId),
+      ).not.toEqual(oldReviewerSessionIds);
     });
   });
 

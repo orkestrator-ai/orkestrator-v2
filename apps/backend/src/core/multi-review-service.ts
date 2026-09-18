@@ -980,17 +980,17 @@ export class MultiReviewService {
         if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
         // Consolidation is derived from the reviewer reports. Once any input is
         // restarted, its session/result can no longer remain authoritative.
+        const activeReviewSession = reviewSession(workflow);
         await this.abandonSession(
           workflow,
-          reviewModel(workflow),
-          reviewSession(workflow)?.providerSessionId,
+          activeReviewSession ?? reviewModel(workflow),
+          activeReviewSession?.providerSessionId,
         );
-        if (reviewSession(workflow))
-          this.progress.forget(reviewSession(workflow)!.providerSessionId);
-        if (workflow.fixSession && workflow.fixSession !== reviewSession(workflow)) {
+        if (activeReviewSession) this.progress.forget(activeReviewSession.providerSessionId);
+        if (workflow.fixSession && workflow.fixSession !== activeReviewSession) {
           await this.abandonSession(
             workflow,
-            workflow.fixModel,
+            workflow.fixSession,
             workflow.fixSession.providerSessionId,
           );
           this.progress.forget(workflow.fixSession.providerSessionId);
@@ -1060,23 +1060,46 @@ export class MultiReviewService {
         if (kind === "fix" && !fixStepHasStarted(workflow)) {
           throw new Error("Fix has not started");
         }
+        if (
+          kind === "consolidate" &&
+          !workflow.reviewers.some((reviewer) => reviewer.report !== undefined)
+        ) {
+          throw new Error("Consolidation cannot restart without a reviewer report");
+        }
+        if (kind === "fix" && !workflow.consolidatedReport) {
+          throw new Error("Fix cannot restart without a consolidated report");
+        }
+
+        // Snapshot capture can reject (unknown worktree, missing fingerprint,
+        // or too many changed paths). Resolve it before closing result slots or
+        // aborting provider sessions so a rejected command is a true no-op.
+        const restartedReviewWorktreeSnapshot =
+          kind === "prepare"
+            ? await this.captureReviewWorktreeSnapshot(workflow.environmentId)
+            : undefined;
 
         const shouldReplayFix = kind !== "fix" && fixStepHasStarted(workflow);
+        const preserveSharedFixSession =
+          kind === "fix" && !workflow.reviewModel && workflow.fixLaunch?.kind !== "custom";
         await this.supersedeRestartedResults(
           workflow,
           kind === "prepare" ? workflow.reviewers : [],
         );
         const activeReviewSession = reviewSession(workflow);
-        await this.abandonSession(
-          workflow,
-          reviewModel(workflow),
-          activeReviewSession?.providerSessionId,
-        );
-        if (activeReviewSession) this.progress.forget(activeReviewSession.providerSessionId);
+        const abandonActiveReviewSession =
+          kind !== "fix" || (!workflow.reviewModel && !preserveSharedFixSession);
+        if (abandonActiveReviewSession) {
+          await this.abandonSession(
+            workflow,
+            activeReviewSession ?? reviewModel(workflow),
+            activeReviewSession?.providerSessionId,
+          );
+          if (activeReviewSession) this.progress.forget(activeReviewSession.providerSessionId);
+        }
         if (workflow.fixSession && workflow.fixSession !== activeReviewSession) {
           await this.abandonSession(
             workflow,
-            workflow.fixModel,
+            workflow.fixSession,
             workflow.fixSession.providerSessionId,
           );
           this.progress.forget(workflow.fixSession.providerSessionId);
@@ -1098,9 +1121,7 @@ export class MultiReviewService {
             if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
             resetReviewerForRestart(workflow, reviewer);
           }
-          workflow.reviewWorktreeSnapshot = await this.captureReviewWorktreeSnapshot(
-            workflow.environmentId,
-          );
+          workflow.reviewWorktreeSnapshot = restartedReviewWorktreeSnapshot!;
           workflow.phase = "preparing";
           delete workflow.reviewPackage;
           delete workflow.validationRun;
@@ -1108,19 +1129,15 @@ export class MultiReviewService {
           delete workflow.reviewSnapshotStale;
           clearReviewSession(workflow);
         } else if (kind === "consolidate") {
-          if (!workflow.reviewers.some((reviewer) => reviewer.report !== undefined)) {
-            throw new Error("Consolidation cannot restart without a reviewer report");
-          }
           workflow.phase = "consolidating";
           delete workflow.stepRuntimes?.consolidate;
           delete workflow.stepRuntimes?.fix;
           clearReviewSession(workflow);
         } else {
-          if (!workflow.consolidatedReport) {
-            throw new Error("Fix cannot restart without a consolidated report");
+          if (!preserveSharedFixSession) {
+            delete workflow.fixSession;
+            workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
           }
-          delete workflow.fixSession;
-          workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
           delete workflow.stepRuntimes?.fix;
           queueRestartedFix(workflow);
         }

@@ -1779,6 +1779,44 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     }
   });
 
+  test("offers step restart from a touch long press", async () => {
+    const ready = readyWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+    const restartStep = mock(async () => ready);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+        commands={{
+          address: mock(async () => ready),
+          retry: mock(async () => ready),
+          cancel: mock(async () => ready),
+          stopReviewer: mock(async () => ready),
+          restartStep,
+        }}
+      />,
+    );
+
+    const tile = screen
+      .getByRole("button", { name: "Open consolidation session" })
+      .closest("section")!;
+    fireEvent.pointerDown(tile, {
+      pointerType: "touch",
+      pointerId: 72,
+      isPrimary: true,
+      button: 0,
+      clientX: 20,
+      clientY: 20,
+    });
+    await act(async () => {
+      await Bun.sleep(710);
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
+
+    await waitFor(() => expect(restartStep).toHaveBeenCalledWith(ready.id, "consolidate"));
+  });
+
   test("shows a repository-change note and allows reviewer restart", async () => {
     const stale = { ...readyWorkflow(), reviewSnapshotStale: true };
     useMultiReviewStore.getState().replaceWorkflow(stale);

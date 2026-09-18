@@ -492,7 +492,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       .filter((line) => line.startsWith("runner: "))
       .map((line) => line.slice("runner: ".length));
 
-    expect(configuredRunners.sort()).toEqual(
+    expect(Array.from(new Set(configuredRunners)).sort()).toEqual(
       ["ubuntu-24.04", "ubuntu-24.04-arm", "macos-15-intel", "macos-15"].sort(),
     );
     for (const source of [workflow, lintWorkflow]) {
@@ -502,7 +502,9 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     }
     expect(workflow.match(/- "mise\.toml"/g)).toHaveLength(2);
     expect(workflow).toContain("run: mise run download:bun");
-    expect(workflow).toContain("platforms: linux/amd64,linux/arm64");
+    expect(workflow).toContain("platform: linux/amd64");
+    expect(workflow).toContain("platform: linux/arm64");
+    expect(workflow).toContain("platforms: ${{ matrix.platform }}");
   });
 
   test("Claude bridge: musl variant is stripped from the vendored runtime tree, not top-level node_modules", () => {

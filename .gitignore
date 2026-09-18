@@ -25,6 +25,7 @@ binaries/
 *.deb
 *.rpm
 *.snap
+!**/__snapshots__/*.snap
 *.AppImage
 
 # Logs

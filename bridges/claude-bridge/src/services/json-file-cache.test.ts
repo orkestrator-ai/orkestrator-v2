@@ -7,6 +7,7 @@ import {
   getJsonFileParseCount,
   readJsonFileCached,
   readJsonSliceCached,
+  setJsonFileCacheBeforeStatForTesting,
 } from "./json-file-cache.js";
 
 describe("json file cache", () => {
@@ -146,6 +147,47 @@ describe("json file cache", () => {
       ]);
 
       expect(global).toEqual({ alpha: { command: "alpha-server" } });
+      expect(project).toEqual({ beta: { command: "beta-server" } });
+      expect(whole).toEqual(config);
+      expect(getJsonFileParseCount(file)).toBe(1);
+    });
+
+    test("keeps a completed parse for concurrent readers whose metadata is delayed", async () => {
+      await writeFile(file, JSON.stringify(config));
+
+      let statCall = 0;
+      let releaseDelayedStats!: () => void;
+      const delayedStats = new Promise<void>((resolve) => {
+        releaseDelayedStats = resolve;
+      });
+      setJsonFileCacheBeforeStatForTesting(async (target) => {
+        if (target === file && ++statCall > 1) await delayedStats;
+      });
+
+      // All calls join the same read cohort synchronously, but the latter two
+      // cannot stat until the first reader has finished parsing. Deleting a
+      // settled in-flight parse immediately made this sequence parse twice.
+      const globalPromise = readJsonSliceCached<typeof config, unknown>(
+        file,
+        "mcpServers",
+        (parsed) => parsed.mcpServers,
+      );
+      const projectPromise = readJsonSliceCached<typeof config, unknown>(
+        file,
+        "projects:/repo:mcpServers",
+        (parsed) => parsed.projects["/repo"]?.mcpServers,
+      );
+      const wholePromise = readJsonFileCached<typeof config>(file);
+
+      try {
+        expect(await globalPromise).toEqual({ alpha: { command: "alpha-server" } });
+        expect(getJsonFileParseCount(file)).toBe(1);
+      } finally {
+        // Do not strand the other readers if an assertion above fails.
+        releaseDelayedStats();
+      }
+
+      const [project, whole] = await Promise.all([projectPromise, wholePromise]);
       expect(project).toEqual({ beta: { command: "beta-server" } });
       expect(whole).toEqual(config);
       expect(getJsonFileParseCount(file)).toBe(1);

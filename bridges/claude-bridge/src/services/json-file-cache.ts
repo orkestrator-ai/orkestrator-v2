@@ -29,6 +29,13 @@ interface CacheEntry {
   value: unknown;
 }
 
+interface ReadCohort {
+  /** Readers that joined before every member of this cohort settled. */
+  readers: number;
+  /** Parsed snapshots, bounded by the fingerprints observed by those readers. */
+  parses: Map<string, Promise<unknown>>;
+}
+
 /** NUL cannot appear in a path, so it is a safe compound-key separator. */
 const SEPARATOR = "\u0000";
 
@@ -38,13 +45,17 @@ const WHOLE_DOCUMENT = "";
 const slices = new Map<string, CacheEntry>();
 
 /**
- * Parses currently in flight, keyed by path *and* fingerprint so two readers
- * only share a parse when they agree on which version of the file they want.
+ * Overlapping reads, registered before their first await. A parsed document
+ * remains available until every reader in its cohort settles, including a
+ * reader whose `stat` finishes after the initial parse has completed.
  */
-const inFlightParses = new Map<string, Promise<unknown>>();
+const readCohorts = new Map<string, ReadCohort>();
 
 /** Parses performed per path (not served from cache). Test-only instrumentation. */
 const parseCounts = new Map<string, number>();
+
+/** Test-only scheduling seam for proving staggered metadata reads. */
+let beforeStatForTesting: ((filePath: string) => Promise<void>) | null = null;
 
 function fingerprintOf(stats: { mtimeMs: number; size: number; ino: number; dev: number }): string {
   // `ino`/`dev` catch an atomic replace that happens to preserve mtime and
@@ -60,17 +71,35 @@ function forgetFile(filePath: string): void {
   }
 }
 
+/** Join the active per-file cohort before this reader's first await. */
+function joinReadCohort(filePath: string): ReadCohort {
+  const existing = readCohorts.get(filePath);
+  if (existing) {
+    existing.readers += 1;
+    return existing;
+  }
+
+  const cohort: ReadCohort = { readers: 1, parses: new Map() };
+  readCohorts.set(filePath, cohort);
+  return cohort;
+}
+
+function leaveReadCohort(filePath: string, cohort: ReadCohort): void {
+  cohort.readers -= 1;
+  if (cohort.readers === 0 && readCohorts.get(filePath) === cohort) {
+    readCohorts.delete(filePath);
+  }
+}
+
 /**
- * Read and parse the file once per (path, fingerprint), sharing the work with
- * any caller that asks for the same version while the read is outstanding.
+ * Read and parse once per fingerprint within an overlapping-reader cohort.
  *
  * Never rejects: a missing, unreadable or malformed file resolves to null so a
  * persistently broken file is not re-parsed per prompt. The next write changes
  * the fingerprint and retries.
  */
-function parseOnce(filePath: string, fingerprint: string): Promise<unknown> {
-  const key = `${filePath}${SEPARATOR}${fingerprint}`;
-  const existing = inFlightParses.get(key);
+function parseOnce(filePath: string, fingerprint: string, cohort: ReadCohort): Promise<unknown> {
+  const existing = cohort.parses.get(fingerprint);
   if (existing) return existing;
 
   const parse = (async () => {
@@ -83,13 +112,10 @@ function parseOnce(filePath: string, fingerprint: string): Promise<unknown> {
     }
   })();
 
-  inFlightParses.set(key, parse);
-  // The promise above cannot reject, but settle both ways so a future change
-  // to it cannot strand an entry in the map forever.
-  void parse.then(
-    () => inFlightParses.delete(key),
-    () => inFlightParses.delete(key),
-  );
+  // Keep the settled promise until the last overlapping reader leaves. A
+  // caller may already belong to this cohort while its `stat` is still queued,
+  // so deleting on parse completion reintroduces the duplicate-read race.
+  cohort.parses.set(fingerprint, parse);
   return parse;
 }
 
@@ -111,37 +137,47 @@ export async function readJsonSliceCached<Parsed, Slice>(
   sliceKey: string,
   select: (parsed: Parsed) => Slice | null | undefined,
 ): Promise<Slice | null> {
-  let fingerprint: string;
+  // Join synchronously, before the first filesystem await, so every read
+  // started in one Promise.all remains part of the same bounded cohort even
+  // when the host completes its metadata operations unevenly.
+  const cohort = joinReadCohort(filePath);
   try {
-    fingerprint = fingerprintOf(await stat(filePath));
-  } catch {
-    // Missing or unreadable. Drop any stale slice so a file that reappears is
-    // not served from a cache entry describing its previous life.
-    forgetFile(filePath);
-    return null;
-  }
+    await beforeStatForTesting?.(filePath);
 
-  const key = `${filePath}${SEPARATOR}${sliceKey}`;
-  const cached = slices.get(key);
-  if (cached && cached.fingerprint === fingerprint) {
-    return cached.value as Slice | null;
-  }
-
-  const parsed = await parseOnce(filePath, fingerprint);
-
-  let value: Slice | null = null;
-  if (parsed !== null && parsed !== undefined) {
+    let fingerprint: string;
     try {
-      value = select(parsed as Parsed) ?? null;
+      fingerprint = fingerprintOf(await stat(filePath));
     } catch {
-      // A selector that trips over an unexpected shape is treated the same as
-      // an absent slice; a config file is not worth crashing a turn over.
-      value = null;
+      // Missing or unreadable. Drop any stale slice so a file that reappears is
+      // not served from a cache entry describing its previous life.
+      forgetFile(filePath);
+      return null;
     }
-  }
 
-  slices.set(key, { fingerprint, value });
-  return value;
+    const key = `${filePath}${SEPARATOR}${sliceKey}`;
+    const cached = slices.get(key);
+    if (cached && cached.fingerprint === fingerprint) {
+      return cached.value as Slice | null;
+    }
+
+    const parsed = await parseOnce(filePath, fingerprint, cohort);
+
+    let value: Slice | null = null;
+    if (parsed !== null && parsed !== undefined) {
+      try {
+        value = select(parsed as Parsed) ?? null;
+      } catch {
+        // A selector that trips over an unexpected shape is treated the same as
+        // an absent slice; a config file is not worth crashing a turn over.
+        value = null;
+      }
+    }
+
+    slices.set(key, { fingerprint, value });
+    return value;
+  } finally {
+    leaveReadCohort(filePath, cohort);
+  }
 }
 
 /**
@@ -158,8 +194,16 @@ export async function readJsonFileCached<T>(filePath: string): Promise<T | null>
 /** Drop all cached slices. Exported for tests. */
 export function clearJsonFileCache(): void {
   slices.clear();
-  inFlightParses.clear();
+  readCohorts.clear();
   parseCounts.clear();
+  beforeStatForTesting = null;
+}
+
+/** Delay metadata reads in tests; production code must never call this. */
+export function setJsonFileCacheBeforeStatForTesting(
+  hook: ((filePath: string) => Promise<void>) | null,
+): void {
+  beforeStatForTesting = hook;
 }
 
 /**

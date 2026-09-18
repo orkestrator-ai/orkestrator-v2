@@ -1093,12 +1093,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                       <span className={cn(isGrid && "truncate text-xs")}>
                         {isPRMerged ? "PR Merged" : isPRClosed ? "PR Closed" : "View PR"}
                       </span>
+                      {!isPRFinished && checkSummary && checkSummary.total > 0 && (
+                        <PullRequestCheckStatus
+                          checkSummary={checkSummary}
+                          className={cn(isGrid && "text-xs")}
+                        />
+                      )}
                     </Button>
                   </ToolbarTooltipTrigger>
-
-                  {!isPRFinished && checkSummary && checkSummary.total > 0 && (
-                    <PullRequestCheckStatus checkSummary={checkSummary} isGrid={isGrid} />
-                  )}
 
                   {!isPRFinished && hasMergeConflicts === false && (
                     <ToolbarTooltipTrigger

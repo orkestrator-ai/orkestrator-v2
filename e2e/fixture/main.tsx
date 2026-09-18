@@ -1209,11 +1209,13 @@ function WorkspaceBarHeightFixture() {
 
 function PullRequestCheckStatusFixture() {
   const [summary, setSummary] = useState({ passed: 3, total: 4, pending: 1 });
-  const isGrid = new URLSearchParams(window.location.search).has("grid");
 
   return (
     <main className="min-h-screen bg-background p-4 text-foreground">
-      <PullRequestCheckStatus checkSummary={summary} isGrid={isGrid} />
+      <Button size="sm" variant="outline" className="gap-2">
+        <span>View PR</span>
+        <PullRequestCheckStatus checkSummary={summary} />
+      </Button>
       <div className="mt-4 flex gap-2">
         <button type="button" onClick={() => setSummary({ passed: 3, total: 4, pending: 0 })}>
           Complete with failure

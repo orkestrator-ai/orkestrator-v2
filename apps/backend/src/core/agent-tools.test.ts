@@ -232,6 +232,7 @@ describe("agent Kanban tools", () => {
 
     const listed = await rpc(connection.url, connection.token, "tools/list");
     expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual([
+      "validate_workflow_result",
       "submit_feature_plan_state",
       "get_workflow_result_status",
     ]);
@@ -337,6 +338,7 @@ describe("agent Kanban tools", () => {
     const listed = await rpc(first.url, first.token, "tools/list");
     expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual([
       ...WORKFLOW_RESULT_KINDS.map(workflowResultToolName),
+      "validate_workflow_result",
       "get_workflow_result_status",
     ]);
     expect(listed.body.result?.tools?.[0]?.inputSchema).toMatchObject({
@@ -494,10 +496,11 @@ describe("agent Kanban tools", () => {
       const connection = server.workflowResultConnection("env-1", "project-1", "host", resultKey);
       const listed = await rpc(connection.url, connection.token, "tools/list");
       expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual([
+        "validate_workflow_result",
         workflowResultToolName(kind),
         "get_workflow_result_status",
       ]);
-      const submission = listed.body.result?.tools?.[0];
+      const submission = listed.body.result?.tools?.[1];
       expect(submission?.inputSchema).toMatchObject({
         type: "object",
         required: ["resultKey", "result"],

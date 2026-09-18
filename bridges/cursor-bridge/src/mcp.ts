@@ -178,7 +178,19 @@ export async function hostOrkestratorCustomTools(
       description: boundedDescription(listed.description, `Orkestrator Control MCP tool ${name}`),
       ...(inputSchema ? { inputSchema } : {}),
       execute: async (args) => {
-        const result = await connection.call(remoteName, isObject(args) ? args : {});
+        const forwardedArgs = args === undefined || args === null ? {} : args;
+        if (!isObject(forwardedArgs)) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Invalid tool arguments: expected an object. When using CallDynamicTool, pass arguments as a raw object, never as quoted or JSON-stringified JSON.",
+              },
+            ],
+            isError: true as const,
+          };
+        }
+        const result = await connection.call(remoteName, forwardedArgs);
         return {
           content: [{ type: "text" as const, text: formatMcpContent(result) }],
           ...(result.isError === true ? { isError: true } : {}),

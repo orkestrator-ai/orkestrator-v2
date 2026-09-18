@@ -18,6 +18,7 @@ import {
 import {
   WORKFLOW_RESULT_KINDS,
   WORKFLOW_RESULT_MCP_SERVER_NAME,
+  WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
   workflowResultToolName,
 } from "@orkestrator/protocol/workflow-results";
 import type {
@@ -222,11 +223,13 @@ export function openCodeWorkflowResultTurnTools(selectedTool?: string): Record<s
       ...WORKFLOW_RESULT_KINDS.map((kind) =>
         openCodeWorkflowResultToolId(workflowResultToolName(kind)),
       ),
+      openCodeWorkflowResultToolId(WORKFLOW_RESULT_VALIDATION_TOOL_NAME),
       openCodeWorkflowResultToolId("get_workflow_result_status"),
     ].map((tool) => [tool, false]),
   );
   if (selectedTool) {
     tools[openCodeWorkflowResultToolId(selectedTool)] = true;
+    tools[openCodeWorkflowResultToolId(WORKFLOW_RESULT_VALIDATION_TOOL_NAME)] = true;
     tools[openCodeWorkflowResultToolId("get_workflow_result_status")] = true;
   }
   return tools;
@@ -235,11 +238,13 @@ export function openCodeWorkflowResultTurnTools(selectedTool?: string): Record<s
 export function openCodeWorkflowResultPermissionRules(selectedTool: string) {
   return [
     ...openCodeWorkflowResultDenyPermissionRules(),
-    ...[selectedTool, "get_workflow_result_status"].map((tool) => ({
-      permission: openCodeWorkflowResultToolId(tool),
-      pattern: "*",
-      action: "allow" as const,
-    })),
+    ...[selectedTool, WORKFLOW_RESULT_VALIDATION_TOOL_NAME, "get_workflow_result_status"].map(
+      (tool) => ({
+        permission: openCodeWorkflowResultToolId(tool),
+        pattern: "*",
+        action: "allow" as const,
+      }),
+    ),
   ];
 }
 

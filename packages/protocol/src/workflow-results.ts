@@ -76,6 +76,10 @@ export type WorkflowResultSubmission =
     }
   | { ok: false; error: WorkflowResultError };
 
+export type WorkflowResultValidation =
+  | { ok: true; valid: true }
+  | { ok: false; error: WorkflowResultError };
+
 export interface WorkflowResultStatus {
   resultKey: string;
   lifecycle: WorkflowResultLifecycle;
@@ -122,6 +126,8 @@ const WORKFLOW_RESULT_TOOL_NAMES: Record<WorkflowResultKind, string> = {
   "pr-result": "submit_pr_result",
 };
 
+export const WORKFLOW_RESULT_VALIDATION_TOOL_NAME = "validate_workflow_result";
+
 export function workflowResultToolName(kind: WorkflowResultKind): string {
   return WORKFLOW_RESULT_TOOL_NAMES[kind];
 }
@@ -135,7 +141,7 @@ export function workflowResultInstruction(
     ? ` and capability ${JSON.stringify(options.capability)}`
     : "";
   return wrapSystemInstructions(
-    `The following result-tool instructions replace any earlier instruction to emit final JSON, a tagged state block, or a provider-enforced schema for this turn. When your work is complete, call the Orkestrator \`${workflowResultToolName(kind)}\` tool with resultKey ${JSON.stringify(resultKey)}${capabilityArgument} and the complete ${kind.replaceAll("-", " ")} in \`result\`. If the tool rejects the result, correct only the reported contract problems and call it again. If delivery is uncertain, call \`get_workflow_result_status\` with the same resultKey${capabilityArgument} before resubmitting. After the tool accepts the result, finish with a concise prose response. Do not print the result as JSON in your final response. The backend decides when the workflow advances.`,
+    `The following result-tool instructions replace any earlier instruction to emit final JSON, a tagged state block, or a provider-enforced schema for this turn. Never call the submission tool with a probe, placeholder, partial draft, or transport test: the first accepted payload is final and cannot be replaced. If you need to check a completed payload before committing it, call \`${WORKFLOW_RESULT_VALIDATION_TOOL_NAME}\` with resultKey ${JSON.stringify(resultKey)}${capabilityArgument} and the complete ${kind.replaceAll("-", " ")} in \`result\`; validation is read-only. When your work is complete, call the Orkestrator \`${workflowResultToolName(kind)}\` tool with the same resultKey${capabilityArgument} and complete result. When using a generic \`CallDynamicTool\` wrapper, pass \`arguments\` as a raw object, never as a quoted or JSON-stringified object. If the submission tool rejects the result, correct only the reported contract problems and call it again. Only retry an accepted submission with the exact same payload. If delivery is uncertain, call \`get_workflow_result_status\` with the same resultKey${capabilityArgument} before resubmitting. After the tool accepts the result, finish with a concise prose response. Do not print the result as JSON in your final response. The backend decides when the workflow advances.`,
   );
 }
 

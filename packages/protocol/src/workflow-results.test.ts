@@ -39,6 +39,10 @@ describe("workflow result contracts", () => {
     expect(instruction).toContain(JSON.stringify(resultKey));
     expect(instruction).toContain("replace any earlier instruction to emit final JSON");
     expect(instruction).toContain("get_workflow_result_status");
+    expect(instruction).toContain("validate_workflow_result");
+    expect(instruction).toContain("Never call the submission tool with a probe");
+    expect(instruction).toContain("arguments` as a raw object");
+    expect(instruction).toContain("Only retry an accepted submission with the exact same payload");
     expect(instruction).toContain("Do not print the result as JSON in your final response.");
     // Acceptance must not read as workflow completion.
     expect(instruction).toContain("The backend decides when the workflow advances.");

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import { WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY } from "@orkestrator/protocol/workflow-results";
 import { WorkflowResultService } from "./workflow-result-service.js";
 
 const emptyReport: StructuredReviewReport = {
@@ -102,6 +103,111 @@ describe("WorkflowResultService", () => {
       summary: "",
     });
     expect(conflict).toMatchObject({ ok: false, error: { code: "submission_conflict" } });
+  });
+
+  test("preflight validation is read-only and does not consume the correction budget", async () => {
+    const resultKey = await prepare();
+    const invalid = { phase: "collecting", title: 7, summary: "" };
+    for (let index = 0; index < 6; index += 1) {
+      expect(await service.validate(scope, resultKey, invalid)).toMatchObject({
+        ok: false,
+        error: { code: "invalid_result", nextAction: "correct" },
+      });
+    }
+    expect(await service.projection(resultKey)).toBe("preparing");
+
+    const valid = { phase: "collecting", title: "Final", summary: "Complete result." };
+    expect(await service.validate(scope, resultKey, valid)).toEqual({ ok: true, valid: true });
+    expect(service.metrics.snapshot()).toMatchObject({
+      counters: {
+        "preflights|outcome=invalid_result": 6,
+        "preflights|outcome=valid": 1,
+      },
+      durations: {
+        "validation_ms|kind=feature-plan-state": { count: 7 },
+      },
+    });
+    expect(await service.projection(resultKey)).toBe("preparing");
+    expect(await service.submit(scope, resultKey, valid)).toMatchObject({
+      ok: true,
+      duplicate: false,
+    });
+  });
+
+  test("preflight validation enforces per-key backpressure", async () => {
+    const resultKey = await prepare();
+    const payload = { phase: "collecting", title: "Final", summary: "Complete result." };
+    const outcomes = await Promise.all(
+      Array.from({ length: WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY + 1 }, () =>
+        service.validate(scope, resultKey, payload),
+      ),
+    );
+    expect(outcomes.filter((outcome) => outcome.ok)).toHaveLength(
+      WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY,
+    );
+    expect(outcomes).toContainEqual(
+      expect.objectContaining({
+        ok: false,
+        error: expect.objectContaining({ code: "backpressure" }),
+      }),
+    );
+    expect(service.metrics.snapshot().gauges).toMatchObject({ pending_calls: 0, pending_bytes: 0 });
+  });
+
+  test("preflight validation covers scope, lifecycle, size, and serialization denials", async () => {
+    const openKey = await prepare();
+    expect(
+      await service.validate({ environmentId: "env-2", projectId: scope.projectId }, openKey, {
+        phase: "collecting",
+        title: "Final",
+        summary: "",
+      }),
+    ).toMatchObject({ ok: false, error: { code: "capability_denied" } });
+
+    const closedKey = await prepare();
+    await service.close(closedKey, "cancelled");
+    expect(
+      await service.validate(scope, closedKey, {
+        phase: "collecting",
+        title: "Final",
+        summary: "",
+      }),
+    ).toMatchObject({ ok: false, error: { code: "attempt_closed" } });
+
+    const exhaustedKey = await prepare();
+    for (let index = 0; index < 4; index += 1) {
+      await service.submit(scope, exhaustedKey, {
+        phase: "collecting",
+        title: index,
+        summary: "",
+      });
+    }
+    expect(
+      await service.validate(scope, exhaustedKey, {
+        phase: "collecting",
+        title: "Final",
+        summary: "",
+      }),
+    ).toMatchObject({ ok: false, error: { code: "correction_budget_exhausted" } });
+
+    expect(
+      await service.validate(scope, openKey, {
+        phase: "collecting",
+        title: "Final",
+        summary: "é".repeat(400_000),
+      }),
+    ).toMatchObject({ ok: false, error: { code: "result_too_large" } });
+
+    const circular: Record<string, unknown> = {
+      phase: "collecting",
+      title: "Final",
+      summary: "",
+    };
+    circular.self = circular;
+    expect(await service.validate(scope, openKey, circular)).toMatchObject({
+      ok: false,
+      error: { code: "invalid_result" },
+    });
   });
 
   test("serializes simultaneous submissions and enforces caller scope", async () => {

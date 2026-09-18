@@ -30,6 +30,18 @@ import {
 import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review-validation-prompts.js";
 
 const MAX_ISSUES = 32;
+const PLACEHOLDER_VALUES = new Set([
+  "dummy",
+  "placeholder",
+  "probe",
+  "sample",
+  "tbd",
+  "test",
+  "testing",
+  "todo",
+]);
+const PLACEHOLDER_PHRASE =
+  /^(?:(?:this|that) is (?:a )?)?(?:dummy|placeholder|probe|sample|tbd|test|testing|todo)(?: (?:content|only|result|value))?[.!]?$/;
 
 function issue(path: string, code: string, message: string): WorkflowResultValidationIssue {
   return { path: path.slice(0, 256), code, message: message.slice(0, 512) };
@@ -55,6 +67,185 @@ function canonical(value: unknown): unknown {
 
 function same(left: unknown, right: unknown): boolean {
   return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+}
+
+function inspectFinalText(
+  issues: WorkflowResultValidationIssue[],
+  candidate: unknown,
+  path: string,
+): void {
+  if (typeof candidate !== "string") return;
+  const normalized = candidate.trim().toLocaleLowerCase("en-US");
+  if (!PLACEHOLDER_VALUES.has(normalized) && !PLACEHOLDER_PHRASE.test(normalized)) return;
+  issues.push(
+    issue(
+      path,
+      "placeholder_value",
+      "A workflow result must contain final content, not a probe or placeholder.",
+    ),
+  );
+}
+
+function inspectTextArray(
+  issues: WorkflowResultValidationIssue[],
+  candidate: unknown,
+  path: string,
+): void {
+  if (!Array.isArray(candidate)) return;
+  candidate.forEach((entry, index) => inspectFinalText(issues, entry, `${path}[${index}]`));
+}
+
+function inspectReviewFindingNarratives(
+  issues: WorkflowResultValidationIssue[],
+  candidate: unknown,
+  path: string,
+): void {
+  if (!record(candidate)) return;
+  for (const field of [
+    "title",
+    "description",
+    "evidence",
+    "suggestion",
+    "verification",
+    "untestedBehavior",
+  ]) {
+    inspectFinalText(issues, candidate[field], `${path}.${field}`);
+  }
+  inspectTextArray(issues, candidate.alternativeFixes, `${path}.alternativeFixes`);
+}
+
+function inspectReviewFindingArray(
+  issues: WorkflowResultValidationIssue[],
+  candidate: unknown,
+  path: string,
+): void {
+  if (!Array.isArray(candidate)) return;
+  candidate.forEach((entry, index) =>
+    inspectReviewFindingNarratives(issues, entry, `${path}[${index}]`),
+  );
+}
+
+function validateReviewNarratives(value: Record<string, unknown>): WorkflowResultValidationIssue[] {
+  const issues: WorkflowResultValidationIssue[] = [];
+  const reviewScope = record(value.reviewScope) ? value.reviewScope : undefined;
+  if (reviewScope) {
+    inspectTextArray(issues, reviewScope.limitations, "$.reviewScope.limitations");
+    for (const field of ["filesSkipped", "filesLeftUncommitted", "commandsNotRun"]) {
+      if (!Array.isArray(reviewScope[field])) continue;
+      reviewScope[field].forEach((entry, index) => {
+        if (record(entry))
+          inspectFinalText(issues, entry.reason, `$.reviewScope.${field}[${index}].reason`);
+      });
+    }
+    if (Array.isArray(reviewScope.commandsRun)) {
+      reviewScope.commandsRun.forEach((entry, index) => {
+        if (record(entry))
+          inspectFinalText(issues, entry.summary, `$.reviewScope.commandsRun[${index}].summary`);
+      });
+    }
+  }
+  if (record(value.whatChanged)) {
+    inspectFinalText(issues, value.whatChanged.overview, "$.whatChanged.overview");
+    inspectFinalText(issues, value.whatChanged.before, "$.whatChanged.before");
+    inspectFinalText(issues, value.whatChanged.after, "$.whatChanged.after");
+    inspectFinalText(issues, value.whatChanged.userImpact, "$.whatChanged.userImpact");
+    if (Array.isArray(value.whatChanged.keyCodeChanges)) {
+      value.whatChanged.keyCodeChanges.forEach((entry, index) => {
+        if (record(entry))
+          inspectFinalText(
+            issues,
+            entry.description,
+            `$.whatChanged.keyCodeChanges[${index}].description`,
+          );
+      });
+    }
+  }
+  if (record(value.riskProfile))
+    inspectFinalText(issues, value.riskProfile.reasoning, "$.riskProfile.reasoning");
+  if (record(value.verdict))
+    inspectFinalText(issues, value.verdict.reasoning, "$.verdict.reasoning");
+  if (Array.isArray(value.strengths)) {
+    value.strengths.forEach((entry, index) => {
+      if (record(entry))
+        inspectFinalText(issues, entry.description, `$.strengths[${index}].description`);
+    });
+  }
+  inspectReviewFindingArray(issues, value.issues, "$.issues");
+  inspectReviewFindingArray(issues, value.testCoverageGaps, "$.testCoverageGaps");
+  inspectFinalText(issues, value.summaryOfChange, "$.summaryOfChange");
+  inspectFinalText(issues, value.reviewSummary, "$.reviewSummary");
+  return issues.slice(0, MAX_ISSUES);
+}
+
+function validateFinalContent(
+  kind: WorkflowResultKind,
+  value: Record<string, unknown>,
+): WorkflowResultValidationIssue[] {
+  if (kind === "review-report" || kind === "consolidated-review")
+    return validateReviewNarratives(value);
+
+  const issues: WorkflowResultValidationIssue[] = [];
+  if (kind === "feature-plan-state") {
+    inspectFinalText(issues, value.title, "$.title");
+    inspectFinalText(issues, value.summary, "$.summary");
+    if (Array.isArray(value.stories)) {
+      value.stories.forEach((story, index) => {
+        if (!record(story)) return;
+        inspectFinalText(issues, story.title, `$.stories[${index}].title`);
+        inspectFinalText(issues, story.description, `$.stories[${index}].description`);
+        inspectTextArray(
+          issues,
+          story.acceptanceCriteria,
+          `$.stories[${index}].acceptanceCriteria`,
+        );
+      });
+    }
+  } else if (kind === "story-refinement") {
+    inspectFinalText(issues, value.title, "$.title");
+    inspectFinalText(issues, value.description, "$.description");
+    inspectTextArray(issues, value.acceptanceCriteria, "$.acceptanceCriteria");
+  } else if (kind === "validation-plan") {
+    inspectTextArray(issues, value.limitations, "$.limitations");
+  } else if (kind === "review-preparation") {
+    inspectTextArray(issues, value.limitations, "$.limitations");
+    if (Array.isArray(value.validation)) {
+      value.validation.forEach((entry, index) => {
+        if (record(entry))
+          inspectFinalText(issues, entry.limitation, `$.validation[${index}].limitation`);
+      });
+    }
+    if (Array.isArray(value.uncommittedFiles)) {
+      value.uncommittedFiles.forEach((entry, index) => {
+        if (record(entry))
+          inspectFinalText(issues, entry.reason, `$.uncommittedFiles[${index}].reason`);
+      });
+    }
+  } else if (kind === "review-reconciliation") {
+    inspectReviewFindingArray(issues, value.newIssues, "$.newIssues");
+    inspectReviewFindingArray(issues, value.newCoverageGaps, "$.newCoverageGaps");
+    for (const field of ["issueUpdates", "coverageGapUpdates"]) {
+      if (!Array.isArray(value[field])) continue;
+      value[field].forEach((entry, index) => {
+        if (record(entry))
+          inspectReviewFindingNarratives(issues, entry.finding, `$.${field}[${index}].finding`);
+      });
+    }
+  } else if (kind === "fix-result") {
+    inspectFinalText(issues, value.summary, "$.summary");
+    inspectTextArray(issues, value.notes, "$.notes");
+    inspectTextArray(issues, value.limitations, "$.limitations");
+    if (Array.isArray(value.commandsRun)) {
+      value.commandsRun.forEach((entry, index) => {
+        if (record(entry))
+          inspectFinalText(issues, entry.summary, `$.commandsRun[${index}].summary`);
+      });
+    }
+  } else if (kind === "verification-result") {
+    inspectFinalText(issues, value.rationale, "$.rationale");
+  } else if (kind === "pr-result") {
+    inspectFinalText(issues, value.summary, "$.summary");
+  }
+  return issues.slice(0, MAX_ISSUES);
 }
 
 function validateConsolidationContext(
@@ -447,9 +638,10 @@ export function validateWorkflowResult(
     return [issue("$", "invalid_value", error instanceof Error ? error.message : String(error))];
   }
   if (!record(value)) return [];
+  const issues = validateFinalContent(kind, value);
   if (kind === "consolidated-review" && context?.type === "consolidated-review")
-    return validateConsolidationContext(value, context);
+    issues.push(...validateConsolidationContext(value, context));
   if (kind === "review-reconciliation" && context?.type === "review-reconciliation")
-    return validateReconciliationContext(value, context);
-  return [];
+    issues.push(...validateReconciliationContext(value, context));
+  return issues.slice(0, MAX_ISSUES);
 }

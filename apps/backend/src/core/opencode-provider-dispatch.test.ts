@@ -69,12 +69,14 @@ describe("OpenCode provider dispatch", () => {
       ]);
       const selected = openCodeWorkflowResultToolId("submit_review_report");
       const other = openCodeWorkflowResultToolId("submit_fix_result");
+      const validate = openCodeWorkflowResultToolId("validate_workflow_result");
       const status = openCodeWorkflowResultToolId("get_workflow_result_status");
       expect(fake.updateCalls[0]?.permission).toEqual(
         openCodeWorkflowResultPermissionRules("submit_review_report"),
       );
       expect(actionFor(fake.updateCalls[0]!, selected)).toBe("allow");
       expect(actionFor(fake.updateCalls[0]!, other)).toBe("deny");
+      expect(actionFor(fake.updateCalls[0]!, validate)).toBe("allow");
       expect(actionFor(fake.updateCalls[0]!, status)).toBe("allow");
 
       await provider.send("owned-session", "prompt", {
@@ -93,6 +95,7 @@ describe("OpenCode provider dispatch", () => {
         expect.arrayContaining([
           { permission: selected, pattern: "*", action: "deny" },
           { permission: other, pattern: "*", action: "deny" },
+          { permission: validate, pattern: "*", action: "deny" },
           { permission: status, pattern: "*", action: "deny" },
         ]),
       );

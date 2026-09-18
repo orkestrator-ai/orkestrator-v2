@@ -18,6 +18,7 @@ import type {
 const MAX_SERIES = 512;
 
 export type WorkflowResultSubmissionOutcome = "accepted" | "duplicate" | "conflict" | "rejected";
+export type WorkflowResultPreflightOutcome = "valid" | WorkflowResultError["code"];
 
 export interface WorkflowResultDurationSummary {
   count: number;
@@ -109,6 +110,10 @@ export class WorkflowResultMetrics {
 
   recordValidationDuration(kind: WorkflowResultKind, ms: number): void {
     this.observe(`validation_ms|kind=${segment(kind)}`, ms);
+  }
+
+  recordPreflight(outcome: WorkflowResultPreflightOutcome): void {
+    this.increment(`preflights|outcome=${segment(outcome)}`);
   }
 
   recordStorageDuration(operation: "load" | "save", ms: number): void {

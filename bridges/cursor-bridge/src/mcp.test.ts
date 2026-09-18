@@ -343,6 +343,81 @@ describe("hosted Orkestrator custom tools", () => {
     await hosted?.close();
   });
 
+  test("rejects stringified arguments locally and forwards a large object unchanged", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    setCursorMcpTransportForTests({
+      async connect() {
+        return {
+          tools: [{ name: "submit_consolidated_review" }],
+          async call(_name, args) {
+            calls.push(args);
+            return { content: [{ type: "text", text: "accepted" }] };
+          },
+          async close() {},
+        };
+      },
+    });
+    const hosted = await hostOrkestratorCustomTools({
+      url: "http://127.0.0.1:4567/mcp",
+      token: "coord-token",
+    });
+    const tool = hosted?.customTools.submit_consolidated_review;
+    if (!tool) throw new Error("missing hosted submission tool");
+
+    await expect(tool.execute('{"resultKey":"probe"}' as never, {})).resolves.toMatchObject({
+      isError: true,
+      content: [expect.objectContaining({ text: expect.stringContaining("raw object") })],
+    });
+    expect(calls).toEqual([]);
+
+    const large = { resultKey: "final", result: { reviewSummary: "x".repeat(20_000) } };
+    await expect(tool.execute(large, {})).resolves.toEqual({
+      content: [{ type: "text", text: "accepted" }],
+    });
+    expect(calls).toEqual([large]);
+    await hosted.close();
+  });
+
+  test("forwards omitted and null arguments as empty objects for zero-argument tools", async () => {
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    setCursorMcpTransportForTests({
+      async connect() {
+        return {
+          tools: ["list_projects", "get_repository_context", "list_workflows"].map((name) => ({
+            name,
+            inputSchema: { type: "object", properties: {}, additionalProperties: false },
+          })),
+          async call(name, args) {
+            calls.push({ name, args });
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+          async close() {},
+        };
+      },
+    });
+    const hosted = await hostOrkestratorCustomTools({
+      url: "http://127.0.0.1:4567/mcp",
+      token: "coord-token",
+    });
+    if (!hosted) throw new Error("missing hosted tools");
+
+    await expect(
+      hosted.customTools.list_projects?.execute(undefined as never, {}),
+    ).resolves.toEqual({ content: [{ type: "text", text: "ok" }] });
+    await expect(
+      hosted.customTools.get_repository_context?.execute(null as never, {}),
+    ).resolves.toEqual({ content: [{ type: "text", text: "ok" }] });
+    await expect(
+      hosted.customTools.list_workflows?.execute(undefined as never, {}),
+    ).resolves.toEqual({ content: [{ type: "text", text: "ok" }] });
+    expect(calls).toEqual([
+      { name: "list_projects", args: {} },
+      { name: "get_repository_context", args: {} },
+      { name: "list_workflows", args: {} },
+    ]);
+    await hosted.close();
+  });
+
   test("a failed connect is a notice, not a thrown attach", async () => {
     setCursorMcpTransportForTests({
       async connect() {

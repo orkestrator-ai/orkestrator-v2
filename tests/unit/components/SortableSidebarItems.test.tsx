@@ -202,6 +202,62 @@ describe("sortable sidebar items", () => {
     expect(onSelectProject).toHaveBeenCalled();
   });
 
+  test("SortableProjectGroup keeps adjacent populated and empty projects compact", () => {
+    const emptyProject = { ...project, id: "project-2", name: "Project Two", order: 1 };
+    const nestedProject = { ...project, id: "project-3", name: "Project Three", order: 2 };
+    const sharedProps = {
+      isCollapsed: false,
+      isSelected: false,
+      onToggleCollapse: () => {},
+      selectedEnvironmentId: null,
+      onSelectProject: () => {},
+      onSelectEnvironment: () => {},
+      onDeleteProject: () => {},
+      onOpenSettings: () => {},
+      onDeleteEnvironment: () => {},
+      onStartEnvironment: () => {},
+      onStopEnvironment: () => {},
+      onRestartEnvironment: () => {},
+      onCreateEnvironment: () => {},
+    };
+    const { container } = render(
+      <>
+        <SortableProjectGroup {...sharedProps} project={project} environments={[environment]} />
+        <SortableProjectGroup {...sharedProps} project={emptyProject} environments={[]} />
+        <SortableProjectFolder
+          name="Work"
+          projectCount={1}
+          isCollapsed={false}
+          onToggleCollapse={() => {}}
+          onRename={() => {}}
+          onUngroup={() => {}}
+        >
+          <SortableProjectGroup {...sharedProps} project={nestedProject} environments={[]} />
+        </SortableProjectFolder>
+      </>,
+    );
+
+    const projectWrappers = ["Project One", "Project Two", "Project Three"].map((name) => {
+      const header = getProjectHeader(screen.getByRole("button", { name: new RegExp(`^${name}`) }));
+      const wrapper = header.parentElement?.parentElement;
+      if (!wrapper) throw new Error(`Could not locate wrapper for ${name}`);
+      return wrapper;
+    });
+    for (const wrapper of projectWrappers) {
+      const classes = wrapper.className.split(/\s+/);
+      expect(classes).toContain("px-2");
+      expect(classes).not.toContain("py-0.5");
+    }
+
+    const environmentList = screen.getByTestId("sortable-context");
+    expect(environmentList.closest(".pb-1") === null).toBe(true);
+    expect(
+      container
+        .querySelector('[data-project-folder-content="Work"]')
+        ?.contains(projectWrappers[2]!),
+    ).toBe(true);
+  });
+
   test("SortableProjectGroup aggregates unseen and failed agent mail", () => {
     const config = structuredClone(useConfigStore.getInitialState().config);
     config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: true };

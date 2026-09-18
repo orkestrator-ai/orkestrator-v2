@@ -80,6 +80,7 @@ temp/
 .claude/
 .codex/
 .orkestrator/
+.orkestrator-linux-home/
 
 src-tauri
 

@@ -557,6 +557,11 @@ test("dispatch repeats hosted workflow tools on the SDK run", async () => {
     execute: async () => "accepted",
   };
   state.hostedMcpTools = { submit_consolidated_review: submit };
+  state.agentLocalOptions = {
+    cwd: "/workspace",
+    sandboxOptions: { enabled: true },
+    customTools: { stale_tool: submit },
+  };
   const controlled = controlledRun();
   const run = Object.assign(controlled, {
     id: "run-tools",
@@ -573,7 +578,11 @@ test("dispatch repeats hosted workflow tools on the SDK run", async () => {
 
   const handle = await dispatchPrompt(state, agent, { prompt: "Report", images: [] });
 
-  expect(sendOptions?.local?.customTools).toEqual({ submit_consolidated_review: submit });
+  expect(sendOptions?.local).toEqual({
+    cwd: "/workspace",
+    sandboxOptions: { enabled: true },
+    customTools: { submit_consolidated_review: submit },
+  });
   controlled.finish({ status: "completed" });
   await handle.completion;
 });

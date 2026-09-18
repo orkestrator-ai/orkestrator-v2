@@ -116,7 +116,14 @@ export async function dispatchPrompt(
         // the attached map here so a resumed/recovered reviewer cannot retain
         // the tool descriptor while losing the callback and reporting
         // `Unknown custom tool` when it submits its workflow result.
-        ...(state.hostedMcpTools ? { local: { customTools: state.hostedMcpTools } } : {}),
+        ...(state.hostedMcpTools
+          ? {
+              local: {
+                ...state.agentLocalOptions,
+                customTools: state.hostedMcpTools,
+              },
+            }
+          : {}),
         ...(input.requestId ? { idempotencyKey: input.requestId } : {}),
       },
     );

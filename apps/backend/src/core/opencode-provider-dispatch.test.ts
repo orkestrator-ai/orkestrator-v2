@@ -223,7 +223,7 @@ describe("OpenCode provider dispatch", () => {
     }
   });
 
-  test("idle restore after a recreated provider stays a single deny set", async () => {
+  test("idle restore after provider recreation repairs a persisted allow without re-enabling", async () => {
     const fake = openCodeFake();
     const agentMcp = {
       url: "http://127.0.0.1:43123/mcp",
@@ -237,53 +237,49 @@ describe("OpenCode provider dispatch", () => {
         agentMcp,
         workflowResultTool: "submit_review_report",
       });
-      await expect(first.status("owned-session")).resolves.toBe("idle");
     } finally {
       await first.dispose?.();
     }
     const restored = openCodeProvider(fake);
     try {
-      const before = (
-        ((await fake.client.session.get({ sessionID: "owned-session" })).data as {
-          permission?: unknown[];
-        }) ?? {}
-      ).permission;
-      const startingLength = Array.isArray(before) ? before.length : 0;
-      await restored.send("owned-session", "again", {
-        requestId: "request-2",
-        agentMcp,
-        workflowResultTool: "submit_review_report",
-      });
       await expect(restored.status("owned-session")).resolves.toBe("idle");
-      const afterFirst = (
+      const afterRestore = (
         ((await fake.client.session.get({ sessionID: "owned-session" })).data as {
           permission?: unknown[];
         }) ?? {}
       ).permission;
-      await restored.send("owned-session", "third", {
-        requestId: "request-3",
-        agentMcp,
-        workflowResultTool: "submit_review_report",
-      });
       await expect(restored.status("owned-session")).resolves.toBe("idle");
-      const afterSecond = (
-        ((await fake.client.session.get({ sessionID: "owned-session" })).data as {
-          permission?: unknown[];
-        }) ?? {}
-      ).permission;
       const deny = openCodeWorkflowResultDenyPermissionRules();
       const idleRestores = fake.updateCalls.filter(
         (update) =>
           Array.isArray(update.permission) &&
           JSON.stringify(update.permission) === JSON.stringify(deny),
       );
-      expect(idleRestores.length).toBeGreaterThanOrEqual(2);
-      expect(Array.isArray(afterFirst) && afterFirst.length - startingLength).toBe(deny.length + 2);
-      expect(
-        Array.isArray(afterSecond) && afterSecond.length - (afterFirst as unknown[]).length,
-      ).toBe(deny.length + 2);
+      expect(idleRestores).toHaveLength(1);
+      expect(Array.isArray(afterRestore) && afterRestore.slice(-deny.length)).toEqual(deny);
     } finally {
       await restored.dispose?.();
+    }
+  });
+
+  test("rejects a workflow result tool when the MCP capability is absent", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await expect(
+        provider.send("owned-session", "prompt", {
+          requestId: "request-1",
+          agentMcp: {
+            url: "http://127.0.0.1:43123/mcp",
+            token: "broker-token",
+          },
+          workflowResultTool: "submit_review_report",
+        }),
+      ).rejects.toThrow("OpenCode workflow-result tool configuration is incomplete");
+      expect(fake.mcpAddCalls).toHaveLength(0);
+      expect(fake.promptCalls).toHaveLength(0);
+    } finally {
+      await provider.dispose?.();
     }
   });
 

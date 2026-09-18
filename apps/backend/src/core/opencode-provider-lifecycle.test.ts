@@ -62,9 +62,14 @@ describe("OpenCode provider", () => {
           sessionID: "omitted-session",
           directory: "/workspace",
         },
+        {
+          sessionID: "omitted-session",
+          directory: "/workspace",
+        },
       ]);
       expect(fake.statusOptions[0]?.signal).toBeInstanceOf(AbortSignal);
       expect(fake.sessionGetOptions[0]?.signal).toBeInstanceOf(AbortSignal);
+      expect(fake.sessionGetOptions[1]?.signal).toBeInstanceOf(AbortSignal);
     } finally {
       await provider.dispose?.();
     }
@@ -264,7 +269,9 @@ describe("OpenCode provider", () => {
         data: { id: "recreated-session", directory: "/workspace" },
       });
       await expect(provider.status("recreated-session")).resolves.toBe("idle");
-      expect(fake.sessionGetCallCount).toBe(2);
+      // One strong existence probe per status read, plus the first idle read's
+      // bounded workflow-result permission reconciliation.
+      expect(fake.sessionGetCallCount).toBe(3);
     } finally {
       await provider.dispose?.();
     }

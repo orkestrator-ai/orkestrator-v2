@@ -7,7 +7,7 @@
  * of the adapter: the Cursor SDK's event vocabulary is translated here, once,
  * so nothing downstream needs to know which engine produced a transcript.
  */
-import type { Run, SDKAgent, SDKCustomTool } from "@cursor/sdk";
+import type { AgentOptions, Run, SDKAgent, SDKCustomTool } from "@cursor/sdk";
 import type {
   NativeAgentAccountUsageWindow,
   NativeAgentComposerState,
@@ -290,6 +290,11 @@ export interface SessionState {
    * the agent-level descriptors alone are not enough after resume/recovery.
    */
   hostedMcpTools?: Record<string, SDKCustomTool>;
+  /**
+   * Local SDK options used to attach this agent. Per-run custom-tool callbacks
+   * merge into this object so repeating them never drops cwd or sandbox policy.
+   */
+  agentLocalOptions?: NonNullable<AgentOptions["local"]>;
   /**
    * A turn the user cancelled before its run handle existed.
    *

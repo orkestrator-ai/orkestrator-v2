@@ -228,8 +228,8 @@ async function routeGlobal(
     if (!isNativeAgentExecutionPolicy(body.policy)) {
       throw new HttpError(400, "policy is required");
     }
-    const state = await resumeSession(agentId, parseComposerPatch(body), body.policy);
-    storeAgentMcp(state, body.agentMcp);
+    const agentMcp = parseAgentMcpConnection(body.agentMcp);
+    const state = await resumeSession(agentId, parseComposerPatch(body), body.policy, agentMcp);
     json(response, 201, publicSessionReference(state));
     return true;
   }

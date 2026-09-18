@@ -23,7 +23,12 @@ import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, resolveCredential } from "./cre
 import { schedulePlanAccountRefresh } from "./plan-usage.js";
 import { emptyComposer, hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
-import { cursorMcpServers, hostOrkestratorCustomTools, mcpConnectionKey } from "./mcp.js";
+import {
+  cursorMcpServers,
+  hostOrkestratorCustomTools,
+  mcpConnectionKey,
+  type AgentMcpConnection,
+} from "./mcp.js";
 import {
   cursorLocalAgentStore,
   hasUnusedInitialRun,
@@ -328,6 +333,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
   };
   const releaseWarmWorkspace = await prewarmCursorWorkspace(options, policy.sandbox);
   state.workspaceWarmRelease = releaseWarmWorkspace;
+  state.agentLocalOptions = options.local;
 
   try {
     // A session that already ran holds an agent id, and resuming it is what
@@ -365,6 +371,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     state.workspaceWarmRelease = undefined;
     state.hostedMcpClose = undefined;
     state.hostedMcpTools = undefined;
+    state.agentLocalOptions = undefined;
     await Promise.allSettled([
       ...(releaseWarmWorkspace ? [releaseWarmWorkspace()] : []),
       ...(hosted ? [hosted.close()] : []),
@@ -486,6 +493,7 @@ export async function detachAgent(state: SessionState): Promise<void> {
   state.workspaceWarmRelease = undefined;
   state.hostedMcpClose = undefined;
   state.hostedMcpTools = undefined;
+  state.agentLocalOptions = undefined;
   await Promise.allSettled([
     ...(agent ? [agent[Symbol.asyncDispose]()] : []),
     ...(releaseWarmWorkspace ? [releaseWarmWorkspace()] : []),
@@ -727,8 +735,10 @@ export async function resumeSession(
   agentId: string,
   patch: ComposerPatch | undefined,
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
+  agentMcp?: AgentMcpConnection,
 ): Promise<SessionState> {
   const requestedPolicyKey = resumePolicyKey(policy);
+  const requestedMcpKey = mcpConnectionKey(agentMcp);
   const existing = Array.from(sessions.values()).find((state) => state.agentId === agentId);
   if (existing) {
     if (
@@ -739,13 +749,15 @@ export async function resumeSession(
         "Cursor session is already adopted under a different execution policy",
       );
     }
+    if (agentMcp) existing.agentMcp = agentMcp;
     return existing;
   }
   const pending = sessionResumesByAgentId.get(agentId);
   if (pending) {
     if (
       pending.policyKey !== requestedPolicyKey ||
-      pending.composerKey !== JSON.stringify(patch ?? {})
+      pending.composerKey !== JSON.stringify(patch ?? {}) ||
+      pending.mcpKey !== requestedMcpKey
     ) {
       throw new SessionConflictError(
         "Cursor session is already being resumed with a different execution policy",
@@ -757,6 +769,7 @@ export async function resumeSession(
   const operation = (async () => {
     const state = newSessionState(undefined, resolveCursorExecutionPolicy(policy));
     state.agentId = agentId;
+    state.agentMcp = agentMcp;
     applyComposerPatch(state, patch);
     state.composer = await hydrateComposer(state.composer);
     await hydrateHistory(state, { skipRunning: true }).catch(() => undefined);
@@ -770,6 +783,7 @@ export async function resumeSession(
     promise: operation,
     policyKey: requestedPolicyKey,
     composerKey: JSON.stringify(patch ?? {}),
+    mcpKey: requestedMcpKey,
   });
   try {
     return await operation;
@@ -783,7 +797,7 @@ export async function resumeSession(
 
 const sessionResumesByAgentId = new Map<
   string,
-  { promise: Promise<SessionState>; policyKey: string; composerKey: string }
+  { promise: Promise<SessionState>; policyKey: string; composerKey: string; mcpKey: string }
 >();
 
 /**
@@ -837,6 +851,11 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
   const runs = await listAllRuns(state.agentId).catch(() => []);
   const active = [...runs].reverse().find((run) => run.status === "running");
   if (!active) return;
+  // Re-adopt the SDK agent before tailing its surviving run. Agent.resume is
+  // where local custom-tool callbacks are registered after a bridge restart;
+  // observing the Run directly would recover output while leaving any pending
+  // workflow-result invocation without an executor.
+  await ensureAgent(state);
   state.activeRun = active;
   state.status = "running";
   state.turnStartedAt = active.createdAt;

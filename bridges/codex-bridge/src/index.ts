@@ -109,6 +109,31 @@ import { applyRuntimeEnvironmentOutput, refreshRuntimeEnvironment } from "./runt
 
 const WORKFLOW_RESULT_TOOL_NAMES = new Set(WORKFLOW_RESULT_KINDS.map(workflowResultToolName));
 
+function isScopedAgentMcp(value: unknown): value is { url: string; token: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  if (
+    typeof candidate.url !== "string" ||
+    typeof candidate.token !== "string" ||
+    candidate.token.length === 0 ||
+    candidate.token.length > 1_024
+  ) {
+    return false;
+  }
+  try {
+    const url = new URL(candidate.url);
+    return (
+      url.protocol === "http:" &&
+      ["127.0.0.1", "localhost", "host.docker.internal"].includes(url.hostname) &&
+      url.pathname === "/mcp" &&
+      !url.username &&
+      !url.password
+    );
+  } catch {
+    return false;
+  }
+}
+
 // The normalized message model and the item renderer live in ./messages so both
 // engines share one implementation. Re-exported here because existing importers
 // (and item-to-parts.test.ts) resolve them from this module.
@@ -1432,6 +1457,9 @@ app.post("/session/:id/prompt", async (c) => {
   ) {
     return c.json({ error: "workflowResultTool must name a workflow result tool" }, 400);
   }
+  if (workflowResultTool !== undefined && !isScopedAgentMcp(agentMcp)) {
+    return c.json({ error: "workflowResultTool requires agentMcp" }, 400);
+  }
 
   const outcome = await appServerRuntime.prompt(sessionId, {
     prompt,
@@ -1439,9 +1467,7 @@ app.post("/session/:id/prompt", async (c) => {
     attachments,
     outputSchema,
     ...(typeof readOnly === "boolean" ? { readOnly } : {}),
-    ...(agentMcp && typeof agentMcp === "object" && !Array.isArray(agentMcp)
-      ? { agentMcp: agentMcp as { url: string; token: string } }
-      : {}),
+    ...(isScopedAgentMcp(agentMcp) ? { agentMcp } : {}),
     ...(typeof workflowResultTool === "string" ? { workflowResultTool } : {}),
   });
   if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);

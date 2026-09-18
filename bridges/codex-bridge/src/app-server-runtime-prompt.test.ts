@@ -1283,13 +1283,56 @@ describe("at-most-once dispatch", () => {
       }),
     ).toMatchObject({ ok: true });
 
+    const thread = h.child().requests.find((request) => request.method === "thread/start")!;
     const turn = h.child().requests.find((request) => request.method === "turn/start")!;
-    expect(turn.params.approvalPolicy).toBe("never");
-    expect(turn.params.sandboxPolicy).toEqual({ type: "readOnly", networkAccess: true });
+    expect(thread.params.approvalPolicy).toBe("never");
+    expect(thread.params.sandbox).toBe("read-only");
     expect(
-      (turn.params.config as Record<string, Record<string, unknown>>)["mcp_servers.orkestrator"]
+      (thread.params.config as Record<string, Record<string, unknown>>)["mcp_servers.orkestrator"]
         ?.default_tools_approval_mode,
     ).toBe("approve");
+    expect(turn.params.config).toBeUndefined();
+    expect(turn.params.sandboxPolicy).toEqual({ type: "readOnly", networkAccess: true });
+  });
+
+  test("re-resumes an attached thread with workflow result approval before dispatch", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "First turn",
+      requestId: "ordinary-1",
+      attachments: [],
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "Submit the report",
+        requestId: "review-result-2",
+        attachments: [],
+        readOnly: true,
+        agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "attempt-secret" },
+        workflowResultTool: "submit_consolidated_review",
+      }),
+    ).toMatchObject({ ok: true });
+
+    const resume = h
+      .child()
+      .requests.filter((request) => request.method === "thread/resume")
+      .at(-1)!;
+    expect(
+      (resume.params.config as Record<string, Record<string, unknown>>)["mcp_servers.orkestrator"]
+        ?.default_tools_approval_mode,
+    ).toBe("approve");
+    const resultTurn = h
+      .child()
+      .requests.filter((request) => request.method === "turn/start")
+      .at(-1)!;
+    expect(resultTurn.params.config).toBeUndefined();
   });
 
   test("an ambiguous request that did run is reconciled as already-processed", async () => {

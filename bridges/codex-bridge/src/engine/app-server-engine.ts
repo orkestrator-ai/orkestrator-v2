@@ -1028,7 +1028,7 @@ export class AppServerEngine implements CodexEngine {
     const approveAgentMcpTools =
       config.policy?.approvals === "auto-approve" ||
       (config.policy?.id === "coordinator-read-only" && Boolean(config.permissionProfile)) ||
-      Boolean(config.workflowResultTool);
+      Boolean(config.workflowResultTool && config.agentMcp);
     return {
       cwd: config.cwd ?? this.options.cwd,
       // Passed explicitly on every call rather than relying on inherited state.
@@ -1060,9 +1060,9 @@ export class AppServerEngine implements CodexEngine {
                 startup_timeout_sec: 3,
                 // `approve` bypasses the thread's approval policy, so reserve it
                 // for an explicitly auto-approved policy, the trusted
-                // coordinator profile, or a backend-selected tool on an
-                // attempt-scoped workflow result server. Ask/deny must retain
-                // Codex's defaults for ordinary MCP connections.
+                // coordinator profile, or a backend-selected tool paired with
+                // an attempt-scoped workflow result server. Ask/deny must
+                // retain Codex's defaults for ordinary MCP connections.
                 ...(approveAgentMcpTools ? { default_tools_approval_mode: "approve" } : {}),
               },
             },
@@ -1582,7 +1582,12 @@ export class AppServerEngine implements CodexEngine {
       ...(options.requestId ? { clientUserMessageId: options.requestId } : {}),
       ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
       input: options.input.map(toAppServerInput),
-      ...this.toThreadParams(options.config),
+      cwd: options.config.cwd ?? this.options.cwd,
+      approvalPolicy: options.config.approvalPolicy ?? "never",
+      ...(options.config.model ? { model: options.config.model } : {}),
+      ...(options.config.serviceTier !== undefined
+        ? { serviceTier: options.config.serviceTier }
+        : {}),
       ...(options.config.reasoningEffort ? { effort: options.config.reasoningEffort } : {}),
       ...(options.config.reasoningSummary ? { summary: options.config.reasoningSummary } : {}),
       ...(options.config.personality ? { personality: options.config.personality } : {}),
@@ -1591,9 +1596,6 @@ export class AppServerEngine implements CodexEngine {
         ? {}
         : { sandboxPolicy: toSandboxPolicy(options.config) }),
     };
-    // `sandbox` belongs to thread/start; turn/start uses `sandboxPolicy`.
-    delete (params as Record<string, unknown>).sandbox;
-
     const { result, generation } = await this.supervisor.requestWithGeneration<{
       turn: { id: string };
     }>("turn/start", params);

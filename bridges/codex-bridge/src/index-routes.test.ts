@@ -798,9 +798,20 @@ describe("session detail route outcomes", () => {
         const accepted = await jsonRequest("/session/session-1/prompt", "POST", {
           prompt: "submit",
           requestId: "request-result",
+          agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "attempt-secret" },
           workflowResultTool: "submit_consolidated_review",
         });
         expect(accepted.status).toBe(202);
+
+        const unpaired = await jsonRequest("/session/session-1/prompt", "POST", {
+          prompt: "submit",
+          requestId: "request-unpaired",
+          workflowResultTool: "submit_consolidated_review",
+        });
+        expect(unpaired.status).toBe(400);
+        expect(await unpaired.json()).toEqual({
+          error: "workflowResultTool requires agentMcp",
+        });
 
         const rejected = await jsonRequest("/session/session-1/prompt", "POST", {
           prompt: "submit",
@@ -821,6 +832,7 @@ describe("session detail route outcomes", () => {
           prompt: "submit",
           requestId: "request-result",
           attachments: [],
+          agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "attempt-secret" },
           workflowResultTool: "submit_consolidated_review",
         },
       },

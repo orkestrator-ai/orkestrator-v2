@@ -279,10 +279,10 @@ describe("thread lifecycle", () => {
       config,
     });
 
-    // Every entry point that can re-open a thread sends the whole server
-    // table. A leaf-only override on any one of them would silently fall back
-    // to the process-wide bearer token this session is not scoped to.
-    for (const method of ["thread/start", "thread/resume", "thread/fork", "turn/start"]) {
+    // Every entry point that can open or re-open a thread sends the whole
+    // server table. turn/start deliberately does not: its protocol has no
+    // config field, so callers must resume before changing MCP scope.
+    for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
       expect(
         h.child().requests.find((request) => request.method === method)?.params.config,
       ).toEqual({
@@ -294,6 +294,9 @@ describe("thread lifecycle", () => {
         },
       });
     }
+    expect(
+      h.child().requests.find((request) => request.method === "turn/start")?.params.config,
+    ).toBeUndefined();
   });
 
   test.each([
@@ -353,11 +356,10 @@ describe("thread lifecycle", () => {
     ).toBe("approve");
   });
 
-  test("auto-approves an attempt-scoped workflow result server on a read-only turn", async () => {
+  test("auto-approves an attempt-scoped workflow result server when tool and connection are paired", async () => {
     const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
     const config: EngineTurnConfig = {
       ...BUILD,
-      sandbox: "read-only",
       approvalPolicy: "never",
       policy: {
         id: "interactive-host",
@@ -374,14 +376,26 @@ describe("thread lifecycle", () => {
 
     const params = h.child().requests.find((request) => request.method === "thread/start")!.params;
     expect(params.approvalPolicy).toBe("never");
-    expect(params.sandbox).toBe("read-only");
     expect(
       (params.config as Record<string, Record<string, unknown>>)["mcp_servers.orkestrator"]
         ?.default_tools_approval_mode,
     ).toBe("approve");
   });
 
-  test("keeps coordinator MCP approval on thread start, resume, and turn", async () => {
+  test("does not widen MCP approval when a workflow result tool has no scoped connection", async () => {
+    const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
+    const config: EngineTurnConfig = {
+      ...BUILD,
+      workflowResultTool: "submit_consolidated_review",
+    };
+    await h.engine.start();
+    await h.engine.startThread({ config });
+
+    const params = h.child().requests.find((request) => request.method === "thread/start")!.params;
+    expect(params.config).toBeUndefined();
+  });
+
+  test("keeps coordinator MCP approval on thread start and resume", async () => {
     const activePermissionProfile = { id: "coordinator-conversation-1" };
     const h = harness({
       "thread/start": () => ({ thread: thread("t1"), activePermissionProfile }),
@@ -411,7 +425,7 @@ describe("thread lifecycle", () => {
       config,
     });
 
-    for (const method of ["thread/start", "thread/resume", "turn/start"]) {
+    for (const method of ["thread/start", "thread/resume"]) {
       const params = h.child().requests.find((request) => request.method === method)!.params;
       expect(params.sandbox).toBeUndefined();
       expect(
@@ -419,6 +433,9 @@ describe("thread lifecycle", () => {
           ?.default_tools_approval_mode,
       ).toBe("approve");
     }
+    const turn = h.child().requests.find((request) => request.method === "turn/start")!.params;
+    expect(turn.sandbox).toBeUndefined();
+    expect(turn.config).toBeUndefined();
   });
 
   test("plan mode resolves to a read-only sandbox", async () => {

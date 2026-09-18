@@ -24,6 +24,7 @@ describe("progressive bridge transcript", () => {
     if (first.status !== "snapshot") throw new Error("expected snapshot");
     expect(first.value.messages).toHaveLength(100);
     expect(first.value.messages[0]?.id).toBe("20");
+    expect(first.value.startIndex).toBe(20);
     expect(first.value.messageWindow).toMatchObject({
       truncated: true,
       truncationReason: "count",
@@ -103,6 +104,7 @@ describe("progressive bridge transcript", () => {
     if (update.status !== "snapshot") throw new Error("expected snapshot");
     expect(update.value.messages.length).toBeLessThanOrEqual(100);
     expect(update.value.messages.at(-1)?.id).toBe("9999");
+    expect(update.value.startIndex).toBe(10_000 - update.value.messages.length);
     expect(update.value.messageWindow.truncated).toBe(true);
     expect(new TextEncoder().encode(JSON.stringify(update)).byteLength).toBeLessThan(600 * 1024);
   });
@@ -123,6 +125,7 @@ describe("progressive bridge transcript", () => {
     expect(incomplete.status).toBe("snapshot");
     if (incomplete.status !== "snapshot") throw new Error("expected snapshot");
     expect(incomplete.value.messages).toHaveLength(2);
+    expect(incomplete.value.startIndex).toBe(0);
     expect(incomplete.value.complete).toBe(false);
     expect(incomplete.value.messageWindow.truncated).toBe(true);
     expect(incomplete.value.messageWindow.truncationReason).toBeUndefined();

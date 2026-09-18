@@ -73,6 +73,291 @@ describe("native agent progressive remainder", () => {
     );
   });
 
+  test.each([
+    {
+      name: "a shorter overlapping window",
+      preview: ["b"],
+      startIndex: 1,
+    },
+    {
+      name: "an out-of-order overlap",
+      preview: ["b", "x", "c"],
+      startIndex: 1,
+    },
+  ])("rejects positioned prefix reuse for $name", async ({ preview, startIndex }) => {
+    let streaming = false;
+    const stub = createProviderStub("codex", {
+      transcriptSnapshot: async () => ({
+        messages: (streaming ? preview : ["a", "b", "c"]).map((id) => progressiveMessage(id)),
+        complete: !streaming,
+        historyEpoch: "epoch-1",
+        historyStartIndex: streaming ? startIndex : 0,
+        sourceToken: streaming ? "source-2" : "source-1",
+        freshness: "current" as const,
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-progressive-position-rejection-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: `env-env-1:position-rejection-${startIndex}-${preview.join("-")}`,
+        };
+        await service.ensureSession(identity);
+        const input = { ...identity, viewVersion: 1 as const, liveWindow, forceSnapshot: true };
+        await service.getTranscriptUpdate(input);
+        streaming = true;
+        const next = await service.getTranscriptUpdate(input);
+        if (next.status !== "snapshot") throw new Error("expected snapshot");
+        expect(next.value.messages.map((message) => (message as { id: string }).id)).toEqual(
+          Array.from(preview),
+        );
+      },
+    );
+  });
+
+  test("merges a positioned overlap while preserving an incomplete prior history", async () => {
+    let streaming = false;
+    const stub = createProviderStub("codex", {
+      transcriptSnapshot: async () => ({
+        messages: (streaming ? ["b", "c", "d"] : ["a", "b", "c"]).map((id) =>
+          progressiveMessage(id),
+        ),
+        complete: false,
+        historyEpoch: "epoch-1",
+        historyStartIndex: streaming ? 1 : 0,
+        sourceToken: streaming ? "source-2" : "source-1",
+        freshness: "current" as const,
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-progressive-incomplete-overlap-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:incomplete-overlap",
+        };
+        await service.ensureSession(identity);
+        const input = { ...identity, viewVersion: 1 as const, liveWindow, forceSnapshot: true };
+        await service.getTranscriptUpdate(input);
+        streaming = true;
+        const next = await service.getTranscriptUpdate(input);
+        if (next.status !== "snapshot") throw new Error("expected snapshot");
+        expect(next.value.messages.map((message) => (message as { id: string }).id)).toEqual([
+          "a",
+          "b",
+          "c",
+          "d",
+        ]);
+        expect(next.value.historyComplete).toBe(false);
+      },
+    );
+  });
+
+  test.each(["provider session", "source generation"] as const)(
+    "does not reuse a positioned prefix after a $change change",
+    async (change) => {
+      let streaming = false;
+      const stub = createProviderStub("codex", {
+        transcriptSnapshot: async () => ({
+          messages: (streaming ? ["b", "c", "d"] : ["a", "b", "c"]).map((id) =>
+            progressiveMessage(id),
+          ),
+          complete: !streaming,
+          historyEpoch: "epoch-1",
+          historyStartIndex: streaming ? 1 : 0,
+          sourceToken: streaming ? "source-2" : "source-1",
+          freshness: "current" as const,
+        }),
+      });
+      await withService(
+        { prefix: "orkestrator-progressive-identity-change-", provider: async () => stub.provider },
+        async ({ service }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent: "codex" as const,
+            logicalSessionKey: `env-env-1:identity-change-${change}`,
+          };
+          await service.ensureSession(identity);
+          const input = { ...identity, viewVersion: 1 as const, liveWindow, forceSnapshot: true };
+          await service.getTranscriptUpdate(input);
+          if (change === "provider session") {
+            for (const entry of internals(service).progressiveTranscriptCache.values()) {
+              const value = entry.value as { identity?: { providerSessionId: string } };
+              if (value.identity) value.identity.providerSessionId = "provider-session-before";
+            }
+          } else {
+            internals(service).providerConnections.set("env-1\0codex", "generation-2");
+          }
+          streaming = true;
+          const next = await service.getTranscriptUpdate(input);
+          if (next.status !== "snapshot") throw new Error("expected snapshot");
+          expect(next.value.messages.map((message) => (message as { id: string }).id)).toEqual([
+            "b",
+            "c",
+            "d",
+          ]);
+        },
+      );
+    },
+  );
+
+  test("keeps a hydrated prefix for an adjacent fresh-id streaming window", async () => {
+    let phase: "base" | "append" | "rewrite" | "complete" = "base";
+    const stub = createProviderStub("codex", {
+      transcriptSnapshot: async () => ({
+        messages:
+          phase === "base"
+            ? [progressiveMessage("prompt"), progressiveMessage("old-assistant")]
+            : [progressiveMessage("new-user"), progressiveMessage("new-assistant")],
+        complete: phase === "base" || phase === "complete",
+        historyEpoch: phase === "rewrite" ? "epoch-2" : "epoch-1",
+        historyStartIndex: phase === "append" ? 2 : 0,
+        sourceToken: `source-${phase}`,
+        freshness: "current" as const,
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-fresh-id-append-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:fresh-id-append",
+        };
+        await service.ensureSession(identity);
+        const input = { ...identity, viewVersion: 1 as const, liveWindow, forceSnapshot: true };
+        await service.getTranscriptUpdate(input);
+        phase = "append";
+        const appended = await service.getTranscriptUpdate(input);
+        if (appended.status !== "snapshot") throw new Error("expected snapshot");
+        expect(appended.value.messages.map((message) => (message as { id: string }).id)).toEqual([
+          "prompt",
+          "old-assistant",
+          "new-user",
+          "new-assistant",
+        ]);
+        expect(appended.value.historyComplete).toBe(true);
+
+        phase = "rewrite";
+        const rewritten = await service.getTranscriptUpdate(input);
+        if (rewritten.status !== "snapshot") throw new Error("expected snapshot");
+        expect(rewritten.value.messages.map((message) => (message as { id: string }).id)).toEqual([
+          "new-user",
+          "new-assistant",
+        ]);
+
+        phase = "complete";
+        const completed = await service.getTranscriptUpdate(input);
+        if (completed.status !== "snapshot") throw new Error("expected snapshot");
+        expect(completed.value.messages.map((message) => (message as { id: string }).id)).toEqual([
+          "new-user",
+          "new-assistant",
+        ]);
+      },
+    );
+  });
+
+  test("retains a provider-deleted row until an incomplete same-epoch window becomes complete", async () => {
+    let complete = true;
+    let deleted = false;
+    const stub = createProviderStub("codex", {
+      transcriptSnapshot: async () => ({
+        messages: deleted
+          ? [progressiveMessage("response")]
+          : [progressiveMessage("prompt"), progressiveMessage("response")],
+        complete,
+        historyEpoch: "epoch-1",
+        historyStartIndex: deleted && !complete ? 1 : 0,
+        sourceToken: `source-${deleted}-${complete}`,
+        freshness: "current" as const,
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-deleted-row-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:deleted-row",
+        };
+        await service.ensureSession(identity);
+        const input = { ...identity, viewVersion: 1 as const, liveWindow, forceSnapshot: true };
+        await service.getTranscriptUpdate(input);
+        deleted = true;
+        complete = false;
+        const pending = await service.getTranscriptUpdate(input);
+        if (pending.status !== "snapshot") throw new Error("expected snapshot");
+        expect(pending.value.messages.map((message) => (message as { id: string }).id)).toEqual([
+          "prompt",
+          "response",
+        ]);
+        complete = true;
+        const authoritative = await service.getTranscriptUpdate(input);
+        if (authoritative.status !== "snapshot") throw new Error("expected snapshot");
+        expect(
+          authoritative.value.messages.map((message) => (message as { id: string }).id),
+        ).toEqual(["response"]);
+      },
+    );
+  });
+
+  test("does not claim complete history when byte bounding drops a joined prefix", async () => {
+    let streaming = false;
+    const byteWindow = { messages: 100, targetBytes: 512 } as const;
+    const stub = createProviderStub("codex", {
+      transcriptSnapshot: async () => ({
+        messages: [
+          streaming
+            ? progressiveMessage("new", "x".repeat(4_096))
+            : progressiveMessage("old", "old"),
+        ],
+        complete: !streaming,
+        historyEpoch: "epoch-1",
+        historyStartIndex: streaming ? 1 : 0,
+        sourceToken: streaming ? "source-2" : "source-1",
+        freshness: "current" as const,
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-byte-joined-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:byte-joined",
+        };
+        await service.ensureSession(identity);
+        const input = {
+          ...identity,
+          viewVersion: 1 as const,
+          liveWindow: byteWindow,
+          forceSnapshot: true,
+        };
+        await service.getTranscriptUpdate(input);
+        streaming = true;
+        const next = await service.getTranscriptUpdate(input);
+        if (next.status !== "snapshot") throw new Error("expected snapshot");
+        expect(next.value.messages).toHaveLength(1);
+        expect(next.value.messages[0]).toMatchObject({ id: "new" });
+        expect(next.value.messageWindow).toMatchObject({
+          truncated: true,
+          truncationReason: "bytes",
+          canLoadEarlier: false,
+        });
+        expect(next.value.historyComplete).toBe(false);
+      },
+    );
+  });
+
   test("keeps a recovered initial attachment visible across byte-trimmed streaming previews", async () => {
     const prompt = {
       ...progressiveMessage("prompt", "Inspect this screenshot"),
@@ -109,7 +394,12 @@ describe("native agent progressive remainder", () => {
           complete: true,
         });
         if (update.status !== "snapshot") throw new Error("expected bridge snapshot");
-        return { ...update.value, sourceToken: update.token, historyEpoch: `1:${contentEpoch}` };
+        return {
+          ...update.value,
+          historyStartIndex: update.value.startIndex,
+          sourceToken: update.token,
+          historyEpoch: `1:${contentEpoch}`,
+        };
       },
     });
     await withService(

@@ -123,6 +123,12 @@ type NativeAgentRuntimeProvider = shared.NativeAgentRuntimeProvider;
 type ProviderInteractiveSnapshot = shared.ProviderInteractiveSnapshot;
 type ProviderSessionStateSnapshot = shared.ProviderSessionStateSnapshot;
 type ProviderTranscriptSnapshot = shared.ProviderTranscriptSnapshot;
+
+interface ProjectedProgressiveTranscript {
+  value: NativeAgentTranscriptView;
+  historyStartIndex?: number;
+  historyEndIndex?: number;
+}
 type ProviderInteractionObservationEvent = shared.ProviderInteractionObservationEvent;
 type ProviderExecutionMode = shared.ProviderExecutionMode;
 type PromptAttachment = shared.PromptAttachment;
@@ -564,7 +570,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   private readonly progressiveInstanceId = randomUUID();
   private readonly progressiveTranscriptCache = new Map<
     string,
-    { token: string; sourceToken?: string; value: NativeAgentTranscriptView; bytes: number }
+    {
+      token: string;
+      sourceToken?: string;
+      value: NativeAgentTranscriptView;
+      bytes: number;
+      historyStartIndex?: number;
+      historyEndIndex?: number;
+    }
   >();
   private progressiveTranscriptBytes = 0;
   private readonly progressiveSourceTokens = new Map<string, string>();
@@ -1630,9 +1643,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
     const normalized = normalizedProgressiveMessages(fuller);
     if (!normalized || normalized.length <= snapshot.messages.length) return snapshot;
+    const historyStartIndex =
+      snapshot.historyStartIndex === undefined
+        ? undefined
+        : Math.max(0, snapshot.historyStartIndex + snapshot.messages.length - normalized.length);
     return {
       ...snapshot,
       messages: normalized,
+      ...(historyStartIndex === undefined ? {} : { historyStartIndex }),
       complete: normalized.length < liveWindow.messages,
       freshness: "current",
     };
@@ -1644,7 +1662,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     snapshot: ProviderTranscriptSnapshot,
     providerSessionId: string,
     initialPromptPresentation: PersistedNativeAgentSession["initialPromptPresentation"],
-  ): NativeAgentTranscriptView {
+  ): ProjectedProgressiveTranscript {
     const previous = this.progressiveTranscriptCache.get(key);
     const sourceGeneration =
       this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ??
@@ -1659,6 +1677,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
     );
     let projectedMessages = normalized.messages;
+    let projectedStartIndex = snapshot.historyStartIndex;
     let sourceComplete = snapshot.complete;
     /*
      * A bridge bounds raw tool output and inline attachments before we move
@@ -1668,11 +1687,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
      * hydration token. Do not publish the smaller preview again while its next
      * recovery is pending: that removes and reinserts the prompt every poll.
      *
-     * Carry only an overlapping prefix from the same explicit history epoch
-     * and runtime identity. The entire old suffix must match the new prefix in
-     * order; new rows always supply the live content. Complete snapshots,
-     * rewritten histories and disjoint windows remain authoritative replacements.
-     * Reapply the normal count/byte bounds after joining the projected rows.
+     * Carry only a prefix whose sequence position is proven by the provider,
+     * from the same explicit history epoch and runtime identity. Directly
+     * overlapping rows must still match in order; an adjacent disjoint window
+     * is the append-only case that ids alone cannot prove. Complete snapshots,
+     * rewritten histories, gaps and unpositioned windows remain authoritative
+     * replacements. Reapply the normal count/byte bounds after joining.
      */
     if (
       snapshot.complete === false &&
@@ -1680,21 +1700,28 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       previous?.value.historyEpoch === snapshot.historyEpoch &&
       previous.value.identity.providerSessionId === providerSessionId &&
       previous.value.identity.sourceGeneration === identity.sourceGeneration &&
+      previous.historyStartIndex !== undefined &&
+      previous.historyEndIndex !== undefined &&
+      projectedStartIndex !== undefined &&
       projectedMessages.length > 0
     ) {
       const id = (message: unknown) => (message as { id: string }).id;
       const earlier = previous.value.messages;
-      const overlap = earlier.findIndex((message) => id(message) === id(projectedMessages[0]));
-      const liveIds = new Set(projectedMessages.map(id));
+      const incomingEndIndex = projectedStartIndex + projectedMessages.length;
+      const prefixLength = projectedStartIndex - previous.historyStartIndex;
+      const overlapLength = previous.historyEndIndex - projectedStartIndex;
       if (
-        overlap > 0 &&
-        earlier.slice(0, overlap).every((message) => !liveIds.has(id(message))) &&
-        earlier.length - overlap <= projectedMessages.length &&
+        prefixLength > 0 &&
+        prefixLength <= earlier.length &&
+        projectedStartIndex <= previous.historyEndIndex &&
+        incomingEndIndex >= previous.historyEndIndex &&
+        overlapLength >= 0 &&
         earlier
-          .slice(overlap)
+          .slice(prefixLength)
           .every((message, index) => id(message) === id(projectedMessages[index]))
       ) {
-        projectedMessages = [...earlier.slice(0, overlap), ...projectedMessages];
+        projectedMessages = [...earlier.slice(0, prefixLength), ...projectedMessages];
+        projectedStartIndex = previous.historyStartIndex;
         sourceComplete = previous.value.historyComplete;
       }
     }
@@ -1703,6 +1730,17 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       input.liveWindow.messages,
       input.liveWindow.targetBytes,
     );
+    const droppedProjectedMessages = projectedMessages.length - bounded.messages.length;
+    const boundedStartIndex =
+      projectedStartIndex === undefined
+        ? undefined
+        : projectedStartIndex + droppedProjectedMessages;
+    if (snapshot.complete === false && sourceComplete === true && droppedProjectedMessages > 0) {
+      // The old complete base justified the join only while its carried rows
+      // remained visible. A byte bound that drops them leaves an incomplete,
+      // non-pageable provider preview and must not claim complete history.
+      sourceComplete = false;
+    }
     const localPageable =
       bounded.window.canLoadEarlier === true ||
       (normalized.window.canLoadEarlier === true && normalized.window.truncationReason !== "bytes");
@@ -1726,32 +1764,41 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       providerSessionId,
     );
     return {
-      identity,
-      freshness:
-        bounded.messages.length === 0 && complete
-          ? "empty"
-          : snapshot.freshness === "cached"
-            ? "cached"
-            : "current",
-      messages: bounded.messages,
-      messageWindow: {
-        ...bounded.window,
-        truncated,
-        canLoadEarlier: pageable,
+      value: {
+        identity,
+        freshness:
+          bounded.messages.length === 0 && complete
+            ? "empty"
+            : snapshot.freshness === "cached"
+              ? "cached"
+              : "current",
+        messages: bounded.messages,
+        messageWindow: {
+          ...bounded.window,
+          truncated,
+          canLoadEarlier: pageable,
+        },
+        ...(snapshot.title ? { title: snapshot.title } : {}),
+        ...(snapshot.revision === undefined ? {} : { providerRevision: snapshot.revision }),
+        ...(historyCursor ? { historyCursor } : {}),
+        historyEpoch,
+        historyComplete: complete,
       },
-      ...(snapshot.title ? { title: snapshot.title } : {}),
-      ...(snapshot.revision === undefined ? {} : { providerRevision: snapshot.revision }),
-      ...(historyCursor ? { historyCursor } : {}),
-      historyEpoch,
-      historyComplete: complete,
+      ...(boundedStartIndex === undefined
+        ? {}
+        : {
+            historyStartIndex: boundedStartIndex,
+            historyEndIndex: boundedStartIndex + bounded.messages.length,
+          }),
     };
   }
 
   private commitProgressiveTranscript(
     key: string,
     input: NativeAgentTranscriptUpdateInput,
-    value: NativeAgentTranscriptView,
+    projection: ProjectedProgressiveTranscript,
   ): string {
+    const value = projection.value;
     const observed = this.progressiveTranscriptCache.get(key);
     if (observed?.value === value) return observed.token;
     const token = createHash("sha256")
@@ -1761,6 +1808,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           value.historyEpoch,
           value.providerRevision,
           this.progressiveSourceTokens.get(key),
+          projection.historyStartIndex,
+          projection.historyEndIndex,
           value.messages,
         ]),
       )
@@ -1776,6 +1825,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         sourceToken: this.progressiveSourceTokens.get(key),
         value,
         bytes,
+        ...(projection.historyStartIndex === undefined
+          ? {}
+          : { historyStartIndex: projection.historyStartIndex }),
+        ...(projection.historyEndIndex === undefined
+          ? {}
+          : { historyEndIndex: projection.historyEndIndex }),
       });
       this.progressiveTranscriptBytes += bytes;
       this.trimProgressiveTranscriptCache();
@@ -1787,7 +1842,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   private async readProgressiveTranscript(
     input: NativeAgentTranscriptUpdateInput,
     key: string,
-  ): Promise<NativeAgentTranscriptView | null> {
+  ): Promise<ProjectedProgressiveTranscript | null> {
     const resolved = await this.resolveProjectionSession(input);
     if (!resolved) return null;
     const previous = this.progressiveTranscriptCache.get(key);
@@ -1830,7 +1885,15 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         sourceToken: providerResult.sourceToken,
       });
       this.progressiveSourceTokens.set(key, providerResult.sourceToken);
-      return previous.value;
+      return {
+        value: previous.value,
+        ...(previous.historyStartIndex === undefined
+          ? {}
+          : { historyStartIndex: previous.historyStartIndex }),
+        ...(previous.historyEndIndex === undefined
+          ? {}
+          : { historyEndIndex: previous.historyEndIndex }),
+      };
     }
     const snapshot = this.resolveProgressiveSnapshot(key, providerResult);
     if (snapshot.sourceToken) this.progressiveSourceTokens.set(key, snapshot.sourceToken);
@@ -1856,7 +1919,15 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       previous?.value.identity.providerSessionId === resolved.session.providerSessionId &&
       previous.value.messages.length > 0
     ) {
-      return previous.value;
+      return {
+        value: previous.value,
+        ...(previous.historyStartIndex === undefined
+          ? {}
+          : { historyStartIndex: previous.historyStartIndex }),
+        ...(previous.historyEndIndex === undefined
+          ? {}
+          : { historyEndIndex: previous.historyEndIndex }),
+      };
     }
     return this.projectProgressiveTranscript(
       input,
@@ -1887,16 +1958,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const startedAt = this.now();
     const cached = this.progressiveTranscriptCache.get(key);
     const publish = async (): Promise<NativeAgentTranscriptView | null> => {
-      const value = await this.progressiveReadCovering(
+      const projection = await this.progressiveReadCovering(
         key,
         sessionKey,
         epoch,
         input.forceSnapshot === true,
         () => this.readProgressiveTranscript(input, key),
       );
-      if (!value) return null;
-      this.commitProgressiveTranscript(key, input, value);
-      return value;
+      if (!projection) return null;
+      this.commitProgressiveTranscript(key, input, projection);
+      return projection.value;
     };
     if (!cached && !input.forceSnapshot) {
       const persisted = await this.storage.getNativeAgentDisplayTail(sessionKey).catch(() => null);
@@ -1922,7 +1993,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           ...(messageWindow ? { messageWindow } : {}),
           ...(persisted.title ? { title: persisted.title } : {}),
         };
-        const token = this.commitProgressiveTranscript(key, input, value);
+        const token = this.commitProgressiveTranscript(key, input, { value });
         void publish().catch(() => undefined);
         this.recordProgressiveMetric("transcript", startedAt, "persisted", "cached");
         return { viewVersion: 1, status: "snapshot", token, value };

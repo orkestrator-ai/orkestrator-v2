@@ -130,6 +130,9 @@ export async function readHttpBridgeTranscriptSnapshot(input: {
       : "legacy";
   return {
     messages: value.messages,
+    ...(Number.isSafeInteger(value.startIndex) && (value.startIndex as number) >= 0
+      ? { historyStartIndex: value.startIndex as number }
+      : {}),
     sourceToken: body.token,
     complete: value.complete === true,
     ...(typeof value.title === "string" && value.title.trim() ? { title: value.title.trim() } : {}),

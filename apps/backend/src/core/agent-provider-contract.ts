@@ -320,6 +320,8 @@ export interface ProviderInteractiveSnapshot {
 /** Transcript-only provider read. Optional metadata must never be fetched here. */
 export interface ProviderTranscriptSnapshot {
   messages: unknown[];
+  /** Absolute position of the first message within the current history epoch. */
+  historyStartIndex?: number;
   /** False when the provider supplied only a bounded retained tail. */
   complete?: boolean;
   title?: string;

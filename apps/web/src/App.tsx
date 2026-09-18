@@ -90,9 +90,10 @@ function desktopConnectionScopeSeed(): {
 }
 
 /**
- * How many consecutive failed probes it takes to declare an outage once Docker
- * has been seen healthy. One is not enough: a false negative disables every
- * container control and is not corrected until the next poll.
+ * How many consecutive failed probes it takes to declare a transient Docker
+ * outage. This protects both startup and a daemon that was already seen
+ * healthy: one false negative disables every container control and otherwise
+ * is not corrected until the next poll.
  */
 export const DOCKER_UNAVAILABLE_CONFIRMATIONS = 2;
 
@@ -425,13 +426,19 @@ function App() {
 
       // A single failed probe is not evidence of an outage. `check_docker`
       // shells out to `docker info` with a 10s timeout and reports any failure
-      // - including that timeout - as "unavailable", so a loaded host can
-      // produce a false negative. Tearing down container-backed UI on one of
-      // those is destructive, so confirm before believing a daemon that was
-      // healthy a moment ago went away.
+      // - including that timeout - as "unavailable", so a loaded host or a
+      // startup race can produce a false negative. Tearing down container-backed
+      // UI on one of those is destructive, so confirm transient failures at
+      // startup as well as when a daemon that was healthy a moment ago appears
+      // to go away. Missing binaries and durable permission denials do not
+      // benefit from a retry.
       for (
         let attempt = 1;
-        !available && previous === true && attempt < DOCKER_UNAVAILABLE_CONFIRMATIONS;
+        !available &&
+        (previous === true || source === "startup") &&
+        result.reason !== "not-installed" &&
+        result.reason !== "permission-denied" &&
+        attempt < DOCKER_UNAVAILABLE_CONFIRMATIONS;
         attempt++
       ) {
         result = await probeDocker(source);

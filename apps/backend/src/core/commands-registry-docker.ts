@@ -63,18 +63,45 @@ export async function checkDockerAvailability(
   dependencies: {
     commandExists?: (command: string) => Promise<boolean>;
     runCommand?: typeof runCommand;
+    logWarning?: (message: string) => void;
   } = {},
 ): Promise<DockerAvailability> {
   const hasCommand = dependencies.commandExists ?? commandExists;
   const run = dependencies.runCommand ?? runCommand;
+  const logWarning = dependencies.logWarning ?? console.warn;
   if (!(await hasCommand("docker"))) {
+    logWarning("[Docker] Availability probe failed: reason=not-installed commandExists=false");
     return { available: false, reason: "not-installed" };
   }
   try {
     await run("docker", ["info"], { timeoutMs: 10_000 });
     return { available: true, reason: null };
   } catch (error) {
-    return { available: false, reason: dockerUnavailableReason(error) };
+    const reason = dockerUnavailableReason(error);
+    const commandFailure = error instanceof CommandFailedError ? error : null;
+    // Error messages and custom names can contain daemon endpoints, usernames,
+    // or credentials. Keep the persistent diagnostic to fixed-shape metadata.
+    const errorType = commandFailure
+      ? "CommandFailedError"
+      : error instanceof Error
+        ? "Error"
+        : typeof error;
+    logWarning(
+      [
+        "[Docker] Availability probe failed:",
+        `reason=${reason}`,
+        "commandExists=true",
+        `errorType=${errorType}`,
+        `timedOut=${commandFailure?.timedOut ?? false}`,
+        `executableMissing=${commandFailure?.executableMissing ?? false}`,
+        `exitCode=${commandFailure?.exitCode ?? "unknown"}`,
+        `signal=${commandFailure?.signal ?? "none"}`,
+        `dockerHostSet=${Boolean(process.env.DOCKER_HOST?.trim())}`,
+        `dockerContextSet=${Boolean(process.env.DOCKER_CONTEXT?.trim())}`,
+        `dockerConfigSet=${Boolean(process.env.DOCKER_CONFIG?.trim())}`,
+      ].join(" "),
+    );
+    return { available: false, reason };
   }
 }
 

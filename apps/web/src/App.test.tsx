@@ -1931,7 +1931,8 @@ describe("App Docker availability", () => {
   });
 
   test("retry rechecks Docker and syncs environments after Docker becomes available", async () => {
-    // Startup: Docker unavailable. Retry: Docker now available.
+    // Both confirmed startup probes are unavailable. Retry: Docker is now available.
+    mockCheckDocker.mockImplementationOnce(async () => false);
     mockCheckDocker.mockImplementationOnce(async () => false);
     mockCheckDocker.mockImplementationOnce(async () => true);
     mockSyncAllEnvironmentsWithDocker.mockImplementation(async () => ["env-stale"]);
@@ -1946,7 +1947,7 @@ describe("App Docker availability", () => {
 
     // Wait for the startup check to flip dockerAvailable to false.
     await waitFor(() => {
-      expect(mockCheckDocker).toHaveBeenCalledTimes(1);
+      expect(mockCheckDocker).toHaveBeenCalledTimes(2);
     });
     expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
     // Startup check should NOT have triggered sync because Docker was unavailable.
@@ -1957,7 +1958,7 @@ describe("App Docker availability", () => {
     });
 
     await waitFor(() => {
-      expect(mockCheckDocker).toHaveBeenCalledTimes(2);
+      expect(mockCheckDocker).toHaveBeenCalledTimes(3);
       expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(1);
     });
   });
@@ -1983,7 +1984,7 @@ describe("App Docker availability", () => {
     ["unknown", "Docker Is Unavailable", /docker info.*failed/i],
     ["daemon-unavailable", "Docker Is Not Running", /Start the Docker service/i],
   ] as const)("renders the %s Docker diagnostic", async (reason, title, description) => {
-    mockCheckDocker.mockImplementationOnce(async () => ({ available: false, reason }));
+    mockCheckDocker.mockImplementation(async () => ({ available: false, reason }));
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
     render(<App />);
@@ -1998,7 +1999,7 @@ describe("App Docker availability", () => {
     console.error = consoleError;
 
     try {
-      mockCheckDocker.mockImplementationOnce(async () => {
+      mockCheckDocker.mockImplementation(async () => {
         throw new Error("docker socket unavailable");
       });
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
@@ -2035,6 +2036,7 @@ describe("App Docker availability", () => {
     const originalConsoleError = console.error;
     const consoleError = mock(() => {});
     console.error = consoleError;
+    mockCheckDocker.mockImplementationOnce(async () => false);
     mockCheckDocker.mockImplementationOnce(async () => false);
     mockCheckDocker.mockImplementationOnce(async () => {
       throw new Error("retry failed");
@@ -2180,15 +2182,29 @@ describe("App Docker availability", () => {
     }
   });
 
-  test("declares an outage without a confirming probe when Docker was never available", async () => {
+  test("confirms a transient startup failure before declaring Docker unavailable", async () => {
     mockCheckDocker.mockImplementation(async () => false);
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
     render(<App />);
     expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
-    // Startup has no healthy state to protect, so it must not pay for a second
-    // 10s `docker info` before telling the user what is wrong.
-    expect(mockCheckDocker).toHaveBeenCalledTimes(1);
+    expect(mockCheckDocker).toHaveBeenCalledTimes(2);
+  });
+
+  test("recovers when the first startup probe is transient", async () => {
+    mockCheckDocker
+      .mockImplementationOnce(async () => ({
+        available: false,
+        reason: "daemon-unavailable" as const,
+      }))
+      .mockImplementationOnce(async () => ({ available: true, reason: null }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
+    expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(1);
   });
 
   test("deduplicates Docker polls while an earlier probe is still in flight", async () => {

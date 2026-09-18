@@ -214,3 +214,11 @@ export function setJsonFileCacheBeforeStatForTesting(
 export function getJsonFileParseCount(filePath: string): number {
   return parseCounts.get(filePath) ?? 0;
 }
+
+/** Snapshot a file's active cohort. Test-only lifecycle instrumentation. */
+export function getJsonFileReadCohortStateForTesting(
+  filePath: string,
+): { readers: number; parses: number } | null {
+  const cohort = readCohorts.get(filePath);
+  return cohort ? { readers: cohort.readers, parses: cohort.parses.size } : null;
+}

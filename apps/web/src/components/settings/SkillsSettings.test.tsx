@@ -1006,7 +1006,7 @@ describe("SkillsSettings", () => {
         skill({ name: "beta", filePath: "/b/SKILL.md" }),
       ],
     };
-    const pendingCopy = deferred<void>();
+    const pendingCopy = deferred<undefined>();
     writeText.mockImplementationOnce(() => pendingCopy.promise);
 
     render(<SkillsSettings />);
@@ -1014,11 +1014,36 @@ describe("SkillsSettings", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Copy skill path" }));
     fireEvent.click(list().getByText("beta"));
-    await act(async () => pendingCopy.resolve());
+    fireEvent.click(list().getByText("alpha"));
+    await act(async () => {
+      pendingCopy.resolve(undefined);
+    });
 
     expect(screen.getByRole("button", { name: "Copy skill path" })).toBeTruthy();
-    fireEvent.click(list().getByText("alpha"));
-    expect(screen.getByRole("button", { name: "Copy skill path" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Skill path copied" }) === null).toBe(true);
+  });
+
+  test("ignores a clipboard failure from a previously selected skill", async () => {
+    skillScans.claude = {
+      ...emptyScan("claude"),
+      skills: [
+        skill({ name: "alpha", filePath: "/a/SKILL.md" }),
+        skill({ name: "beta", filePath: "/b/SKILL.md" }),
+      ],
+    };
+    const pendingCopy = deferred<undefined>();
+    writeText.mockImplementationOnce(() => pendingCopy.promise);
+
+    render(<SkillsSettings />);
+    await waitFor(() => expect(list().getByText("beta")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy skill path" }));
+    fireEvent.click(list().getByText("beta"));
+    await act(async () => {
+      pendingCopy.reject(new Error("clipboard unavailable"));
+    });
+
+    expect(mockToastError).not.toHaveBeenCalled();
   });
 
   test("reports scan progress and failure in the footer instead of zero counts", async () => {

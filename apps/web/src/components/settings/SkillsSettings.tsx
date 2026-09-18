@@ -373,6 +373,10 @@ export function SkillsSettings({
       setCopied(true);
       copyTimer.current = setTimeout(() => setCopied(false), COPY_CONFIRM_MS);
     } catch {
+      // A failure from a pane the user has already left is as stale as its
+      // success. Do not surface an error for an action that is no longer
+      // visible or relevant to the current selection.
+      if (copySelectionVersion.current !== selectionVersion) return;
       toast.error("Could not copy the path to the clipboard");
     }
   }, [selected]);

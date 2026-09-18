@@ -2038,7 +2038,7 @@ async function withService(
   }) => Promise<void>,
   options: {
     packageFlow?: boolean;
-    createProvider?: () => Promise<BuildPipelineProvider>;
+    createProvider?: NonNullable<MultiReviewServiceOptions["provider"]>;
     serviceOptions?: Partial<MultiReviewServiceOptions>;
     /** Backend command runner; defaults to a stable clean review snapshot. */
     invoke?: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -4303,17 +4303,37 @@ test("MultiReviewService rewinds consolidation when a completed reviewer is rest
 
       await waitUntil(async () => {
         await service.advanceNow(started.id);
-        return (await snapshot(started.id))?.phase === "ready";
+        const workflow = await snapshot(started.id);
+        return workflow?.phase === "interactive" && workflow.addressPromptPending !== true;
       });
       const reconsolidated = (await snapshot(started.id))!;
       expect(reconsolidated.reviewers[0]?.providerSessionId).not.toBe(reviewerSessionId);
       expect(reconsolidated.fixSession?.providerSessionId).not.toBe(fixSessionId);
-      expect(reconsolidated.fixSession?.sessionKey).toBe(restarted.fixSessionKey);
+      expect(reconsolidated.fixSession?.sessionKey).toStartWith(
+        `multi-review:${started.id}:interactive:`,
+      );
+      expect(reconsolidated.fixSessionKey).toBe(restarted.fixSessionKey);
+      expect(reconsolidated.restartFixAfterConsolidation).toBeUndefined();
+    },
+    {
+      serviceOptions: {
+        dispatchAddressPrompt: async (workflow, _presentation) => ({
+          tabId: workflow.addressTabId!,
+          fixSession: {
+            ...workflow.fixModel,
+            sessionKey: workflow.addressSessionKey!,
+            providerSessionId: "provider-restarted-fix",
+            requestIds: [workflow.addressRequestId!],
+            status: "running",
+            startedAt: new Date().toISOString(),
+          },
+        }),
+      },
     },
   );
 });
 
-test("MultiReviewService preserves fix work when an incomplete fix result failed", async () => {
+test("MultiReviewService invalidates incomplete fix work when a reviewer restarts", async () => {
   const provider = new Provider();
   provider.fixComplete = false;
   await withService("env-restart-after-fix", provider, async ({ service, storage, snapshot }) => {
@@ -4324,22 +4344,384 @@ test("MultiReviewService preserves fix work when an incomplete fix result failed
     });
     const failed = (await snapshot(workflowId))!;
     const reviewerId = failed.reviewers[0]!.id;
-    const before = {
-      consolidatedReport: failed.consolidatedReport,
-      fixSession: failed.fixSession,
-      fixResult: failed.fixResult,
-    };
-
-    await expect(service.restartReviewer(workflowId, reviewerId)).rejects.toThrow(
-      "after fix work begins",
-    );
-    expect(await snapshot(workflowId)).toMatchObject(before);
-    expect(provider.aborted).toEqual([]);
+    const restarted = await service.restartReviewer(workflowId, reviewerId);
+    expect(restarted.phase).toBe("reviewing");
+    expect(restarted.reviewers[0]).toMatchObject({ status: "pending" });
+    expect(restarted.consolidatedReport).toBeUndefined();
+    expect(restarted.fixSession).toBeUndefined();
+    expect(restarted.fixResult).toBeUndefined();
+    expect(restarted.restartFixAfterConsolidation).toBe(true);
+    expect(provider.aborted).toContain(failed.fixSession!.providerSessionId);
 
     const claim = await storage.claimMultiReviewController(workflowId, "other-owner", 15_000);
-    expect(claim.granted).toBe(true);
+    expect(claim.granted).toBe(false);
   });
 });
+
+test("MultiReviewService restarts preparation and reruns reviewers and consolidation", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-restart-preparation",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const ready = (await snapshot(started.id))!;
+      const reviewerSessionId = ready.reviewers[0]!.providerSessionId!;
+
+      const restarted = await service.restartStep(started.id, "prepare");
+      expect(restarted.phase).toBe("preparing");
+      expect(restarted.reviewPackage).toBeUndefined();
+      expect(restarted.consolidatedReport).toBeUndefined();
+      expect(restarted.reviewers[0]).toMatchObject({ status: "pending" });
+      expect(restarted.reviewers[0]?.providerSessionId).toBeUndefined();
+
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const rerun = (await snapshot(started.id))!;
+      expect(rerun.reviewers[0]?.providerSessionId).not.toBe(reviewerSessionId);
+      expect(rerun.reviewers[0]?.status).toBe("completed");
+      expect(rerun.consolidatedReport).toBeDefined();
+    },
+    { packageFlow: true },
+  );
+});
+
+test("MultiReviewService restarts consolidation without rerunning completed reviewers", async () => {
+  const provider = new Provider();
+  await withService("env-restart-consolidation", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const ready = (await snapshot(started.id))!;
+    const reviewerSessionId = ready.reviewers[0]!.providerSessionId!;
+    const consolidationSessionId = ready.fixSession!.providerSessionId;
+
+    const restarted = await service.restartStep(started.id, "consolidate");
+    expect(restarted.phase).toBe("consolidating");
+    expect(restarted.reviewers[0]).toMatchObject({
+      status: "completed",
+      providerSessionId: reviewerSessionId,
+    });
+    expect(restarted.consolidatedReport).toBeUndefined();
+
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const rerun = (await snapshot(started.id))!;
+    expect(rerun.reviewers[0]?.providerSessionId).toBe(reviewerSessionId);
+    expect(rerun.fixSession?.providerSessionId).not.toBe(consolidationSessionId);
+    expect(rerun.consolidatedReport).toBeDefined();
+  });
+});
+
+test("MultiReviewService restarts the Fix handoff with a fresh durable request", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-restart-fix",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const first = await service.address(started.id);
+      const firstRequestId = first.addressRequestId!;
+      const firstSessionId = first.fixSession!.providerSessionId;
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+
+      const restarted = await service.restartStep(started.id, "fix");
+      expect(restarted).toMatchObject({
+        phase: "interactive",
+        addressPromptPending: true,
+        addressPromptAttempts: 0,
+        fixSession: { providerSessionId: firstSessionId },
+      });
+      expect(restarted.addressRequestId).not.toBe(firstRequestId);
+      expect(restarted.fixResult).toBeUndefined();
+      expect(provider.aborted).not.toContain(firstSessionId);
+
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+      expect(await snapshot(started.id)).toMatchObject({
+        phase: "interactive",
+        fixSession: { providerSessionId: firstSessionId },
+        stepRuntimes: { fix: { startedAt: expect.any(String) } },
+      });
+    },
+    {
+      serviceOptions: {
+        dispatchAddressPrompt: async (workflow) => ({
+          fixSession: workflow.fixSession!,
+          tabId: workflow.addressTabId!,
+        }),
+      },
+    },
+  );
+});
+
+test.each(["fix", "consolidate", "prepare", "reviewer"] as const)(
+  "MultiReviewService aborts a custom Fix through its owning provider before %s restart",
+  async (restartKind) => {
+    const defaultProvider = new Provider();
+    const customProvider = new Provider();
+    const environmentId = `env-restart-custom-${restartKind}`;
+    await withService(
+      environmentId,
+      defaultProvider,
+      async ({ service, start, snapshot }) => {
+        const started = await start();
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.phase === "ready";
+        });
+        await service.customFix({
+          workflowId: started.id,
+          fixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+          instruction: "Preserve this custom launch",
+        });
+        await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+        const customSessionId = (await snapshot(started.id))!.fixSession!.providerSessionId;
+
+        if (restartKind === "reviewer") {
+          await service.restartReviewer(started.id, (await snapshot(started.id))!.reviewers[0]!.id);
+        } else {
+          await service.restartStep(started.id, restartKind);
+        }
+
+        expect(customProvider.aborted).toContain(customSessionId);
+        expect(defaultProvider.aborted).not.toContain(customSessionId);
+      },
+      {
+        createProvider: async (_workflow, selection) =>
+          selection.agent === "codex" ? customProvider : defaultProvider,
+        serviceOptions: {
+          dispatchAddressPrompt: async (workflow) => ({
+            tabId: workflow.addressTabId!,
+            fixSession: {
+              ...(workflow.customFixModel ?? workflow.fixModel),
+              sessionKey: workflow.addressSessionKey!,
+              providerSessionId: `custom-fix-${restartKind}`,
+              requestIds: [workflow.addressRequestId!],
+              status: "running",
+              startedAt: new Date().toISOString(),
+            },
+          }),
+        },
+      },
+    );
+  },
+);
+
+test("MultiReviewService replays a restarted custom Fix instruction and model", async () => {
+  const provider = new Provider();
+  const dispatches: Array<{
+    instruction: string | undefined;
+    model: MultiReviewModelSelection | undefined;
+  }> = [];
+  await withService(
+    "env-replay-custom-fix",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const model = { agent: "codex" as const, model: "gpt-5.4", reasoningEffort: "high" };
+      await service.customFix({
+        workflowId: started.id,
+        fixModel: model,
+        instruction: "Repair only the reviewed regression",
+      });
+      await waitUntil(() => dispatches.length === 1);
+
+      await service.restartStep(started.id, "consolidate");
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return dispatches.length === 2;
+      });
+
+      expect(dispatches[1]).toEqual({
+        instruction: "Repair only the reviewed regression",
+        model,
+      });
+      expect((await snapshot(started.id))?.restartFixAfterConsolidation).toBeUndefined();
+    },
+    {
+      serviceOptions: {
+        dispatchAddressPrompt: async (workflow) => {
+          dispatches.push({
+            instruction: workflow.customFixInstruction,
+            model: workflow.customFixModel,
+          });
+          return {
+            tabId: workflow.addressTabId!,
+            fixSession: {
+              ...(workflow.customFixModel ?? workflow.fixModel),
+              sessionKey: workflow.addressSessionKey!,
+              providerSessionId: `replayed-custom-fix-${dispatches.length}`,
+              requestIds: [workflow.addressRequestId!],
+              status: "running",
+              startedAt: new Date().toISOString(),
+            },
+          };
+        },
+      },
+    },
+  );
+});
+
+test("MultiReviewService leaves sessions and results intact when prepare snapshot capture fails", async () => {
+  const provider = new Provider();
+  let rejectSnapshot = false;
+  await withService(
+    "env-restart-snapshot-failure",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const before = structuredClone((await snapshot(started.id))!);
+      const abortsBefore = [...provider.aborted];
+      rejectSnapshot = true;
+
+      await expect(service.restartStep(started.id, "prepare")).rejects.toThrow(
+        "could not capture the environment Git state",
+      );
+      expect(await snapshot(started.id)).toEqual(before);
+      expect(provider.aborted).toEqual(abortsBefore);
+    },
+    {
+      invoke: async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+        if (command === "get_environment_uncommitted_paths" && rejectSnapshot) {
+          return { status: "unknown", error: "git probe failed" } as T;
+        }
+        return stableReviewInvoker<T>(command, args);
+      },
+    },
+  );
+});
+
+test.each([
+  {
+    name: "cancelled workflow",
+    kind: "prepare" as const,
+    message: "cancelled Multi Review",
+    mutate: (workflow: MultiReviewWorkflow) => {
+      workflow.phase = "cancelled";
+    },
+  },
+  {
+    name: "unstarted preparation",
+    kind: "prepare" as const,
+    message: "preparation has not started",
+    mutate: (workflow: MultiReviewWorkflow) => {
+      workflow.phase = "reviewing";
+      delete workflow.stepRuntimes;
+      delete workflow.reviewPackage;
+      delete workflow.validationRun;
+      delete workflow.activeRequest;
+      for (const reviewer of workflow.reviewers) {
+        reviewer.status = "pending";
+        delete reviewer.providerSessionId;
+        delete reviewer.report;
+        delete reviewer.startedAt;
+        delete reviewer.completedAt;
+        delete reviewer.error;
+      }
+    },
+  },
+  {
+    name: "unstarted consolidation",
+    kind: "consolidate" as const,
+    message: "Consolidation has not started",
+    mutate: (workflow: MultiReviewWorkflow) => {
+      workflow.phase = "reviewing";
+      delete workflow.stepRuntimes;
+      delete workflow.consolidatedReport;
+      delete workflow.activeRequest;
+    },
+  },
+  {
+    name: "unstarted fix",
+    kind: "fix" as const,
+    message: "Fix has not started",
+    mutate: (workflow: MultiReviewWorkflow) => {
+      workflow.phase = "ready";
+      delete workflow.fixLaunch;
+      delete workflow.stepRuntimes;
+      delete workflow.fixResult;
+    },
+  },
+  {
+    name: "consolidation without reports",
+    kind: "consolidate" as const,
+    message: "without a reviewer report",
+    mutate: (workflow: MultiReviewWorkflow) => {
+      workflow.phase = "reviewing";
+      workflow.stepRuntimes = { consolidate: { startedAt: new Date().toISOString() } };
+      for (const reviewer of workflow.reviewers) {
+        reviewer.status = "pending";
+        delete reviewer.providerSessionId;
+        delete reviewer.report;
+        delete reviewer.startedAt;
+        delete reviewer.completedAt;
+        delete reviewer.error;
+      }
+    },
+  },
+  {
+    name: "fix without consolidation",
+    kind: "fix" as const,
+    message: "without a consolidated report",
+    mutate: (workflow: MultiReviewWorkflow) => {
+      workflow.phase = "failed";
+      workflow.error = "Previous fix failed";
+      workflow.fixLaunch = { kind: "default" };
+      delete workflow.consolidatedReport;
+    },
+  },
+])(
+  "MultiReviewService rejects $name before provider cleanup",
+  async ({ kind, message, mutate }) => {
+    const provider = new Provider();
+    await withService(
+      `env-restart-precondition-${kind}-${message.length}`,
+      provider,
+      async ({ service, storage, start, snapshot }) => {
+        const started = await start();
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.phase === "ready";
+        });
+        await service.shutdown();
+        await mutateStoredWorkflow(storage, started.id, mutate);
+        const replacement = new MultiReviewService(storage, stableReviewInvoker, {
+          autoAdvance: false,
+          provider: async () => provider,
+        });
+        try {
+          const abortsBefore = [...provider.aborted];
+          await expect(replacement.restartStep(started.id, kind)).rejects.toThrow(message);
+          expect(provider.aborted).toEqual(abortsBefore);
+        } finally {
+          await replacement.shutdown();
+        }
+      },
+    );
+  },
+);
 
 test("MultiReviewService unsticks a reviewer in the same session with a continuation prompt", async () => {
   const provider = new Provider();

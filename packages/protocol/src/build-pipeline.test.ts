@@ -2132,3 +2132,22 @@ describe("reconnect attempt harness", () => {
     }
   });
 });
+
+describe("pipeline restart requests", () => {
+  test("accepts each durable restart kind and rejects malformed requests", () => {
+    for (const restartRequest of [
+      { kind: "session", phase: "review" },
+      { kind: "review-package", implementationPhase: "build" },
+      { kind: "validation", implementationPhase: "fix" },
+    ] as const) {
+      expect(isBuildPipeline({ ...snapshot(), restartRequest })).toBe(true);
+    }
+    for (const restartRequest of [
+      { kind: "session", phase: "unknown" },
+      { kind: "validation", implementationPhase: "review" },
+      { kind: "session", phase: "review", extra: true },
+    ]) {
+      expect(isBuildPipeline({ ...snapshot(), restartRequest })).toBe(false);
+    }
+  });
+});

@@ -271,6 +271,13 @@ export async function restartMultiReviewReviewer(
   });
 }
 
+export async function restartMultiReviewStep(
+  workflowId: string,
+  kind: "prepare" | "consolidate" | "fix",
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("restart_multi_review_step", { workflowId, kind });
+}
+
 export async function unstickMultiReviewReviewer(
   workflowId: string,
   reviewerId: string,
@@ -751,6 +758,13 @@ export async function retryBuildPipelineStage(pipelineId: string): Promise<Backe
   return invoke<BackendBuildPipeline>("retry_build_pipeline_stage", {
     pipelineId,
   });
+}
+
+export async function restartBuildPipelineStep(
+  pipelineId: string,
+  stageId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("restart_build_pipeline_step", { pipelineId, stageId });
 }
 
 export async function retryBuildPipelineInteractionFailure(

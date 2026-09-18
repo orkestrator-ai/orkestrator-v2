@@ -96,6 +96,13 @@ const retryStageMock = mock(async (pipelineId: string): Promise<BuildPipeline> =
   failureContext: undefined,
   backendRevision: 14,
 }));
+const restartStepMock = mock(
+  async (pipelineId: string, _stageId: string): Promise<BuildPipeline> => ({
+    ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+    phase: "building" as const,
+    backendRevision: 15,
+  }),
+);
 const retryInteractionFailureMock = mock(async (pipelineId: string) => ({
   ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
   phase: "building" as const,
@@ -113,6 +120,7 @@ mock.module("@/lib/backend", () => ({
   sendBuildPipelineMessage: sendMessageMock,
   retryBuildPipelineReview: retryReviewMock,
   retryBuildPipelineStage: retryStageMock,
+  restartBuildPipelineStep: restartStepMock,
   retryBuildPipelineInteractionFailure: retryInteractionFailureMock,
   getBuildPipelineConditional: getBuildPipelineConditionalMock,
 }));
@@ -261,8 +269,10 @@ describe("BuildChatTab backend projection", () => {
     sendMessageMock.mockClear();
     retryReviewMock.mockClear();
     retryStageMock.mockClear();
+    restartStepMock.mockClear();
     retryInteractionFailureMock.mockClear();
     mockToastError.mockClear();
+    mockToastSuccess.mockClear();
     getBuildPipelineConditionalMock.mockClear();
     getBuildPipelineConditionalMock.mockImplementation(async () => null);
     useBuildPipelineStore.setState({
@@ -290,6 +300,61 @@ describe("BuildChatTab backend projection", () => {
     expect(screen.getByText("Implementation complete")).toBeTruthy();
     expect(useBuildPipelineStore.getState().viewedSessionIds.get(pipeline.id)).toBe(
       "build-session",
+    );
+  });
+
+  test("offers restart from a pipeline stage tab context menu", async () => {
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: "Build Session Iteration 1" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
+
+    await waitFor(() => expect(restartStepMock).toHaveBeenCalledWith(pipeline.id, "build-session"));
+    expect(mockToastSuccess).toHaveBeenCalledWith("Stage restarted");
+  });
+
+  test("offers validation restart from a touch long press", async () => {
+    const withValidation = {
+      ...pipeline,
+      validationRun: validationRun({ id: "validation-long-press" }),
+    };
+    useBuildPipelineStore.getState().replacePipeline(withValidation);
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    const testsTab = screen.getByRole("tab", { name: /^Tests,/ });
+    fireEvent.pointerDown(testsTab, {
+      pointerType: "touch",
+      pointerId: 71,
+      isPrimary: true,
+      button: 0,
+      clientX: 20,
+      clientY: 20,
+    });
+    await act(async () => {
+      await Bun.sleep(710);
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
+
+    await waitFor(() =>
+      expect(restartStepMock).toHaveBeenCalledWith(pipeline.id, "validation:validation-long-press"),
     );
   });
 

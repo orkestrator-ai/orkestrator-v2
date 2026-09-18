@@ -12,6 +12,7 @@ import {
   Pause,
   Play,
   RefreshCw,
+  RotateCcw,
   Square,
   type LucideIcon,
 } from "lucide-react";
@@ -43,6 +44,12 @@ import {
 import { useMediaQuery, useVirtuosoScrollState } from "@/hooks";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -706,6 +713,23 @@ export function BuildChatTab({
     }
   };
 
+  const restartStage = async (stageId: string): Promise<void> => {
+    if (!pipeline || controlPending) return;
+    setControlPending(true);
+    try {
+      const updated = await backend.restartBuildPipelineStep(pipeline.id, stageId);
+      replacePipeline(updated);
+      pinnedSessionRef.current = false;
+      toast.success("Stage restarted");
+    } catch (error) {
+      toast.error("Failed to restart the stage", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setControlPending(false);
+    }
+  };
+
   const sendMessage = async (): Promise<void> => {
     const text = draft.trim();
     if (!pipeline || !text || sendPending) return;
@@ -1072,38 +1096,52 @@ export function BuildChatTab({
                     ? validationStageSummary(pipeline.validationRun)
                     : "0 checks";
                   return (
-                    <button
-                      key={stage.key}
-                      id={stageTabId(stage.key)}
-                      type="button"
-                      role="tab"
-                      aria-selected={isSelected}
-                      aria-controls={transcriptPanelId}
-                      aria-label={`Tests, ${testsSummary}`}
-                      tabIndex={isSelected || (selectedSessionId === null && index === 0) ? 0 : -1}
-                      className={cn(
-                        "flex w-full items-start gap-2 rounded-lg border px-2 py-2 text-left transition-colors",
-                        isSelected
-                          ? "border-zinc-700/70 bg-zinc-800/85"
-                          : "border-transparent hover:bg-zinc-800/55",
-                      )}
-                      onClick={() => selectStage(stage.id)}
-                    >
-                      <ValidationStateIcon pipeline={pipeline} />
-                      <span className="min-w-0">
-                        <span
+                    <ContextMenu key={stage.key}>
+                      <ContextMenuTrigger asChild>
+                        <button
+                          id={stageTabId(stage.key)}
+                          type="button"
+                          role="tab"
+                          aria-selected={isSelected}
+                          aria-controls={transcriptPanelId}
+                          aria-label={`Tests, ${testsSummary}`}
+                          tabIndex={
+                            isSelected || (selectedSessionId === null && index === 0) ? 0 : -1
+                          }
                           className={cn(
-                            "block truncate text-xs font-medium",
-                            isSelected ? "text-foreground" : "text-foreground/80",
+                            "flex w-full items-start gap-2 rounded-lg border px-2 py-2 text-left transition-colors",
+                            isSelected
+                              ? "border-zinc-700/70 bg-zinc-800/85"
+                              : "border-transparent hover:bg-zinc-800/55",
                           )}
+                          onClick={() => selectStage(stage.id)}
                         >
-                          Tests
-                        </span>
-                        <span className="block text-[11px] text-muted-foreground">
-                          {testsSummary}
-                        </span>
-                      </span>
-                    </button>
+                          <ValidationStateIcon pipeline={pipeline} />
+                          <span className="min-w-0">
+                            <span
+                              className={cn(
+                                "block truncate text-xs font-medium",
+                                isSelected ? "text-foreground" : "text-foreground/80",
+                              )}
+                            >
+                              Tests
+                            </span>
+                            <span className="block text-[11px] text-muted-foreground">
+                              {testsSummary}
+                            </span>
+                          </span>
+                        </button>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent className="w-40">
+                        <ContextMenuItem
+                          disabled={controlPending}
+                          onSelect={() => void restartStage(stage.id)}
+                        >
+                          <RotateCcw />
+                          Restart
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
                   );
                 }
                 const { session } = stage;
@@ -1152,67 +1190,81 @@ export function BuildChatTab({
                   (sessionReviewReportsAreCurrent ? session.reviewReport : undefined) ??
                   (ownsReport ? pipeline.structuredReview : undefined);
                 return (
-                  <button
-                    key={session.sessionKey}
-                    id={stageTabId(session.sessionKey)}
-                    type="button"
-                    role="tab"
-                    aria-selected={isSelected}
-                    aria-controls={transcriptPanelId}
-                    // One stop for the whole list, then arrow keys within it —
-                    // otherwise Tab walks every stage before reaching the
-                    // transcript. The first stage stands in for the frame before
-                    // the following effect has chosen one.
-                    tabIndex={isSelected || (selectedSessionId === null && index === 0) ? 0 : -1}
-                    className={cn(
-                      "flex w-full items-start gap-2 rounded-lg border px-2 py-2 text-left transition-colors",
-                      isSelected
-                        ? "border-zinc-700/70 bg-zinc-800/85"
-                        : "border-transparent hover:bg-zinc-800/55",
-                    )}
-                    onClick={() => selectStage(stage.id)}
-                  >
-                    <SessionStateIcon session={session} />
-                    <span className="min-w-0 flex-1">
-                      <span
+                  <ContextMenu key={session.sessionKey}>
+                    <ContextMenuTrigger asChild>
+                      <button
+                        id={stageTabId(session.sessionKey)}
+                        type="button"
+                        role="tab"
+                        aria-selected={isSelected}
+                        aria-controls={transcriptPanelId}
+                        // One stop for the whole list, then arrow keys within it —
+                        // otherwise Tab walks every stage before reaching the
+                        // transcript. The first stage stands in for the frame before
+                        // the following effect has chosen one.
+                        tabIndex={
+                          isSelected || (selectedSessionId === null && index === 0) ? 0 : -1
+                        }
                         className={cn(
-                          "block truncate text-xs font-medium",
-                          isSelected ? "text-foreground" : "text-foreground/80",
+                          "flex w-full items-start gap-2 rounded-lg border px-2 py-2 text-left transition-colors",
+                          isSelected
+                            ? "border-zinc-700/70 bg-zinc-800/85"
+                            : "border-transparent hover:bg-zinc-800/55",
                         )}
+                        onClick={() => selectStage(stage.id)}
                       >
-                        {reviewLabel ?? session.label}
-                      </span>
-                      {reviewerModelLabel ? (
-                        <span className="block truncate text-[11px] text-muted-foreground">
-                          {reviewerModelLabel}
+                        <SessionStateIcon session={session} />
+                        <span className="min-w-0 flex-1">
+                          <span
+                            className={cn(
+                              "block truncate text-xs font-medium",
+                              isSelected ? "text-foreground" : "text-foreground/80",
+                            )}
+                          >
+                            {reviewLabel ?? session.label}
+                          </span>
+                          {reviewerModelLabel ? (
+                            <span className="block truncate text-[11px] text-muted-foreground">
+                              {reviewerModelLabel}
+                            </span>
+                          ) : (
+                            <span className="block text-[11px] text-muted-foreground">
+                              Iteration {session.iteration + 1}
+                            </span>
+                          )}
+                          {reviewerRuntime && (
+                            <span
+                              className="mt-0.5 block truncate font-mono text-[10px] tabular-nums text-muted-foreground"
+                              aria-label={`${reviewLabel} runtime and token usage`}
+                            >
+                              {reviewerRuntime}
+                            </span>
+                          )}
+                          {(session.autoDeclineCount ?? 0) > 0 && (
+                            <span className="mt-1 block text-[10px] text-muted-foreground">
+                              {session.autoDeclineCount} input request
+                              {session.autoDeclineCount === 1 ? "" : "s"} auto-declined
+                            </span>
+                          )}
+                          {stageReport && (
+                            <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200/90">
+                              <ClipboardCheck className="h-2.5 w-2.5" />
+                              Report · {issueCountLabel(stageReport.issues.length)}
+                            </span>
+                          )}
                         </span>
-                      ) : (
-                        <span className="block text-[11px] text-muted-foreground">
-                          Iteration {session.iteration + 1}
-                        </span>
-                      )}
-                      {reviewerRuntime && (
-                        <span
-                          className="mt-0.5 block truncate font-mono text-[10px] tabular-nums text-muted-foreground"
-                          aria-label={`${reviewLabel} runtime and token usage`}
-                        >
-                          {reviewerRuntime}
-                        </span>
-                      )}
-                      {(session.autoDeclineCount ?? 0) > 0 && (
-                        <span className="mt-1 block text-[10px] text-muted-foreground">
-                          {session.autoDeclineCount} input request
-                          {session.autoDeclineCount === 1 ? "" : "s"} auto-declined
-                        </span>
-                      )}
-                      {stageReport && (
-                        <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200/90">
-                          <ClipboardCheck className="h-2.5 w-2.5" />
-                          Report · {issueCountLabel(stageReport.issues.length)}
-                        </span>
-                      )}
-                    </span>
-                  </button>
+                      </button>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent className="w-40">
+                      <ContextMenuItem
+                        disabled={controlPending}
+                        onSelect={() => void restartStage(stage.id)}
+                      >
+                        <RotateCcw />
+                        Restart
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
                 );
               })
             )}
@@ -1322,71 +1374,69 @@ export function BuildChatTab({
         </div>
       </div>
 
-      {transcriptVisible &&
-        !validationSelected &&
-        (canSendMessage || !isAtBottom) && (
-          // The native tabs dock their composer as a floating card rather than a
-          // bordered footer strip, so this matches that shape instead of drawing
-          // another rule across the pane. It addresses the transcript, so on a
-          // phone it goes with it rather than eating a third of the stage list.
-          <div className="shrink-0 px-3 pt-2 pb-4">
-            {!isAtBottom && (
-              <div className="mx-auto mb-1 flex w-full max-w-[56rem] justify-end">
-                <button
-                  type="button"
-                  onClick={scrollToBottom}
-                  className="flex shrink-0 items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
-                  aria-label="Scroll to bottom of transcript"
-                >
-                  <ArrowDown className="h-3.5 w-3.5" />
-                  <span>Scroll down</span>
-                </button>
-              </div>
-            )}
-            {canSendMessage && (
-              <div className="mx-auto w-full max-w-[56rem] rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20">
-                {queuedMessages > 0 && (
-                  <div className="mb-1.5 text-[11px] text-muted-foreground">
-                    {queuedMessages === 1
-                      ? "1 message queued — it will be delivered when the agent is next idle."
-                      : `${queuedMessages} messages queued — they will be delivered one at a time as the agent goes idle.`}
-                  </div>
-                )}
-                <div className="flex items-end gap-2">
-                  <Textarea
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                    maxLength={MAX_PIPELINE_USER_MESSAGE_LENGTH}
-                    rows={2}
-                    className="min-h-0 resize-none border-none bg-transparent px-1 py-1 shadow-none focus-visible:ring-0"
-                    placeholder="Send a message to the agent..."
-                    aria-label="Send a message to the agent"
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter" || event.shiftKey) return;
-                      event.preventDefault();
-                      void sendMessage();
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    size="icon"
-                    className="h-7 w-7 rounded-lg transition-colors"
-                    title="Send message"
-                    aria-label="Send message"
-                    disabled={sendPending || draft.trim().length === 0}
-                    onClick={() => void sendMessage()}
-                  >
-                    {sendPending ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <ArrowUp className="h-4 w-4" />
-                    )}
-                  </Button>
+      {transcriptVisible && !validationSelected && (canSendMessage || !isAtBottom) && (
+        // The native tabs dock their composer as a floating card rather than a
+        // bordered footer strip, so this matches that shape instead of drawing
+        // another rule across the pane. It addresses the transcript, so on a
+        // phone it goes with it rather than eating a third of the stage list.
+        <div className="shrink-0 px-3 pt-2 pb-4">
+          {!isAtBottom && (
+            <div className="mx-auto mb-1 flex w-full max-w-[56rem] justify-end">
+              <button
+                type="button"
+                onClick={scrollToBottom}
+                className="flex shrink-0 items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
+                aria-label="Scroll to bottom of transcript"
+              >
+                <ArrowDown className="h-3.5 w-3.5" />
+                <span>Scroll down</span>
+              </button>
+            </div>
+          )}
+          {canSendMessage && (
+            <div className="mx-auto w-full max-w-[56rem] rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20">
+              {queuedMessages > 0 && (
+                <div className="mb-1.5 text-[11px] text-muted-foreground">
+                  {queuedMessages === 1
+                    ? "1 message queued — it will be delivered when the agent is next idle."
+                    : `${queuedMessages} messages queued — they will be delivered one at a time as the agent goes idle.`}
                 </div>
+              )}
+              <div className="flex items-end gap-2">
+                <Textarea
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  maxLength={MAX_PIPELINE_USER_MESSAGE_LENGTH}
+                  rows={2}
+                  className="min-h-0 resize-none border-none bg-transparent px-1 py-1 shadow-none focus-visible:ring-0"
+                  placeholder="Send a message to the agent..."
+                  aria-label="Send a message to the agent"
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" || event.shiftKey) return;
+                    event.preventDefault();
+                    void sendMessage();
+                  }}
+                />
+                <Button
+                  type="button"
+                  size="icon"
+                  className="h-7 w-7 rounded-lg transition-colors"
+                  title="Send message"
+                  aria-label="Send message"
+                  disabled={sendPending || draft.trim().length === 0}
+                  onClick={() => void sendMessage()}
+                >
+                  {sendPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <ArrowUp className="h-4 w-4" />
+                  )}
+                </Button>
               </div>
-            )}
-          </div>
-        )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

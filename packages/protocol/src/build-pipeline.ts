@@ -98,6 +98,12 @@ export type PipelineSessionPhase =
   | "pr"
   | "resolve-conflicts";
 
+/** Durable handoff from an explicit UI restart to the background supervisor. */
+export type PipelineRestartRequest =
+  | { kind: "session"; phase: PipelineSessionPhase }
+  | { kind: "review-package"; implementationPhase: "build" | "fix" }
+  | { kind: "validation"; implementationPhase: "build" | "fix" };
+
 /** The steps a launcher can configure independently. */
 export type BuildStepKey = "build" | "review" | "address" | "verify" | "pr" | "resolve-conflicts";
 
@@ -641,6 +647,8 @@ export interface BuildPipeline {
   pendingUserMessages?: PipelineUserMessage[];
   /** Set by the retry-review control; consumed by the next supervisor pass. */
   reviewRetryRequested?: boolean;
+  /** Selected historical stage to start again on the next supervisor pass. */
+  restartRequest?: PipelineRestartRequest;
   createdAt: string;
   taskTitle: string;
   taskSnapshot: TaskSnapshot;
@@ -1169,6 +1177,21 @@ function isPromptAttempt(value: unknown): value is PipelinePromptAttempt {
   );
 }
 
+function isPipelineRestartRequest(value: unknown): value is PipelineRestartRequest {
+  if (!isRecord(value) || typeof value.kind !== "string") return false;
+  if (value.kind === "session") {
+    return (
+      Object.keys(value).every((key) => key === "kind" || key === "phase") &&
+      SESSION_PHASES.has(value.phase as PipelineSessionPhase)
+    );
+  }
+  return (
+    (value.kind === "review-package" || value.kind === "validation") &&
+    Object.keys(value).every((key) => key === "kind" || key === "implementationPhase") &&
+    (value.implementationPhase === "build" || value.implementationPhase === "fix")
+  );
+}
+
 function isNonBlankString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
@@ -1248,6 +1271,7 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
         value.pendingUserMessages.length > MAX_PIPELINE_USER_MESSAGES ||
         !value.pendingUserMessages.every(isUserMessage))) ||
     (value.reviewRetryRequested !== undefined && typeof value.reviewRetryRequested !== "boolean") ||
+    (value.restartRequest !== undefined && !isPipelineRestartRequest(value.restartRequest)) ||
     (value.reviewers !== undefined && !isBuildStepConfigList(value.reviewers)) ||
     (value.reviewPreparation !== undefined && !isBuildStepConfig(value.reviewPreparation)) ||
     (value.environmentOptions !== undefined &&

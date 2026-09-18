@@ -3,6 +3,7 @@ import {
   applyWindowTitle,
   focusWindowById,
   projectMenuWindows,
+  resolveFocusedWindowContext,
   type FocusableWindow,
   type MenuSourceWindow,
 } from "../../../apps/desktop/electron/window-menu";
@@ -57,6 +58,28 @@ describe("projectMenuWindows", () => {
 
   test("returns an empty list when nothing is registered", () => {
     expect(projectMenuWindows([], null)).toEqual([]);
+  });
+});
+
+describe("resolveFocusedWindowContext", () => {
+  test("prefers the live native focus over the recorded fallback", () => {
+    const live = { window: sourceWindow({ title: "Live" }) };
+    const recorded = { window: sourceWindow({ title: "Recorded" }) };
+    const contexts = new Map([
+      [11, live],
+      [22, recorded],
+    ]);
+
+    expect(resolveFocusedWindowContext(contexts, live.window, 22)).toBe(live);
+  });
+
+  test("uses the recorded id only while native focus is unavailable", () => {
+    const recorded = { window: sourceWindow({ title: "Recorded" }) };
+    const contexts = new Map([[22, recorded]]);
+
+    expect(resolveFocusedWindowContext(contexts, null, 22)).toBe(recorded);
+    expect(resolveFocusedWindowContext(contexts, undefined, 99)).toBeNull();
+    expect(resolveFocusedWindowContext(contexts, null, null)).toBeNull();
   });
 });
 

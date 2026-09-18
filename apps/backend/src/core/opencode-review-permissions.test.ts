@@ -252,16 +252,19 @@ describe("OpenCode reviewer shell permissions", () => {
       fake.setStatusResponse({ data: { [sessionId]: { type: "idle" } } });
 
       await expect(provider.status(sessionId)).resolves.toBe("idle");
-      expect(fake.updateCalls).toHaveLength(2);
+      expect(fake.updateCalls).toHaveLength(3);
       const restored = fake.updateCalls[1]!;
       expect(actionFor(restored, "bash", "git commit -am later")).toBe("allow");
       expect(actionFor(restored, "edit")).toBe("allow");
+      expect(
+        actionFor(fake.updateCalls[2]!, "orkestrator_workflow_result_submit_review_report"),
+      ).toBe("deny");
 
       await provider.send(sessionId, "Continue in build mode", {
         requestId: "later-build-turn",
         mode: "build",
       });
-      expect(fake.updateCalls).toHaveLength(2);
+      expect(fake.updateCalls).toHaveLength(3);
       expect(fake.promptCalls.at(-1)!.tools).toBeUndefined();
     } finally {
       await provider.dispose?.();
@@ -288,9 +291,12 @@ describe("OpenCode reviewer shell permissions", () => {
     fake.setStatusResponse({ data: { "review-session": { type: "idle" } } });
     try {
       await expect(restoredProvider.status("review-session")).resolves.toBe("idle");
-      expect(fake.updateCalls).toHaveLength(2);
+      expect(fake.updateCalls).toHaveLength(3);
       expect(actionFor(fake.updateCalls[1]!, "edit")).toBe("allow");
       expect(actionFor(fake.updateCalls[1]!, "bash", "git commit -am later")).toBe("allow");
+      expect(
+        actionFor(fake.updateCalls[2]!, "orkestrator_workflow_result_submit_review_report"),
+      ).toBe("deny");
     } finally {
       await restoredProvider.dispose?.();
     }
@@ -383,12 +389,16 @@ describe("OpenCode reviewer shell permissions", () => {
     fake.setStatusResponse({ data: { "review-session": { type: "idle" } } });
     try {
       await expect(restoredProvider.status("review-session")).resolves.toBe("idle");
-      const restore = fake.updateCalls.at(-1)!;
-      expect(restore.permission).toEqual(
+      const baseRestore = fake.updateCalls.at(-2)!;
+      const workflowRestore = fake.updateCalls.at(-1)!;
+      expect(baseRestore.permission).toEqual(
         openCodePermissionRules(effectiveOpenCodePolicy(policy)),
       );
-      expect(actionFor(restore, "edit")).toBe("allow");
-      expect(actionFor(restore, "bash", "git commit -am later")).toBe("allow");
+      expect(actionFor(baseRestore, "edit")).toBe("allow");
+      expect(actionFor(baseRestore, "bash", "git commit -am later")).toBe("allow");
+      expect(actionFor(workflowRestore, "orkestrator_workflow_result_submit_review_report")).toBe(
+        "deny",
+      );
     } finally {
       await restoredProvider.dispose?.();
     }

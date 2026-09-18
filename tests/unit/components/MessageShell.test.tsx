@@ -236,8 +236,8 @@ describe("MessageShell", () => {
     );
 
     const bubble = getUserBubble(container, "Native touch navigation");
-    expect(bubble.style.touchAction).toBe("");
-    expect(bubble.style.WebkitTouchCallout).toBe("none");
+    expect(bubble.style.getPropertyValue("touch-action")).toBe("");
+    expect(bubble.className).toContain("[-webkit-touch-callout:none]");
   });
 
   test("keeps a long press at the movement boundary and cancels past it horizontally", async () => {

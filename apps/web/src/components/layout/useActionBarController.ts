@@ -470,9 +470,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   }, [createPrLaunchClaims, releaseCreatePrLaunch]);
 
   useEffect(() => {
+    const timers = createPrGraceTimersRef.current;
     return () => {
-      for (const timer of createPrGraceTimersRef.current.values()) clearTimeout(timer);
-      createPrGraceTimersRef.current.clear();
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
     };
   }, []);
 

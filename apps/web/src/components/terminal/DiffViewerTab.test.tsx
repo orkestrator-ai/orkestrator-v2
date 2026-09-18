@@ -724,14 +724,12 @@ describe("DiffViewerTab editor lifecycle and controls", () => {
     const setJavaScriptOptions = mock((_options: unknown) => {});
     const setJsonOptions = mock((_options: unknown) => {});
     const monaco = {
-      languages: {
-        typescript: {
-          typescriptDefaults: { setDiagnosticsOptions: setTypeScriptOptions },
-          javascriptDefaults: { setDiagnosticsOptions: setJavaScriptOptions },
-        },
-        json: {
-          jsonDefaults: { setDiagnosticsOptions: setJsonOptions },
-        },
+      typescript: {
+        typescriptDefaults: { setDiagnosticsOptions: setTypeScriptOptions },
+        javascriptDefaults: { setDiagnosticsOptions: setJavaScriptOptions },
+      },
+      json: {
+        jsonDefaults: { setDiagnosticsOptions: setJsonOptions },
       },
     };
     const dispose = mock(() => {});

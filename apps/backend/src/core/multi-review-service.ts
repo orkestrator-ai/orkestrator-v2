@@ -2151,9 +2151,7 @@ export class MultiReviewService {
         agentMcp
           ? {
               agentMcp,
-              ...(agentMcp.workflowResultCapability
-                ? { workflowResultTool: workflowResultToolName(resultKind) }
-                : {}),
+              workflowResultTool: workflowResultToolName(resultKind),
             }
           : undefined,
       );
@@ -2177,9 +2175,7 @@ export class MultiReviewService {
             effort: selection.reasoningEffort,
             ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
             ...(agentMcp ? { agentMcp } : {}),
-            ...(agentMcp?.workflowResultCapability
-              ? { workflowResultTool: workflowResultToolName(resultKind) }
-              : {}),
+            ...(agentMcp ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
           },
         );
       } catch (error) {

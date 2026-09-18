@@ -22,15 +22,15 @@ type MonacoMountedEditor = Parameters<OnMount>[0];
 type MonacoMountApi = Parameters<OnMount>[1];
 
 export function disableMonacoFileDiagnostics(monaco: MonacoBeforeMountApi): void {
-  monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+  monaco.typescript.typescriptDefaults.setDiagnosticsOptions({
     noSemanticValidation: true,
     noSyntaxValidation: true,
   });
-  monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+  monaco.typescript.javascriptDefaults.setDiagnosticsOptions({
     noSemanticValidation: true,
     noSyntaxValidation: true,
   });
-  monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+  monaco.json.jsonDefaults.setDiagnosticsOptions({
     validate: false,
   });
 }

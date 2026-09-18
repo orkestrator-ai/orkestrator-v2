@@ -151,10 +151,10 @@ export class OpenCodeReviewSessionPermissions {
   }
 
   /** Restore the immutable base policy once a reviewer is no longer running. */
-  async restoreIfNeeded(sessionId: string): Promise<void> {
-    if (!this.candidates.has(sessionId) && !this.active.has(sessionId)) return;
+  async restoreIfNeeded(sessionId: string): Promise<boolean> {
+    if (!this.candidates.has(sessionId) && !this.active.has(sessionId)) return false;
     const policy = await this.readPolicy(sessionId);
-    if (!policy || !this.active.has(sessionId)) return;
+    if (!policy || !this.active.has(sessionId)) return false;
     try {
       const response = await this.client.session.update(
         {
@@ -166,6 +166,7 @@ export class OpenCodeReviewSessionPermissions {
       );
       assertSdkResponse(response, "OpenCode reviewer permission restore");
       this.active.delete(sessionId);
+      return true;
     } catch (error) {
       throw new ProviderUnavailableError("OpenCode reviewer permissions could not be restored", {
         cause: error,

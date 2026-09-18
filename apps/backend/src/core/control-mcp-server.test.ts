@@ -1292,9 +1292,9 @@ describe("Orkestrator control MCP server", () => {
         requiredFor: "launch_environment",
       },
     });
-    expect(
-      invocations.filter(({ command }) => command === "get_project_git_status"),
-    ).toHaveLength(gitStatusBeforeLaunchOptions);
+    expect(invocations.filter(({ command }) => command === "get_project_git_status")).toHaveLength(
+      gitStatusBeforeLaunchOptions,
+    );
 
     const launched = await rpc(credential.url, credential.token, "tools/call", {
       name: "launch_environment",

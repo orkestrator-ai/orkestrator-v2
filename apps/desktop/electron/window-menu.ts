@@ -11,6 +11,24 @@ export type MenuSourceContext = {
 };
 
 /**
+ * Resolve the context that owns desktop commands. Native focus is authoritative
+ * when Electron reports it; the most recently recorded focus is only a fallback
+ * for window managers that temporarily report no focused BrowserWindow.
+ */
+export function resolveFocusedWindowContext<Context extends MenuSourceContext>(
+  contexts: ReadonlyMap<number, Context>,
+  focusedWindow: MenuSourceWindow | null | undefined,
+  lastFocusedWindowId: number | null,
+): Context | null {
+  if (focusedWindow) {
+    for (const context of contexts.values()) {
+      if (context.window === focusedWindow) return context;
+    }
+  }
+  return lastFocusedWindowId === null ? null : (contexts.get(lastFocusedWindowId) ?? null);
+}
+
+/**
  * Project the live desktop windows into the plain data the menu template
  * renders. Destroyed windows are skipped before their title is read so a
  * window that is mid-teardown can neither appear in the list nor throw.

@@ -19,14 +19,14 @@
     "@orkestrator/backend": "workspace:*",
     "@orkestrator/protocol": "workspace:*",
     "@orkestrator/web": "workspace:*",
-    "tar-stream": "3.2.0",
+    "tar-stream": "3.2.1",
     "yauzl": "3.4.0"
   },
   "devDependencies": {
-    "@types/node": "^25.9.3",
+    "@types/node": "^25.9.7",
     "@types/tar-stream": "3.1.4",
     "@types/yauzl": "3.4.0",
-    "electron": "^42.4.1",
-    "typescript": "~5.8.3"
+    "electron": "^42.11.5",
+    "typescript": "~5.9.3"
   }
 }

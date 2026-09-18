@@ -416,6 +416,9 @@ describe("NativeAgentService", () => {
         async create() {
           return { data: { id: "provider-session" } };
         },
+        async get() {
+          return { data: { id: "provider-session", directory: "/workspace" } };
+        },
         async status() {
           return { data: { "provider-session": { type: "idle" } } };
         },

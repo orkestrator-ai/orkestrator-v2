@@ -783,6 +783,62 @@ describe("session detail route outcomes", () => {
     ]);
   });
 
+  test("forwards a known workflow result tool and rejects an unknown one", async () => {
+    const calls: unknown[] = [];
+    await withRuntimeMethod(
+      "prompt",
+      async (sessionId: string, input: unknown) => {
+        calls.push({ sessionId, input });
+        return {
+          ok: true,
+          result: { status: "processing", requestId: "request-result", threadId: "thread-1" },
+        };
+      },
+      async () => {
+        const accepted = await jsonRequest("/session/session-1/prompt", "POST", {
+          prompt: "submit",
+          requestId: "request-result",
+          agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "attempt-secret" },
+          workflowResultTool: "submit_consolidated_review",
+        });
+        expect(accepted.status).toBe(202);
+
+        const unpaired = await jsonRequest("/session/session-1/prompt", "POST", {
+          prompt: "submit",
+          requestId: "request-unpaired",
+          workflowResultTool: "submit_consolidated_review",
+        });
+        expect(unpaired.status).toBe(400);
+        expect(await unpaired.json()).toEqual({
+          error: "workflowResultTool requires agentMcp",
+        });
+
+        const rejected = await jsonRequest("/session/session-1/prompt", "POST", {
+          prompt: "submit",
+          requestId: "request-unknown",
+          workflowResultTool: "launch_environment",
+        });
+        expect(rejected.status).toBe(400);
+        expect(await rejected.json()).toEqual({
+          error: "workflowResultTool must name a workflow result tool",
+        });
+      },
+    );
+
+    expect(calls).toEqual([
+      {
+        sessionId: "session-1",
+        input: {
+          prompt: "submit",
+          requestId: "request-result",
+          attachments: [],
+          agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "attempt-secret" },
+          workflowResultTool: "submit_consolidated_review",
+        },
+      },
+    ]);
+  });
+
   test("accepts images, rejects unsupported files, and maps runtime failures", async () => {
     const calls: unknown[] = [];
     let outcome: unknown = {

@@ -792,13 +792,20 @@ async function extractTarGzipEntry(
     // settles is how the callback stream and the promise pipeline are bridged.
     void pipeline(stream, createWriteStream(destinationPath, { flags: "wx", mode: 0o500 })).then(
       // oxlint-disable-next-line promise/no-callback-in-promise
-      next,
+      () => next(),
       (error: unknown) =>
         extract.destroy(error instanceof Error ? error : new Error(String(error))),
     );
   });
 
-  await pipeline(createReadStream(archivePath), createGunzip(), extract);
+  // tar-stream's Extract is a Node Writable at runtime. Its independently
+  // resolved Node declaration can otherwise fail structural comparison with
+  // the app's newer @types/node pipeline destination.
+  await pipeline(
+    createReadStream(archivePath),
+    createGunzip(),
+    extract as unknown as NodeJS.WritableStream,
+  );
   if (!found) throw new Error(`${label} executable was not found in its archive`);
 }
 
@@ -880,12 +887,18 @@ async function extractTarGzipBundle(
         ),
       )
       // As above: `next` is tar-stream's per-entry callback.
-      // oxlint-disable-next-line promise/no-callback-in-promise
-      .then(next, (error: unknown) =>
-        extract.destroy(error instanceof Error ? error : new Error(String(error))),
+      .then(
+        // oxlint-disable-next-line promise/no-callback-in-promise
+        () => next(),
+        (error: unknown) =>
+          extract.destroy(error instanceof Error ? error : new Error(String(error))),
       );
   });
-  await pipeline(createReadStream(archivePath), createGunzip(), extract);
+  await pipeline(
+    createReadStream(archivePath),
+    createGunzip(),
+    extract as unknown as NodeJS.WritableStream,
+  );
   if (!foundExecutable) throw new Error(`${label} executable was not found in its bundle`);
 }
 

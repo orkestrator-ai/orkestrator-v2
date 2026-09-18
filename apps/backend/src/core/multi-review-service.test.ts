@@ -2124,82 +2124,87 @@ async function waitUntil(
   }
 }
 
-test.each(["grok", "cursor", "pi"] as const)(
+test.each(["grok", "cursor", "pi", "codex"] as const)(
   "MultiReviewService delivers %s reviewer and consolidation reports through MCP tools",
   async (agent) => {
-  const provider = new Provider(false);
-  const environmentId = `env-tool-results-${agent}`;
-  await withService(
-    environmentId,
-    provider,
-    async ({ service, start, snapshot, workflowResults }) => {
-      const selection = { agent, model: agent === "grok" ? "grok-4.6" : "default" };
-      const started = await start([selection], selection);
-      await waitUntil(async () => {
-        await service.advanceNow(started.id);
-        return Boolean((await snapshot(started.id))?.reviewers[0]?.requestId);
-      });
-      let current = (await snapshot(started.id))!;
-      const reviewerRequestId = current.reviewers[0]!.requestId!;
-      expect(current.reviewers[0]?.resultTransport).toBe("tool-v1");
-      const reviewerDispatch = provider.sends.get(reviewerRequestId);
-      expect(reviewerDispatch?.prompt).toContain("submit_review_report");
-      expect(reviewerDispatch?.options.schema).toBeUndefined();
-      expect(reviewerDispatch?.options.agentMcp).toEqual({
-        url: "http://127.0.0.1:1234/mcp",
-        token: "test-token",
-      });
+    const provider = new Provider(false);
+    const environmentId = `env-tool-results-${agent}`;
+    await withService(
+      environmentId,
+      provider,
+      async ({ service, start, snapshot, workflowResults }) => {
+        const selection = { agent, model: agent === "grok" ? "grok-4.6" : "default" };
+        const started = await start([selection], selection);
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return Boolean((await snapshot(started.id))?.reviewers[0]?.requestId);
+        });
+        let current = (await snapshot(started.id))!;
+        const reviewerRequestId = current.reviewers[0]!.requestId!;
+        expect(current.reviewers[0]?.resultTransport).toBe("tool-v1");
+        const reviewerDispatch = provider.sends.get(reviewerRequestId);
+        expect(reviewerDispatch?.prompt).toContain("submit_review_report");
+        expect(reviewerDispatch?.options.schema).toBeUndefined();
+        expect(reviewerDispatch?.options.workflowResultTool).toBe("submit_review_report");
+        expect(reviewerDispatch?.options.agentMcp).toEqual({
+          url: "http://127.0.0.1:1234/mcp",
+          token: "test-token",
+        });
 
-      await workflowResults!.submit(
-        { environmentId, projectId: "project-1" },
-        reviewerRequestId,
-        cleanReport,
-      );
-      await waitUntil(async () => {
-        await service.advanceNow(started.id);
-        return (await snapshot(started.id))?.reviewers[0]?.status === "completed";
-      });
-      current = (await snapshot(started.id))!;
-      expect(current.reviewers[0]?.status).toBe("completed");
-      expect(
-        await workflowResults!.status(
+        await workflowResults!.submit(
           { environmentId, projectId: "project-1" },
           reviewerRequestId,
-        ),
-      ).toMatchObject({ lifecycle: "consumed" });
+          cleanReport,
+        );
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.reviewers[0]?.status === "completed";
+        });
+        current = (await snapshot(started.id))!;
+        expect(current.reviewers[0]?.status).toBe("completed");
+        expect(
+          await workflowResults!.status(
+            { environmentId, projectId: "project-1" },
+            reviewerRequestId,
+          ),
+        ).toMatchObject({ lifecycle: "consumed" });
 
-      await waitUntil(async () => {
-        await service.advanceNow(started.id);
-        return (await snapshot(started.id))?.activeRequest?.kind === "consolidate";
-      });
-      current = (await snapshot(started.id))!;
-      const consolidationRequestId = current.activeRequest!.requestId;
-      expect(current.activeRequest?.resultTransport).toBe("tool-v1");
-      const consolidationDispatch = provider.sends.get(consolidationRequestId);
-      expect(consolidationDispatch?.prompt).toContain("submit_consolidated_review");
-      expect(consolidationDispatch?.options.schema).toBeUndefined();
-      expect(consolidationDispatch?.options.agentMcp).toEqual({
-        url: "http://127.0.0.1:1234/mcp",
-        token: "test-token",
-      });
-      await workflowResults!.submit(
-        { environmentId, projectId: "project-1" },
-        consolidationRequestId,
-        cleanReport,
-      );
-      await service.advanceNow(started.id);
-
-      expect((await snapshot(started.id))?.phase).toBe("ready");
-      expect(
-        await workflowResults!.status(
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.activeRequest?.kind === "consolidate";
+        });
+        current = (await snapshot(started.id))!;
+        const consolidationRequestId = current.activeRequest!.requestId;
+        expect(current.activeRequest?.resultTransport).toBe("tool-v1");
+        const consolidationDispatch = provider.sends.get(consolidationRequestId);
+        expect(consolidationDispatch?.prompt).toContain("submit_consolidated_review");
+        expect(consolidationDispatch?.options.schema).toBeUndefined();
+        expect(consolidationDispatch?.options.workflowResultTool).toBe(
+          "submit_consolidated_review",
+        );
+        expect(consolidationDispatch?.options.agentMcp).toEqual({
+          url: "http://127.0.0.1:1234/mcp",
+          token: "test-token",
+        });
+        await workflowResults!.submit(
           { environmentId, projectId: "project-1" },
           consolidationRequestId,
-        ),
-      ).toMatchObject({ lifecycle: "consumed" });
-    },
-    { toolMode: true },
-  );
-});
+          cleanReport,
+        );
+        await service.advanceNow(started.id);
+
+        expect((await snapshot(started.id))?.phase).toBe("ready");
+        expect(
+          await workflowResults!.status(
+            { environmentId, projectId: "project-1" },
+            consolidationRequestId,
+          ),
+        ).toMatchObject({ lifecycle: "consumed" });
+      },
+      { toolMode: true },
+    );
+  },
+);
 
 test("MultiReviewService sends OpenCode the stable broker capability and exact turn tool", async () => {
   const provider = new Provider(false);

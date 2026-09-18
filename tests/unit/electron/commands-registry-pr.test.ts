@@ -152,6 +152,10 @@ exit 1
     await withFakeGh(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$5" = "statusCheckRollup" ]; then
+  printf '%s\\n' '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"status":"IN_PROGRESS","conclusion":""}]}'
+  exit 0
+fi
 printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/1","state":"CLOSED","mergeable":"MERGEABLE","updatedAt":"2026-01-01T00:00:00Z"},{"url":"https://github.com/acme/repo/pull/2","state":"OPEN","mergeable":"CONFLICTING","updatedAt":"2026-01-02T00:00:00Z"}]'
 `,
       async (logPath) => {
@@ -164,13 +168,50 @@ printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/1","state":"CLOSED","
           url: "https://github.com/acme/repo/pull/2",
           state: "open",
           hasMergeConflicts: true,
-          checkSummary: { passed: 0, total: 0, pending: 0 },
+          checkSummary: { passed: 1, total: 2, pending: 1 },
         });
 
         const ghLog = await fs.readFile(logPath, "utf8");
-        expect(ghLog.trim()).toBe(
+        expect(ghLog.trim().split("\n")).toEqual([
           "pr list --head feature/pr --state all --limit 30 --json url,state,mergeable,updatedAt",
-        );
+          "pr view https://github.com/acme/repo/pull/2 --json statusCheckRollup",
+        ]);
+      },
+    );
+  });
+
+  test("keeps local PR metadata when check rollups are forbidden", async () => {
+    const worktreePath = await createTempDir("ork-electron-pr-check-permission-");
+    const environment = createEnvironment({ worktreePath, branch: "feature/check-permission" });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' 'GraphQL: Resource not accessible by personal access token (statusCheckRollup)' >&2
+  exit 1
+fi
+printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/5","state":"OPEN","mergeable":"MERGEABLE","updatedAt":"2026-01-02T00:00:00Z"}]'
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("detect_pr_local")?.(
+            { environmentId: environment.id, branch: environment.branch },
+            context,
+          ),
+        ).resolves.toEqual({
+          url: "https://github.com/acme/repo/pull/5",
+          state: "open",
+          hasMergeConflicts: false,
+          checkSummary: { passed: 0, total: 0, pending: 0 },
+        });
+
+        expect((await fs.readFile(logPath, "utf8")).trim().split("\n")).toEqual([
+          "pr list --head feature/check-permission --state all --limit 30 --json url,state,mergeable,updatedAt",
+          "pr view https://github.com/acme/repo/pull/5 --json statusCheckRollup",
+        ]);
       },
     );
   });
@@ -375,6 +416,58 @@ exit 0
         expect(execLog).toContain("source /usr/local/bin/orkestrator-runtime-env.sh");
         expect(execLog).toContain("orkestrator_source_runtime_env");
         expect(execLog).not.toContain("gh pr view");
+      },
+    );
+  });
+
+  test("keeps container PR metadata when check rollups are forbidden", async () => {
+    const { context } = createContext(
+      createEnvironment({
+        id: "env-container-check-permission",
+        environmentType: "containerized",
+        containerId: "container-check-permission",
+        status: "running",
+        branch: "feature/container-check-permission",
+      }),
+    );
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(
+      `#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  case "$*" in
+    *"git -C /workspace branch --show-current"*) printf '%s\\n' 'feature/container-check-permission'; exit 0 ;;
+    *"statusCheckRollup"*) printf '%s\\n' 'GraphQL: Resource not accessible by personal access token (statusCheckRollup)' >&2; exit 1 ;;
+  esac
+  printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/12","state":"OPEN","mergeable":"MERGEABLE","updatedAt":"2026-01-03T00:00:00Z"}]'
+  exit 0
+fi
+exit 0
+`,
+      async (logs) => {
+        await expect(
+          commands.get("detect_pr")?.(
+            {
+              containerId: "container-check-permission",
+              branch: "feature/container-check-permission",
+            },
+            context,
+          ),
+        ).resolves.toEqual({
+          url: "https://github.com/acme/repo/pull/12",
+          state: "open",
+          hasMergeConflicts: false,
+          checkSummary: { passed: 0, total: 0, pending: 0 },
+        });
+
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(execLog).toContain(
+          "gh pr list --head 'feature/container-check-permission' --state all --limit 30 --json url,state,mergeable,updatedAt",
+        );
+        expect(execLog).toContain(
+          "gh pr view 'https://github.com/acme/repo/pull/12' --json statusCheckRollup",
+        );
       },
     );
   });

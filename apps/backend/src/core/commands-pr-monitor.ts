@@ -9,6 +9,7 @@ import type {
 import { withContainerRuntimeCredential } from "./commands-runtime-state.js";
 import { quoteShell } from "./commands-agent-support.js";
 import {
+  parsePrCheckSummary,
   parsePrDetectionOutput,
   parseKnownPrDetectionOutput,
   validatePrDetectionBranch,
@@ -146,6 +147,11 @@ export interface PrMonitorDetectionRequest {
   branch: string;
 }
 
+export interface PrMonitorCheckRequest {
+  args: string[];
+  shellCommand: string;
+}
+
 /**
  * Selects immutable-URL lookup while a known PR is nonterminal. A branch
  * lookup is suitable for discovery but GitHub commonly deletes the head branch
@@ -156,10 +162,10 @@ export interface PrMonitorDetectionRequest {
 export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitorDetectionRequest {
   const headBranch = validatePrDetectionBranch(target.branch);
   if (target.prUrl && target.prState !== "merged" && target.prState !== "closed") {
-    const args = ["pr", "view", target.prUrl, "--json", "url,state,mergeable,statusCheckRollup"];
+    const args = ["pr", "view", target.prUrl, "--json", "url,state,mergeable"];
     return {
       args,
-      shellCommand: `gh pr view ${quoteShell(target.prUrl)} --json url,state,mergeable,statusCheckRollup`,
+      shellCommand: `gh pr view ${quoteShell(target.prUrl)} --json url,state,mergeable`,
       knownPrUrl: target.prUrl,
       branch: headBranch,
     };
@@ -182,6 +188,32 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
     knownPrUrl: null,
     branch: headBranch,
   };
+}
+
+/**
+ * CI checks are intentionally fetched separately from authoritative PR
+ * metadata. Some tokens can read pull requests but not check rollups; a badge
+ * permission must never stop merge/close detection or linked-task updates.
+ */
+export function getPrMonitorCheckRequest(prUrl: string): PrMonitorCheckRequest {
+  const args = ["pr", "view", prUrl, "--json", "statusCheckRollup"];
+  return {
+    args,
+    shellCommand: `gh pr view ${quoteShell(prUrl)} --json statusCheckRollup`,
+  };
+}
+
+export function parsePrMonitorCheckResponse(stdout: string) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout.trim());
+  } catch {
+    throw new Error("Failed to parse gh PR check output");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("Failed to parse gh PR check output");
+  }
+  return parsePrCheckSummary((parsed as Record<string, unknown>).statusCheckRollup);
 }
 
 export function parsePrMonitorDetectionResponse(
@@ -242,14 +274,37 @@ export async function detectEnvironmentPullRequest(
       cwd: target.worktreePath,
       timeoutMs: 30_000,
     });
-    return parsePrMonitorDetectionResponse(request, stdout);
+    const detection = parsePrMonitorDetectionResponse(request, stdout);
+    if (!detection || detection.state !== "open") return detection;
+    const checkRequest = getPrMonitorCheckRequest(detection.url);
+    try {
+      const result = await runCommand("gh", checkRequest.args, {
+        cwd: target.worktreePath,
+        timeoutMs: 10_000,
+      });
+      return { ...detection, checkSummary: parsePrMonitorCheckResponse(result.stdout) };
+    } catch {
+      return detection;
+    }
   }
   if (!target.containerId) throw new Error("Container environment has no container id");
   const output = await dockerExec(
     target.containerId,
     withContainerRuntimeCredential(request.shellCommand),
   );
-  return parsePrMonitorDetectionResponse(request, output);
+  const detection = parsePrMonitorDetectionResponse(request, output);
+  if (!detection || detection.state !== "open") return detection;
+  const checkRequest = getPrMonitorCheckRequest(detection.url);
+  try {
+    const checks = await dockerExec(
+      target.containerId,
+      withContainerRuntimeCredential(checkRequest.shellCommand),
+      10_000,
+    );
+    return { ...detection, checkSummary: parsePrMonitorCheckResponse(checks) };
+  } catch {
+    return detection;
+  }
 }
 
 export const prMonitorService = new PrMonitorService({

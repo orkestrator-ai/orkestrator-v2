@@ -1253,13 +1253,17 @@ export function parsePrCheckSummary(value: unknown): PrCheckSummary {
     const status = typeof check.status === "string" ? check.status.toUpperCase() : null;
     const state = typeof check.state === "string" ? check.state.toUpperCase() : null;
 
-    if (
+    // A live CheckRun can temporarily retain its previous conclusion while a
+    // new run is queued. Its current status is authoritative over that stale
+    // conclusion, otherwise a running check would be shown as passed.
+    if (status !== null && status !== "COMPLETED") {
+      pending += 1;
+    } else if (
       (conclusion && PASSING_CHECK_OUTCOMES.has(conclusion)) ||
       (state && PASSING_CHECK_OUTCOMES.has(state))
     ) {
       passed += 1;
     } else if (
-      (status !== null && status !== "COMPLETED") ||
       (state !== null && PENDING_CHECK_STATES.has(state)) ||
       (status === null && state === null && conclusion === null)
     ) {

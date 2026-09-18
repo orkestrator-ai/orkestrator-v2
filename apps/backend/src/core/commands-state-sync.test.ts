@@ -12,7 +12,9 @@ import {
   __testing as commandTesting,
   createCommandRegistry,
   findKanbanTaskForEnvironment,
+  getPrMonitorCheckRequest,
   getPrMonitorDetectionRequest,
+  parsePrMonitorCheckResponse,
   parsePrMonitorDetectionResponse,
   shutdownPrMonitorTracking,
   toClientEnvironment,
@@ -6024,10 +6026,10 @@ describe("pr monitor commands", () => {
       "view",
       "https://github.com/acme/repo/pull/7",
       "--json",
-      "url,state,mergeable,statusCheckRollup",
+      "url,state,mergeable",
     ]);
     expect(known.shellCommand).toBe(
-      "gh pr view 'https://github.com/acme/repo/pull/7' --json url,state,mergeable,statusCheckRollup",
+      "gh pr view 'https://github.com/acme/repo/pull/7' --json url,state,mergeable",
     );
     expect(
       parsePrMonitorDetectionResponse(
@@ -6036,20 +6038,37 @@ describe("pr monitor commands", () => {
           url: "https://github.com/acme/repo/pull/7",
           state: "MERGED",
           mergeable: "UNKNOWN",
-          statusCheckRollup: [
-            { status: "COMPLETED", conclusion: "SUCCESS" },
-            { state: "SUCCESS" },
-            { status: "IN_PROGRESS", conclusion: null },
-            { status: "COMPLETED", conclusion: "FAILURE" },
-          ],
         }),
       ),
     ).toEqual({
       url: "https://github.com/acme/repo/pull/7",
       state: "merged",
       hasMergeConflicts: null,
-      checkSummary: { passed: 2, total: 4, pending: 1 },
+      checkSummary: { passed: 0, total: 0, pending: 0 },
     });
+    const checks = getPrMonitorCheckRequest("https://github.com/acme/repo/pull/7");
+    expect(checks.args).toEqual([
+      "pr",
+      "view",
+      "https://github.com/acme/repo/pull/7",
+      "--json",
+      "statusCheckRollup",
+    ]);
+    expect(checks.shellCommand).toBe(
+      "gh pr view 'https://github.com/acme/repo/pull/7' --json statusCheckRollup",
+    );
+    expect(
+      parsePrMonitorCheckResponse(
+        JSON.stringify({
+          statusCheckRollup: [
+            { status: "COMPLETED", conclusion: "SUCCESS" },
+            { state: "SUCCESS" },
+            { status: "IN_PROGRESS", conclusion: "" },
+            { status: "COMPLETED", conclusion: "FAILURE" },
+          ],
+        }),
+      ),
+    ).toEqual({ passed: 2, total: 4, pending: 1 });
     expect(
       parsePrMonitorDetectionResponse(
         known,
@@ -6095,6 +6114,17 @@ describe("pr monitor commands", () => {
     ["queued", { state: "QUEUED" }, { passed: 0, total: 1, pending: 1 }],
     ["waiting", { state: "WAITING" }, { passed: 0, total: 1, pending: 1 }],
     ["in-progress status", { status: "IN_PROGRESS" }, { passed: 0, total: 1, pending: 1 }],
+    [
+      "real in-progress CheckRun",
+      { status: "IN_PROGRESS", conclusion: "" },
+      { passed: 0, total: 1, pending: 1 },
+    ],
+    ["requested status", { status: "REQUESTED" }, { passed: 0, total: 1, pending: 1 }],
+    [
+      "running status with a stale success conclusion",
+      { status: "IN_PROGRESS", conclusion: "SUCCESS" },
+      { passed: 0, total: 1, pending: 1 },
+    ],
     ["empty entry", {}, { passed: 0, total: 1, pending: 1 }],
     ["neutral", { conclusion: "NEUTRAL" }, { passed: 1, total: 1, pending: 0 }],
     ["lowercase skipped", { conclusion: "skipped" }, { passed: 1, total: 1, pending: 0 }],

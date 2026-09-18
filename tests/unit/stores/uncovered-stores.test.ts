@@ -208,6 +208,21 @@ describe("prMonitorStore", () => {
     expect(completeMap).not.toBe(runningMap);
     expect(completeMap.get("env-1")?.checkSummary).toEqual({ passed: 1, total: 2, pending: 0 });
   });
+
+  test("rehydrates a populated CI summary from an authoritative snapshot", () => {
+    const state = usePrMonitorStore.getState();
+    state.applySnapshot([
+      monitorEntry("env-1", {
+        checkSummary: { passed: 3, total: 4, pending: 1 },
+      }),
+    ]);
+
+    expect(usePrMonitorStore.getState().getMonitoringState("env-1")?.checkSummary).toEqual({
+      passed: 3,
+      total: 4,
+      pending: 1,
+    });
+  });
 });
 
 describe("local session and terminal portal state", () => {

@@ -390,6 +390,26 @@ describe("PrMonitorService", () => {
     ]);
   });
 
+  test("publishes CI checks on the same cycle that first discovers a PR", async () => {
+    const harness = createHarness();
+    harness.setDetect(async () =>
+      detection({
+        url: "https://github.com/org/repo/pull/3",
+        checkSummary: { passed: 2, total: 3, pending: 1 },
+      }),
+    );
+    harness.service.requestMode(target(), "create-pending");
+
+    await harness.fireNext();
+
+    expect(harness.service.snapshot()[0]).toMatchObject({
+      mode: "normal",
+      prUrl: "https://github.com/org/repo/pull/3",
+      checkSummary: { passed: 2, total: 3, pending: 1 },
+    });
+    expect(harness.pendingDelays()).toEqual([20_000]);
+  });
+
   test("merge-pending reverts to normal after its timeout", async () => {
     const harness = createHarness();
     harness.setDetect(async () => detection());
@@ -1079,6 +1099,34 @@ describe("PrMonitorService", () => {
     harness.setDetect(async () => null);
     harness.service.probe(target());
 
+    await harness.fireNext();
+
+    expect(harness.service.trackedIds()).toEqual([]);
+    expect(harness.emitted).toEqual([]);
+  });
+
+  test("a target change does not announce a provisional probe that finds nothing", async () => {
+    const harness = createHarness();
+    let resolveFirst!: (value: PrDetection | null) => void;
+    let detections = 0;
+    harness.setDetect(async () => {
+      detections += 1;
+      if (detections === 1) {
+        return await new Promise<PrDetection | null>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      return null;
+    });
+    harness.service.probe(target());
+    await harness.fireNext();
+
+    harness.service.sync([target({ branch: "feature/renamed" })]);
+    expect(harness.emitted).toEqual([]);
+
+    resolveFirst(null);
+    await harness.flush();
+    expect(harness.pendingDelays()).toEqual([0]);
     await harness.fireNext();
 
     expect(harness.service.trackedIds()).toEqual([]);

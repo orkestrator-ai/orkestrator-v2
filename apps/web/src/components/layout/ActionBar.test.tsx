@@ -5724,7 +5724,7 @@ describe("ActionBar pull request actions", () => {
       name: "passed",
       summary: { passed: 4, total: 4, pending: 0 },
       label: "4 of 4 CI checks passed; all checks complete",
-      colorClass: "text-red-600",
+      colorClass: "text-green-600",
       borderClass: "border-green-600",
       liveText: "4/4 checks; all checks complete",
     },
@@ -5829,6 +5829,18 @@ describe("ActionBar pull request actions", () => {
     expect(
       screen.getByRole("status", { name: "4 of 4 CI checks passed; all checks complete" }),
     ).toBeTruthy();
+
+    act(() => {
+      usePrMonitorStore.getState().applyEvent({
+        environmentId: currentEnvironment.id,
+        state: {
+          ...usePrMonitorStore.getState().states.get(currentEnvironment.id)!,
+          checkSummary: null,
+        },
+      });
+    });
+
+    expect(screen.queryByRole("status") === null).toBe(true);
   });
 
   test("does not show a CI indicator before GitHub reports checks", () => {

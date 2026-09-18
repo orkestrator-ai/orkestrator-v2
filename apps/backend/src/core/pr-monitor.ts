@@ -190,7 +190,7 @@ export class PrMonitorService {
         // Storage is authoritative for the persisted PR fields; the entry's
         // copy exists so a check can see what the previous reading was.
         const targetChanged = this.replaceTarget(entry, target);
-        if (targetChanged) this.emitState(entry);
+        if (targetChanged && entry.lastEmitted) this.emitState(entry);
         if (!target.ready && entry.active) this.pause(target.environmentId);
         else if (target.ready && !entry.active) {
           entry.active = true;
@@ -269,6 +269,9 @@ export class PrMonitorService {
     let restorePaused = false;
     if (entry) {
       const targetChanged = this.replaceTarget(entry, reconciledTarget);
+      // A confirmed terminal result is no longer a speculative probe and is
+      // meaningful to clients even when the entry began life unannounced.
+      entry.provisional = false;
       if (targetChanged) this.emitState(entry);
       if (!entry.active) {
         entry.active = true;
@@ -301,7 +304,7 @@ export class PrMonitorService {
     const entry = this.entries.get(target.environmentId);
     if (entry) {
       const targetChanged = this.replaceTarget(entry, target);
-      if (targetChanged) this.emitState(entry);
+      if (targetChanged && entry.lastEmitted) this.emitState(entry);
       if (entry.active) this.scheduleNext(entry, 0);
       return;
     }

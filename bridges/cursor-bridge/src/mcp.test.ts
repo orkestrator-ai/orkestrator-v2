@@ -378,6 +378,46 @@ describe("hosted Orkestrator custom tools", () => {
     await hosted.close();
   });
 
+  test("forwards omitted and null arguments as empty objects for zero-argument tools", async () => {
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    setCursorMcpTransportForTests({
+      async connect() {
+        return {
+          tools: ["list_projects", "get_repository_context", "list_workflows"].map((name) => ({
+            name,
+            inputSchema: { type: "object", properties: {}, additionalProperties: false },
+          })),
+          async call(name, args) {
+            calls.push({ name, args });
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+          async close() {},
+        };
+      },
+    });
+    const hosted = await hostOrkestratorCustomTools({
+      url: "http://127.0.0.1:4567/mcp",
+      token: "coord-token",
+    });
+    if (!hosted) throw new Error("missing hosted tools");
+
+    await expect(
+      hosted.customTools.list_projects?.execute(undefined as never, {}),
+    ).resolves.toEqual({ content: [{ type: "text", text: "ok" }] });
+    await expect(
+      hosted.customTools.get_repository_context?.execute(null as never, {}),
+    ).resolves.toEqual({ content: [{ type: "text", text: "ok" }] });
+    await expect(
+      hosted.customTools.list_workflows?.execute(undefined as never, {}),
+    ).resolves.toEqual({ content: [{ type: "text", text: "ok" }] });
+    expect(calls).toEqual([
+      { name: "list_projects", args: {} },
+      { name: "get_repository_context", args: {} },
+      { name: "list_workflows", args: {} },
+    ]);
+    await hosted.close();
+  });
+
   test("a failed connect is a notice, not a thrown attach", async () => {
     setCursorMcpTransportForTests({
       async connect() {

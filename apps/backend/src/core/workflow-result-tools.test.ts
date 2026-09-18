@@ -82,6 +82,84 @@ describe("workflow result contract validation", () => {
     expect(negative).toEqual([]);
   });
 
+  test("placeholder narrative fields are rejected for every final result shape", () => {
+    const cases = [
+      ["feature-plan-state", { phase: "collecting", title: "probe", summary: "" }, "$.title"],
+      [
+        "story-refinement",
+        {
+          storyId: "story-1",
+          title: "probe",
+          description: "Final description.",
+          acceptanceCriteria: ["Criterion"],
+        },
+        "$.title",
+      ],
+      [
+        "validation-plan",
+        { headRef: "a".repeat(40), commands: [], limitations: ["probe"] },
+        "$.limitations[0]",
+      ],
+      [
+        "review-preparation",
+        { validation: [], uncommittedFiles: [], limitations: ["This is a probe."] },
+        "$.limitations[0]",
+      ],
+      ["review-report", { ...report, reviewSummary: "probe" }, "$.reviewSummary"],
+      [
+        "fix-result",
+        {
+          complete: true,
+          summary: "probe",
+          filesChanged: [],
+          commandsRun: [],
+          notes: [],
+          limitations: [],
+        },
+        "$.summary",
+      ],
+      ["verification-result", { complete: true, rationale: "probe" }, "$.rationale"],
+      [
+        "pr-result",
+        { status: "created", url: "https://github.com/org/repo/pull/1", summary: "probe" },
+        "$.summary",
+      ],
+    ] as const;
+
+    for (const [kind, value, path] of cases) {
+      expect(validateWorkflowResult(kind, value)).toContainEqual(
+        expect.objectContaining({ path, code: "placeholder_value" }),
+      );
+    }
+  });
+
+  test("placeholder matching is whole-field and leaves ordinary prose unchanged", () => {
+    const legitimate = {
+      ...report,
+      whatChanged: {
+        ...report.whatChanged,
+        overview: "The test harness now rejects a placeholder before accepting the report.",
+      },
+      reviewScope: {
+        ...report.reviewScope,
+        limitations: ["A sample project was unavailable, so the integration suite was not run."],
+      },
+      reviewSummary: "The placeholder guard is covered by focused tests.",
+    };
+    expect(validateWorkflowResult("review-report", legitimate)).toEqual([]);
+
+    const nestedProbe = {
+      ...report,
+      reviewScope: { ...report.reviewScope, limitations: ["placeholder only"] },
+    };
+    expect(validateWorkflowResult("review-report", nestedProbe)).toContainEqual(
+      expect.objectContaining({
+        path: "$.reviewScope.limitations[0]",
+        code: "placeholder_value",
+      }),
+    );
+  });
+
   test("wrong types, unknown properties, and enum confusion are reported by path", () => {
     const issues = validateWorkflowResult("feature-plan-state", {
       phase: "stories ",
@@ -269,6 +347,26 @@ describe("workflow result context fencing", () => {
     expect(await service.projection(resultKey)).toBe("correcting");
   });
 
+  test("a review-report probe is rejected without requiring consolidation context", async () => {
+    const resultKey = crypto.randomUUID();
+    await service.prepare({
+      resultKey,
+      kind: "review-report",
+      ...scope,
+      provider: "cursor",
+    });
+    const probe = { ...report, reviewSummary: "probe" };
+
+    expect(await service.submit(scope, resultKey, probe)).toMatchObject({
+      ok: false,
+      error: {
+        code: "invalid_result",
+        issues: [expect.objectContaining({ path: "$.reviewSummary", code: "placeholder_value" })],
+      },
+    });
+    expect(await service.projection(resultKey)).toBe("correcting");
+  });
+
   test("a submission with no accepted slot is denied rather than fabricated", async () => {
     const denied = await service.submit(scope, crypto.randomUUID(), { phase: "collecting" });
     expect(denied.ok).toBe(false);
@@ -281,6 +379,126 @@ describe("workflow result context fencing", () => {
 });
 
 describe("workflow result broker tools", () => {
+  test("broker validation schema rejects bad capabilities and the handler authorizes and forwards JSON", async () => {
+    type Registration = {
+      meta: { inputSchema: { safeParse(value: unknown): { success: boolean } } };
+      handler: (args: Record<string, unknown>) => Promise<unknown>;
+    };
+    const registrations = new Map<string, Registration>();
+    const server = {
+      registerTool(name: string, meta: Registration["meta"], handler: Registration["handler"]) {
+        registrations.set(name, { meta, handler });
+      },
+    };
+    const resultKey = crypto.randomUUID();
+    const capability = "c".repeat(32);
+    const authorizationCalls: unknown[][] = [];
+    const validationCalls: unknown[][] = [];
+    let failValidation = false;
+    const workflowResults = {
+      async authorizeCapability(...args: unknown[]) {
+        authorizationCalls.push(args);
+        return args[1] === resultKey && args[2] === capability;
+      },
+      async validate(...args: unknown[]) {
+        validationCalls.push(args);
+        if (failValidation) throw new Error("disk unavailable");
+        return { ok: true, valid: true };
+      },
+      async binding() {
+        return { kind: "review-report" };
+      },
+      async submit() {
+        return { ok: true, lifecycle: "accepted" };
+      },
+      async status() {
+        return null;
+      },
+    };
+    const { registerWorkflowResultBrokerTools } = await import("./workflow-result-tools.js");
+    const scope = { environmentId: "env-1", projectId: "project-1" };
+    registerWorkflowResultBrokerTools(server as never, workflowResults as never, scope);
+    const registration = registrations.get("validate_workflow_result");
+    if (!registration) throw new Error("missing validation tool");
+
+    expect(registration.meta.inputSchema.safeParse({ resultKey, result: {} }).success).toBe(false);
+    expect(
+      registration.meta.inputSchema.safeParse({ resultKey, capability: "short", result: {} })
+        .success,
+    ).toBe(false);
+    expect(
+      registration.meta.inputSchema.safeParse({ resultKey, capability, result: undefined }).success,
+    ).toBe(false);
+    const result = { nested: [true, null, 1, "value"] };
+    expect(registration.meta.inputSchema.safeParse({ resultKey, capability, result }).success).toBe(
+      true,
+    );
+
+    expect(
+      await registration.handler({
+        resultKey: crypto.randomUUID(),
+        capability,
+        result,
+      }),
+    ).toMatchObject({
+      isError: true,
+      structuredContent: { ok: false, error: { code: "capability_denied" } },
+    });
+    expect(validationCalls).toHaveLength(0);
+
+    expect(await registration.handler({ resultKey, capability, result })).toMatchObject({
+      structuredContent: { ok: true, valid: true },
+    });
+    expect(authorizationCalls.at(-1)).toEqual([scope, resultKey, capability, "opencode"]);
+    expect(validationCalls).toEqual([[scope, resultKey, result]]);
+
+    failValidation = true;
+    expect(await registration.handler({ resultKey, capability, result })).toMatchObject({
+      isError: true,
+      structuredContent: { ok: false, error: { code: "storage_unavailable" } },
+    });
+  });
+
+  test("attempt-scoped validation denies a different result key before service access", async () => {
+    const handlers = new Map<string, (args: Record<string, unknown>) => Promise<unknown>>();
+    const server = {
+      registerTool(
+        name: string,
+        _meta: unknown,
+        handler: (args: Record<string, unknown>) => Promise<unknown>,
+      ) {
+        handlers.set(name, handler);
+      },
+    };
+    let validations = 0;
+    const workflowResults = {
+      async validate() {
+        validations += 1;
+        return { ok: true, valid: true };
+      },
+      async submit() {
+        return { ok: true, lifecycle: "accepted" };
+      },
+      async status() {
+        return null;
+      },
+    };
+    const { registerWorkflowResultTools } = await import("./workflow-result-tools.js");
+    registerWorkflowResultTools(server as never, workflowResults as never, {
+      environmentId: "env-1",
+      projectId: "project-1",
+      workflowResultKey: crypto.randomUUID(),
+      kind: "review-report",
+    });
+    const validate = handlers.get("validate_workflow_result");
+    if (!validate) throw new Error("missing validation tool");
+    expect(await validate({ resultKey: crypto.randomUUID(), result: report })).toMatchObject({
+      isError: true,
+      structuredContent: { ok: false, error: { code: "capability_denied" } },
+    });
+    expect(validations).toBe(0);
+  });
+
   test("status reports capability rejection, unavailability, and storage failure", async () => {
     const handlers = new Map<string, (args: Record<string, unknown>) => Promise<unknown>>();
     const server = {

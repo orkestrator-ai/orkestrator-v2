@@ -27,7 +27,10 @@ import {
   type WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
 import { validateWorkflowResult } from "./workflow-result-contracts.js";
-import { WorkflowResultMetrics } from "./workflow-result-metrics.js";
+import {
+  WorkflowResultMetrics,
+  type WorkflowResultPreflightOutcome,
+} from "./workflow-result-metrics.js";
 
 const MAX_STORE_BYTES = 64 * 1024 * 1024;
 const MAX_CAPABILITY_IDENTITY_BYTES = 4 * 1024;
@@ -212,6 +215,33 @@ export class WorkflowResultService {
     this.metrics = metrics;
   }
 
+  private beginPending(resultKey: string, bytes: number): boolean {
+    const pendingForKey = this.pendingCallsByKey.get(resultKey) ?? 0;
+    if (
+      this.pendingCalls >= WORKFLOW_RESULT_MAX_PENDING_CALLS ||
+      pendingForKey >= WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY ||
+      this.pendingBytes + bytes > WORKFLOW_RESULT_MAX_PENDING_BYTES
+    ) {
+      return false;
+    }
+    this.pendingCalls += 1;
+    this.pendingBytes += bytes;
+    this.pendingCallsByKey.set(resultKey, pendingForKey + 1);
+    this.metrics.setGauge("pending_calls", this.pendingCalls);
+    this.metrics.setGauge("pending_bytes", this.pendingBytes);
+    return true;
+  }
+
+  private endPending(resultKey: string, bytes: number): void {
+    this.pendingCalls -= 1;
+    this.pendingBytes -= bytes;
+    const remainingForKey = (this.pendingCallsByKey.get(resultKey) ?? 1) - 1;
+    if (remainingForKey > 0) this.pendingCallsByKey.set(resultKey, remainingForKey);
+    else this.pendingCallsByKey.delete(resultKey);
+    this.metrics.setGauge("pending_calls", this.pendingCalls);
+    this.metrics.setGauge("pending_bytes", this.pendingBytes);
+  }
+
   async initializeCapabilityIdentity(): Promise<void> {
     if (this.capabilityIdentity) return;
     await mkdir(path.dirname(this.capabilityIdentityPath), { recursive: true });
@@ -380,6 +410,7 @@ export class WorkflowResultService {
     try {
       serialized = serialize(result);
     } catch {
+      this.metrics.recordPreflight("invalid_result");
       return {
         ok: false,
         error: {
@@ -389,7 +420,9 @@ export class WorkflowResultService {
         },
       };
     }
-    if (Buffer.byteLength(serialized, "utf8") > WORKFLOW_RESULT_MAX_BYTES) {
+    const validationBytes = Buffer.byteLength(serialized, "utf8");
+    if (validationBytes > WORKFLOW_RESULT_MAX_BYTES) {
+      this.metrics.recordPreflight("result_too_large");
       return {
         ok: false,
         error: {
@@ -399,47 +432,77 @@ export class WorkflowResultService {
         },
       };
     }
-    const entry = (await this.load()).entries[resultKey];
-    if (
-      !entry ||
-      entry.environmentId !== scope.environmentId ||
-      entry.projectId !== scope.projectId
-    ) {
+    if (!this.beginPending(resultKey, validationBytes)) {
+      this.metrics.recordPreflight("backpressure");
       return {
         ok: false,
         error: {
-          code: "capability_denied",
-          nextAction: "stop",
-          message: "This tool connection cannot validate that workflow result.",
+          code: "backpressure",
+          nextAction: "lookup_or_resubmit",
+          message: "The workflow result service is busy. Check status before retrying.",
         },
       };
     }
-    if (entry.lifecycle !== "open") {
-      return {
-        ok: false,
-        error: {
-          code: entry.lifecycle === "exhausted" ? "correction_budget_exhausted" : "attempt_closed",
-          nextAction: "stop",
-          message:
-            entry.lifecycle === "exhausted"
-              ? "The correction budget for this workflow result is exhausted."
-              : "This workflow result attempt is closed.",
-        },
-      };
+    let outcome: WorkflowResultPreflightOutcome = "invalid_result";
+    try {
+      const entry = (await this.load()).entries[resultKey];
+      if (
+        !entry ||
+        entry.environmentId !== scope.environmentId ||
+        entry.projectId !== scope.projectId
+      ) {
+        outcome = "capability_denied";
+        return {
+          ok: false,
+          error: {
+            code: "capability_denied",
+            nextAction: "stop",
+            message: "This tool connection cannot validate that workflow result.",
+          },
+        };
+      }
+      if (entry.lifecycle !== "open") {
+        outcome =
+          entry.lifecycle === "exhausted" ? "correction_budget_exhausted" : "attempt_closed";
+        return {
+          ok: false,
+          error: {
+            code: outcome,
+            nextAction: "stop",
+            message:
+              entry.lifecycle === "exhausted"
+                ? "The correction budget for this workflow result is exhausted."
+                : "This workflow result attempt is closed.",
+          },
+        };
+      }
+      const validationStartedAt = Date.now();
+      let issues: WorkflowResultValidationIssue[];
+      try {
+        issues = validateEntryResult(entry, result);
+      } finally {
+        this.metrics.recordValidationDuration(entry.kind, Date.now() - validationStartedAt);
+      }
+      if (issues.length > 0) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_result",
+            nextAction: "correct",
+            message: "The result is not valid. Correct the reported fields before submitting it.",
+            issues,
+          },
+        };
+      }
+      outcome = "valid";
+      return { ok: true, valid: true };
+    } catch (error) {
+      outcome = "storage_unavailable";
+      throw error;
+    } finally {
+      this.metrics.recordPreflight(outcome);
+      this.endPending(resultKey, validationBytes);
     }
-    const issues = validateEntryResult(entry, result);
-    if (issues.length > 0) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_result",
-          nextAction: "correct",
-          message: "The result is not valid. Correct the reported fields before submitting it.",
-          issues,
-        },
-      };
-    }
-    return { ok: true, valid: true };
   }
 
   async submit(
@@ -462,7 +525,8 @@ export class WorkflowResultService {
         },
       };
     }
-    if (Buffer.byteLength(serialized, "utf8") > WORKFLOW_RESULT_MAX_BYTES) {
+    const submissionBytes = Buffer.byteLength(serialized, "utf8");
+    if (submissionBytes > WORKFLOW_RESULT_MAX_BYTES) {
       return {
         ok: false,
         error: {
@@ -472,12 +536,7 @@ export class WorkflowResultService {
         },
       };
     }
-    const pendingForKey = this.pendingCallsByKey.get(resultKey) ?? 0;
-    if (
-      this.pendingCalls >= WORKFLOW_RESULT_MAX_PENDING_CALLS ||
-      pendingForKey >= WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY ||
-      this.pendingBytes + Buffer.byteLength(serialized, "utf8") > WORKFLOW_RESULT_MAX_PENDING_BYTES
-    ) {
+    if (!this.beginPending(resultKey, submissionBytes)) {
       return {
         ok: false,
         error: {
@@ -487,10 +546,6 @@ export class WorkflowResultService {
         },
       };
     }
-    const submissionBytes = Buffer.byteLength(serialized, "utf8");
-    this.pendingCalls += 1;
-    this.pendingBytes += submissionBytes;
-    this.pendingCallsByKey.set(resultKey, pendingForKey + 1);
     try {
       return await this.mutate(async (store) => {
         const entry = store.entries[resultKey];
@@ -650,13 +705,7 @@ export class WorkflowResultService {
         return { ok: true, receipt, lifecycle: entry.lifecycle, duplicate: false };
       });
     } finally {
-      this.pendingCalls -= 1;
-      this.pendingBytes -= submissionBytes;
-      const remainingForKey = (this.pendingCallsByKey.get(resultKey) ?? 1) - 1;
-      if (remainingForKey > 0) this.pendingCallsByKey.set(resultKey, remainingForKey);
-      else this.pendingCallsByKey.delete(resultKey);
-      this.metrics.setGauge("pending_calls", this.pendingCalls);
-      this.metrics.setGauge("pending_bytes", this.pendingBytes);
+      this.endPending(resultKey, submissionBytes);
     }
   }
 

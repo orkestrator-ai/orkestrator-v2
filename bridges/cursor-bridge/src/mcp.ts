@@ -178,7 +178,8 @@ export async function hostOrkestratorCustomTools(
       description: boundedDescription(listed.description, `Orkestrator Control MCP tool ${name}`),
       ...(inputSchema ? { inputSchema } : {}),
       execute: async (args) => {
-        if (!isObject(args)) {
+        const forwardedArgs = args === undefined || args === null ? {} : args;
+        if (!isObject(forwardedArgs)) {
           return {
             content: [
               {
@@ -189,7 +190,7 @@ export async function hostOrkestratorCustomTools(
             isError: true as const,
           };
         }
-        const result = await connection.call(remoteName, args);
+        const result = await connection.call(remoteName, forwardedArgs);
         return {
           content: [{ type: "text" as const, text: formatMcpContent(result) }],
           ...(result.isError === true ? { isError: true } : {}),

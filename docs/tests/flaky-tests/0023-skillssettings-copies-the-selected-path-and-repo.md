@@ -1,7 +1,7 @@
 # `SkillsSettings > copies the selected path and reports clipboard failures` (`apps/web/src/components/settings/SkillsSettings.test.tsx:730`)
 
 - **ID:** 0023
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-28; recurred 2026-09-11 and 2026-09-15
 - **Original command:** `bun run --cwd apps/web test`
 - **Worker configuration:** the web package ran `bun test src --parallel` with
@@ -51,3 +51,18 @@ The first-prompt changes under validation do not change SkillsSettings. This
 recurrence points to clipboard confirmation timing or fixture state under the
 aggregate workload; the exact mechanism is still unconfirmed. No assertion or
 timeout was relaxed.
+
+## Resolution (2026-09-18)
+
+The confirmation reset was a passive effect keyed by the selected path. After a
+scan selected the first skill, the copy button could become queryable before
+that effect ran. If the async clipboard write settled first, the delayed effect
+immediately cleared the successful confirmation. A 50-repetition focused run
+reproduced this family three times across 150 cases, including the missing
+`Skill path copied` button from this entry.
+
+The selection reset now runs as a layout effect, before the button can be used,
+and carries a selection version across the clipboard await so a completion from
+an old pane cannot arm a stale confirmation. A new regression covers that
+in-flight selection change. The four clipboard cases then passed 200/200 under
+repetition, and the complete 46-test owner passed.

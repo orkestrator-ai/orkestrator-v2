@@ -5,8 +5,10 @@ import { join } from "node:path";
 import {
   clearJsonFileCache,
   getJsonFileParseCount,
+  getJsonFileReadCohortStateForTesting,
   readJsonFileCached,
   readJsonSliceCached,
+  setJsonFileCacheBeforeStatForTesting,
 } from "./json-file-cache.js";
 
 describe("json file cache", () => {
@@ -149,6 +151,105 @@ describe("json file cache", () => {
       expect(project).toEqual({ beta: { command: "beta-server" } });
       expect(whole).toEqual(config);
       expect(getJsonFileParseCount(file)).toBe(1);
+    });
+
+    test("keeps a completed parse for concurrent readers whose metadata is delayed", async () => {
+      await writeFile(file, JSON.stringify(config));
+
+      let statCall = 0;
+      let releaseDelayedStats!: () => void;
+      const delayedStats = new Promise<void>((resolve) => {
+        releaseDelayedStats = resolve;
+      });
+      setJsonFileCacheBeforeStatForTesting(async (target) => {
+        if (target === file && ++statCall > 1) await delayedStats;
+      });
+
+      // All calls join the same read cohort synchronously, but the latter two
+      // cannot stat until the first reader has finished parsing. Deleting a
+      // settled in-flight parse immediately made this sequence parse twice.
+      const globalPromise = readJsonSliceCached<typeof config, unknown>(
+        file,
+        "mcpServers",
+        (parsed) => parsed.mcpServers,
+      );
+      const projectPromise = readJsonSliceCached<typeof config, unknown>(
+        file,
+        "projects:/repo:mcpServers",
+        (parsed) => parsed.projects["/repo"]?.mcpServers,
+      );
+      const wholePromise = readJsonFileCached<typeof config>(file);
+
+      expect(getJsonFileReadCohortStateForTesting(file)).toEqual({ readers: 3, parses: 0 });
+
+      try {
+        expect(await globalPromise).toEqual({ alpha: { command: "alpha-server" } });
+        expect(getJsonFileParseCount(file)).toBe(1);
+        expect(getJsonFileReadCohortStateForTesting(file)).toEqual({ readers: 2, parses: 1 });
+      } finally {
+        // Do not strand the other readers if an assertion above fails.
+        releaseDelayedStats();
+      }
+
+      const [project, whole] = await Promise.all([projectPromise, wholePromise]);
+      expect(project).toEqual({ beta: { command: "beta-server" } });
+      expect(whole).toEqual(config);
+      expect(getJsonFileParseCount(file)).toBe(1);
+      expect(getJsonFileReadCohortStateForTesting(file)).toBeNull();
+    });
+
+    test("retains mixed fingerprints until an overlapping cohort tears down", async () => {
+      await writeFile(file, JSON.stringify({ value: "old" }));
+
+      let statCall = 0;
+      let releaseSecondStat!: () => void;
+      let releaseThirdStat!: () => void;
+      const secondStat = new Promise<void>((resolve) => {
+        releaseSecondStat = resolve;
+      });
+      const thirdStat = new Promise<void>((resolve) => {
+        releaseThirdStat = resolve;
+      });
+      setJsonFileCacheBeforeStatForTesting(async (target) => {
+        if (target !== file) return;
+        const call = ++statCall;
+        if (call === 2) await secondStat;
+        if (call === 3) await thirdStat;
+      });
+
+      const oldPromise = readJsonSliceCached<{ value: string }, string>(
+        file,
+        "old-value",
+        (parsed) => parsed.value,
+      );
+      const newPromise = readJsonSliceCached<{ value: string }, string>(
+        file,
+        "new-value",
+        (parsed) => parsed.value,
+      );
+      const overlappingPromise = readJsonSliceCached<{ value: string }, string>(
+        file,
+        "overlapping-new-value",
+        (parsed) => parsed.value,
+      );
+
+      expect(getJsonFileReadCohortStateForTesting(file)).toEqual({ readers: 3, parses: 0 });
+      try {
+        expect(await oldPromise).toBe("old");
+        expect(getJsonFileReadCohortStateForTesting(file)).toEqual({ readers: 2, parses: 1 });
+        await writeFile(file, JSON.stringify({ value: "new and longer" }));
+        releaseSecondStat();
+        expect(await newPromise).toBe("new and longer");
+        expect(getJsonFileParseCount(file)).toBe(2);
+        expect(getJsonFileReadCohortStateForTesting(file)).toEqual({ readers: 1, parses: 2 });
+      } finally {
+        releaseSecondStat();
+        releaseThirdStat();
+      }
+
+      expect(await overlappingPromise).toBe("new and longer");
+      expect(getJsonFileParseCount(file)).toBe(2);
+      expect(getJsonFileReadCohortStateForTesting(file)).toBeNull();
     });
 
     test("caches an absent slice without re-parsing, and revalidates on change", async () => {

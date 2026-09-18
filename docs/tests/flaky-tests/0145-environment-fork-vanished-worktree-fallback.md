@@ -1,7 +1,7 @@
 # Vanished worktree fallback rejects in the aggregate suite
 
 - **ID:** 0145
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-17
 - **Test:** `fork_environment > falls back to the project checkout when a local
   worktree has vanished`
@@ -23,3 +23,16 @@
   platform-version and provider-adapter changes do not touch this test or the
   environment-fork implementation, and the captured aggregate output did not
   retain enough of the rejection to identify which shared dependency changed.
+
+## Resolution (2026-09-18)
+
+The assertion started `resolveEnvironmentForkBase` and then launched a second
+Git subprocess to construct the expected value inline. Under aggregate process
+contention, both competed inside Bun's generic five-second test deadline. When
+that deadline won, fixture teardown could remove the temporary repository while
+the subject was still reading it, converting the timeout into the reported
+between-test rejection.
+
+The expected commit is now read before the subject starts, and this explicitly
+subprocess-backed case uses the shared 30-second asynchronous test budget. The
+target passed 50/50 under repetition and all 24 tests in the owner passed.

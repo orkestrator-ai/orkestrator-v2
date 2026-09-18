@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ImgHTMLAttributes } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ImgHTMLAttributes,
+} from "react";
 import { AlertTriangle, Check, Copy, FolderOpen, Loader2, RefreshCw, Search } from "lucide-react";
 import { toast } from "sonner";
 import type { Components } from "react-markdown";
@@ -208,6 +216,7 @@ export function SkillsSettings({
   const scanTokens = useRef<Record<string, number>>({});
   const fileToken = useRef(0);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copySelectionVersion = useRef(0);
   /** Providers whose scan has completed, for `reuseLoadedScans`. */
   const loadedProviders = useRef<Set<string>>(new Set());
 
@@ -342,7 +351,8 @@ export function SkillsSettings({
    * the next skill's button reading "copied", and a second copy would have its
    * confirmation cancelled by the first copy's timer.
    */
-  useEffect(() => {
+  useLayoutEffect(() => {
+    copySelectionVersion.current += 1;
     setCopied(false);
     return () => {
       if (copyTimer.current) clearTimeout(copyTimer.current);
@@ -352,12 +362,21 @@ export function SkillsSettings({
 
   const copyPath = useCallback(async () => {
     if (!selected) return;
+    const selectionVersion = copySelectionVersion.current;
     try {
       await navigator.clipboard.writeText(selected.filePath);
+      // The clipboard API may settle after the user has selected another skill.
+      // That success belongs to the old pane and must not arm its confirmation
+      // timer (or reappear if the user returns before the timer expires).
+      if (copySelectionVersion.current !== selectionVersion) return;
       if (copyTimer.current) clearTimeout(copyTimer.current);
       setCopied(true);
       copyTimer.current = setTimeout(() => setCopied(false), COPY_CONFIRM_MS);
     } catch {
+      // A failure from a pane the user has already left is as stale as its
+      // success. Do not surface an error for an action that is no longer
+      // visible or relevant to the current selection.
+      if (copySelectionVersion.current !== selectionVersion) return;
       toast.error("Could not copy the path to the clipboard");
     }
   }, [selected]);

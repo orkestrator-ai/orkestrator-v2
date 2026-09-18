@@ -74,6 +74,8 @@ jobs:
         run: mise run download:bun
 
       - name: Build the desktop application
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: mise run build:all
 
       - name: Exercise the standalone packaged-backend layout

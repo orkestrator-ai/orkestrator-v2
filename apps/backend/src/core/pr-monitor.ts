@@ -58,8 +58,10 @@ export interface PrDetection {
   state: PrState;
   /** Null means GitHub has not determined mergeability yet. */
   hasMergeConflicts: boolean | null;
-  /** Null means the rollup was not fetched or could not be fetched. */
+  /** Null means no usable rollup was returned. See {@link checkSummaryStatus}. */
   checkSummary: PrCheckSummary | null;
+  /** Distinguishes a throttled/irrelevant query from an attempted query failure. */
+  checkSummaryStatus: "skipped" | "succeeded" | "failed";
 }
 
 export interface PrMonitorDetectionOptions {
@@ -152,7 +154,7 @@ interface PrMonitorEntry {
   observedPr: { url: string; state: PrState } | null;
   /** Latest check rollup; intentionally runtime state so every UI rehydrates from the monitor. */
   checkSummary: PrCheckSummary | null;
-  /** Last rollup-query attempt; limits GitHub traffic independently of PR-state polling. */
+  /** Last completed rollup-query attempt; limits GitHub traffic independently of PR polling. */
   lastCheckSummaryAt: number | null;
   /** Last emitted state; suppresses byte-identical events. */
   lastEmitted?: PrMonitorEnvironmentState;
@@ -458,11 +460,13 @@ export class PrMonitorService {
       try {
         const now = this.options.monotonicNow();
         const includeCheckSummary =
-          entry.mode === "normal" &&
+          entry.mode !== "merge-pending" &&
           (entry.lastCheckSummaryAt === null ||
             now - entry.lastCheckSummaryAt >= PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS);
-        if (includeCheckSummary) entry.lastCheckSummaryAt = now;
         detection = await this.options.effects.detect(detectionTarget, { includeCheckSummary });
+        if (includeCheckSummary && detection?.checkSummaryStatus !== "skipped") {
+          entry.lastCheckSummaryAt = now;
+        }
       } catch (error) {
         failed = true;
         this.warn(`PR detection failed for ${entry.target.environmentId}`, error);
@@ -628,15 +632,18 @@ export class PrMonitorService {
     if (observedChanged) {
       entry.observedPr = { url: detection.url, state: detection.state };
     }
-    // A null summary means this cycle skipped the separately throttled query or
-    // that query failed. Preserve the last good reading for the same open PR.
-    // A successful empty rollup still clears the badge, and terminal/replaced
-    // PRs must never retain a summary that no longer describes what is shown.
+    // Preserve the last good reading only when this cycle intentionally skipped
+    // the separately throttled query. A failed attempted refresh clears the
+    // badge rather than presenting obsolete counts as current. A successful
+    // empty rollup also clears it, as do terminal and replacement PRs.
     if (detection.url !== previous.prUrl || detection.state !== "open") {
       entry.checkSummary = null;
     }
-    if (detection.checkSummary !== null) {
-      entry.checkSummary = detection.checkSummary.total > 0 ? detection.checkSummary : null;
+    if (detection.checkSummaryStatus === "failed") {
+      entry.checkSummary = null;
+    } else if (detection.checkSummaryStatus === "succeeded") {
+      entry.checkSummary =
+        detection.checkSummary && detection.checkSummary.total > 0 ? detection.checkSummary : null;
     }
     return transition;
   }
@@ -837,18 +844,23 @@ export class PrMonitorService {
 
   private replaceTarget(entry: PrMonitorEntry, target: PrMonitorTarget): boolean {
     const changed = !isSameTarget(entry.target, target);
+    const shouldClearSummary =
+      entry.target.prUrl !== target.prUrl ||
+      target.prState === "merged" ||
+      target.prState === "closed";
+    const summaryChanged = shouldClearSummary && entry.checkSummary !== null;
+    if (shouldClearSummary) {
+      entry.checkSummary = null;
+      entry.lastCheckSummaryAt = null;
+    }
     if (changed) {
-      // A summary belongs to one immutable PR URL. Keep it through readiness
-      // and state changes for that PR, but never let it leak onto a replacement.
-      if (entry.target.prUrl !== target.prUrl) {
-        entry.checkSummary = null;
-        entry.lastCheckSummaryAt = null;
-      }
+      // A summary belongs to one open immutable PR URL. Keep it through
+      // readiness changes, but never leak it onto a replacement or terminal PR.
       entry.generation += 1;
       if (entry.checkInProgress) entry.recheckRequested = true;
     }
     entry.target = target;
-    return changed;
+    return changed || summaryChanged;
   }
 
   private isCurrent(entry: PrMonitorEntry, generation: number): boolean {

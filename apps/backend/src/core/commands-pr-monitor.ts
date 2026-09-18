@@ -276,8 +276,9 @@ export async function detectEnvironmentPullRequest(
       timeoutMs: 30_000,
     });
     const detection = parsePrMonitorDetectionResponse(request, stdout);
-    if (!detection || detection.state !== "open" || options.includeCheckSummary === false) {
-      return detection;
+    if (!detection) return null;
+    if (detection.state !== "open" || options.includeCheckSummary !== true) {
+      return { ...detection, checkSummaryStatus: "skipped" };
     }
     const checkRequest = getPrMonitorCheckRequest(detection.url);
     try {
@@ -285,9 +286,13 @@ export async function detectEnvironmentPullRequest(
         cwd: target.worktreePath,
         timeoutMs: 10_000,
       });
-      return { ...detection, checkSummary: parsePrMonitorCheckResponse(result.stdout) };
+      return {
+        ...detection,
+        checkSummary: parsePrMonitorCheckResponse(result.stdout),
+        checkSummaryStatus: "succeeded",
+      };
     } catch {
-      return detection;
+      return { ...detection, checkSummaryStatus: "failed" };
     }
   }
   if (!target.containerId) throw new Error("Container environment has no container id");
@@ -296,8 +301,9 @@ export async function detectEnvironmentPullRequest(
     withContainerRuntimeCredential(request.shellCommand),
   );
   const detection = parsePrMonitorDetectionResponse(request, output);
-  if (!detection || detection.state !== "open" || options.includeCheckSummary === false) {
-    return detection;
+  if (!detection) return null;
+  if (detection.state !== "open" || options.includeCheckSummary !== true) {
+    return { ...detection, checkSummaryStatus: "skipped" };
   }
   const checkRequest = getPrMonitorCheckRequest(detection.url);
   try {
@@ -306,9 +312,13 @@ export async function detectEnvironmentPullRequest(
       withContainerRuntimeCredential(checkRequest.shellCommand),
       10_000,
     );
-    return { ...detection, checkSummary: parsePrMonitorCheckResponse(checks) };
+    return {
+      ...detection,
+      checkSummary: parsePrMonitorCheckResponse(checks),
+      checkSummaryStatus: "succeeded",
+    };
   } catch {
-    return detection;
+    return { ...detection, checkSummaryStatus: "failed" };
   }
 }
 
@@ -414,6 +424,7 @@ export async function reconcileConfirmedMerge(
     state: "merged",
     hasMergeConflicts: false,
     checkSummary: null,
+    checkSummaryStatus: "skipped",
   });
 }
 

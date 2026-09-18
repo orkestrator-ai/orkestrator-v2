@@ -215,11 +215,14 @@ function openPr(overrides: Partial<PrMonitorTarget> = {}): PrMonitorTarget {
 }
 
 function detection(overrides: Partial<PrDetection> = {}): PrDetection {
+  const checkSummary = overrides.checkSummary ?? null;
   return {
     url: "https://github.com/org/repo/pull/1",
     state: "open",
     hasMergeConflicts: false,
-    checkSummary: null,
+    checkSummary,
+    checkSummaryStatus:
+      overrides.checkSummaryStatus ?? (checkSummary === null ? "skipped" : "succeeded"),
     ...overrides,
   };
 }
@@ -319,23 +322,18 @@ describe("PrMonitorService", () => {
     expect(harness.stateEvents().at(-1)?.state.checkSummary).toBeNull();
   });
 
-  test("retains the last CI summary when a later rollup fetch fails", async () => {
+  test("clears the last CI summary when a later rollup fetch fails", async () => {
     const harness = createHarness();
     harness.setDetect(async () => detection({ checkSummary: { passed: 2, total: 4, pending: 2 } }));
     harness.service.sync([openPr()]);
     await harness.fireNext();
 
-    const eventsAfterSummary = harness.stateEvents().length;
     harness.clock.value += PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS;
-    harness.setDetect(async () => detection({ checkSummary: null }));
+    harness.setDetect(async () => detection({ checkSummary: null, checkSummaryStatus: "failed" }));
     await harness.fireNext();
 
-    expect(harness.service.snapshot()[0]?.checkSummary).toEqual({
-      passed: 2,
-      total: 4,
-      pending: 2,
-    });
-    expect(harness.stateEvents()).toHaveLength(eventsAfterSummary);
+    expect(harness.service.snapshot()[0]?.checkSummary).toBeNull();
+    expect(harness.stateEvents().at(-1)?.state.checkSummary).toBeNull();
 
     harness.clock.value += PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS;
     harness.setDetect(async () => detection({ checkSummary: { passed: 0, total: 0, pending: 0 } }));
@@ -345,7 +343,55 @@ describe("PrMonitorService", () => {
     expect(harness.stateEvents().at(-1)?.state.checkSummary).toBeNull();
   });
 
-  test("throttles CI rollups in normal mode and skips them in pending modes", async () => {
+  test("retains the last CI summary when a later cycle intentionally skips the rollup", async () => {
+    const harness = createHarness();
+    harness.setDetect(async () => detection({ checkSummary: { passed: 2, total: 4, pending: 2 } }));
+    harness.service.sync([openPr()]);
+    await harness.fireNext();
+
+    const eventsAfterSummary = harness.stateEvents().length;
+    harness.setDetect(async () => detection());
+    await harness.fireNext();
+
+    expect(harness.service.snapshot()[0]?.checkSummary).toEqual({
+      passed: 2,
+      total: 4,
+      pending: 2,
+    });
+    expect(harness.stateEvents()).toHaveLength(eventsAfterSummary);
+  });
+
+  test("clears a CI summary when an open PR becomes terminal", async () => {
+    const harness = createHarness();
+    harness.setDetect(async () => detection({ checkSummary: { passed: 4, total: 4, pending: 0 } }));
+    harness.service.sync([openPr()]);
+    await harness.fireNext();
+
+    harness.setDetect(async () => detection({ state: "merged" }));
+    await harness.fireNext();
+
+    expect(harness.service.snapshot()[0]).toMatchObject({
+      prState: "merged",
+      checkSummary: null,
+    });
+    expect(harness.stateEvents().at(-1)?.state.checkSummary).toBeNull();
+  });
+
+  test("clears a CI summary before removing a PR that disappears", async () => {
+    const harness = createHarness();
+    harness.setDetect(async () => detection({ checkSummary: { passed: 1, total: 2, pending: 1 } }));
+    harness.service.sync([openPr()]);
+    await harness.fireNext();
+
+    harness.setDetect(async () => null);
+    await harness.fireNext();
+
+    expect(harness.service.snapshot()).toEqual([]);
+    expect(harness.stateEvents().at(-1)?.state.checkSummary).toBeNull();
+    expect(harness.removalEvents()).toEqual([{ environmentId: "env-1", removed: true }]);
+  });
+
+  test("throttles CI rollups, fetches on first discovery, and skips merge-pending", async () => {
     const harness = createHarness();
     harness.setDetect(async (_target, options) =>
       detection({
@@ -377,7 +423,33 @@ describe("PrMonitorService", () => {
     createHarnessInstance.setDetect(async () => null);
     createHarnessInstance.service.requestMode(target(), "create-pending");
     await createHarnessInstance.fireNext();
-    expect(createHarnessInstance.calls.detectOptions).toEqual([{ includeCheckSummary: false }]);
+    expect(createHarnessInstance.calls.detectOptions).toEqual([{ includeCheckSummary: true }]);
+  });
+
+  test("does not consume the CI throttle when primary PR detection throws", async () => {
+    const harness = createHarness();
+    let attempt = 0;
+    harness.setDetect(async (_target, options) => {
+      attempt += 1;
+      if (attempt === 1) throw new Error("temporary GitHub failure");
+      return detection({
+        checkSummary: options.includeCheckSummary ? { passed: 1, total: 1, pending: 0 } : null,
+      });
+    });
+    harness.service.sync([openPr()]);
+
+    await harness.fireNext();
+    await harness.fireNext();
+
+    expect(harness.calls.detectOptions).toEqual([
+      { includeCheckSummary: true },
+      { includeCheckSummary: true },
+    ]);
+    expect(harness.service.snapshot()[0]?.checkSummary).toEqual({
+      passed: 1,
+      total: 1,
+      pending: 0,
+    });
   });
 
   test("clears a CI summary for a replacement PR before its first detection", async () => {
@@ -462,10 +534,10 @@ describe("PrMonitorService", () => {
 
   test("publishes CI checks on the same cycle that first discovers a PR", async () => {
     const harness = createHarness();
-    harness.setDetect(async () =>
+    harness.setDetect(async (_target, options) =>
       detection({
         url: "https://github.com/org/repo/pull/3",
-        checkSummary: { passed: 2, total: 3, pending: 1 },
+        checkSummary: options.includeCheckSummary ? { passed: 2, total: 3, pending: 1 } : null,
       }),
     );
     harness.service.requestMode(target(), "create-pending");
@@ -477,6 +549,7 @@ describe("PrMonitorService", () => {
       prUrl: "https://github.com/org/repo/pull/3",
       checkSummary: { passed: 2, total: 3, pending: 1 },
     });
+    expect(harness.calls.detectOptions).toEqual([{ includeCheckSummary: true }]);
     expect(harness.pendingDelays()).toEqual([20_000]);
   });
 
@@ -832,6 +905,21 @@ describe("PrMonitorService", () => {
         },
       },
     ]);
+  });
+
+  test("an externally confirmed merge clears an existing CI summary", async () => {
+    const harness = createHarness();
+    harness.setDetect(async () => detection({ checkSummary: { passed: 4, total: 4, pending: 0 } }));
+    harness.service.sync([openPr()]);
+    await harness.fireNext();
+
+    await harness.service.reconcileTerminal(openPr(), detection({ state: "merged" }));
+
+    expect(harness.service.snapshot()[0]).toMatchObject({
+      prState: "merged",
+      checkSummary: null,
+    });
+    expect(harness.stateEvents().at(-1)?.state.checkSummary).toBeNull();
   });
 
   test("serializes external confirmation with an in-flight monitor reconciliation", async () => {

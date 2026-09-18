@@ -5719,6 +5719,7 @@ describe("ActionBar pull request actions", () => {
       colorClass: "text-orange-600",
       borderClass: "border-orange-500",
       liveText: "2/4 checks; 2 still running",
+      state: "running",
     },
     {
       name: "passed",
@@ -5727,18 +5728,20 @@ describe("ActionBar pull request actions", () => {
       colorClass: "text-red-600",
       borderClass: "border-green-600",
       liveText: "4/4 checks; all checks complete",
+      state: "passed",
     },
     {
       name: "failed",
       summary: { passed: 3, total: 4, pending: 0 },
-      label: "3 of 4 CI checks passed; all checks complete",
+      label: "3 of 4 CI checks passed; 1 failed; all checks complete",
       colorClass: "text-red-600",
       borderClass: "border-red-600",
       liveText: "3/4 checks; all checks complete",
+      state: "failed",
     },
   ])(
     "shows $name CI checks between the PR actions",
-    ({ summary, label, colorClass, borderClass, liveText }) => {
+    ({ summary, label, colorClass, borderClass, liveText, state }) => {
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
       currentCheckSummary = summary;
       render(<ActionBar />);
@@ -5748,6 +5751,7 @@ describe("ActionBar pull request actions", () => {
       expect(status.classList.contains(colorClass)).toBe(true);
       expect(status.classList.contains(borderClass)).toBe(true);
       expect(status.classList.contains("bg-transparent")).toBe(true);
+      expect(status.dataset.state).toBe(state);
 
       const toolbarText = Array.from(status.parentElement?.children ?? []).map(
         (element) => element.textContent,
@@ -5767,10 +5771,23 @@ describe("ActionBar pull request actions", () => {
     view.rerender(<ActionBar />);
 
     const completed = screen.getByRole("status", {
-      name: "3 of 4 CI checks passed; all checks complete",
+      name: "3 of 4 CI checks passed; 1 failed; all checks complete",
     });
     expect(completed.textContent).toBe("3/4 checks; all checks complete");
     expect(completed.textContent).not.toBe(runningText);
+  });
+
+  test("shows a known failure while other CI checks are still running", () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    currentCheckSummary = { passed: 1, total: 4, pending: 2 };
+    render(<ActionBar />);
+
+    const status = screen.getByRole("status", {
+      name: "1 of 4 CI checks passed; 1 failed; 2 still running",
+    });
+    expect(status.dataset.state).toBe("failed");
+    expect(status.classList.contains("border-red-600")).toBe(true);
+    expect(status.classList.contains("text-red-600")).toBe(true);
   });
 
   test("uses compact CI indicator styling in grid presentation", () => {

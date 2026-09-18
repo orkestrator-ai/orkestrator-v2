@@ -10,12 +10,16 @@ test("CI status announces running, failed, and successful completion", async ({ 
   await expect(status).toHaveText("3/4 checks; 1 still running");
   await expect(status).toHaveClass(/border-orange-500/);
   await expect(status).toHaveClass(/bg-transparent/);
+  await expect(status).toHaveAttribute("data-state", "running");
 
   await page.getByRole("button", { name: "Complete with failure" }).click();
   await expect(
-    page.getByRole("status", { name: "3 of 4 CI checks passed; all checks complete" }),
+    page.getByRole("status", {
+      name: "3 of 4 CI checks passed; 1 failed; all checks complete",
+    }),
   ).toHaveText("3/4 checks; all checks complete");
   await expect(page.getByRole("status")).toHaveClass(/border-red-600/);
+  await expect(page.getByRole("status")).toHaveAttribute("data-state", "failed");
 
   await page.getByRole("button", { name: "Complete successfully" }).click();
   await expect(
@@ -23,6 +27,7 @@ test("CI status announces running, failed, and successful completion", async ({ 
   ).toHaveText("4/4 checks; all checks complete");
   await expect(page.getByRole("status")).toHaveClass(/border-green-600/);
   await expect(page.getByRole("status")).toHaveClass(/text-red-600/);
+  await expect(page.getByRole("status")).toHaveAttribute("data-state", "passed");
 });
 
 test("CI status uses compact styling in grid presentation", async ({ page }) => {

@@ -168,19 +168,18 @@ printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/1","state":"CLOSED","
           url: "https://github.com/acme/repo/pull/2",
           state: "open",
           hasMergeConflicts: true,
-          checkSummary: { passed: 1, total: 2, pending: 1 },
+          checkSummary: null,
         });
 
         const ghLog = await fs.readFile(logPath, "utf8");
-        expect(ghLog.trim().split("\n")).toEqual([
+        expect(ghLog.trim()).toBe(
           "pr list --head feature/pr --state all --limit 30 --json url,state,mergeable,updatedAt",
-          "pr view https://github.com/acme/repo/pull/2 --json statusCheckRollup",
-        ]);
+        );
       },
     );
   });
 
-  test("keeps local PR metadata when check rollups are forbidden", async () => {
+  test("one-shot local detection skips check rollups", async () => {
     const worktreePath = await createTempDir("ork-electron-pr-check-permission-");
     const environment = createEnvironment({ worktreePath, branch: "feature/check-permission" });
     const { context } = createContext(environment);
@@ -208,10 +207,9 @@ printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/5","state":"OPEN","me
           checkSummary: null,
         });
 
-        expect((await fs.readFile(logPath, "utf8")).trim().split("\n")).toEqual([
+        expect((await fs.readFile(logPath, "utf8")).trim()).toBe(
           "pr list --head feature/check-permission --state all --limit 30 --json url,state,mergeable,updatedAt",
-          "pr view https://github.com/acme/repo/pull/5 --json statusCheckRollup",
-        ]);
+        );
       },
     );
   });
@@ -420,7 +418,7 @@ exit 0
     );
   });
 
-  test("keeps container PR metadata when check rollups are forbidden", async () => {
+  test("one-shot container detection skips check rollups", async () => {
     const { context } = createContext(
       createEnvironment({
         id: "env-container-check-permission",
@@ -465,9 +463,7 @@ exit 0
         expect(execLog).toContain(
           "gh pr list --head 'feature/container-check-permission' --state all --limit 30 --json url,state,mergeable,updatedAt",
         );
-        expect(execLog).toContain(
-          "gh pr view 'https://github.com/acme/repo/pull/12' --json statusCheckRollup",
-        );
+        expect(execLog).not.toContain("statusCheckRollup");
       },
     );
   });

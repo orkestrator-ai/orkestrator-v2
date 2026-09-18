@@ -168,6 +168,34 @@ describe("usePrMonitorService", () => {
     expect(states.get("env-2")?.mode).toBe("create-pending");
   });
 
+  test("rehydrates CI completion missed while an environment view was inactive", async () => {
+    mockGetPrMonitorState.mockResolvedValueOnce({
+      entries: [makeState("env-1", { checkSummary: { passed: 2, total: 3, pending: 1 } })],
+    });
+    const mounted = renderHook(() => usePrMonitorService());
+    await flush();
+    expect(usePrMonitorStore.getState().states.get("env-1")?.checkSummary).toEqual({
+      passed: 2,
+      total: 3,
+      pending: 1,
+    });
+
+    mounted.unmount();
+    usePrMonitorStore.setState({ states: new Map() });
+    mockGetPrMonitorState.mockResolvedValueOnce({
+      entries: [makeState("env-1", { checkSummary: { passed: 3, total: 3, pending: 0 } })],
+    });
+
+    renderHook(() => usePrMonitorService());
+    await flush();
+
+    expect(usePrMonitorStore.getState().states.get("env-1")?.checkSummary).toEqual({
+      passed: 3,
+      total: 3,
+      pending: 0,
+    });
+  });
+
   test("ignores a malformed snapshot rather than trusting the wire", async () => {
     usePrMonitorStore.getState().applyEvent(stateEvent("env-1"));
     mockGetPrMonitorState.mockImplementation(() =>

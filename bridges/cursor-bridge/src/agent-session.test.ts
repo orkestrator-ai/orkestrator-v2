@@ -669,8 +669,10 @@ describe("ensureAgent", () => {
     });
     expect(state.mcpServerNames).toEqual(["orkestrator"]);
     expect(state.hostedMcpClose).toBeFunction();
+    expect(state.hostedMcpTools?.launch_environment).toBeDefined();
     await detachAgent(state);
     expect(state.hostedMcpClose).toBeUndefined();
+    expect(state.hostedMcpTools).toBeUndefined();
   });
 
   test("a read-only attach drops repository MCP servers even when project settings are opted in", async () => {
@@ -870,6 +872,7 @@ describe("ensureAgent", () => {
     try {
       await expect(ensureAgent(state)).rejects.toThrow("SDK create failed");
       expect(state.hostedMcpClose).toBeUndefined();
+      expect(state.hostedMcpTools).toBeUndefined();
       expect(state.agent).toBeNull();
       expect(closed).toBe(1);
     } finally {

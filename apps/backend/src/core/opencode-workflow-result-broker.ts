@@ -26,9 +26,10 @@ export class OpenCodeWorkflowResultBroker {
   private mcpKey: string | null = null;
   private mcpSetup: { key: string; promise: Promise<void> } | null = null;
   private readonly enabled = new Map<string, string>();
-  private readonly permissionRestore = new Map<string, ReturnType<
-    typeof openCodeWorkflowResultDenyPermissionRules
-  >>();
+  private readonly permissionRestore = new Map<
+    string,
+    ReturnType<typeof openCodeWorkflowResultDenyPermissionRules>
+  >();
 
   constructor(
     private readonly client: OpencodeClient,

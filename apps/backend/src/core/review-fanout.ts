@@ -883,9 +883,7 @@ export class ReviewFanoutRunner {
         agentMcp
           ? {
               agentMcp,
-              ...(agentMcp.workflowResultCapability
-                ? { workflowResultTool: workflowResultToolName("review-report") }
-                : {}),
+              workflowResultTool: workflowResultToolName("review-report"),
             }
           : undefined,
       );
@@ -912,9 +910,7 @@ export class ReviewFanoutRunner {
             effort: reviewer.reasoningEffort,
             ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
             ...(agentMcp ? { agentMcp } : {}),
-            ...(agentMcp?.workflowResultCapability
-              ? { workflowResultTool: workflowResultToolName("review-report") }
-              : {}),
+            ...(agentMcp ? { workflowResultTool: workflowResultToolName("review-report") } : {}),
           },
         );
       } catch (error) {

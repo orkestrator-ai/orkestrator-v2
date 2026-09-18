@@ -1027,7 +1027,8 @@ export class AppServerEngine implements CodexEngine {
   private toThreadParams(config: EngineTurnConfig): Record<string, unknown> {
     const approveAgentMcpTools =
       config.policy?.approvals === "auto-approve" ||
-      (config.policy?.id === "coordinator-read-only" && Boolean(config.permissionProfile));
+      (config.policy?.id === "coordinator-read-only" && Boolean(config.permissionProfile)) ||
+      Boolean(config.workflowResultTool);
     return {
       cwd: config.cwd ?? this.options.cwd,
       // Passed explicitly on every call rather than relying on inherited state.
@@ -1058,8 +1059,10 @@ export class AppServerEngine implements CodexEngine {
                 required: false,
                 startup_timeout_sec: 3,
                 // `approve` bypasses the thread's approval policy, so reserve it
-                // for an explicitly auto-approved policy or the trusted
-                // coordinator profile. Ask/deny must retain Codex's defaults.
+                // for an explicitly auto-approved policy, the trusted
+                // coordinator profile, or a backend-selected tool on an
+                // attempt-scoped workflow result server. Ask/deny must retain
+                // Codex's defaults for ordinary MCP connections.
                 ...(approveAgentMcpTools ? { default_tools_approval_mode: "approve" } : {}),
               },
             },

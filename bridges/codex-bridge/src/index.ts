@@ -13,6 +13,10 @@ import { Hono } from "hono";
 import { compress } from "hono/compress";
 import { isJsonSchema } from "@orkestrator/protocol/structured-output";
 import {
+  WORKFLOW_RESULT_KINDS,
+  workflowResultToolName,
+} from "@orkestrator/protocol/workflow-results";
+import {
   boundTranscriptResponse,
   type TranscriptWindowMetadata,
 } from "@orkestrator/protocol/transcript-window";
@@ -89,6 +93,7 @@ import type {
   NormalizedPart,
   ToolDiffMetadata,
 } from "./messages/types.js";
+
 import {
   DEFAULT_REASONING_EFFORT,
   MODEL_REASONING_EFFORTS,
@@ -101,6 +106,8 @@ import {
   type BridgeReasoningEffort,
 } from "./models-cache.js";
 import { applyRuntimeEnvironmentOutput, refreshRuntimeEnvironment } from "./runtime-env.js";
+
+const WORKFLOW_RESULT_TOOL_NAMES = new Set(WORKFLOW_RESULT_KINDS.map(workflowResultToolName));
 
 // The normalized message model and the item renderer live in ./messages so both
 // engines share one implementation. Re-exported here because existing importers
@@ -1384,6 +1391,7 @@ app.post("/session/:id/prompt", async (c) => {
   const outputSchema = body.outputSchema;
   const readOnly = body.readOnly;
   const agentMcp = body.agentMcp;
+  const workflowResultTool = body.workflowResultTool;
   const rawAttachments = Array.isArray(body.attachments) ? body.attachments : [];
   if (
     rawAttachments.some(
@@ -1418,6 +1426,12 @@ app.post("/session/:id/prompt", async (c) => {
   if (readOnly !== undefined && typeof readOnly !== "boolean") {
     return c.json({ error: "readOnly must be a boolean" }, 400);
   }
+  if (
+    workflowResultTool !== undefined &&
+    (typeof workflowResultTool !== "string" || !WORKFLOW_RESULT_TOOL_NAMES.has(workflowResultTool))
+  ) {
+    return c.json({ error: "workflowResultTool must name a workflow result tool" }, 400);
+  }
 
   const outcome = await appServerRuntime.prompt(sessionId, {
     prompt,
@@ -1428,6 +1442,7 @@ app.post("/session/:id/prompt", async (c) => {
     ...(agentMcp && typeof agentMcp === "object" && !Array.isArray(agentMcp)
       ? { agentMcp: agentMcp as { url: string; token: string } }
       : {}),
+    ...(typeof workflowResultTool === "string" ? { workflowResultTool } : {}),
   });
   if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
   return c.json(outcome.result, 202);

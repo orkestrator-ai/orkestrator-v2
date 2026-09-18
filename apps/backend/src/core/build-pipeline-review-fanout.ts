@@ -624,9 +624,7 @@ export class BuildPipelineReviewFanout {
         agentMcp
           ? {
               agentMcp,
-              ...(agentMcp.workflowResultCapability
-                ? { workflowResultTool: workflowResultToolName("consolidated-review") }
-                : {}),
+              workflowResultTool: workflowResultToolName("consolidated-review"),
             }
           : undefined,
       );
@@ -655,7 +653,7 @@ export class BuildPipelineReviewFanout {
               ? { fastMode: consolidation.fastMode }
               : {}),
             ...(agentMcp ? { agentMcp } : {}),
-            ...(agentMcp?.workflowResultCapability
+            ...(agentMcp
               ? { workflowResultTool: workflowResultToolName("consolidated-review") }
               : {}),
           },

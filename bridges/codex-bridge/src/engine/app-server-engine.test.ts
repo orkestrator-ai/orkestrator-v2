@@ -353,6 +353,34 @@ describe("thread lifecycle", () => {
     ).toBe("approve");
   });
 
+  test("auto-approves an attempt-scoped workflow result server on a read-only turn", async () => {
+    const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
+    const config: EngineTurnConfig = {
+      ...BUILD,
+      sandbox: "read-only",
+      approvalPolicy: "never",
+      policy: {
+        id: "interactive-host",
+        sandbox: "provider",
+        approvals: "ask",
+        projectResources: false,
+        networkAccess: "full",
+      },
+      agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "attempt-secret" },
+      workflowResultTool: "submit_consolidated_review",
+    };
+    await h.engine.start();
+    await h.engine.startThread({ config });
+
+    const params = h.child().requests.find((request) => request.method === "thread/start")!.params;
+    expect(params.approvalPolicy).toBe("never");
+    expect(params.sandbox).toBe("read-only");
+    expect(
+      (params.config as Record<string, Record<string, unknown>>)["mcp_servers.orkestrator"]
+        ?.default_tools_approval_mode,
+    ).toBe("approve");
+  });
+
   test("keeps coordinator MCP approval on thread start, resume, and turn", async () => {
     const activePermissionProfile = { id: "coordinator-conversation-1" };
     const h = harness({

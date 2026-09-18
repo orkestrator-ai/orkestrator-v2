@@ -349,6 +349,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                 ? {
                     fastMode: options.fastMode ?? this.connection.fastMode,
                     agentMcp: options.agentMcp,
+                    workflowResultTool: options.workflowResultTool,
                   }
                 : this.agent === "cursor" || this.agent === "grok" || this.agent === "pi"
                   ? {

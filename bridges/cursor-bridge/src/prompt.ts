@@ -112,6 +112,11 @@ export async function dispatchPrompt(
             throw error;
           }
         },
+        // Cursor's local executor owns custom-tool callbacks per run. Repeat
+        // the attached map here so a resumed/recovered reviewer cannot retain
+        // the tool descriptor while losing the callback and reporting
+        // `Unknown custom tool` when it submits its workflow result.
+        ...(state.hostedMcpTools ? { local: { customTools: state.hostedMcpTools } } : {}),
         ...(input.requestId ? { idempotencyKey: input.requestId } : {}),
       },
     );

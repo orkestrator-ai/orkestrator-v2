@@ -291,6 +291,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       })
     : undefined;
   state.hostedMcpClose = hosted?.close;
+  state.hostedMcpTools = hosted?.customTools;
   state.mcpServerNames = hosted ? ["orkestrator"] : allowHttpMcp ? Object.keys(mcpServers) : [];
   state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
   const options: AgentOptions = {
@@ -363,6 +364,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
   } catch (error) {
     state.workspaceWarmRelease = undefined;
     state.hostedMcpClose = undefined;
+    state.hostedMcpTools = undefined;
     await Promise.allSettled([
       ...(releaseWarmWorkspace ? [releaseWarmWorkspace()] : []),
       ...(hosted ? [hosted.close()] : []),
@@ -483,6 +485,7 @@ export async function detachAgent(state: SessionState): Promise<void> {
   state.attachedMcpKey = undefined;
   state.workspaceWarmRelease = undefined;
   state.hostedMcpClose = undefined;
+  state.hostedMcpTools = undefined;
   await Promise.allSettled([
     ...(agent ? [agent[Symbol.asyncDispose]()] : []),
     ...(releaseWarmWorkspace ? [releaseWarmWorkspace()] : []),

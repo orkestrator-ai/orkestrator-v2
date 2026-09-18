@@ -1259,6 +1259,39 @@ describe("at-most-once dispatch", () => {
     ]);
   });
 
+  test("a read-only workflow result turn approves its attempt-scoped MCP tools", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({
+      mode: "build",
+      policy: {
+        id: "interactive-host",
+        sandbox: "provider",
+        approvals: "ask",
+        projectResources: false,
+        networkAccess: "full",
+      },
+    });
+
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "Submit the report",
+        requestId: "review-result-1",
+        attachments: [],
+        readOnly: true,
+        agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "attempt-secret" },
+        workflowResultTool: "submit_consolidated_review",
+      }),
+    ).toMatchObject({ ok: true });
+
+    const turn = h.child().requests.find((request) => request.method === "turn/start")!;
+    expect(turn.params.approvalPolicy).toBe("never");
+    expect(turn.params.sandboxPolicy).toEqual({ type: "readOnly", networkAccess: true });
+    expect(
+      (turn.params.config as Record<string, Record<string, unknown>>)["mcp_servers.orkestrator"]
+        ?.default_tools_approval_mode,
+    ).toBe("approve");
+  });
+
   test("an ambiguous request that did run is reconciled as already-processed", async () => {
     const h = await harness({
       "thread/read": () => ({

@@ -550,6 +550,34 @@ test("dispatch records the SDK run identity on its exact user message", async ()
   await handle.completion;
 });
 
+test("dispatch repeats hosted workflow tools on the SDK run", async () => {
+  const state = runningSession();
+  const submit = {
+    description: "Submit the review report",
+    execute: async () => "accepted",
+  };
+  state.hostedMcpTools = { submit_consolidated_review: submit };
+  const controlled = controlledRun();
+  const run = Object.assign(controlled, {
+    id: "run-tools",
+    status: "running" as const,
+    onDidChangeStatus: () => () => undefined,
+  });
+  let sendOptions: Parameters<SDKAgent["send"]>[1];
+  const agent = {
+    send: async (_message: unknown, options: Parameters<SDKAgent["send"]>[1]) => {
+      sendOptions = options;
+      return run;
+    },
+  } as unknown as SDKAgent;
+
+  const handle = await dispatchPrompt(state, agent, { prompt: "Report", images: [] });
+
+  expect(sendOptions?.local?.customTools).toEqual({ submit_consolidated_review: submit });
+  controlled.finish({ status: "completed" });
+  await handle.completion;
+});
+
 describe("terminal run usage", () => {
   test("publishes stream-only usage before the run finishes", async () => {
     const state = runningSession();

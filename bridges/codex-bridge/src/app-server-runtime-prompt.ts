@@ -149,6 +149,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       outputSchema?: JsonSchema;
       readOnly?: boolean;
       agentMcp?: { url: string; token: string };
+      workflowResultTool?: string;
     },
   ): Promise<
     | { ok: true; result: PromptAcceptedResult }
@@ -200,6 +201,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       outputSchema?: JsonSchema;
       readOnly?: boolean;
       agentMcp?: { url: string; token: string };
+      workflowResultTool?: string;
     },
   ): Promise<
     | { ok: true; result: PromptAcceptedResult }
@@ -439,9 +441,11 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     // Consolidation is a structured report turn, not a planning turn. Apply
     // the read-only boundary to this turn's sandbox without changing the
     // conversation mode or persisting it onto the reusable Fix session.
-    const turnConfig: EngineTurnConfig = input.readOnly
-      ? { ...session.config, sandbox: "read-only", approvalPolicy: "never" }
-      : session.config;
+    const turnConfig: EngineTurnConfig = {
+      ...session.config,
+      ...(input.readOnly ? { sandbox: "read-only", approvalPolicy: "never" } : {}),
+      ...(input.workflowResultTool ? { workflowResultTool: input.workflowResultTool } : {}),
+    };
 
     try {
       // 5. Journal *before* the write: everything from here to `markAccepted` is

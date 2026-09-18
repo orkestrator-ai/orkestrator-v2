@@ -1226,7 +1226,7 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         XCTAssertEqual(scripts[1], try rejectionScript(id: "use-id", error: TestFailure.expected))
     }
 
-    func testBridgeSwitchAuthenticatesTheNewActiveConnectionForReal() async throws {
+    func testBridgeSwitchAuthenticatesAndLoadsTheNewActiveConnectionForReal() async throws {
         let model = ConnectionModel(
             credentialStore: MemoryCredentialStore(),
             validator: MockValidator()
@@ -1239,6 +1239,25 @@ final class RemoteWebViewPolicyTests: XCTestCase {
             stubAuthentication: false
         )
         coordinator.javaScriptEvaluator = { _ in nil }
+        let webView = WKWebView()
+        coordinator.webView = webView
+        coordinator.loginProtocolClasses = [StubURLProtocol.self]
+        var loadedRequest: URLRequest?
+        coordinator.requestLoader = { _, request in loadedRequest = request }
+        StubURLProtocol.handler = { request in
+            (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 303,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: [
+                        "Location": "https://new.example/",
+                        "Set-Cookie": "orkestrator_gateway_auth=session-value; Path=/; Secure; HttpOnly; SameSite=Strict",
+                    ]
+                )!,
+                Data()
+            )
+        }
 
         await coordinator.handleBridgeRequest(
             id: "connect-id",
@@ -1251,13 +1270,25 @@ final class RemoteWebViewPolicyTests: XCTestCase {
 
         XCTAssertFalse(coordinator.isSwitchingThroughBridge)
         XCTAssertEqual(coordinator.requestedConnection, model.activeConnection)
+        XCTAssertEqual(state.value, .loading)
+        await coordinator.authenticationTask?.value
+
+        let request = try XCTUnwrap(loadedRequest)
+        XCTAssertEqual(request.url, model.activeConnection?.address)
+        XCTAssertEqual(request.cachePolicy, .reloadIgnoringLocalAndRemoteCacheData)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
+        XCTAssertEqual(
+            RemoteWebView.Coordinator.navigationDisposition(
+                for: try XCTUnwrap(request.url),
+                targetFrameExists: true,
+                targetFrameIsMain: true,
+                connection: coordinator.requestedConnection
+            ),
+            .allow
+        )
         XCTAssertNil(coordinator.authenticatedConnection)
         XCTAssertEqual(state.value, .loading)
-
-        // The login never leaves the process: the coordinator has no web view,
-        // so the task exits without touching the network or the state.
-        await coordinator.authenticationTask?.value
-        XCTAssertEqual(state.value, .loading)
+        withExtendedLifetime(webView) {}
     }
 
     func testBridgeJSONEncodingFailureIsNormalizedAndJavaScriptStringsAreSafe() throws {

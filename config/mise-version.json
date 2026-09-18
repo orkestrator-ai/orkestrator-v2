@@ -4,10 +4,10 @@
     "docker/Dockerfile duplicates these values because Docker ARGs cannot read this file directly.",
     "tests/unit/version-drift.test.ts enforces that the Dockerfile and default network allowlists agree."
   ],
-  "version": "2026.9.1",
+  "version": "2026.9.11",
   "linux": {
-    "x64Sha256": "063dda9149ab6be53da877c2d176afe0eac68e64cf8ca295bd0528720701c65d",
-    "arm64Sha256": "98d2ea7b82dd966afdb8a9f4e9edbca771acf2a30d2842bfc0efdb7b61c886a3"
+    "x64Sha256": "02a19e4a5eda23cda916503ad09dbc608a249fe7a7d5686c5a74ff3a7ce3b7e0",
+    "arm64Sha256": "d781ce1b4daad6ead469b0a57fef4bfb49c4e02025dc88111ff1bfaa8c90aad9"
   },
   "runtimeAllowedHosts": ["nodejs.org", "mise.jdx.dev", "mise-versions.jdx.dev", "aube.jdx.dev"]
 }

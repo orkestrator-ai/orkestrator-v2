@@ -53,7 +53,12 @@ import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapter
 import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
 import { registerWindowAllClosedQuit } from "./quit-policy.js";
 import { createApplicationMenuTemplate } from "./application-menu.js";
-import { applyWindowTitle, focusWindowById, projectMenuWindows } from "./window-menu.js";
+import {
+  applyWindowTitle,
+  focusWindowById,
+  projectMenuWindows,
+  resolveFocusedWindowContext,
+} from "./window-menu.js";
 import { runtimeProfileFromEnvironment } from "./runtime-profile.js";
 import {
   installProductionApplicationLogging,
@@ -138,10 +143,11 @@ function emitToWindow(window: BrowserWindow, event: string, payload: unknown): v
 }
 
 function focusedContext(): DesktopWindowContext | null {
-  const focusedWindow = BrowserWindow.getFocusedWindow();
-  const focused = focusedWindow ? windowContexts.get(focusedWindow.webContents.id) : null;
-  if (focused) return focused;
-  return lastFocusedWindowId === null ? null : (windowContexts.get(lastFocusedWindowId) ?? null);
+  return resolveFocusedWindowContext(
+    windowContexts,
+    BrowserWindow.getFocusedWindow(),
+    lastFocusedWindowId,
+  );
 }
 
 function contextForEvent(event?: { sender?: { id: number } }): DesktopWindowContext {
@@ -171,11 +177,17 @@ function setConnectionTitle(window: BrowserWindow, scope: string): void {
 }
 
 function menuWindowList() {
-  return projectMenuWindows(windowContexts, BrowserWindow.getFocusedWindow());
+  return projectMenuWindows(windowContexts, focusedContext()?.window);
 }
 
 function focusDesktopWindow(id: number): void {
   focusWindowById(windowContexts, id);
+  const context = windowContexts.get(id);
+  if (!context || context.window.isDestroyed()) return;
+  // Some Linux window managers do not synchronously report native focus back
+  // to Electron. The explicit menu choice is still authoritative.
+  lastFocusedWindowId = id;
+  createMenu();
 }
 
 function createWindowBrowserPreviews(

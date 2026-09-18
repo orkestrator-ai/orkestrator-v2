@@ -81,9 +81,13 @@ export class OpenCodeWorkflowResultBroker {
     }
   }
 
-  async enableForTurn(sessionId: string, selectedTool: string | undefined): Promise<void> {
+  async enableForTurn(
+    sessionId: string,
+    selectedTool: string | undefined,
+    reassert = false,
+  ): Promise<void> {
     if (!selectedTool) return;
-    if (this.enabled.get(sessionId) === selectedTool) return;
+    if (!reassert && this.enabled.get(sessionId) === selectedTool) return;
     try {
       const response = await this.client.session.update(
         {
@@ -105,24 +109,31 @@ export class OpenCodeWorkflowResultBroker {
     this.reconciled.add(sessionId);
   }
 
-  async restore(sessionId: string): Promise<void> {
+  async restore(sessionId: string, afterReviewerRestore = false): Promise<void> {
     let permission = this.permissionRestore.get(sessionId);
-    if (!permission) {
+    if (!permission && !afterReviewerRestore) {
       if (this.reconciled.has(sessionId)) return;
       const response = await this.client.session.get(
         { sessionID: sessionId, directory: this.directory },
         this.requestOptions(),
       );
       assertSdkResponse(response, "OpenCode workflow-result permission reconciliation");
-      this.reconciled.add(sessionId);
-      if (!hasEnabledWorkflowResultPermission(asRecord(response.data)?.permission)) return;
+      if (!hasEnabledWorkflowResultPermission(asRecord(response.data)?.permission)) {
+        this.reconciled.add(sessionId);
+        return;
+      }
       permission = openCodeWorkflowResultDenyPermissionRules();
     }
     const response = await this.client.session.update(
-      { sessionID: sessionId, directory: this.directory, permission },
+      {
+        sessionID: sessionId,
+        directory: this.directory,
+        permission: permission ?? openCodeWorkflowResultDenyPermissionRules(),
+      },
       this.requestOptions(),
     );
     assertSdkResponse(response, "OpenCode workflow-result permission restore");
+    this.reconciled.add(sessionId);
     this.permissionRestore.delete(sessionId);
     this.enabled.delete(sessionId);
   }

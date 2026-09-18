@@ -17,7 +17,7 @@ describe("createUuid", () => {
   });
 
   test("creates a version 4 UUID when randomUUID is unavailable", () => {
-    const getRandomValues: Crypto["getRandomValues"] = (array) => {
+    const getRandomValues: Crypto["getRandomValues"] = <T extends ArrayBufferView>(array: T): T => {
       const bytes = array as unknown as Uint8Array;
       for (let index = 0; index < bytes.length; index += 1) {
         bytes[index] = index;

@@ -130,6 +130,7 @@ struct RemoteWebView: UIViewRepresentable {
         var readinessCheckDelay: Duration = .milliseconds(100)
         var javaScriptEvaluator: ((String) async throws -> Any?)?
         var authenticationStarter: ((RemoteConnection) -> Void)?
+        var requestLoader: ((WKWebView, URLRequest) -> Void)?
         /// Injected only by tests so the login exchange can be stubbed without
         /// reaching the network. Nil in production.
         var loginProtocolClasses: [AnyClass]?
@@ -179,7 +180,11 @@ struct RemoteWebView: UIViewRepresentable {
                         timeoutInterval: 20
                     )
                     request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
-                    webView.load(request)
+                    if let requestLoader = self.requestLoader {
+                        requestLoader(webView, request)
+                    } else {
+                        webView.load(request)
+                    }
                 } catch is CancellationError {
                     return
                 } catch {
@@ -215,6 +220,7 @@ struct RemoteWebView: UIViewRepresentable {
             isSwitchingThroughBridge = false
             javaScriptEvaluator = nil
             authenticationStarter = nil
+            requestLoader = nil
             webView = nil
         }
 

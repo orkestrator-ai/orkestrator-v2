@@ -198,16 +198,16 @@ export function DiffViewerTab({
   // Disable linting/diagnostics before editor mounts
   const handleEditorWillMount: BeforeMount = useCallback((monacoInstance) => {
     // Disable TypeScript/JavaScript diagnostics
-    monacoInstance.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+    monacoInstance.typescript.typescriptDefaults.setDiagnosticsOptions({
       noSemanticValidation: true,
       noSyntaxValidation: true,
     });
-    monacoInstance.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+    monacoInstance.typescript.javascriptDefaults.setDiagnosticsOptions({
       noSemanticValidation: true,
       noSyntaxValidation: true,
     });
     // Disable JSON validation
-    monacoInstance.languages.json.jsonDefaults.setDiagnosticsOptions({
+    monacoInstance.json.jsonDefaults.setDiagnosticsOptions({
       validate: false,
     });
   }, []);

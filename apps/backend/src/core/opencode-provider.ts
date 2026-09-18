@@ -745,8 +745,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         });
       }
       const messageID = this.messageIds.resolve(scope, history, options.requestId);
-      await this.workflowResults.enableForTurn(sessionId, options.workflowResultTool);
-      const reviewShellEnabled = await this.reviewPermissions.enableForTurn(sessionId, options);
+      const workflowTool = options.workflowResultTool;
+      const reviewEnabled = await this.reviewPermissions.enableForTurn(sessionId, options);
+      // Reassert after reviewer rules: OpenCode appends updates and the last match wins.
+      await this.workflowResults.enableForTurn(sessionId, workflowTool, reviewEnabled);
       const dispatchStartedAt = this.now();
       this.streamState.beginTurn(sessionId, dispatchStartedAt);
       let response;
@@ -781,7 +783,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
                 model,
                 agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options, "build"),
                 variant,
-                ...(options.readOnly && !reviewShellEnabled
+                ...(options.readOnly && !reviewEnabled
                   ? { tools: OPENCODE_READ_ONLY_TURN_TOOLS }
                   : {}),
               },
@@ -849,8 +851,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       }
       if (lifecycle === "running") return "running";
       if (lifecycle === "missing") return "missing";
-      await this.workflowResults.restore(sessionId);
-      await this.reviewPermissions.restoreIfNeeded(sessionId);
+      const reviewerRestored = await this.reviewPermissions.restoreIfNeeded(sessionId);
+      // A recreated provider recovers reviewer identity but not the broker's enabled map.
+      await this.workflowResults.restore(sessionId, reviewerRestored);
       if (lifecycle === "idle") return "idle";
       return "error";
     } catch (error) {

@@ -150,11 +150,7 @@ export function SortableProjectGroup({
 
   return (
     <>
-      <div
-        ref={setNodeRef}
-        style={style}
-        className={cn("px-2 py-0.5", isDragging && "opacity-50 z-50")}
-      >
+      <div ref={setNodeRef} style={style} className={cn("px-2", isDragging && "opacity-50 z-50")}>
         <Collapsible open={!isCollapsed} onOpenChange={onToggleCollapse}>
           {/* Project Header with Context Menu */}
           <div
@@ -314,31 +310,29 @@ export function SortableProjectGroup({
 
           {/* Environments List */}
           <CollapsibleContent>
-            <div className="pb-1">
-              {environments.length > 0 && (
-                <SortableContext
-                  items={environments.map((e) => e.id)}
-                  strategy={verticalListSortingStrategy}
-                >
-                  {environments.map((environment) => (
-                    <SortableEnvironmentItem
-                      key={environment.id}
-                      environment={environment}
-                      isSelected={selectedEnvironmentId === environment.id}
-                      onSelect={onSelectEnvironment}
-                      onDelete={onDeleteEnvironment}
-                      onStart={onStartEnvironment}
-                      onStop={onStopEnvironment}
-                      onRestart={onRestartEnvironment}
-                      onFork={onForkEnvironment}
-                      onUpdate={onUpdateEnvironment}
-                      isMultiSelectMode={isMultiSelectMode}
-                      isChecked={selectedEnvironmentIds.includes(environment.id)}
-                    />
-                  ))}
-                </SortableContext>
-              )}
-            </div>
+            {environments.length > 0 && (
+              <SortableContext
+                items={environments.map((e) => e.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                {environments.map((environment) => (
+                  <SortableEnvironmentItem
+                    key={environment.id}
+                    environment={environment}
+                    isSelected={selectedEnvironmentId === environment.id}
+                    onSelect={onSelectEnvironment}
+                    onDelete={onDeleteEnvironment}
+                    onStart={onStartEnvironment}
+                    onStop={onStopEnvironment}
+                    onRestart={onRestartEnvironment}
+                    onFork={onForkEnvironment}
+                    onUpdate={onUpdateEnvironment}
+                    isMultiSelectMode={isMultiSelectMode}
+                    isChecked={selectedEnvironmentIds.includes(environment.id)}
+                  />
+                ))}
+              </SortableContext>
+            )}
           </CollapsibleContent>
         </Collapsible>
       </div>

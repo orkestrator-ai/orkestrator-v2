@@ -51,7 +51,7 @@ RUN groupmod -n node bun \
 # terminals — need genuine Node (not bun's node shim). This also provides npm
 # for the global CLI installs below. /usr/local/bin precedes the bun-node
 # fallback on PATH, so this node takes precedence.
-ARG NODE_VERSION=24.11.0
+ARG NODE_VERSION=24.21.0
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
     amd64) NODE_ARCH=x64 ;; \
@@ -91,11 +91,11 @@ RUN mkdir -p /workspace /opencode-state /home/node/.claude /home/node/.codex /ho
 
 WORKDIR /workspace
 
-ARG GIT_DELTA_VERSION=0.18.2
+ARG GIT_DELTA_VERSION=0.19.2
 RUN ARCH=$(dpkg --print-architecture) && \
   case "$ARCH" in \
-    amd64) GIT_DELTA_SHA=1658c7b61825d411b50734f34016101309e4b6e7f5799944cf8e4ac542cebd7f ;; \
-    arm64) GIT_DELTA_SHA=937781aa7788e1510858743fff6c9a8b4a69fe0a22a7c8a69493e633227939a9 ;; \
+    amd64) GIT_DELTA_SHA=ea4f0222950ee750a3d38dd80d03bce4cee07a3f63928fc47548383bcaf23093 ;; \
+    arm64) GIT_DELTA_SHA=0edc36cf514f1bd84becac3e94ee8ae9f8818c6a1f99f7b2ee67b362afa253d3 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   wget "https://github.com/dandavison/delta/releases/download/${GIT_DELTA_VERSION}/git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
@@ -130,8 +130,8 @@ ENV VISUAL=nano
 #   PI_CLI_VERSION        ↔ the four @earendil-works/pi-* pins in bridges/pi-bridge/package.json
 # Claude CLI has its own release train, distinct from
 # @anthropic-ai/claude-agent-sdk.
-ARG CLAUDE_CLI_VERSION=2.1.274
-ARG CODEX_CLI_VERSION=0.154.0
+ARG CLAUDE_CLI_VERSION=2.1.276
+ARG CODEX_CLI_VERSION=0.155.0
 ARG OPENCODE_CLI_VERSION=1.18.31
 ARG GROK_BUILD_VERSION=1.0.34
 ARG PI_CLI_VERSION=0.85.1
@@ -229,7 +229,7 @@ RUN find /usr/local/share/npm-global/lib/node_modules/@openai \
 # namespaces (the default seccomp profile blocks them), so an explicit
 # `chromiumSandbox: true` dies with "Chromium sandboxing failed!". The container
 # is the isolation boundary.
-ARG PLAYWRIGHT_VERSION=1.61.1
+ARG PLAYWRIGHT_VERSION=1.63.0
 # One shared browser root, readable by `node` and by the uid-0 `orkroot` used for
 # root terminals, instead of a per-user ~/.cache/ms-playwright copy.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
@@ -361,11 +361,11 @@ RUN printf '%s\n' 'source /etc/orkestrator/zshrc' >> /etc/zsh/zshrc \
 # shared Bun install remains visible if a devcontainer mounts over the node
 # user's home. Keep both supported image architectures pinned to
 # config/mise-version.json.
-ARG MISE_VERSION=2026.9.1
+ARG MISE_VERSION=2026.9.11
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) MISE_ARCH=x64; MISE_SHA=063dda9149ab6be53da877c2d176afe0eac68e64cf8ca295bd0528720701c65d ;; \
-    arm64) MISE_ARCH=arm64; MISE_SHA=98d2ea7b82dd966afdb8a9f4e9edbca771acf2a30d2842bfc0efdb7b61c886a3 ;; \
+    amd64) MISE_ARCH=x64; MISE_SHA=02a19e4a5eda23cda916503ad09dbc608a249fe7a7d5686c5a74ff3a7ce3b7e0 ;; \
+    arm64) MISE_ARCH=arm64; MISE_SHA=d781ce1b4daad6ead469b0a57fef4bfb49c4e02025dc88111ff1bfaa8c90aad9 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   MISE_TARBALL="mise-v${MISE_VERSION}-linux-${MISE_ARCH}.tar.gz" && \

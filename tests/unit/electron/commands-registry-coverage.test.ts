@@ -1255,6 +1255,7 @@ describe("direct backend command registry coverage", () => {
         environmentId: paused.id,
         mode: "create-pending",
         checkInProgress: false,
+        checkSummary: null,
       }),
     ]);
     await expect(
@@ -1272,6 +1273,7 @@ describe("direct backend command registry coverage", () => {
       environmentId: paused.id,
       mode: "create-pending",
       checkInProgress: false,
+      checkSummary: null,
     });
 
     await expect(

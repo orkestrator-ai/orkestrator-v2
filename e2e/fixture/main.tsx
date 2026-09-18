@@ -23,6 +23,7 @@ import { DiffViewerTab } from "../../apps/web/src/components/terminal/DiffViewer
 import { MonacoFileEditor } from "../../apps/web/src/components/terminal/MonacoFileEditor";
 import { ChangedFileItem } from "../../apps/web/src/components/files-panel/ChangedFileItem";
 import { MobileAppShellLayout } from "../../apps/web/src/components/layout/MobileAppShellLayout";
+import { PullRequestCheckStatus } from "../../apps/web/src/components/layout/PullRequestCheckStatus";
 import { SystemUsageIndicator } from "../../apps/web/src/components/layout/SystemUsageIndicator";
 import { TAB_STRIP_CLASS } from "../../apps/web/src/components/pane-layout/TabShell";
 import { ProjectSearchBar } from "../../apps/web/src/components/sidebar/ProjectSearchBar";
@@ -1206,6 +1207,25 @@ function WorkspaceBarHeightFixture() {
   );
 }
 
+function PullRequestCheckStatusFixture() {
+  const [summary, setSummary] = useState({ passed: 3, total: 4, pending: 1 });
+  const isGrid = new URLSearchParams(window.location.search).has("grid");
+
+  return (
+    <main className="min-h-screen bg-background p-4 text-foreground">
+      <PullRequestCheckStatus checkSummary={summary} isGrid={isGrid} />
+      <div className="mt-4 flex gap-2">
+        <button type="button" onClick={() => setSummary({ passed: 3, total: 4, pending: 0 })}>
+          Complete with failure
+        </button>
+        <button type="button" onClick={() => setSummary({ passed: 4, total: 4, pending: 0 })}>
+          Complete successfully
+        </button>
+      </div>
+    </main>
+  );
+}
+
 function fixtureForPath() {
   if (window.location.pathname === "/browser") return <BrowserFixture />;
   if (window.location.pathname === "/build-pipeline-header") {
@@ -1238,6 +1258,9 @@ function fixtureForPath() {
   if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   if (window.location.pathname === "/system-usage") return <SystemUsageFixture />;
+  if (window.location.pathname === "/pr-check-status") {
+    return <PullRequestCheckStatusFixture />;
+  }
   if (window.location.pathname === "/workspace-bar-height") {
     return <WorkspaceBarHeightFixture />;
   }

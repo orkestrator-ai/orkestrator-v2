@@ -89,6 +89,7 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import { MAX_TABS } from "@/contexts";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
+import { PullRequestCheckStatus } from "./PullRequestCheckStatus";
 
 const LazyRepositorySettings = lazy(async () => ({
   default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
@@ -294,6 +295,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     isLocalEnvironment,
     isRunning,
     hasMergeConflicts,
+    checkSummary,
     viewPR,
     hasPR,
     isPRMerged,
@@ -1093,6 +1095,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                       </span>
                     </Button>
                   </ToolbarTooltipTrigger>
+
+                  {!isPRFinished && checkSummary && checkSummary.total > 0 && (
+                    <PullRequestCheckStatus checkSummary={checkSummary} isGrid={isGrid} />
+                  )}
 
                   {!isPRFinished && hasMergeConflicts === false && (
                     <ToolbarTooltipTrigger

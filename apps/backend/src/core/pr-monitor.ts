@@ -6,6 +6,7 @@ import {
   type PrMonitorEvent,
   type PrMonitorMode,
   type PrMonitorTransition,
+  type PrCheckSummary,
   type PrState,
 } from "@orkestrator/protocol/pr-monitor";
 
@@ -57,6 +58,15 @@ export interface PrDetection {
   state: PrState;
   /** Null means GitHub has not determined mergeability yet. */
   hasMergeConflicts: boolean | null;
+  /** Null means no usable rollup was returned. See {@link checkSummaryStatus}. */
+  checkSummary: PrCheckSummary | null;
+  /** Distinguishes a throttled/irrelevant query from an attempted query failure. */
+  checkSummaryStatus: "skipped" | "succeeded" | "failed";
+}
+
+export interface PrMonitorDetectionOptions {
+  /** Whether this detection should also pay for the separate check-rollup query. */
+  includeCheckSummary: boolean;
 }
 
 /** The slice of a kanban task the reconciliation side effects need. */
@@ -76,7 +86,10 @@ export interface PrMonitorKanbanTask {
  */
 export interface PrMonitorEffects {
   /** Returns the PR for the branch, null when none exists, throws on failure. */
-  detect: (target: PrMonitorTarget) => Promise<PrDetection | null>;
+  detect: (
+    target: PrMonitorTarget,
+    options: PrMonitorDetectionOptions,
+  ) => Promise<PrDetection | null>;
   persistPr: (environmentId: string, detection: PrDetection) => Promise<void>;
   clearPr: (environmentId: string) => Promise<void>;
   findTaskForEnvironment: (environmentId: string) => Promise<PrMonitorKanbanTask | null>;
@@ -102,6 +115,7 @@ export interface PrMonitorServiceOptions {
 
 export const PR_MERGED_COMMENT = "🎉 PR merged";
 export const PR_CLOSED_COMMENT = "❌ PR closed";
+export const PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS = 60_000;
 
 type ReconciliationStep = "status" | "link" | "comment" | "metadata";
 
@@ -138,6 +152,10 @@ interface PrMonitorEntry {
   reconciliation: Map<string, Set<ReconciliationStep>>;
   /** Latest successfully observed PR identity, including failed persist attempts. */
   observedPr: { url: string; state: PrState } | null;
+  /** Latest check rollup; intentionally runtime state so every UI rehydrates from the monitor. */
+  checkSummary: PrCheckSummary | null;
+  /** Last completed rollup-query attempt; limits GitHub traffic independently of PR polling. */
+  lastCheckSummaryAt: number | null;
   /** Last emitted state; suppresses byte-identical events. */
   lastEmitted?: PrMonitorEnvironmentState;
 }
@@ -185,7 +203,8 @@ export class PrMonitorService {
       if (entry) {
         // Storage is authoritative for the persisted PR fields; the entry's
         // copy exists so a check can see what the previous reading was.
-        this.replaceTarget(entry, target);
+        const targetChanged = this.replaceTarget(entry, target);
+        if (targetChanged && entry.lastEmitted) this.emitState(entry);
         if (!target.ready && entry.active) this.pause(target.environmentId);
         else if (target.ready && !entry.active) {
           entry.active = true;
@@ -220,7 +239,7 @@ export class PrMonitorService {
       this.track(target, mode, { immediate: true, paused: !target.ready });
       return;
     }
-    this.replaceTarget(entry, target);
+    const targetChanged = this.replaceTarget(entry, target);
     entry.provisional = false;
     if (entry.mode !== mode) {
       entry.mode = mode;
@@ -228,6 +247,7 @@ export class PrMonitorService {
       this.emitState(entry);
     } else {
       entry.modeStartedAt = this.options.monotonicNow();
+      if (targetChanged) this.emitState(entry);
     }
     if (target.ready && !entry.active) entry.active = true;
     if (entry.active) this.scheduleNext(entry, 0);
@@ -262,7 +282,11 @@ export class PrMonitorService {
     let entry = this.entries.get(target.environmentId);
     let restorePaused = false;
     if (entry) {
-      this.replaceTarget(entry, reconciledTarget);
+      const targetChanged = this.replaceTarget(entry, reconciledTarget);
+      // A confirmed terminal result is no longer a speculative probe and is
+      // meaningful to clients even when the entry began life unannounced.
+      entry.provisional = false;
+      if (targetChanged) this.emitState(entry);
       if (!entry.active) {
         entry.active = true;
         restorePaused = true;
@@ -293,7 +317,8 @@ export class PrMonitorService {
   probe(target: PrMonitorTarget): void {
     const entry = this.entries.get(target.environmentId);
     if (entry) {
-      this.replaceTarget(entry, target);
+      const targetChanged = this.replaceTarget(entry, target);
+      if (targetChanged && entry.lastEmitted) this.emitState(entry);
       if (entry.active) this.scheduleNext(entry, 0);
       return;
     }
@@ -363,6 +388,8 @@ export class PrMonitorService {
       reconciliation: new Map(),
       observedPr:
         target.prUrl && target.prState ? { url: target.prUrl, state: target.prState } : null,
+      checkSummary: null,
+      lastCheckSummaryAt: null,
     };
     this.entries.set(target.environmentId, entry);
     // Probes stay unannounced until they find something, so a probe that finds
@@ -431,7 +458,15 @@ export class PrMonitorService {
       let detection: PrDetection | null = null;
       let failed = false;
       try {
-        detection = await this.options.effects.detect(detectionTarget);
+        const now = this.options.monotonicNow();
+        const includeCheckSummary =
+          entry.mode !== "merge-pending" &&
+          (entry.lastCheckSummaryAt === null ||
+            now - entry.lastCheckSummaryAt >= PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS);
+        detection = await this.options.effects.detect(detectionTarget, { includeCheckSummary });
+        if (includeCheckSummary && detection?.checkSummaryStatus !== "skipped") {
+          entry.lastCheckSummaryAt = now;
+        }
       } catch (error) {
         failed = true;
         this.warn(`PR detection failed for ${entry.target.environmentId}`, error);
@@ -597,6 +632,19 @@ export class PrMonitorService {
     if (observedChanged) {
       entry.observedPr = { url: detection.url, state: detection.state };
     }
+    // Preserve the last good reading only when this cycle intentionally skipped
+    // the separately throttled query. A failed attempted refresh clears the
+    // badge rather than presenting obsolete counts as current. A successful
+    // empty rollup also clears it, as do terminal and replacement PRs.
+    if (detection.url !== previous.prUrl || detection.state !== "open") {
+      entry.checkSummary = null;
+    }
+    if (detection.checkSummaryStatus === "failed") {
+      entry.checkSummary = null;
+    } else if (detection.checkSummaryStatus === "succeeded") {
+      entry.checkSummary =
+        detection.checkSummary && detection.checkSummary.total > 0 ? detection.checkSummary : null;
+    }
     return transition;
   }
 
@@ -608,6 +656,7 @@ export class PrMonitorService {
       // to retain a provisional background poller forever.
       entry.persistencePending = false;
       entry.observedPr = null;
+      entry.checkSummary = null;
       return;
     }
     // After a merge with --delete-branch the environment checks out the base
@@ -620,6 +669,7 @@ export class PrMonitorService {
       entry.target = { ...entry.target, prUrl: null, prState: null, hasMergeConflicts: null };
       entry.persistencePending = false;
       entry.observedPr = null;
+      entry.checkSummary = null;
     } catch (error) {
       entry.persistencePending = true;
       entry.consecutiveErrors += 1;
@@ -788,15 +838,29 @@ export class PrMonitorService {
       prUrl: entry.target.prUrl,
       prState: entry.target.prState,
       hasMergeConflicts: entry.target.hasMergeConflicts,
+      checkSummary: entry.checkSummary,
     };
   }
 
-  private replaceTarget(entry: PrMonitorEntry, target: PrMonitorTarget): void {
-    if (!isSameTarget(entry.target, target)) {
+  private replaceTarget(entry: PrMonitorEntry, target: PrMonitorTarget): boolean {
+    const changed = !isSameTarget(entry.target, target);
+    const shouldClearSummary =
+      entry.target.prUrl !== target.prUrl ||
+      target.prState === "merged" ||
+      target.prState === "closed";
+    const summaryChanged = shouldClearSummary && entry.checkSummary !== null;
+    if (shouldClearSummary) {
+      entry.checkSummary = null;
+      entry.lastCheckSummaryAt = null;
+    }
+    if (changed) {
+      // A summary belongs to one open immutable PR URL. Keep it through
+      // readiness changes, but never leak it onto a replacement or terminal PR.
       entry.generation += 1;
       if (entry.checkInProgress) entry.recheckRequested = true;
     }
     entry.target = target;
+    return changed || summaryChanged;
   }
 
   private isCurrent(entry: PrMonitorEntry, generation: number): boolean {
@@ -850,6 +914,17 @@ function isSameTarget(a: PrMonitorTarget, b: PrMonitorTarget): boolean {
   );
 }
 
+function isSameCheckSummary(a: PrCheckSummary | null, b: PrCheckSummary | null): boolean {
+  return (
+    a === b ||
+    (a !== null &&
+      b !== null &&
+      a.passed === b.passed &&
+      a.total === b.total &&
+      a.pending === b.pending)
+  );
+}
+
 function isSameObservableState(
   a: PrMonitorEnvironmentState,
   b: PrMonitorEnvironmentState,
@@ -859,6 +934,7 @@ function isSameObservableState(
     a.consecutiveErrors === b.consecutiveErrors &&
     a.prUrl === b.prUrl &&
     a.prState === b.prState &&
-    a.hasMergeConflicts === b.hasMergeConflicts
+    a.hasMergeConflicts === b.hasMergeConflicts &&
+    isSameCheckSummary(a.checkSummary, b.checkSummary)
   );
 }

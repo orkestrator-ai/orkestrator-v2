@@ -139,9 +139,9 @@ printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE"}'
       );
     }, "the immediate PR recheck to persist mergeability");
 
-    expect(await fs.readFile(ghLogPath, "utf8")).toContain(
-      `pr view ${PR_URL} --json url,state,mergeable`,
-    );
+    const ghCommands = (await fs.readFile(ghLogPath, "utf8")).trim().split("\n");
+    expect(ghCommands).toContain(`pr view ${PR_URL} --json url,state,mergeable`);
+    expect(ghCommands).toContain(`pr view ${PR_URL} --json statusCheckRollup`);
     expect(await storage.getEnvironment("env-1")).toMatchObject({
       prUrl: PR_URL,
       prState: "open",

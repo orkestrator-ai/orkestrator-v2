@@ -137,16 +137,23 @@ export function registerPullRequestCommands(
     if (!env) throw new Error(`Environment not found: ${environmentId}`);
     if (!env.worktreePath)
       throw new Error("Environment is not a local environment (no worktree path)");
-    return detectEnvironmentPullRequest({
+    const detection = await detectEnvironmentPullRequest({
       ...environmentToPrMonitorTarget(env),
       branch: validatePrDetectionBranch(branch),
       prUrl: null,
       prState: null,
     });
+    if (!detection) return null;
+    return {
+      url: detection.url,
+      state: detection.state,
+      hasMergeConflicts: detection.hasMergeConflicts,
+      checkSummary: detection.checkSummary,
+    };
   });
   register("detect_pr", async ({ containerId, branch }) => {
     const resolvedContainerId = asString(containerId, "containerId");
-    return detectEnvironmentPullRequest({
+    const detection = await detectEnvironmentPullRequest({
       environmentId: resolvedContainerId,
       branch: validatePrDetectionBranch(branch),
       kind: "container",
@@ -156,6 +163,13 @@ export function registerPullRequestCommands(
       prState: null,
       hasMergeConflicts: null,
     });
+    if (!detection) return null;
+    return {
+      url: detection.url,
+      state: detection.state,
+      hasMergeConflicts: detection.hasMergeConflicts,
+      checkSummary: detection.checkSummary,
+    };
   });
   register("merge_pr_local", async ({ environmentId, method, deleteBranch }, context) => {
     const id = asString(environmentId, "environmentId");

@@ -821,6 +821,10 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  if [ "$5" = "statusCheckRollup" ]; then
+    printf '%s\\n' 'GraphQL: Resource not accessible by personal access token (statusCheckRollup)' >&2
+    exit 1
+  fi
   printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","state":"OPEN","mergeable":"MERGEABLE"}'
   exit 0
 fi
@@ -830,18 +834,31 @@ exit 1
         async (logPath) => {
           await commands.get("start_environment")?.({ environmentId: environment.id }, context);
           await commands.get("pr_monitor_refresh")?.({ environmentId: environment.id }, context);
-          await waitForCondition(
-            () =>
-              existsSync(logPath) &&
-              readFileSync(logPath, "utf8").includes(
+          await waitForCondition(() => {
+            if (!existsSync(logPath)) return false;
+            const log = readFileSync(logPath, "utf8");
+            return (
+              log.includes(
                 "pr view https://github.com/acme/repo/pull/42 --json url,state,mergeable",
-              ),
-            "resumed PR monitor check",
-          );
+              ) &&
+              log.includes("pr view https://github.com/acme/repo/pull/42 --json statusCheckRollup")
+            );
+          }, "resumed PR monitor check");
 
-          expect(await fs.readFile(logPath, "utf8")).toContain(
+          const ghCommands = (await fs.readFile(logPath, "utf8")).trim().split("\n");
+          expect(ghCommands).toContain(
             "pr view https://github.com/acme/repo/pull/42 --json url,state,mergeable",
           );
+          expect(ghCommands).toContain(
+            "pr view https://github.com/acme/repo/pull/42 --json statusCheckRollup",
+          );
+          const snapshot = (await commands.get("get_pr_monitor_state")?.({}, context)) as {
+            entries: Array<{ environmentId: string; consecutiveErrors: number }>;
+          };
+          expect(
+            snapshot.entries.find((entry) => entry.environmentId === environment.id)
+              ?.consecutiveErrors,
+          ).toBe(0);
         },
       );
     },

@@ -3,6 +3,7 @@ import {
   PR_MONITOR_BACKOFF,
   PR_MONITOR_INTERVALS_MS,
   getEffectivePrMonitorInterval,
+  isPrCheckSummary,
   isPrMonitorEvent,
   isPrMonitorMode,
   isPrMonitorSnapshot,
@@ -19,6 +20,7 @@ function state(overrides: Partial<PrMonitorEnvironmentState> = {}): PrMonitorEnv
     prUrl: "https://github.com/org/repo/pull/1",
     prState: "open",
     hasMergeConflicts: false,
+    checkSummary: null,
     ...overrides,
   };
 }
@@ -51,6 +53,20 @@ describe("isPrMonitorMode", () => {
     expect(isPrMonitorMode("merge-pending")).toBe(true);
     expect(isPrMonitorMode("idle")).toBe(false);
     expect(isPrMonitorMode(undefined)).toBe(false);
+  });
+});
+
+describe("isPrCheckSummary", () => {
+  test("accepts bounded aggregate counts", () => {
+    expect(isPrCheckSummary({ passed: 3, total: 5, pending: 1 })).toBe(true);
+    expect(isPrCheckSummary({ passed: 0, total: 0, pending: 0 })).toBe(true);
+  });
+
+  test("rejects impossible or non-integral counts", () => {
+    expect(isPrCheckSummary({ passed: 4, total: 3, pending: 0 })).toBe(false);
+    expect(isPrCheckSummary({ passed: 2, total: 3, pending: 2 })).toBe(false);
+    expect(isPrCheckSummary({ passed: -1, total: 3, pending: 0 })).toBe(false);
+    expect(isPrCheckSummary({ passed: 1.5, total: 3, pending: 0 })).toBe(false);
   });
 });
 
@@ -96,6 +112,12 @@ describe("isPrMonitorEvent", () => {
     ).toBe(false);
     expect(
       isPrMonitorEvent({ environmentId: "env-1", state: state({ consecutiveErrors: -1 }) }),
+    ).toBe(false);
+    expect(
+      isPrMonitorEvent({
+        environmentId: "env-1",
+        state: state({ checkSummary: { passed: 2, total: 1, pending: 0 } }),
+      }),
     ).toBe(false);
     expect(
       isPrMonitorEvent({

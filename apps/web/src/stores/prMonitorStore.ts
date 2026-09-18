@@ -39,7 +39,10 @@ function isSameState(a: PrMonitorEnvironmentState, b: PrMonitorEnvironmentState)
     a.lastCheckAt === b.lastCheckAt &&
     a.prUrl === b.prUrl &&
     a.prState === b.prState &&
-    a.hasMergeConflicts === b.hasMergeConflicts
+    a.hasMergeConflicts === b.hasMergeConflicts &&
+    a.checkSummary?.passed === b.checkSummary?.passed &&
+    a.checkSummary?.total === b.checkSummary?.total &&
+    a.checkSummary?.pending === b.checkSummary?.pending
   );
 }
 

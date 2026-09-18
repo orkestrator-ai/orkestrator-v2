@@ -25,9 +25,11 @@ import * as realMultiReviewPersistence from "@/lib/multi-review-persistence";
 import * as realUseFileSearch from "@/hooks/useFileSearch";
 import * as realPaneLayoutAuthoritative from "@/lib/pane-layout-authoritative";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import type { Environment, PrState, Project } from "@/types";
 import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
+import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 import type { KanbanTask } from "@/lib/backend";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import {
@@ -226,6 +228,8 @@ const selectedProject: Project = {
 };
 
 let currentEnvironment: Environment = selectedEnvironment;
+let currentCheckSummary: PrCheckSummary | null = null;
+let currentUseRealPullRequest = false;
 let currentSelectedEnvironmentId: string | null = selectedEnvironment.id;
 let currentClaudeModel = "claude-default-model";
 let currentCodexModel = "codex-default-model";
@@ -717,16 +721,20 @@ mock.module("@/hooks", () => ({
   useProjects: () => ({
     updateProject: updateProjectMock,
   }),
-  usePullRequest: () => ({
-    prUrl: currentEnvironment.prUrl,
-    prState: currentEnvironment.prState,
-    hasMergeConflicts: currentEnvironment.hasMergeConflicts,
-    viewPR: viewPRMock,
-    setModeCreatePending: setModeCreatePendingMock,
-    setModeMergePending: setModeMergePendingMock,
-    armRefreshAfterAgentCompletion: armRefreshAfterAgentCompletionMock,
-    disarmRefreshAfterAgentCompletion: disarmRefreshAfterAgentCompletionMock,
-  }),
+  usePullRequest: (options: Parameters<typeof realHooksSnapshot.usePullRequest>[0]) =>
+    currentUseRealPullRequest
+      ? realHooksSnapshot.usePullRequest(options)
+      : {
+          prUrl: currentEnvironment.prUrl,
+          prState: currentEnvironment.prState,
+          hasMergeConflicts: currentEnvironment.hasMergeConflicts,
+          checkSummary: currentCheckSummary,
+          viewPR: viewPRMock,
+          setModeCreatePending: setModeCreatePendingMock,
+          setModeMergePending: setModeMergePendingMock,
+          armRefreshAfterAgentCompletion: armRefreshAfterAgentCompletionMock,
+          disarmRefreshAfterAgentCompletion: disarmRefreshAfterAgentCompletionMock,
+        },
 }));
 
 mock.module("@/hooks/useFileSearch", () => ({
@@ -968,6 +976,14 @@ beforeEach(() => {
     configurable: true,
   });
   currentEnvironment = { ...selectedEnvironment };
+  currentCheckSummary = null;
+  currentUseRealPullRequest = false;
+  realStoresSnapshot.useEnvironmentStore.setState({
+    environments: [],
+    isLoading: false,
+    error: null,
+  });
+  usePrMonitorStore.setState({ states: new Map() });
   currentSelectedEnvironmentId = currentEnvironment.id;
   currentSelectedProjectId = selectedProject.id;
   currentOtherEnvironments = [];
@@ -5695,6 +5711,174 @@ describe("ActionBar configured action defaults", () => {
 });
 
 describe("ActionBar pull request actions", () => {
+  test.each([
+    {
+      name: "running",
+      summary: { passed: 2, total: 4, pending: 2 },
+      label: "2 of 4 CI checks passed; 2 still running",
+      colorClass: "text-orange-600",
+      borderClass: "border-orange-500",
+      liveText: "2/4 checks; 2 still running",
+      state: "running",
+    },
+    {
+      name: "passed",
+      summary: { passed: 4, total: 4, pending: 0 },
+      label: "4 of 4 CI checks passed; all checks complete",
+      colorClass: "text-red-600",
+      borderClass: "border-green-600",
+      liveText: "4/4 checks; all checks complete",
+      state: "passed",
+    },
+    {
+      name: "failed",
+      summary: { passed: 3, total: 4, pending: 0 },
+      label: "3 of 4 CI checks passed; 1 failed; all checks complete",
+      colorClass: "text-red-600",
+      borderClass: "border-red-600",
+      liveText: "3/4 checks; all checks complete",
+      state: "failed",
+    },
+  ])(
+    "shows $name CI checks between the PR actions",
+    ({ summary, label, colorClass, borderClass, liveText, state }) => {
+      currentEnvironment = { ...selectedEnvironment, prState: "open" };
+      currentCheckSummary = summary;
+      render(<ActionBar />);
+
+      const status = screen.getByRole("status", { name: label });
+      expect(status.textContent).toBe(liveText);
+      expect(status.classList.contains(colorClass)).toBe(true);
+      expect(status.classList.contains(borderClass)).toBe(true);
+      expect(status.classList.contains("bg-transparent")).toBe(true);
+      expect(status.dataset.state).toBe(state);
+
+      const toolbarText = Array.from(status.parentElement?.children ?? []).map(
+        (element) => element.textContent,
+      );
+      expect(toolbarText.indexOf("View PR")).toBeLessThan(toolbarText.indexOf(status.textContent));
+      expect(toolbarText.indexOf(status.textContent)).toBeLessThan(toolbarText.indexOf("Merge PR"));
+    },
+  );
+
+  test("announces when the final pending check completes unsuccessfully", () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    currentCheckSummary = { passed: 3, total: 4, pending: 1 };
+    const view = render(<ActionBar />);
+    const runningText = screen.getByRole("status").textContent;
+
+    currentCheckSummary = { passed: 3, total: 4, pending: 0 };
+    view.rerender(<ActionBar />);
+
+    const completed = screen.getByRole("status", {
+      name: "3 of 4 CI checks passed; 1 failed; all checks complete",
+    });
+    expect(completed.textContent).toBe("3/4 checks; all checks complete");
+    expect(completed.textContent).not.toBe(runningText);
+  });
+
+  test("shows a known failure while other CI checks are still running", () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    currentCheckSummary = { passed: 1, total: 4, pending: 2 };
+    render(<ActionBar />);
+
+    const status = screen.getByRole("status", {
+      name: "1 of 4 CI checks passed; 1 failed; 2 still running",
+    });
+    expect(status.dataset.state).toBe("failed");
+    expect(status.classList.contains("border-red-600")).toBe(true);
+    expect(status.classList.contains("text-red-600")).toBe(true);
+  });
+
+  test("uses compact CI indicator styling in grid presentation", () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    currentCheckSummary = { passed: 2, total: 4, pending: 2 };
+    render(<ActionBar presentation="grid" />);
+
+    const status = screen.getByRole("status");
+    expect(status.classList.contains("px-2.5")).toBe(true);
+    expect(status.classList.contains("text-xs")).toBe(true);
+    expect(status.classList.contains("border-orange-500")).toBe(true);
+  });
+
+  test("renders live monitor-store updates through the real pull request hook", () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    realStoresSnapshot.useEnvironmentStore.setState({
+      environments: [currentEnvironment],
+      isLoading: false,
+      error: null,
+    });
+    usePrMonitorStore.setState({
+      states: new Map([
+        [
+          currentEnvironment.id,
+          {
+            environmentId: currentEnvironment.id,
+            mode: "normal",
+            checkInProgress: false,
+            checkSummary: { passed: 2, total: 4, pending: 2 },
+            consecutiveErrors: 0,
+            lastCheckAt: null,
+            prUrl: currentEnvironment.prUrl,
+            prState: "open",
+            hasMergeConflicts: false,
+          },
+        ],
+      ]),
+    });
+    currentUseRealPullRequest = true;
+    render(<ActionBar />);
+
+    expect(
+      screen.getByRole("status", { name: "2 of 4 CI checks passed; 2 still running" }),
+    ).toBeTruthy();
+
+    act(() => {
+      usePrMonitorStore.getState().applyEvent({
+        environmentId: currentEnvironment.id,
+        state: {
+          ...usePrMonitorStore.getState().states.get(currentEnvironment.id)!,
+          checkSummary: { passed: 4, total: 4, pending: 0 },
+        },
+      });
+    });
+
+    expect(
+      screen.getByRole("status", { name: "4 of 4 CI checks passed; all checks complete" }),
+    ).toBeTruthy();
+
+    act(() => {
+      usePrMonitorStore.getState().applyEvent({
+        environmentId: currentEnvironment.id,
+        state: {
+          ...usePrMonitorStore.getState().states.get(currentEnvironment.id)!,
+          checkSummary: null,
+        },
+      });
+    });
+
+    expect(screen.queryByRole("status") === null).toBe(true);
+  });
+
+  test("does not show a CI indicator before GitHub reports checks", () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    currentCheckSummary = { passed: 0, total: 0, pending: 0 };
+    render(<ActionBar />);
+
+    expect(screen.queryByRole("status") === null).toBe(true);
+  });
+
+  test.each(["merged", "closed"] as const)(
+    "does not show a CI indicator for a %s pull request",
+    (prState) => {
+      currentEnvironment = { ...selectedEnvironment, prState };
+      currentCheckSummary = { passed: 4, total: 4, pending: 0 };
+      render(<ActionBar />);
+
+      expect(screen.queryByRole("status") === null).toBe(true);
+    },
+  );
+
   test("hides Push Changes for every terminal pull request state", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "merged" };
     const view = render(<ActionBar />);

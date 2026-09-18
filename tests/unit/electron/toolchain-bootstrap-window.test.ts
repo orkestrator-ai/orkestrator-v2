@@ -38,7 +38,6 @@ describe("toolchain bootstrap window", () => {
     const selecting = chooseAgentPlatforms({
       BrowserWindowCtor: SelectionWindow as never,
       dirname: "/app/electron",
-      platform: "linux",
     });
     await Promise.resolve();
     ipcListener?.({}, "orkestrator:agent-platform-selection", ["grok", "invalid", "claude"]);
@@ -50,11 +49,23 @@ describe("toolchain bootstrap window", () => {
       nodeIntegration: false,
       sandbox: false,
     });
-    expect(windowOptions).toMatchObject({ width: 650, height: 600, resizable: true });
-    expect(windowOptions).not.toHaveProperty("minWidth");
-    expect(windowOptions).not.toHaveProperty("minHeight");
-    expect(windowOptions).not.toHaveProperty("maxWidth");
-    expect(windowOptions).not.toHaveProperty("maxHeight");
+    if (process.platform === "linux") {
+      expect(windowOptions).toMatchObject({ width: 650, height: 600, resizable: true });
+      expect(windowOptions).not.toHaveProperty("minWidth");
+      expect(windowOptions).not.toHaveProperty("minHeight");
+      expect(windowOptions).not.toHaveProperty("maxWidth");
+      expect(windowOptions).not.toHaveProperty("maxHeight");
+    } else {
+      expect(windowOptions).toMatchObject({
+        width: 650,
+        height: 600,
+        minWidth: 650,
+        minHeight: 600,
+        maxWidth: 650,
+        maxHeight: 600,
+        resizable: false,
+      });
+    }
     const loadedHtml = decodeURIComponent(loadedUrl.split(",")[1] ?? "");
     expect(loadedHtml).toContain(
       "body { margin: 0; min-height: 100vh; display: flex; padding: 44px 28px;",
@@ -87,6 +98,85 @@ describe("toolchain bootstrap window", () => {
     closedListener?.();
 
     await expect(selecting).rejects.toThrow("Agent platform selection was cancelled");
+  });
+
+  test("keeps the platform picker fixed at 650x600 on non-Linux platforms", async () => {
+    let ipcListener: ((_event: unknown, channel: string, values: unknown) => void) | undefined;
+    let windowOptions: BrowserWindowConstructorOptions | undefined;
+    class FixedSelectionWindow {
+      readonly webContents = {
+        on: mock((event: string, listener: (...args: never[]) => void) => {
+          if (event === "ipc-message") ipcListener = listener as typeof ipcListener;
+        }),
+        once: mock(() => undefined),
+        setWindowOpenHandler: mock(() => undefined),
+      };
+      readonly loadURL = mock(async () => undefined);
+      readonly once = mock(() => undefined);
+      readonly isDestroyed = mock(() => false);
+      readonly close = mock(() => undefined);
+      constructor(options: BrowserWindowConstructorOptions) {
+        windowOptions = options;
+      }
+    }
+
+    const selecting = chooseAgentPlatforms({
+      BrowserWindowCtor: FixedSelectionWindow as never,
+      dirname: "/app/electron",
+      platform: "darwin",
+    });
+    await Promise.resolve();
+    ipcListener?.({}, "orkestrator:agent-platform-selection", ["codex"]);
+
+    await expect(selecting).resolves.toEqual(["codex"]);
+    expect(windowOptions).toMatchObject({
+      width: 650,
+      height: 600,
+      minWidth: 650,
+      minHeight: 600,
+      maxWidth: 650,
+      maxHeight: 600,
+      resizable: false,
+    });
+  });
+
+  test("uses the host platform when no sizing platform is injected", async () => {
+    class HostPlatformWindow {
+      readonly webContents = {
+        on: mock(() => undefined),
+        send: mock(() => undefined),
+        setWindowOpenHandler: mock(() => undefined),
+        once: mock(() => undefined),
+      };
+      readonly loadURL = mock(async () => undefined);
+      readonly isDestroyed = mock(() => false);
+      readonly close = mock(() => undefined);
+
+      constructor(readonly options: BrowserWindowConstructorOptions) {}
+    }
+
+    const window = (await createToolchainBootstrapWindow({
+      BrowserWindowCtor: HostPlatformWindow as never,
+      dirname: "/app/electron",
+    })) as unknown as HostPlatformWindow;
+
+    if (process.platform === "linux") {
+      expect(window.options).toMatchObject({ width: 520, height: 300, resizable: true });
+      expect(window.options).not.toHaveProperty("minWidth");
+      expect(window.options).not.toHaveProperty("minHeight");
+      expect(window.options).not.toHaveProperty("maxWidth");
+      expect(window.options).not.toHaveProperty("maxHeight");
+    } else {
+      expect(window.options).toMatchObject({
+        width: 520,
+        height: 300,
+        minWidth: 520,
+        minHeight: 300,
+        maxWidth: 520,
+        maxHeight: 300,
+        resizable: false,
+      });
+    }
   });
 
   test("loads a locked-down local progress page and forwards status over IPC", async () => {

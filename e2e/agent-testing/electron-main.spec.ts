@@ -2,9 +2,10 @@ import { expect, test } from "@playwright/test";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
@@ -48,15 +49,88 @@ async function waitForUrl(url: string): Promise<void> {
     .toBe(true);
 }
 
-test("real Electron main process shares one backend across independent windows", async () => {
-  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-smoke-"));
-  let vite: ChildProcess | null = null;
-  let launchedApp: ElectronApplication | null = null;
+async function captureBootstrapRendering(app: ElectronApplication) {
+  return app.evaluate(async ({ app: electronApp, BrowserWindow, screen }) => {
+    const bootstrapWindow = BrowserWindow.getAllWindows()[0];
+    if (!bootstrapWindow) throw new Error("Bootstrap window was not created");
+    try {
+      // A tiling compositor controls the final surface. Giving the real
+      // window a different size exercises the same resize and repaint path.
+      bootstrapWindow.setSize(900, 700);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const bounds = bootstrapWindow.getBounds();
+      const [contentWidth, contentHeight] = bootstrapWindow.getContentSize();
+      const scaleFactor = screen.getDisplayMatching(bounds).scaleFactor;
+      const captureSize = (await bootstrapWindow.webContents.capturePage()).getSize();
+      const layout = (await bootstrapWindow.webContents.executeJavaScript(`(() => {
+          const main = document.querySelector("main").getBoundingClientRect();
+          const body = document.body.getBoundingClientRect();
+          return {
+            innerWidth,
+            innerHeight,
+            main: { left: main.left, right: main.right, top: main.top, bottom: main.bottom },
+            body: { width: body.width, height: body.height },
+          };
+        })()`)) as {
+        innerWidth: number;
+        innerHeight: number;
+        main: { left: number; right: number; top: number; bottom: number };
+        body: { width: number; height: number };
+      };
+      return {
+        bounds,
+        captureSize,
+        contentWidth,
+        contentHeight,
+        layout,
+        maximumSize: bootstrapWindow.getMaximumSize(),
+        minimumSize: bootstrapWindow.getMinimumSize(),
+        ozonePlatform: electronApp.commandLine.getSwitchValue("ozone-platform"),
+        resizable: bootstrapWindow.isResizable(),
+        scaleFactor,
+      };
+    } finally {
+      bootstrapWindow.destroy();
+    }
+  });
+}
+
+function expectResponsiveBootstrapRendering(
+  rendering: Awaited<ReturnType<typeof captureBootstrapRendering>>,
+): void {
+  expect(rendering.resizable).toBe(true);
+  expect(rendering.minimumSize).toEqual([0, 0]);
+  expect(rendering.maximumSize).toEqual([0, 0]);
+  expect(rendering.bounds.width).toBeGreaterThan(520);
+  expect(rendering.bounds.height).toBeGreaterThan(300);
+  expect(Math.abs(rendering.layout.innerWidth - rendering.contentWidth)).toBeLessThanOrEqual(2);
+  expect(Math.abs(rendering.layout.innerHeight - rendering.contentHeight)).toBeLessThanOrEqual(2);
+  expect(rendering.layout.body.width).toBeCloseTo(rendering.layout.innerWidth, 0);
+  expect(rendering.layout.body.height).toBeCloseTo(rendering.layout.innerHeight, 0);
+  expect((rendering.layout.main.left + rendering.layout.main.right) / 2).toBeCloseTo(
+    rendering.layout.innerWidth / 2,
+    0,
+  );
+  expect(rendering.layout.main.top).toBeGreaterThanOrEqual(0);
+  expect(rendering.layout.main.bottom).toBeLessThanOrEqual(rendering.layout.innerHeight);
+  expect(rendering.captureSize).toEqual({
+    width: Math.round(rendering.contentWidth * rendering.scaleFactor),
+    height: Math.round(rendering.contentHeight * rendering.scaleFactor),
+  });
+}
+
+test.beforeAll(() => {
   const build = spawnSync("bunx", ["tsc", "-p", "tsconfig.electron.json"], {
     cwd: packageRoot,
     encoding: "utf8",
   });
   expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
+});
+
+test("real Electron main process shares one backend across independent windows", async () => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-smoke-"));
+  let vite: ChildProcess | null = null;
+  let launchedApp: ElectronApplication | null = null;
   const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
   const profile = resolveRuntimeProfile({
     repositoryRoot,
@@ -104,6 +178,7 @@ test("real Electron main process shares one backend across independent windows",
         app.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()?.getTitle() ?? null),
       )
       .toBe(`${profile.electronTitle} — Local`);
+
     const userData = await app.evaluate(({ app: electronApp }) => electronApp.getPath("userData"));
     expect(userData).toBe(profile.dataDir);
     const greeting = await window.evaluate(async () => {
@@ -163,7 +238,7 @@ test("real Electron main process shares one backend across independent windows",
           bubbles: true,
           cancelable: true,
         });
-        window.dispatchEvent(event);
+        globalThis.dispatchEvent(event);
         return event.defaultPrevented;
       });
     const rendererTabCount = await window.locator('[aria-label^="Close "]').count();
@@ -294,6 +369,52 @@ test("real Electron main process shares one backend across independent windows",
         process.kill(-vite.pid, "SIGTERM");
       } catch {}
     }
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("bootstrap window repaints a resized native Wayland surface at fractional scale", async () => {
+  test.skip(
+    process.platform !== "linux" || !process.env.WAYLAND_DISPLAY,
+    "Native Wayland rendering requires a Linux Wayland display",
+  );
+
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-wayland-smoke-"));
+  const entrypoint = path.join(temporaryRoot, "main.cjs");
+  const bootstrapDirname = path.join(packageRoot, "dist", "electron");
+  const bootstrapModuleUrl = pathToFileURL(
+    path.join(bootstrapDirname, "toolchain-bootstrap-window.js"),
+  ).href;
+  let launchedApp: ElectronApplication | null = null;
+  try {
+    await writeFile(
+      entrypoint,
+      [
+        'const { app, BrowserWindow } = require("electron");',
+        "app.whenReady().then(async () => {",
+        `  const bootstrap = await import(${JSON.stringify(bootstrapModuleUrl)});`,
+        "  await bootstrap.createToolchainBootstrapWindow({",
+        "    BrowserWindowCtor: BrowserWindow,",
+        `    dirname: ${JSON.stringify(bootstrapDirname)},`,
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    const app = await electron.launch({
+      executablePath: electronExecutable,
+      args: ["--ozone-platform=wayland", "--force-device-scale-factor=1.25", entrypoint],
+      cwd: repositoryRoot,
+    });
+    launchedApp = app;
+    await app.firstWindow();
+
+    const rendering = await captureBootstrapRendering(app);
+    expectResponsiveBootstrapRendering(rendering);
+    expect(rendering.ozonePlatform).toBe("wayland");
+    expect(rendering.scaleFactor).toBeCloseTo(1.25, 2);
+  } finally {
+    await launchedApp?.close().catch(() => undefined);
     await rm(temporaryRoot, { recursive: true, force: true });
   }
 });

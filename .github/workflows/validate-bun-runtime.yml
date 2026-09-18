@@ -59,7 +59,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up mise toolchain
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
@@ -74,6 +74,8 @@ jobs:
         run: mise run download:bun
 
       - name: Build the desktop application
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: mise run build:all
 
       - name: Exercise the standalone packaged-backend layout
@@ -103,30 +105,35 @@ jobs:
         run: mise run verify:packaged-backend
 
   container:
-    name: Container (linux/amd64 + linux/arm64)
-    runs-on: ubuntu-24.04
+    name: Container (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            runner: ubuntu-24.04
+            platform: linux/amd64
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-        with:
-          platforms: arm64
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - name: Build both published architectures
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+      - name: Build published architecture
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: docker/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: false
-          cache-from: type=gha,scope=orkestrator-container-validation
-          cache-to: type=gha,mode=max,scope=orkestrator-container-validation
+          cache-from: type=gha,scope=orkestrator-container-validation-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=orkestrator-container-validation-${{ matrix.name }}

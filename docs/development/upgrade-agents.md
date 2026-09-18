@@ -7,15 +7,15 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
-| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.274`, Anthropic SDK `0.126.0`, CLI `2.1.274` |
-| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.154.0` |
+| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.276`, Anthropic SDK `0.126.0`, CLI `2.1.276` |
+| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.155.0` |
 | OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.18.31` |
 | Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.31` (latest stable, verified 2026-09-17) |
 | Grok | No SDK. The ACP bridge spawns the CLI and speaks ACP over its stdio | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.34` |
 | Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types; `@earendil-works/pi-server` completes the SDK's runtime closure | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `0.85.1` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
-Verified against upstream stable releases on 2026-09-17.
+Verified against upstream stable releases on 2026-09-18.
 
 ## What is enforced, and what is not
 

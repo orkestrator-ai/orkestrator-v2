@@ -288,11 +288,11 @@ liveTest(
       const review = openCodeReviewPermissionRules(policy);
       const updated = await client.session.update({
         sessionID: sessionId,
-        permission: [...workflow, ...review],
+        permission: [...review, ...workflow],
       });
       if (updated.error) throw new Error("OpenCode did not update permissions");
       const afterUpdate = await client.session.get({ sessionID: sessionId });
-      expect(afterUpdate.data?.permission?.slice(-review.length)).toEqual(review);
+      expect(afterUpdate.data?.permission?.slice(-workflow.length)).toEqual(workflow);
 
       const withoutTools = await client.session.promptAsync({
         sessionID: sessionId,
@@ -300,7 +300,7 @@ liveTest(
       });
       if (withoutTools.error) throw new Error("OpenCode rejected the unmasked prompt");
       const preserved = await client.session.get({ sessionID: sessionId });
-      expect(preserved.data?.permission?.slice(-review.length)).toEqual(review);
+      expect(preserved.data?.permission?.slice(-workflow.length)).toEqual(workflow);
 
       const masked = await client.session.promptAsync({
         sessionID: sessionId,
@@ -309,7 +309,7 @@ liveTest(
       });
       if (masked.error) throw new Error("OpenCode rejected the masked prompt");
       const replaced = await client.session.get({ sessionID: sessionId });
-      expect(replaced.data?.permission?.slice(-review.length)).not.toEqual(review);
+      expect(replaced.data?.permission?.slice(-workflow.length)).not.toEqual(workflow);
     } finally {
       if (server && server.exitCode === null) {
         server.kill();

@@ -72,14 +72,12 @@ describe("MonacoFileEditor integration helpers", () => {
     const setJavaScriptOptions = mock((_options: unknown) => {});
     const setJsonOptions = mock((_options: unknown) => {});
     const monaco = {
-      languages: {
-        typescript: {
-          typescriptDefaults: { setDiagnosticsOptions: setTypeScriptOptions },
-          javascriptDefaults: { setDiagnosticsOptions: setJavaScriptOptions },
-        },
-        json: {
-          jsonDefaults: { setDiagnosticsOptions: setJsonOptions },
-        },
+      typescript: {
+        typescriptDefaults: { setDiagnosticsOptions: setTypeScriptOptions },
+        javascriptDefaults: { setDiagnosticsOptions: setJavaScriptOptions },
+      },
+      json: {
+        jsonDefaults: { setDiagnosticsOptions: setJsonOptions },
       },
     };
 
@@ -164,14 +162,12 @@ describe("MonacoFileEditor component", () => {
     const monaco = {
       KeyMod: { CtrlCmd: 4 },
       KeyCode: { KeyS: 8 },
-      languages: {
-        typescript: {
-          typescriptDefaults: { setDiagnosticsOptions },
-          javascriptDefaults: { setDiagnosticsOptions },
-        },
-        json: {
-          jsonDefaults: { setDiagnosticsOptions },
-        },
+      typescript: {
+        typescriptDefaults: { setDiagnosticsOptions },
+        javascriptDefaults: { setDiagnosticsOptions },
+      },
+      json: {
+        jsonDefaults: { setDiagnosticsOptions },
       },
     };
     const editor = {

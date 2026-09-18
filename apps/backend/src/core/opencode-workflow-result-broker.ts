@@ -26,9 +26,10 @@ export class OpenCodeWorkflowResultBroker {
   private mcpKey: string | null = null;
   private mcpSetup: { key: string; promise: Promise<void> } | null = null;
   private readonly enabled = new Map<string, string>();
-  private readonly permissionRestore = new Map<string, ReturnType<
-    typeof openCodeWorkflowResultDenyPermissionRules
-  >>();
+  private readonly permissionRestore = new Map<
+    string,
+    ReturnType<typeof openCodeWorkflowResultDenyPermissionRules>
+  >();
 
   constructor(
     private readonly client: OpencodeClient,
@@ -78,9 +79,13 @@ export class OpenCodeWorkflowResultBroker {
     }
   }
 
-  async enableForTurn(sessionId: string, selectedTool: string | undefined): Promise<void> {
+  async enableForTurn(
+    sessionId: string,
+    selectedTool: string | undefined,
+    reassert = false,
+  ): Promise<void> {
     if (!selectedTool) return;
-    if (this.enabled.get(sessionId) === selectedTool) return;
+    if (!reassert && this.enabled.get(sessionId) === selectedTool) return;
     try {
       const response = await this.client.session.update(
         {
@@ -101,11 +106,15 @@ export class OpenCodeWorkflowResultBroker {
     this.enabled.set(sessionId, selectedTool);
   }
 
-  async restore(sessionId: string): Promise<void> {
+  async restore(sessionId: string, afterReviewerRestore = false): Promise<void> {
     const permission = this.permissionRestore.get(sessionId);
-    if (!permission) return;
+    if (!permission && !afterReviewerRestore) return;
     const response = await this.client.session.update(
-      { sessionID: sessionId, directory: this.directory, permission },
+      {
+        sessionID: sessionId,
+        directory: this.directory,
+        permission: permission ?? openCodeWorkflowResultDenyPermissionRules(),
+      },
       this.requestOptions(),
     );
     assertSdkResponse(response, "OpenCode workflow-result permission restore");

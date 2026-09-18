@@ -74,6 +74,7 @@ const {
   parseContainerFileTree,
   __testing: commandTesting,
 } = await import("../../../apps/backend/src/core/commands");
+const { resolveBunBinary } = await import("../../../apps/backend/src/core/commands-agent-support");
 
 const tempDirs: string[] = [];
 
@@ -98,6 +99,19 @@ async function createTempDir(prefix: string, parent = os.tmpdir()): Promise<stri
   tempDirs.push(directory);
   return directory;
 }
+
+test("managed Bun resolution returns an absolute executable for relative app roots", async () => {
+  const root = await createTempDir("ork-relative-app-root-", process.cwd());
+  const appRoot = path.relative(process.cwd(), root);
+  const bundledBun = path.join(root, "binaries", "bun");
+  await fs.mkdir(path.dirname(bundledBun), { recursive: true });
+  await fs.writeFile(bundledBun, "");
+
+  const resolved = resolveBunBinary(createContext(null, { appRoot }));
+
+  expect(resolved).toBe(bundledBun);
+  expect(path.isAbsolute(resolved)).toBe(true);
+});
 
 async function withFakeDocker(
   script: string,

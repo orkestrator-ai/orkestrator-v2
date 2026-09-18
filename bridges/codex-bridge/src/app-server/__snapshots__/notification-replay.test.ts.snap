@@ -1,0 +1,116 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`recorded app-server stream replay synthetic-full-turn.jsonl renders to a stable structure 1`] = `
+{
+  "counts": {
+    "notifications": 26,
+    "responses": 1,
+    "serverRequests": 0,
+  },
+  "invalidLines": 0,
+  "serverRequestMethods": [],
+  "turns": [
+    {
+      "contentLength": 44,
+      "finalDiffLength": 100,
+      "parts": [
+        {
+          "contentLength": 25,
+          "type": "thinking",
+        },
+        {
+          "contentLength": 5,
+          "toolName": "bash",
+          "toolState": "success",
+          "type": "tool-invocation",
+        },
+        {
+          "contentLength": 17,
+          "toolName": "web_search",
+          "toolState": "success",
+          "type": "tool-invocation",
+        },
+        {
+          "contentLength": 27,
+          "toolName": "apply_patch",
+          "toolState": "success",
+          "type": "tool-invocation",
+        },
+        {
+          "contentLength": 44,
+          "type": "text",
+        },
+      ],
+      "phase": "completed",
+    },
+    {
+      "contentLength": 13,
+      "parts": [
+        {
+          "contentLength": 13,
+          "type": "text",
+        },
+      ],
+      "phase": "interrupted",
+    },
+    {
+      "contentLength": 0,
+      "errorCode": "usageLimitExceeded",
+      "parts": [],
+      "phase": "failed",
+    },
+  ],
+  "unknownMethods": [],
+  "unsupportedItemTypes": [],
+}
+`;
+
+exports[`recorded app-server stream replay synthetic-raw-apply-patch.jsonl renders to a stable structure 1`] = `
+{
+  "counts": {
+    "notifications": 12,
+    "responses": 0,
+    "serverRequests": 0,
+  },
+  "invalidLines": 0,
+  "serverRequestMethods": [],
+  "turns": [
+    {
+      "contentLength": 20,
+      "parts": [
+        {
+          "contentLength": 27,
+          "toolName": "apply_patch",
+          "toolState": "success",
+          "type": "tool-invocation",
+        },
+        {
+          "contentLength": 8,
+          "toolName": "apply_patch",
+          "toolState": "success",
+          "type": "tool-invocation",
+        },
+        {
+          "contentLength": 8,
+          "toolName": "apply_patch",
+          "toolState": "success",
+          "type": "tool-invocation",
+        },
+        {
+          "contentLength": 14,
+          "toolName": "apply_patch",
+          "toolState": "failure",
+          "type": "tool-invocation",
+        },
+        {
+          "contentLength": 20,
+          "type": "text",
+        },
+      ],
+      "phase": "completed",
+    },
+  ],
+  "unknownMethods": [],
+  "unsupportedItemTypes": [],
+}
+`;

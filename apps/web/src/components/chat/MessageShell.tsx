@@ -172,13 +172,13 @@ export function MessageShell({
               isUser
                 ? "rounded-xl border border-border/70 bg-zinc-800/80 px-3.5 py-1.5 shadow-sm [&_.prose_p]:my-0"
                 : "w-full",
+              isUser && onUserLongPress && "[-webkit-touch-callout:none]",
             )}
             onPointerDown={isUser ? handleUserPointerDown : undefined}
             onPointerMove={isUser ? handleUserPointerMove : undefined}
             onPointerUp={isUser ? handleUserPointerUp : undefined}
             onPointerCancel={isUser ? handleUserPointerCancel : undefined}
             onClickCapture={isUser ? handleUserClickCapture : undefined}
-            style={isUser && onUserLongPress ? { WebkitTouchCallout: "none" } : undefined}
           >
             {showHeader && isUser ? <div className="sr-only">{authorLabel}</div> : null}
 

@@ -25,6 +25,7 @@ binaries/
 *.deb
 *.rpm
 *.snap
+!**/__snapshots__/*.snap
 *.AppImage
 
 # Logs
@@ -79,6 +80,7 @@ temp/
 .claude/
 .codex/
 .orkestrator/
+.orkestrator-linux-home/
 
 src-tauri
 

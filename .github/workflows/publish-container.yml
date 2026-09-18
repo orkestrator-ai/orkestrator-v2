@@ -15,19 +15,16 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  publish:
-    name: Publish to GHCR
+  validate-release:
+    name: Validate release tag
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 10
     permissions:
       contents: read
-      packages: write
-      attestations: write
-      id-token: write
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Validate release version
         shell: bash
@@ -47,16 +44,34 @@ jobs:
             exit 1
           fi
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-        with:
-          platforms: arm64
+  build:
+    name: Build ${{ matrix.name }}
+    needs: validate-release
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            runner: ubuntu-24.04
+            platform: linux/amd64
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -64,7 +79,75 @@ jobs:
 
       - name: Generate image metadata
         id: metadata
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          labels: |
+            org.opencontainers.image.title=Orkestrator AI development environment
+            org.opencontainers.image.description=Development container for Orkestrator AI agents and isolated workspaces
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push architecture by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=orkestrator-container-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=orkestrator-container-${{ matrix.name }}
+
+      - name: Export architecture digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test "${IMAGE_DIGEST#sha256:}" != "$IMAGE_DIGEST"
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${IMAGE_DIGEST#sha256:}"
+
+      - name: Upload architecture digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: container-digest-${{ matrix.name }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish multi-architecture manifest
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - name: Download architecture digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: container-digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image metadata
+        id: metadata
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           flavor: |
@@ -74,27 +157,37 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=sha,prefix=sha-,format=long
-          labels: |
-            org.opencontainers.image.title=Orkestrator AI development environment
-            org.opencontainers.image.description=Development container for Orkestrator AI agents and isolated workspaces
-            org.opencontainers.image.licenses=MIT
 
-      - name: Build and push image
-        id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          file: docker/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels }}
-          cache-from: type=gha,scope=orkestrator-container
-          cache-to: type=gha,mode=max,scope=orkestrator-container
+      - name: Create and verify multi-architecture manifest
+        id: manifest
+        env:
+          IMAGE_TAGS: ${{ steps.metadata.outputs.tags }}
+        run: |
+          set -euo pipefail
+          mapfile -t tags <<< "$IMAGE_TAGS"
+          tag_args=()
+          for tag in "${tags[@]}"; do
+            if [[ -n "$tag" ]]; then tag_args+=(--tag "$tag"); fi
+          done
+          digest_refs=()
+          for digest_file in "${RUNNER_TEMP}"/digests/*; do
+            digest_refs+=("${REGISTRY}/${IMAGE_NAME}@sha256:$(basename "$digest_file")")
+          done
+          test "${#digest_refs[@]}" -eq 2
+          docker buildx imagetools create \
+            --metadata-file "${RUNNER_TEMP}/manifest-metadata.json" \
+            "${tag_args[@]}" \
+            "${digest_refs[@]}"
+          manifest_digest="$(jq -er '."containerimage.digest"' "${RUNNER_TEMP}/manifest-metadata.json")"
+          echo "digest=$manifest_digest" >> "$GITHUB_OUTPUT"
+          platforms="$(docker buildx imagetools inspect "${tags[0]}" --raw | \
+            jq -r '.manifests[].platform | "\(.os)/\(.architecture)"' | sort)"
+          grep -Fxq 'linux/amd64' <<< "$platforms"
+          grep -Fxq 'linux/arm64' <<< "$platforms"
 
       - name: Attest build provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true

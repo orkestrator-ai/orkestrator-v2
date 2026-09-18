@@ -632,7 +632,7 @@ export function resolveBunBinary(context: CommandContext): string {
     path.join(context.resourceRoot, "bin", "bun"),
     path.join(context.appRoot, "binaries", "bun"),
     path.join(context.appRoot, "bin", "bun"),
-  ];
+  ].map((candidate) => path.resolve(candidate));
   return candidates.find((candidate) => existsSync(candidate)) ?? "bun";
 }
 

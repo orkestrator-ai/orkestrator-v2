@@ -5,6 +5,7 @@ import { publishConnections } from "@/lib/connections";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 
 const originalReload = window.location.reload;
+const originalClientPlatform = window.__orkestratorClientPlatform;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -59,6 +60,7 @@ afterEach(() => {
   cleanup();
   delete window.orkestrator;
   window.location.reload = originalReload;
+  window.__orkestratorClientPlatform = originalClientPlatform;
 });
 
 describe("server connection switcher", () => {
@@ -499,6 +501,47 @@ describe("server connection switcher", () => {
     await waitFor(() => expect(use).toHaveBeenCalledWith("remote-1"));
     expect(reload).toHaveBeenCalledTimes(1);
   });
+
+  test.each(["ios-wkwebview", "ipad-wkwebview", "iphone-wkwebview"] as const)(
+    "lets the native bridge navigate after switching on %s",
+    async (platform) => {
+      const list = {
+        activeConnectionId: "current",
+        connections: [
+          {
+            id: "current",
+            name: "Current",
+            address: "https://current.example",
+            kind: "remote" as const,
+            active: true,
+            requiresToken: false,
+          },
+          {
+            id: "selected",
+            name: "Selected",
+            address: "https://selected.example",
+            kind: "remote" as const,
+            active: false,
+            requiresToken: false,
+          },
+        ],
+      };
+      const { use } = installConnections(list);
+      const reload = mock(() => undefined);
+      window.__orkestratorClientPlatform = platform;
+      window.location.reload = reload as unknown as typeof window.location.reload;
+      render(<ServerConnectionSwitcher />);
+
+      fireEvent.pointerDown(
+        await screen.findByRole("button", { name: "Connected server: Current" }),
+        { button: 0, ctrlKey: false, pointerType: "touch" },
+      );
+      fireEvent.click(await screen.findByText("Selected"));
+
+      await waitFor(() => expect(use).toHaveBeenCalledWith("selected"));
+      expect(reload).not.toHaveBeenCalled();
+    },
+  );
 
   test("recovers when switching a saved server fails", async () => {
     const list = {

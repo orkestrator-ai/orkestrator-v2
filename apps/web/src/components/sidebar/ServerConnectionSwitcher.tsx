@@ -44,6 +44,21 @@ function readinessLabel(readiness: DisplayReadiness): string {
   return readiness;
 }
 
+function reloadAfterConnectionChange(): void {
+  const platform = window.__orkestratorClientPlatform;
+  if (
+    platform === "ios-wkwebview" ||
+    platform === "ipad-wkwebview" ||
+    platform === "iphone-wkwebview"
+  ) {
+    // The native connection bridge reauthenticates and navigates its WKWebView.
+    // Reloading the old page races that navigation and iOS can route it to the
+    // system browser as an external server URL.
+    return;
+  }
+  window.location.reload();
+}
+
 export function ServerConnectionSwitcher() {
   const [connections, setConnections] = useState<ConnectionList | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -197,7 +212,7 @@ export function ServerConnectionSwitcher() {
     setSwitchingId(connection.id);
     try {
       await api.use(connection.id);
-      window.location.reload();
+      reloadAfterConnectionChange();
     } catch (caught) {
       toast.error("Could not switch servers", { description: errorMessage(caught) });
       setSwitchingId(null);
@@ -213,7 +228,7 @@ export function ServerConnectionSwitcher() {
     try {
       await api.connect({ address, token });
       setToken("");
-      window.location.reload();
+      reloadAfterConnectionChange();
     } catch (caught) {
       setError(errorMessage(caught));
       setConnecting(false);

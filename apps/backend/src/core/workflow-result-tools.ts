@@ -2,9 +2,11 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import type {
   WorkflowResultKind,
   WorkflowResultSubmission,
+  WorkflowResultValidation,
 } from "@orkestrator/protocol/workflow-results";
 import {
   WORKFLOW_RESULT_KINDS,
+  WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
   workflowResultToolName,
 } from "@orkestrator/protocol/workflow-results";
 import { z } from "zod";
@@ -19,7 +21,7 @@ export interface WorkflowResultToolScope extends WorkflowResultCallerScope {
   kind: WorkflowResultKind;
 }
 
-function resultResponse(result: WorkflowResultSubmission) {
+function resultResponse(result: WorkflowResultSubmission | WorkflowResultValidation) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(result) }],
     structuredContent: result as unknown as Record<string, unknown>,
@@ -50,22 +52,51 @@ function capabilityDenied(): WorkflowResultSubmission {
   };
 }
 
-/** Registers the two tools exposed by one attempt-scoped result capability. */
+/** Registers the tools exposed by one attempt-scoped result capability. */
 export function registerWorkflowResultTools(
   server: McpServer,
   workflowResults: WorkflowResultService,
   scope: WorkflowResultToolScope,
 ): void {
   const submissionToolName = workflowResultToolName(scope.kind);
+  const resultSchema = z.fromJSONSchema(workflowResultJsonSchema(scope.kind));
+  server.registerTool(
+    WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
+    {
+      title: "Validate workflow result",
+      description:
+        "Validate one complete workflow result without accepting it, consuming a correction attempt, or changing workflow state. Use this instead of probing the submission tool.",
+      inputSchema: z
+        .object({
+          resultKey: z.string().uuid(),
+          result: resultSchema,
+        })
+        .strict(),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ resultKey, result }) => {
+      if (resultKey !== scope.workflowResultKey) return resultResponse(capabilityDenied());
+      try {
+        return resultResponse(await workflowResults.validate(scope, resultKey, result));
+      } catch {
+        return resultResponse(storageFailure());
+      }
+    },
+  );
   server.registerTool(
     submissionToolName,
     {
       title: "Submit workflow result",
-      description: `Submit the complete ${scope.kind.replaceAll("-", " ")} for this workflow attempt. Validation errors are returned for correction. Repeating an accepted result is safe.`,
+      description: `Submit the complete and final ${scope.kind.replaceAll("-", " ")} for this workflow attempt. Never use this tool for a probe, placeholder, partial draft, or transport test; use ${WORKFLOW_RESULT_VALIDATION_TOOL_NAME} instead. The first accepted payload is final and cannot be replaced. Only retry an accepted submission with the exact same payload.`,
       inputSchema: z
         .object({
           resultKey: z.string().uuid(),
-          result: z.fromJSONSchema(workflowResultJsonSchema(scope.kind)),
+          result: resultSchema,
         })
         .strict(),
       annotations: {
@@ -141,7 +172,7 @@ export function registerWorkflowResultBrokerTools(
       workflowResultToolName(kind),
       {
         title: `Submit ${kind.replaceAll("-", " ")}`,
-        description: `Submit the complete ${kind.replaceAll("-", " ")} for the authorized workflow attempt. Validation errors are returned for correction. Repeating an accepted result is safe.`,
+        description: `Submit the complete and final ${kind.replaceAll("-", " ")} for the authorized workflow attempt. Never use this tool for a probe, placeholder, partial draft, or transport test; use ${WORKFLOW_RESULT_VALIDATION_TOOL_NAME} instead. The first accepted payload is final and cannot be replaced. Only retry an accepted submission with the exact same payload.`,
         inputSchema: z
           .object({
             resultKey: z.string().uuid(),
@@ -172,6 +203,40 @@ export function registerWorkflowResultBrokerTools(
       },
     );
   }
+
+  server.registerTool(
+    WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
+    {
+      title: "Validate workflow result",
+      description:
+        "Validate one complete authorized workflow result without accepting it, consuming a correction attempt, or changing workflow state. Use this instead of probing a submission tool.",
+      inputSchema: z
+        .object({
+          resultKey: z.string().uuid(),
+          capability: z.string().min(32).max(2_048),
+          result: z.json(),
+        })
+        .strict(),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ resultKey, capability, result }) => {
+      try {
+        if (
+          !(await workflowResults.authorizeCapability(scope, resultKey, capability, "opencode"))
+        ) {
+          return resultResponse(capabilityDenied());
+        }
+        return resultResponse(await workflowResults.validate(scope, resultKey, result));
+      } catch {
+        return resultResponse(storageFailure());
+      }
+    },
+  );
 
   server.registerTool(
     "get_workflow_result_status",

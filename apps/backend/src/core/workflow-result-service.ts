@@ -23,6 +23,8 @@ import {
   type WorkflowResultStatus,
   type WorkflowResultSubmission,
   type WorkflowResultSubmissionState,
+  type WorkflowResultValidation,
+  type WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
 import { validateWorkflowResult } from "./workflow-result-contracts.js";
 import { WorkflowResultMetrics } from "./workflow-result-metrics.js";
@@ -58,6 +60,29 @@ interface StoredWorkflowResult extends WorkflowResultSlotInput {
 interface WorkflowResultStore {
   version: 1;
   entries: Record<string, StoredWorkflowResult>;
+}
+
+function validateEntryResult(
+  entry: StoredWorkflowResult,
+  result: unknown,
+): WorkflowResultValidationIssue[] {
+  const issues = validateWorkflowResult(entry.kind, result, entry.schema, entry.context);
+  if (
+    issues.length === 0 &&
+    entry.kind === "story-refinement" &&
+    entry.expectedStoryId &&
+    (!result ||
+      typeof result !== "object" ||
+      Array.isArray(result) ||
+      (result as Record<string, unknown>).storyId !== entry.expectedStoryId)
+  ) {
+    issues.push({
+      path: "$.storyId",
+      code: "context_mismatch",
+      message: "The result belongs to a different story.",
+    });
+  }
+  return issues;
 }
 
 function canonical(value: unknown): unknown {
@@ -345,6 +370,78 @@ export class WorkflowResultService {
       : "correcting";
   }
 
+  /** Validate one complete candidate without consuming its correction budget or changing state. */
+  async validate(
+    scope: WorkflowResultCallerScope,
+    resultKey: string,
+    result: unknown,
+  ): Promise<WorkflowResultValidation> {
+    let serialized: string;
+    try {
+      serialized = serialize(result);
+    } catch {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_result",
+          nextAction: "correct",
+          message: "The result must be a JSON-serializable value.",
+        },
+      };
+    }
+    if (Buffer.byteLength(serialized, "utf8") > WORKFLOW_RESULT_MAX_BYTES) {
+      return {
+        ok: false,
+        error: {
+          code: "result_too_large",
+          nextAction: "stop",
+          message: `The result exceeds the ${WORKFLOW_RESULT_MAX_BYTES}-byte limit.`,
+        },
+      };
+    }
+    const entry = (await this.load()).entries[resultKey];
+    if (
+      !entry ||
+      entry.environmentId !== scope.environmentId ||
+      entry.projectId !== scope.projectId
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "capability_denied",
+          nextAction: "stop",
+          message: "This tool connection cannot validate that workflow result.",
+        },
+      };
+    }
+    if (entry.lifecycle !== "open") {
+      return {
+        ok: false,
+        error: {
+          code: entry.lifecycle === "exhausted" ? "correction_budget_exhausted" : "attempt_closed",
+          nextAction: "stop",
+          message:
+            entry.lifecycle === "exhausted"
+              ? "The correction budget for this workflow result is exhausted."
+              : "This workflow result attempt is closed.",
+        },
+      };
+    }
+    const issues = validateEntryResult(entry, result);
+    if (issues.length > 0) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_result",
+          nextAction: "correct",
+          message: "The result is not valid. Correct the reported fields before submitting it.",
+          issues,
+        },
+      };
+    }
+    return { ok: true, valid: true };
+  }
+
   async submit(
     scope: WorkflowResultCallerScope,
     resultKey: string,
@@ -481,22 +578,7 @@ export class WorkflowResultService {
         }
         if (!entry.firstSubmissionAt) entry.firstSubmissionAt = new Date().toISOString();
         const validationStartedAt = Date.now();
-        const issues = validateWorkflowResult(entry.kind, result, entry.schema, entry.context);
-        if (
-          issues.length === 0 &&
-          entry.kind === "story-refinement" &&
-          entry.expectedStoryId &&
-          (!result ||
-            typeof result !== "object" ||
-            Array.isArray(result) ||
-            (result as Record<string, unknown>).storyId !== entry.expectedStoryId)
-        ) {
-          issues.push({
-            path: "$.storyId",
-            code: "context_mismatch",
-            message: "The result belongs to a different story.",
-          });
-        }
+        const issues = validateEntryResult(entry, result);
         this.metrics.recordValidationDuration(entry.kind, Date.now() - validationStartedAt);
         if (issues.length > 0) {
           // A repeated delivery of the same invalid payload is one correction,

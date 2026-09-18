@@ -65,6 +65,41 @@ function validateConsolidationContext(
   >,
 ): WorkflowResultValidationIssue[] {
   const issues: WorkflowResultValidationIssue[] = [];
+  const placeholderValues = new Set([
+    "dummy",
+    "placeholder",
+    "probe",
+    "sample",
+    "tbd",
+    "test",
+    "testing",
+    "todo",
+  ]);
+  const inspectFinalText = (candidate: unknown, path: string): void => {
+    if (
+      typeof candidate === "string" &&
+      placeholderValues.has(candidate.trim().toLocaleLowerCase("en-US"))
+    ) {
+      issues.push(
+        issue(
+          path,
+          "placeholder_value",
+          "A consolidated review must contain final review content, not a probe or placeholder.",
+        ),
+      );
+    }
+  };
+  if (record(value.whatChanged)) {
+    inspectFinalText(value.whatChanged.overview, "$.whatChanged.overview");
+    inspectFinalText(value.whatChanged.before, "$.whatChanged.before");
+    inspectFinalText(value.whatChanged.after, "$.whatChanged.after");
+    inspectFinalText(value.whatChanged.userImpact, "$.whatChanged.userImpact");
+  }
+  if (record(value.riskProfile))
+    inspectFinalText(value.riskProfile.reasoning, "$.riskProfile.reasoning");
+  if (record(value.verdict)) inspectFinalText(value.verdict.reasoning, "$.verdict.reasoning");
+  inspectFinalText(value.summaryOfChange, "$.summaryOfChange");
+  inspectFinalText(value.reviewSummary, "$.reviewSummary");
   const inspect = (findings: unknown, kind: "issue" | "coverage-gap", path: string): void => {
     if (!Array.isArray(findings)) return;
     findings.forEach((finding, index) => {

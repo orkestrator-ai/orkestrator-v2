@@ -105,6 +105,7 @@ ${MULTI_REVIEW_CONSOLIDATION_PROMPT_CONTINUATION}${JSON.stringify(input.targetBr
 - Reconcile disagreements using the supplied evidence; do not decide by majority vote.${scopeReconciliationRule(input.worktree, input.reviewPackage, input.worktreeChangedDuringReview)}
 - Combine useful strengths, limitations, test results, scope details, change explanation, and reviewer commentary without inventing evidence.
 - The output must stand alone. Do not mention reviewer numbers or assume the reader can see the source reports.
+- If a workflow result tool is assigned, never call its submission tool with a probe, placeholder, partial report, or transport test. Submit only the complete final consolidated report; an accepted submission cannot be replaced.
 - This is a report-consolidation turn, not a planning turn. ${MULTI_REVIEW_PLAN_TOOL_PROHIBITION} A plan, plan-review card, or approval request is not a valid result. Do not ask anyone to approve a plan or switch modes. Return the consolidated structured report directly.
 - Do not edit files, run commands, ask questions, or add prose outside the provider-enforced structured result.
 

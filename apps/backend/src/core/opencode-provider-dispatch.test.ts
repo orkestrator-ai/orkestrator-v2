@@ -13,6 +13,7 @@ import {
 import { openCodeIncompleteTurnRequestId } from "./opencode-turn-recovery.js";
 import {
   openCodeWorkflowResultDenyPermissionRules,
+  openCodeWorkflowResultPermissionRules,
   openCodeWorkflowResultToolId,
 } from "./opencode-provider-helpers.js";
 import {
@@ -51,9 +52,11 @@ describe("OpenCode provider dispatch", () => {
       ]);
       const selected = openCodeWorkflowResultToolId("submit_review_report");
       const other = openCodeWorkflowResultToolId("submit_fix_result");
+      const validate = openCodeWorkflowResultToolId("validate_workflow_result");
       const status = openCodeWorkflowResultToolId("get_workflow_result_status");
       expect(fake.updateCalls[0]?.permission).toEqual([
         { permission: selected, pattern: "*", action: "allow" },
+        { permission: validate, pattern: "*", action: "allow" },
         { permission: status, pattern: "*", action: "allow" },
       ]);
 
@@ -73,6 +76,7 @@ describe("OpenCode provider dispatch", () => {
         expect.arrayContaining([
           { permission: selected, pattern: "*", action: "deny" },
           { permission: other, pattern: "*", action: "deny" },
+          { permission: validate, pattern: "*", action: "deny" },
           { permission: status, pattern: "*", action: "deny" },
         ]),
       );
@@ -272,16 +276,19 @@ describe("OpenCode provider dispatch", () => {
         }) ?? {}
       ).permission;
       const deny = openCodeWorkflowResultDenyPermissionRules();
+      const allowCount = openCodeWorkflowResultPermissionRules("submit_review_report").length;
       const idleRestores = fake.updateCalls.filter(
         (update) =>
           Array.isArray(update.permission) &&
           JSON.stringify(update.permission) === JSON.stringify(deny),
       );
       expect(idleRestores.length).toBeGreaterThanOrEqual(2);
-      expect(Array.isArray(afterFirst) && afterFirst.length - startingLength).toBe(deny.length + 2);
-      expect(Array.isArray(afterSecond) && afterSecond.length - (afterFirst as unknown[]).length).toBe(
-        deny.length + 2,
+      expect(Array.isArray(afterFirst) && afterFirst.length - startingLength).toBe(
+        deny.length + allowCount,
       );
+      expect(
+        Array.isArray(afterSecond) && afterSecond.length - (afterFirst as unknown[]).length,
+      ).toBe(deny.length + allowCount);
     } finally {
       await restored.dispose?.();
     }

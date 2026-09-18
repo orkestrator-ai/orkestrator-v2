@@ -163,6 +163,8 @@ describe("multi review consolidation prompt", () => {
     expect(prompt).toContain(MULTI_REVIEW_PLAN_TOOL_PROHIBITION);
     expect(prompt).toContain("A plan, plan-review card, or approval request is not a valid result");
     expect(prompt).toContain("Return the consolidated structured report directly");
+    expect(prompt).toContain("never call its submission tool with a probe");
+    expect(prompt).toContain("an accepted submission cannot be replaced");
     expect(prompt).toContain("## Structured report structural preflight");
     expect(prompt.indexOf("- Semantically deduplicate equivalent issues")).toBeLessThan(
       prompt.indexOf("## Structured report structural preflight"),

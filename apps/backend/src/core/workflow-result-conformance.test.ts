@@ -93,10 +93,11 @@ describe("workflow result transport conformance", () => {
     const { connection } = await slot("review-report");
     const listed = await rpc(connection.url, connection.token, "tools/list");
     expect(listed.result?.tools?.map((tool) => tool.name)).toEqual([
+      "validate_workflow_result",
       "submit_review_report",
       "get_workflow_result_status",
     ]);
-    const submission = listed.result?.tools?.[0];
+    const submission = listed.result?.tools?.[1];
     expect(submission?.inputSchema).toMatchObject({
       type: "object",
       required: ["resultKey", "result"],
@@ -105,6 +106,16 @@ describe("workflow result transport conformance", () => {
 
   test("an invalid call returns model-visible feedback and the correction is accepted once", async () => {
     const { resultKey, connection } = await slot();
+    const preflight = await rpc(connection.url, connection.token, "tools/call", {
+      name: "validate_workflow_result",
+      arguments: { resultKey, result: { phase: "stories", title: "T", summary: "" } },
+    });
+    expect(preflight.result?.structuredContent).toMatchObject({
+      ok: false,
+      error: { code: "invalid_result", nextAction: "correct" },
+    });
+    expect(await workflowResults.projection(resultKey)).toBe("preparing");
+
     // Rejected by the published input schema before the handler runs. The
     // model still receives it as tool feedback rather than a transport failure.
     const malformed = await rpc(connection.url, connection.token, "tools/call", {
@@ -198,7 +209,7 @@ describe("workflow result transport conformance", () => {
     const names = listed.result?.tools?.map((tool) => tool.name) ?? [];
     expect(names).not.toContain("create_ticket");
     expect(names).not.toContain("send_message");
-    expect(names.length).toBe(2);
+    expect(names.length).toBe(3);
   });
 
   test("a capability signed for another environment is not accepted", async () => {

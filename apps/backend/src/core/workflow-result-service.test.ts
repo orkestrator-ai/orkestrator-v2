@@ -104,6 +104,26 @@ describe("WorkflowResultService", () => {
     expect(conflict).toMatchObject({ ok: false, error: { code: "submission_conflict" } });
   });
 
+  test("preflight validation is read-only and does not consume the correction budget", async () => {
+    const resultKey = await prepare();
+    const invalid = { phase: "collecting", title: 7, summary: "" };
+    for (let index = 0; index < 6; index += 1) {
+      expect(await service.validate(scope, resultKey, invalid)).toMatchObject({
+        ok: false,
+        error: { code: "invalid_result", nextAction: "correct" },
+      });
+    }
+    expect(await service.projection(resultKey)).toBe("preparing");
+
+    const valid = { phase: "collecting", title: "Final", summary: "Complete result." };
+    expect(await service.validate(scope, resultKey, valid)).toEqual({ ok: true, valid: true });
+    expect(await service.projection(resultKey)).toBe("preparing");
+    expect(await service.submit(scope, resultKey, valid)).toMatchObject({
+      ok: true,
+      duplicate: false,
+    });
+  });
+
   test("serializes simultaneous submissions and enforces caller scope", async () => {
     const resultKey = await prepare();
     const denied = await service.submit(

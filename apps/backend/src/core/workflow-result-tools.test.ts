@@ -227,6 +227,48 @@ describe("workflow result context fencing", () => {
     }
   });
 
+  test("an obvious consolidated-review probe is rejected before it can become authoritative", async () => {
+    const resultKey = crypto.randomUUID();
+    await service.prepare({
+      resultKey,
+      kind: "consolidated-review",
+      ...scope,
+      provider: "cursor",
+      context: { type: "consolidated-review", sources: { "reviewer-1:0": "issue" } },
+    });
+    const probe = {
+      ...report,
+      whatChanged: {
+        overview: "probe",
+        before: "probe",
+        after: "probe",
+        keyCodeChanges: [],
+        userImpact: "probe",
+      },
+      riskProfile: { ...report.riskProfile, reasoning: "probe" },
+      verdict: { ready: "yes", reasoning: "probe" },
+      summaryOfChange: "probe",
+      reviewSummary: "probe",
+    };
+
+    const validation = await service.validate(scope, resultKey, probe);
+    expect(validation).toMatchObject({
+      ok: false,
+      error: {
+        code: "invalid_result",
+      },
+    });
+    expect(
+      !validation.ok &&
+        validation.error.issues?.some((issue) => issue.code === "placeholder_value"),
+    ).toBe(true);
+    expect(await service.submit(scope, resultKey, probe)).toMatchObject({
+      ok: false,
+      error: { code: "invalid_result" },
+    });
+    expect(await service.projection(resultKey)).toBe("correcting");
+  });
+
   test("a submission with no accepted slot is denied rather than fabricated", async () => {
     const denied = await service.submit(scope, crypto.randomUUID(), { phase: "collecting" });
     expect(denied.ok).toBe(false);
@@ -265,13 +307,15 @@ describe("workflow result broker tools", () => {
       async submit() {
         return { ok: true, lifecycle: "accepted" };
       },
+      async validate() {
+        return { ok: true, valid: true };
+      },
     };
     const { registerWorkflowResultBrokerTools } = await import("./workflow-result-tools.js");
-    registerWorkflowResultBrokerTools(
-      server as never,
-      workflowResults as never,
-      { environmentId: "env-1", projectId: "project-1" },
-    );
+    registerWorkflowResultBrokerTools(server as never, workflowResults as never, {
+      environmentId: "env-1",
+      projectId: "project-1",
+    });
     const status = handlers.get("get_workflow_result_status");
     if (!status) throw new Error("missing status tool");
     expect(await status({ resultKey: "known-key", capability: "denied" })).toMatchObject({
@@ -309,16 +353,18 @@ describe("workflow result broker tools", () => {
       async submit() {
         return { ok: true, lifecycle: "accepted" };
       },
+      async validate() {
+        return { ok: true, valid: true };
+      },
       async status() {
         return null;
       },
     };
     const { registerWorkflowResultBrokerTools } = await import("./workflow-result-tools.js");
-    registerWorkflowResultBrokerTools(
-      server as never,
-      workflowResults as never,
-      { environmentId: "env-1", projectId: "project-1" },
-    );
+    registerWorkflowResultBrokerTools(server as never, workflowResults as never, {
+      environmentId: "env-1",
+      projectId: "project-1",
+    });
     const submitFix = handlers.get("submit_fix_result");
     if (!submitFix) throw new Error("missing submit_fix_result");
     expect(

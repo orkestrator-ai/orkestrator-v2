@@ -343,6 +343,41 @@ describe("hosted Orkestrator custom tools", () => {
     await hosted?.close();
   });
 
+  test("rejects stringified arguments locally and forwards a large object unchanged", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    setCursorMcpTransportForTests({
+      async connect() {
+        return {
+          tools: [{ name: "submit_consolidated_review" }],
+          async call(_name, args) {
+            calls.push(args);
+            return { content: [{ type: "text", text: "accepted" }] };
+          },
+          async close() {},
+        };
+      },
+    });
+    const hosted = await hostOrkestratorCustomTools({
+      url: "http://127.0.0.1:4567/mcp",
+      token: "coord-token",
+    });
+    const tool = hosted?.customTools.submit_consolidated_review;
+    if (!tool) throw new Error("missing hosted submission tool");
+
+    await expect(tool.execute('{"resultKey":"probe"}' as never, {})).resolves.toMatchObject({
+      isError: true,
+      content: [expect.objectContaining({ text: expect.stringContaining("raw object") })],
+    });
+    expect(calls).toEqual([]);
+
+    const large = { resultKey: "final", result: { reviewSummary: "x".repeat(20_000) } };
+    await expect(tool.execute(large, {})).resolves.toEqual({
+      content: [{ type: "text", text: "accepted" }],
+    });
+    expect(calls).toEqual([large]);
+    await hosted.close();
+  });
+
   test("a failed connect is a notice, not a thrown attach", async () => {
     setCursorMcpTransportForTests({
       async connect() {

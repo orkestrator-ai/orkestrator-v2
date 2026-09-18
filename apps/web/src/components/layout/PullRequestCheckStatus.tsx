@@ -23,7 +23,7 @@ export function PullRequestCheckStatus({
         checkSummary.pending > 0
           ? "border-orange-500 text-orange-600 dark:text-orange-400"
           : checkSummary.passed === checkSummary.total
-            ? "border-green-600 text-green-600 dark:text-green-400"
+            ? "border-green-600 text-red-600 dark:text-red-400"
             : "border-red-600 text-red-600 dark:text-red-400",
         isGrid && "px-2.5 text-xs",
       )}

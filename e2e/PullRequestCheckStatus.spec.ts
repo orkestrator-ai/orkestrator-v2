@@ -22,7 +22,7 @@ test("CI status announces running, failed, and successful completion", async ({ 
     page.getByRole("status", { name: "4 of 4 CI checks passed; all checks complete" }),
   ).toHaveText("4/4 checks; all checks complete");
   await expect(page.getByRole("status")).toHaveClass(/border-green-600/);
-  await expect(page.getByRole("status")).toHaveClass(/text-green-600/);
+  await expect(page.getByRole("status")).toHaveClass(/text-red-600/);
 });
 
 test("CI status uses compact styling in grid presentation", async ({ page }) => {

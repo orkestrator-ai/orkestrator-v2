@@ -1739,6 +1739,46 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     await waitFor(() => expect(unstickReviewer).toHaveBeenCalledWith(reviewing.id, "reviewer-1"));
   });
 
+  test("offers restart from every started workflow step tile", async () => {
+    const ready = readyWorkflow();
+    const completed: MultiReviewWorkflow = {
+      ...ready,
+      phase: "completed",
+      stepRuntimes: {
+        prepare: { startedAt: ready.createdAt, completedAt: ready.updatedAt },
+        consolidate: { startedAt: ready.createdAt, completedAt: ready.updatedAt },
+        fix: { startedAt: ready.createdAt, completedAt: ready.updatedAt },
+      },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(completed);
+    const restartStep = mock(async () => completed);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: completed.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => completed)}
+        commands={{
+          address: mock(async () => completed),
+          retry: mock(async () => completed),
+          cancel: mock(async () => completed),
+          stopReviewer: mock(async () => completed),
+          restartStep,
+        }}
+      />,
+    );
+
+    for (const [buttonName, kind] of [
+      ["Open review package generation session", "prepare"],
+      ["Open consolidation session", "consolidate"],
+      ["Open fix model session", "fix"],
+    ] as const) {
+      fireEvent.contextMenu(screen.getByRole("button", { name: buttonName }).closest("section")!);
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
+      await waitFor(() => expect(restartStep).toHaveBeenLastCalledWith(completed.id, kind));
+    }
+  });
+
   test("shows a repository-change note and allows reviewer restart", async () => {
     const stale = { ...readyWorkflow(), reviewSnapshotStale: true };
     useMultiReviewStore.getState().replaceWorkflow(stale);

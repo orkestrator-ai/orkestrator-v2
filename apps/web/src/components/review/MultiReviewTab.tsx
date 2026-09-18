@@ -54,6 +54,7 @@ interface MultiReviewCommands {
   cancel: (workflowId: string) => Promise<MultiReviewWorkflow>;
   stopReviewer: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
   restartReviewer?: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
+  restartStep?: (workflowId: string, kind: MultiReviewStepKind) => Promise<MultiReviewWorkflow>;
   unstickReviewer?: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
 }
 
@@ -65,6 +66,7 @@ const defaultCommands: MultiReviewCommands = {
   cancel: backend.cancelMultiReview,
   stopReviewer: backend.stopMultiReviewReviewer,
   restartReviewer: backend.restartMultiReviewReviewer,
+  restartStep: backend.restartMultiReviewStep,
   unstickReviewer: backend.unstickMultiReviewReviewer,
 };
 
@@ -474,6 +476,9 @@ function MultiReviewStepSection({
   openTitle,
   canOpen,
   onOpen,
+  canRestart,
+  restarting,
+  onRestart,
   requireDirectActivation = false,
 }: {
   heading: string;
@@ -487,6 +492,9 @@ function MultiReviewStepSection({
   openTitle: string;
   canOpen: boolean;
   onOpen: () => void;
+  canRestart: boolean;
+  restarting: boolean;
+  onRestart: () => void;
   /**
    * Preparation and consolidation are backend-owned sessions. Keep them out of
    * the pane layout until an input actually begins on their card.
@@ -524,82 +532,92 @@ function MultiReviewStepSection({
   }, [requireDirectActivation]);
 
   return (
-    <section className="rounded-xl border border-border/60 bg-card/35 p-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">{heading}</h2>
-        <span className="text-xs text-muted-foreground">{status.label}</span>
-      </div>
-      <div className="flex items-center rounded-lg border border-border/45 bg-background/40 transition-colors has-[button:enabled:hover]:border-cyan-400/35">
-        <button
-          ref={buttonRef}
-          type="button"
-          disabled={!canOpen}
-          aria-label={openLabel}
-          title={openTitle}
-          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-cyan-500/5 disabled:cursor-default"
-          onPointerDown={(event) => {
-            if (event.isPrimary === false || event.button !== 0) return;
-            directActivationRef.current = {
-              kind: "pointer",
-              pointerId: event.pointerId,
-            };
-          }}
-          onPointerCancel={(event) => {
-            const activation = directActivationRef.current;
-            if (activation?.kind === "pointer" && activation.pointerId === event.pointerId) {
-              directActivationRef.current = null;
-            }
-          }}
-          onBlur={() => {
-            if (directActivationRef.current?.kind === "keyboard") {
-              directActivationRef.current = null;
-            }
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              directActivationRef.current = { kind: "keyboard" };
-            }
-          }}
-          onClick={(event) => {
-            const hasDirectActivation = directActivationRef.current !== null;
-            directActivationRef.current = null;
-            // A trusted detail-zero click is an assistive-technology
-            // activation. Pointer and keyboard activation are armed above;
-            // synthetic/carry-over clicks are deliberately ignored.
-            if (
-              !allowsReviewTileActivation(
-                requireDirectActivation,
-                hasDirectActivation,
-                event.detail,
-                event.nativeEvent.isTrusted,
-              )
-            ) {
-              return;
-            }
-            onOpen();
-          }}
-        >
-          <MultiReviewStepIcon state={status.state} stalled={stalled} />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium">
-              {name} · {model.agent}
-            </p>
-            <p className="truncate text-[11px] text-muted-foreground">
-              {model.model}
-              {model.reasoningEffort ? ` · ${model.reasoningEffort}` : ""}
-            </p>
-            {runtime ? (
-              <p
-                className="mt-0.5 truncate font-mono text-[10px] tabular-nums text-muted-foreground"
-                aria-label={runtimeLabel}
-              >
-                {runtime}
-              </p>
-            ) : null}
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <section className="rounded-xl border border-border/60 bg-card/35 p-4">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">{heading}</h2>
+            <span className="text-xs text-muted-foreground">{status.label}</span>
           </div>
-        </button>
-      </div>
-    </section>
+          <div className="flex items-center rounded-lg border border-border/45 bg-background/40 transition-colors has-[button:enabled:hover]:border-cyan-400/35">
+            <button
+              ref={buttonRef}
+              type="button"
+              disabled={!canOpen}
+              aria-label={openLabel}
+              title={openTitle}
+              className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-cyan-500/5 disabled:cursor-default"
+              onPointerDown={(event) => {
+                if (event.isPrimary === false || event.button !== 0) return;
+                directActivationRef.current = {
+                  kind: "pointer",
+                  pointerId: event.pointerId,
+                };
+              }}
+              onPointerCancel={(event) => {
+                const activation = directActivationRef.current;
+                if (activation?.kind === "pointer" && activation.pointerId === event.pointerId) {
+                  directActivationRef.current = null;
+                }
+              }}
+              onBlur={() => {
+                if (directActivationRef.current?.kind === "keyboard") {
+                  directActivationRef.current = null;
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  directActivationRef.current = { kind: "keyboard" };
+                }
+              }}
+              onClick={(event) => {
+                const hasDirectActivation = directActivationRef.current !== null;
+                directActivationRef.current = null;
+                // A trusted detail-zero click is an assistive-technology
+                // activation. Pointer and keyboard activation are armed above;
+                // synthetic/carry-over clicks are deliberately ignored.
+                if (
+                  !allowsReviewTileActivation(
+                    requireDirectActivation,
+                    hasDirectActivation,
+                    event.detail,
+                    event.nativeEvent.isTrusted,
+                  )
+                ) {
+                  return;
+                }
+                onOpen();
+              }}
+            >
+              <MultiReviewStepIcon state={status.state} stalled={stalled} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-medium">
+                  {name} · {model.agent}
+                </p>
+                <p className="truncate text-[11px] text-muted-foreground">
+                  {model.model}
+                  {model.reasoningEffort ? ` · ${model.reasoningEffort}` : ""}
+                </p>
+                {runtime ? (
+                  <p
+                    className="mt-0.5 truncate font-mono text-[10px] tabular-nums text-muted-foreground"
+                    aria-label={runtimeLabel}
+                  >
+                    {runtime}
+                  </p>
+                ) : null}
+              </div>
+            </button>
+          </div>
+        </section>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-40">
+        <ContextMenuItem disabled={!canRestart || restarting} onSelect={onRestart}>
+          {restarting ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+          Restart
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -622,6 +640,7 @@ function MultiReviewOverviewTab({
     reviewerId: string;
     kind: "restart" | "unstick";
   } | null>(null);
+  const [restartingStep, setRestartingStep] = useState<MultiReviewStepKind | null>(null);
   const [customFixPromptOpen, setCustomFixPromptOpen] = useState(false);
   const [customFixPending, setCustomFixPending] = useState(false);
   const [customFixError, setCustomFixError] = useState<string | null>(null);
@@ -787,6 +806,19 @@ function MultiReviewOverviewTab({
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setReviewerAction(null);
+    }
+  };
+
+  const restartStep = async (kind: MultiReviewStepKind) => {
+    if (!workflow || !commands.restartStep || restartingStep !== null || pending) return;
+    setRestartingStep(kind);
+    setError(null);
+    try {
+      replaceWorkflow(await commands.restartStep(workflow.id, kind));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setRestartingStep(null);
     }
   };
 
@@ -987,6 +1019,9 @@ function MultiReviewOverviewTab({
             )}
             canOpen={canOpenReviewStep(packageStatus)}
             onOpen={() => presentReviewSession(workflow)}
+            canRestart={packageStatus.state !== "not-started" && Boolean(commands.restartStep)}
+            restarting={restartingStep === "prepare"}
+            onRestart={() => void restartStep("prepare")}
             requireDirectActivation
           />
           {workflow.validationRun && (
@@ -1014,11 +1049,12 @@ function MultiReviewOverviewTab({
                   (workflow.phase === "reviewing" ||
                     workflow.phase === "consolidating" ||
                     workflow.phase === "ready" ||
+                    workflow.phase === "fixing" ||
+                    workflow.phase === "interactive" ||
+                    workflow.phase === "completed" ||
                     workflow.phase === "failed") &&
                   workflow.activeRequest?.kind !== "prepare" &&
-                  !(workflow.reviewSnapshotStale === true && workflow.reviewPackage) &&
-                  workflow.fixResult === undefined &&
-                  !(workflow.phase === "failed" && workflow.consolidatedReport !== undefined);
+                  !(workflow.reviewSnapshotStale === true && workflow.reviewPackage);
                 const canUnstick =
                   workflow.phase === "reviewing" &&
                   reviewer.status === "running" &&
@@ -1198,6 +1234,11 @@ function MultiReviewOverviewTab({
             )}
             canOpen={canOpenReviewStep(consolidationStatus)}
             onOpen={() => presentReviewSession(workflow)}
+            canRestart={
+              consolidationStatus.state !== "not-started" && Boolean(commands.restartStep)
+            }
+            restarting={restartingStep === "consolidate"}
+            onRestart={() => void restartStep("consolidate")}
             requireDirectActivation
           />
 
@@ -1218,6 +1259,9 @@ function MultiReviewOverviewTab({
             )}
             canOpen={canOpenFixStep(fixStatus)}
             onOpen={() => presentFixSession(workflow, "manual")}
+            canRestart={fixStatus.state !== "not-started" && Boolean(commands.restartStep)}
+            restarting={restartingStep === "fix"}
+            onRestart={() => void restartStep("fix")}
           />
 
           {workflow.consolidatedReport && (

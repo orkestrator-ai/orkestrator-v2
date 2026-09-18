@@ -11,10 +11,12 @@ import {
   isBuildPipeline,
   isActiveBuildPhase,
   isStartBuildPipelineInput,
+  isReviewPackagePreparationSession,
   usesReviewFanout,
   MAX_PIPELINE_USER_MESSAGES,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
 } from "@orkestrator/protocol/build-pipeline";
+import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import type { ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
 import type {
   StructuredOutputProvider,
@@ -824,6 +826,178 @@ export abstract class BuildPipelineServiceBase {
     return (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
   }
 
+  /**
+   * Restarts one visible pipeline stage and invalidates every result derived
+   * from it. The request is persisted before the supervisor opens a new
+   * session, so an unmounted renderer or backend restart cannot lose the run.
+   */
+  async restartStep(pipelineId: string, stageId: string): Promise<BuildPipeline> {
+    let rejection: Error | undefined;
+    await this.mutate(pipelineId, async (candidate) => {
+      const validationId = candidate.validationRun
+        ? `validation:${candidate.validationRun.id}`
+        : undefined;
+      const target = candidate.sessions.find(
+        (session) => session.sdkSessionId === stageId || session.sessionKey === stageId,
+      );
+      if (!target && stageId !== validationId) {
+        rejection = new Error("This pipeline stage is no longer available");
+        return;
+      }
+
+      // A late tool submission from the discarded generation must be denied;
+      // otherwise it could become authoritative after the replacement starts.
+      await this.closeWorkflowResults(
+        candidate,
+        "superseded",
+        new Set(candidate.pendingResultConsumptions ?? []),
+      );
+
+      if (
+        candidate.validationRun &&
+        (candidate.validationRun.status === "planned" ||
+          candidate.validationRun.status === "running")
+      ) {
+        try {
+          candidate.validationRun = await this.invoke("cancel_review_validation", {
+            environmentId: candidate.environmentId,
+            run: candidate.validationRun,
+          });
+        } catch {
+          // The new generation is authoritative even when an obsolete runner
+          // cannot confirm cancellation. Its id is discarded below.
+        }
+      }
+      if (candidate.reviewFanout) {
+        await this.abandonReviewFanout(candidate, "idle");
+      } else {
+        const current = sessionForCurrentPhase(candidate);
+        if (current?.status === "running") {
+          try {
+            await (
+              await this.provider(candidate, sessionAgent(candidate, current))
+            ).abort(current.sdkSessionId);
+          } catch {
+            // Restart rotates to a new session; a failed best-effort abort must
+            // not strand the durable request on the obsolete generation.
+          }
+          current.status = "idle";
+          current.completedAt ??= new Date().toISOString();
+        }
+      }
+
+      const implementationPhase = (): "build" | "fix" => {
+        const currentIterationImplementation = [...candidate.sessions]
+          .reverse()
+          .find(
+            (session) =>
+              session.iteration === candidate.iteration &&
+              (session.phase === "build" || session.phase === "fix") &&
+              !isReviewPackagePreparationSession(session, candidate),
+          );
+        return currentIterationImplementation?.phase === "fix" ? "fix" : "build";
+      };
+
+      if (stageId === validationId) {
+        const plan = candidate.validationRun!.plan;
+        candidate.validationRun = newReviewValidationRun(`review-validation-${randomUUID()}`, plan);
+        candidate.restartRequest = {
+          kind: "validation",
+          implementationPhase: implementationPhase(),
+        };
+      } else if (isReviewPackagePreparationSession(target, candidate)) {
+        candidate.restartRequest = {
+          kind: "review-package",
+          implementationPhase: target!.phase === "fix" ? "fix" : "build",
+        };
+      } else {
+        const requestedPhase = target!.phase;
+        if (requestedPhase === "review" && !candidate.reviewPackage) {
+          candidate.restartRequest = {
+            kind: "review-package",
+            implementationPhase: implementationPhase(),
+          };
+        } else if (requestedPhase === "address" && !candidate.structuredReview) {
+          candidate.restartRequest = candidate.reviewPackage
+            ? { kind: "session", phase: "review" }
+            : { kind: "review-package", implementationPhase: implementationPhase() };
+        } else {
+          candidate.restartRequest = { kind: "session", phase: requestedPhase };
+        }
+      }
+
+      const restart = candidate.restartRequest;
+      const selectedPhase =
+        restart.kind === "session"
+          ? restart.phase
+          : restart.kind === "validation"
+            ? "review"
+            : restart.implementationPhase;
+      const selectedOrder = {
+        build: 0,
+        fix: 0,
+        review: 2,
+        address: 3,
+        verify: 4,
+        pr: 5,
+        "resolve-conflicts": 6,
+      }[selectedPhase];
+
+      if (selectedOrder <= 1) {
+        delete candidate.reviewPackage;
+        if (restart.kind !== "validation") delete candidate.validationRun;
+      }
+      if (selectedOrder <= 2) {
+        discardSessionReviewReports(candidate);
+        delete candidate.reviewFanout;
+        delete candidate.structuredReview;
+        delete candidate.structuredReviewRequestId;
+      }
+      if (selectedOrder <= 4) {
+        delete candidate.verificationResult;
+        if (!(restart.kind === "session" && restart.phase === "fix")) {
+          delete candidate.verificationFeedback;
+        }
+      }
+
+      candidate.phase =
+        restart.kind === "session"
+          ? restart.phase === "build"
+            ? "building"
+            : restart.phase === "review"
+              ? "reviewing"
+              : restart.phase === "address"
+                ? "addressing"
+                : restart.phase === "verify"
+                  ? "verifying"
+                  : restart.phase === "fix"
+                    ? "fixing"
+                    : restart.phase === "pr"
+                      ? "creating-pr"
+                      : "resolving-conflicts"
+          : restart.implementationPhase === "fix"
+            ? "fixing"
+            : "building";
+      delete candidate.error;
+      delete candidate.failureContext;
+      delete candidate.reconnectAttempt;
+      delete candidate.pendingPromptAttempt;
+      delete candidate.activePromptContext;
+      delete candidate.pendingInteractionResolution;
+      delete candidate.pendingUserMessages;
+      delete candidate.reviewRetryRequested;
+      delete candidate.stageRetryRequested;
+      delete candidate.interactionRetryRequested;
+      delete candidate.stallWarning;
+      delete candidate.pausedFromPhase;
+      delete candidate.completionCommentStatus;
+      delete candidate.completionCommentError;
+    });
+    if (rejection) throw rejection;
+    await this.runLocked(pipelineId);
+    return (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
+  }
+
   /** Starts a fresh attempt for the non-interactive stage that failed. */
   async retryStage(pipelineId: string): Promise<BuildPipeline> {
     let rejection: Error | undefined;
@@ -978,10 +1152,13 @@ export abstract class BuildPipelineServiceBase {
   private async closeWorkflowResults(
     pipeline: BuildPipeline,
     lifecycle: "cancelled" | "superseded",
+    excluded = new Set<string>(),
   ): Promise<void> {
     await Promise.all(
       Array.from(this.workflowResultKeys(pipeline), (resultKey) =>
-        this.options.workflowResults?.close(resultKey, lifecycle),
+        excluded.has(resultKey)
+          ? Promise.resolve()
+          : this.options.workflowResults?.close(resultKey, lifecycle),
       ),
     );
   }

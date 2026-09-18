@@ -4645,6 +4645,10 @@ describe("multi review commands", () => {
       ...workflow("restartReviewer"),
       id,
     }));
+    const restartStep = mock(async (id: string, _kind: string) => ({
+      ...workflow("restartStep"),
+      id,
+    }));
     const unstickReviewer = mock(async (id: string, _reviewerId: string) => ({
       ...workflow("unstickReviewer"),
       id,
@@ -4658,6 +4662,7 @@ describe("multi review commands", () => {
       cancel,
       stopReviewer,
       restartReviewer,
+      restartStep,
       unstickReviewer,
     } as unknown as NonNullable<CommandContext["multiReviews"]>;
 
@@ -4687,6 +4692,7 @@ describe("multi review commands", () => {
           ["cancel_multi_review", { workflowId: "multi-1" }],
           ["stop_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
           ["restart_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
+          ["restart_multi_review_step", { workflowId: "multi-1", kind: "consolidate" }],
           ["unstick_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
         ];
         for (const [command, args] of calls) {
@@ -4710,6 +4716,7 @@ describe("multi review commands", () => {
         expect(cancel).toHaveBeenCalledWith("multi-1");
         expect(stopReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
         expect(restartReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
+        expect(restartStep).toHaveBeenCalledWith("multi-1", "consolidate");
         expect(unstickReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
       },
       { multiReviews: supervisor },
@@ -4785,6 +4792,12 @@ describe("multi review commands", () => {
             instruction: " ",
           }),
         ).rejects.toThrow("Invalid Multi Review custom fix request");
+        await expect(
+          invoke("restart_multi_review_step", {
+            workflowId: "multi-1",
+            kind: "reviewers",
+          }),
+        ).rejects.toThrow("Invalid multi review step");
         expect(start).not.toHaveBeenCalled();
         expect(lifecycle).not.toHaveBeenCalled();
       },
@@ -5095,6 +5108,11 @@ describe("build pipeline commands", () => {
       operation: "retry-stage",
       id,
     }));
+    const restartStep = mock(async (id: string, stageId: string) => ({
+      operation: "restart-step",
+      id,
+      stageId,
+    }));
     const retryInteractionFailure = mock(async (id: string) => ({
       operation: "retry-interaction",
       id,
@@ -5109,6 +5127,7 @@ describe("build pipeline commands", () => {
       sendMessage,
       retryReview,
       retryStage,
+      restartStep,
       retryInteractionFailure,
     } as unknown as NonNullable<CommandContext["buildPipelines"]>;
 
@@ -5152,6 +5171,16 @@ describe("build pipeline commands", () => {
           }),
         ).resolves.toEqual({ operation: "retry-stage", id: "pipeline-1" });
         await expect(
+          invoke("restart_build_pipeline_step", {
+            pipelineId: "pipeline-1",
+            stageId: "review-session",
+          }),
+        ).resolves.toEqual({
+          operation: "restart-step",
+          id: "pipeline-1",
+          stageId: "review-session",
+        });
+        await expect(
           invoke("retry_build_pipeline_interaction_failure", {
             pipelineId: "pipeline-1",
           }),
@@ -5174,6 +5203,7 @@ describe("build pipeline commands", () => {
         expect(sendMessage).toHaveBeenCalledWith("pipeline-1", "also update the README");
         expect(retryReview).toHaveBeenCalledWith("pipeline-1");
         expect(retryStage).toHaveBeenCalledWith("pipeline-1");
+        expect(restartStep).toHaveBeenCalledWith("pipeline-1", "review-session");
         expect(retryInteractionFailure).toHaveBeenCalledWith("pipeline-1");
       },
       { buildPipelines: supervisor },
@@ -5296,6 +5326,7 @@ describe("build pipeline commands", () => {
         ],
         ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
         ["retry_build_pipeline_stage", { pipelineId: "pipeline-1" }],
+        ["restart_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "review-session" }],
         [
           "retry_build_pipeline_interaction_failure",
           {

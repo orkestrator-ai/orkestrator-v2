@@ -300,6 +300,38 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       return;
     }
 
+    if (pipeline.restartRequest) {
+      const request = pipeline.restartRequest;
+      delete pipeline.restartRequest;
+      if (request.kind === "review-package") {
+        pipeline.phase = request.implementationPhase === "fix" ? "fixing" : "building";
+        await this.startReviewPackagePreparation(pipeline);
+        return;
+      }
+      if (request.kind === "validation") {
+        pipeline.phase = request.implementationPhase === "fix" ? "fixing" : "building";
+        if (!pipeline.validationRun) throw new Error("Validation restart plan is missing");
+        await this.advanceValidation(pipeline);
+        return;
+      }
+      const phase =
+        request.phase === "build"
+          ? "building"
+          : request.phase === "review"
+            ? "reviewing"
+            : request.phase === "address"
+              ? "addressing"
+              : request.phase === "verify"
+                ? "verifying"
+                : request.phase === "fix"
+                  ? "fixing"
+                  : request.phase === "pr"
+                    ? "creating-pr"
+                    : "resolving-conflicts";
+      await this.startStage(pipeline, request.phase, phase);
+      return;
+    }
+
     if (
       pipeline.stageRetryRequested &&
       pipeline.phase === "reviewing" &&

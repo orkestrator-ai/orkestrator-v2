@@ -104,6 +104,7 @@ class FakeProvider implements BuildPipelineProvider {
     sessionId: string;
     interaction?: ProviderSessionRegistration;
   }> = [];
+  readonly aborted: string[] = [];
   private counter = 0;
 
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
@@ -163,7 +164,9 @@ class FakeProvider implements BuildPipelineProvider {
     };
   }
 
-  async abort(_sessionId: string): Promise<void> {}
+  async abort(sessionId: string): Promise<void> {
+    this.aborted.push(sessionId);
+  }
 }
 
 async function withService(
@@ -1030,6 +1033,47 @@ describe("BuildPipelineService", () => {
         command: "pr_monitor_watch",
         args: { environmentId: "env-1", mode: "normal" },
       });
+    });
+  });
+
+  test("restarts a selected pipeline stage and runs every downstream stage again", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      for (let pass = 0; pass < 6; pass += 1) {
+        await service.advanceNow(started.id);
+      }
+
+      const completed = await pipeline(storage, started.id);
+      expect(completed.phase).toBe("complete");
+      const originalReview = completed.sessions.find(
+        (session) => session.phase === "review" && session.reviewReport !== undefined,
+      )!;
+      const originalDownstream = completed.sessions.filter(
+        (session) => session.phase === "verify" || session.phase === "pr",
+      );
+      expect(originalReview).toBeDefined();
+      expect(originalDownstream).not.toHaveLength(0);
+
+      const restarted = await service.restartStep(started.id, originalReview.sdkSessionId);
+      expect(restarted.phase).toBe("reviewing");
+      expect(restarted.structuredReview).toBeUndefined();
+      expect(restarted.verificationResult).toBeUndefined();
+      expect(restarted.restartRequest).toBeUndefined();
+      const replacementReview = restarted.sessions.at(-1)!;
+      expect(replacementReview).toMatchObject({ phase: "review", status: "running" });
+      expect(replacementReview.sdkSessionId).not.toBe(originalReview.sdkSessionId);
+
+      for (let pass = 0; pass < 4; pass += 1) {
+        await service.advanceNow(started.id);
+      }
+      const rerun = await pipeline(storage, started.id);
+      expect(rerun.phase).toBe("complete");
+      const replacementDownstream = rerun.sessions.filter(
+        (session) =>
+          (session.phase === "verify" || session.phase === "pr") &&
+          !originalDownstream.some((old) => old.sessionKey === session.sessionKey),
+      );
+      expect(replacementDownstream.map((session) => session.phase)).toEqual(["verify", "pr"]);
     });
   });
 

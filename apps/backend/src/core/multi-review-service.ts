@@ -220,6 +220,65 @@ function clearPendingAddressIdentity(workflow: MultiReviewWorkflow): void {
   delete workflow.addressTabId;
 }
 
+function fixStepHasStarted(workflow: MultiReviewWorkflow): boolean {
+  return (
+    workflow.fixLaunch !== undefined ||
+    workflow.stepRuntimes?.fix !== undefined ||
+    workflow.fixResult !== undefined ||
+    workflow.phase === "fixing" ||
+    workflow.phase === "interactive" ||
+    workflow.phase === "completed"
+  );
+}
+
+function queueRestartedFix(workflow: MultiReviewWorkflow): void {
+  const launch = workflow.fixLaunch ?? { kind: "default" as const };
+  workflow.fixLaunch = launch;
+  const launchId = randomUUID();
+  workflow.phase = "interactive";
+  workflow.addressPromptPending = true;
+  workflow.addressPromptAttempts = 0;
+  workflow.addressSessionKey = `multi-review:${workflow.id}:interactive:${launchId}`;
+  workflow.addressRequestId = `multi-review-address:${workflow.id}:${launchId}`;
+  workflow.addressTabId = `multi-review-fix:${workflow.id}:${launchId}`;
+  if (launch.kind === "custom") {
+    workflow.customFixInstruction = launch.instruction;
+    workflow.customFixModel = launch.model;
+  } else {
+    delete workflow.customFixInstruction;
+    delete workflow.customFixModel;
+  }
+  delete workflow.presentationError;
+  delete workflow.activeRequest;
+  delete workflow.error;
+}
+
+function resetReviewerForRestart(
+  workflow: MultiReviewWorkflow,
+  reviewer: MultiReviewWorkflow["reviewers"][number],
+): void {
+  reviewer.status = "pending";
+  reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
+  delete reviewer.providerSessionId;
+  delete reviewer.requestId;
+  delete reviewer.dispatchState;
+  delete reviewer.resultTransport;
+  delete reviewer.resultSubmission;
+  delete reviewer.schemaRepairAttempts;
+  delete reviewer.schemaRepairPrompt;
+  delete reviewer.continuationPrompt;
+  delete reviewer.idleResultPolls;
+  delete reviewer.progressAt;
+  delete reviewer.progressDigest;
+  delete reviewer.stalledSince;
+  delete reviewer.tokenCount;
+  delete reviewer.usageFinalizationPolls;
+  delete reviewer.report;
+  delete reviewer.error;
+  delete reviewer.startedAt;
+  delete reviewer.completedAt;
+}
+
 class FixResultValidationError extends Error {
   readonly issues: readonly ReviewContractValidationIssue[];
 
@@ -534,6 +593,7 @@ export class MultiReviewService {
         // prompt from `advance`; a renderer can disappear immediately after this
         // save without delaying or losing the work.
         workflow.phase = "interactive";
+        workflow.fixLaunch = { kind: "default" };
         workflow.addressPromptPending = true;
         workflow.addressPromptAttempts = 0;
         workflow.addressSessionKey = `multi-review:${workflow.id}:interactive`;
@@ -601,6 +661,11 @@ export class MultiReviewService {
           repository,
           this.catalogReaderFor(workflow.environmentId),
         );
+        workflow.fixLaunch = {
+          kind: "custom",
+          instruction,
+          model: workflow.customFixModel,
+        };
         workflow.addressPromptPending = true;
         workflow.addressPromptAttempts = 0;
         delete workflow.presentationError;
@@ -723,6 +788,8 @@ export class MultiReviewService {
         delete workflow.addressPromptPending;
         delete workflow.addressPromptAttempts;
         clearPendingAddressIdentity(workflow);
+        delete workflow.customFixInstruction;
+        delete workflow.customFixModel;
         delete workflow.presentationError;
       } else if (
         workflow.activeRequest?.kind === "prepare" ||
@@ -896,22 +963,18 @@ export class MultiReviewService {
           );
         }
         if (
-          workflow.phase !== "reviewing" &&
-          workflow.phase !== "consolidating" &&
-          workflow.phase !== "ready" &&
-          workflow.phase !== "failed"
+          workflow.phase === "preparing" ||
+          workflow.phase === "cancelling" ||
+          workflow.phase === "cancelled"
         ) {
-          throw new Error("A reviewer can no longer be restarted after fix work begins");
+          throw new Error("This reviewer is not available to restart yet");
         }
         if (workflow.reviewSnapshotStale === true && workflow.reviewPackage) {
           throw new Error("Restart the full Multi Review to review the updated worktree snapshot");
         }
-        if (
-          workflow.fixResult !== undefined ||
-          (workflow.phase === "failed" && workflow.consolidatedReport !== undefined)
-        ) {
-          throw new Error("A reviewer can no longer be restarted after fix work begins");
-        }
+        const restartFixAfterConsolidation = fixStepHasStarted(workflow);
+
+        await this.supersedeRestartedResults(workflow, [reviewer]);
 
         await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
         if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
@@ -924,24 +987,17 @@ export class MultiReviewService {
         );
         if (reviewSession(workflow))
           this.progress.forget(reviewSession(workflow)!.providerSessionId);
-        reviewer.status = "pending";
-        delete reviewer.providerSessionId;
-        reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
-        delete reviewer.requestId;
-        delete reviewer.dispatchState;
-        delete reviewer.schemaRepairAttempts;
-        delete reviewer.schemaRepairPrompt;
-        delete reviewer.continuationPrompt;
-        delete reviewer.idleResultPolls;
-        delete reviewer.progressAt;
-        delete reviewer.progressDigest;
-        delete reviewer.stalledSince;
-        delete reviewer.tokenCount;
-        delete reviewer.usageFinalizationPolls;
-        delete reviewer.report;
-        delete reviewer.error;
-        delete reviewer.startedAt;
-        delete reviewer.completedAt;
+        if (workflow.fixSession && workflow.fixSession !== reviewSession(workflow)) {
+          await this.abandonSession(
+            workflow,
+            workflow.fixModel,
+            workflow.fixSession.providerSessionId,
+          );
+          this.progress.forget(workflow.fixSession.providerSessionId);
+          delete workflow.fixSession;
+          workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
+        }
+        resetReviewerForRestart(workflow, reviewer);
         workflow.phase = "reviewing";
         clearReviewSession(workflow);
         delete workflow.activeRequest;
@@ -952,9 +1008,146 @@ export class MultiReviewService {
         delete workflow.addressPromptPending;
         delete workflow.addressPromptAttempts;
         clearPendingAddressIdentity(workflow);
+        delete workflow.customFixInstruction;
+        delete workflow.customFixModel;
         delete workflow.presentationError;
+        workflow.restartFixAfterConsolidation = restartFixAfterConsolidation || undefined;
         delete workflow.error;
         const saved = await this.save(workflow, token);
+        handedToSupervisor = true;
+        void this.advanceNow(workflowId);
+        return saved;
+      } finally {
+        if (!handedToSupervisor && !isSupervisedPhase(phaseAtClaim)) {
+          await this.release(workflow, token);
+        }
+      }
+    });
+  }
+
+  /** Restart a preparation, consolidation, or fix tile and every dependent step. */
+  async restartStep(workflowId: string, kind: MultiReviewStepKind): Promise<MultiReviewWorkflow> {
+    return this.withLock(workflowId, async () => {
+      const controlled = await this.loadControlled(workflowId);
+      if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
+      const { workflow, token } = controlled;
+      const phaseAtClaim = workflow.phase;
+      let handedToSupervisor = false;
+      try {
+        if (workflow.phase === "cancelling" || workflow.phase === "cancelled") {
+          throw new Error("A cancelled Multi Review cannot restart a step");
+        }
+        const packageStarted =
+          workflow.stepRuntimes?.prepare !== undefined ||
+          workflow.reviewPackage !== undefined ||
+          workflow.validationRun !== undefined ||
+          workflow.activeRequest?.kind === "prepare" ||
+          workflow.phase === "preparing" ||
+          workflow.reviewers.some(
+            (reviewer) => reviewer.providerSessionId !== undefined || reviewer.report !== undefined,
+          );
+        const consolidationStarted =
+          workflow.stepRuntimes?.consolidate !== undefined ||
+          workflow.consolidatedReport !== undefined ||
+          workflow.activeRequest?.kind === "consolidate" ||
+          workflow.phase === "consolidating";
+        if (kind === "prepare" && !packageStarted) {
+          throw new Error("Review package preparation has not started");
+        }
+        if (kind === "consolidate" && !consolidationStarted) {
+          throw new Error("Consolidation has not started");
+        }
+        if (kind === "fix" && !fixStepHasStarted(workflow)) {
+          throw new Error("Fix has not started");
+        }
+
+        const shouldReplayFix = kind !== "fix" && fixStepHasStarted(workflow);
+        await this.supersedeRestartedResults(
+          workflow,
+          kind === "prepare" ? workflow.reviewers : [],
+        );
+        const activeReviewSession = reviewSession(workflow);
+        await this.abandonSession(
+          workflow,
+          reviewModel(workflow),
+          activeReviewSession?.providerSessionId,
+        );
+        if (activeReviewSession) this.progress.forget(activeReviewSession.providerSessionId);
+        if (workflow.fixSession && workflow.fixSession !== activeReviewSession) {
+          await this.abandonSession(
+            workflow,
+            workflow.fixModel,
+            workflow.fixSession.providerSessionId,
+          );
+          this.progress.forget(workflow.fixSession.providerSessionId);
+        }
+
+        if (kind === "prepare") {
+          if (
+            workflow.validationRun &&
+            (workflow.validationRun.status === "planned" ||
+              workflow.validationRun.status === "running")
+          ) {
+            await this.invoke("cancel_review_validation", {
+              environmentId: workflow.environmentId,
+              run: workflow.validationRun,
+            }).catch(() => undefined);
+          }
+          for (const reviewer of workflow.reviewers) {
+            await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
+            if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
+            resetReviewerForRestart(workflow, reviewer);
+          }
+          workflow.reviewWorktreeSnapshot = await this.captureReviewWorktreeSnapshot(
+            workflow.environmentId,
+          );
+          workflow.phase = "preparing";
+          delete workflow.reviewPackage;
+          delete workflow.validationRun;
+          delete workflow.stepRuntimes;
+          delete workflow.reviewSnapshotStale;
+          clearReviewSession(workflow);
+        } else if (kind === "consolidate") {
+          if (!workflow.reviewers.some((reviewer) => reviewer.report !== undefined)) {
+            throw new Error("Consolidation cannot restart without a reviewer report");
+          }
+          workflow.phase = "consolidating";
+          delete workflow.stepRuntimes?.consolidate;
+          delete workflow.stepRuntimes?.fix;
+          clearReviewSession(workflow);
+        } else {
+          if (!workflow.consolidatedReport) {
+            throw new Error("Fix cannot restart without a consolidated report");
+          }
+          delete workflow.fixSession;
+          workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
+          delete workflow.stepRuntimes?.fix;
+          queueRestartedFix(workflow);
+        }
+
+        if (kind !== "fix") {
+          if (workflow.reviewModel) {
+            delete workflow.fixSession;
+            workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
+          }
+          workflow.restartFixAfterConsolidation = shouldReplayFix || undefined;
+          delete workflow.consolidatedReport;
+        } else {
+          delete workflow.restartFixAfterConsolidation;
+        }
+        delete workflow.fixResult;
+        delete workflow.activeRequest;
+        if (kind !== "fix") {
+          delete workflow.addressPromptPending;
+          delete workflow.addressPromptAttempts;
+          clearPendingAddressIdentity(workflow);
+          delete workflow.customFixInstruction;
+          delete workflow.customFixModel;
+          delete workflow.presentationError;
+        }
+        delete workflow.error;
+        const saved = await this.save(workflow, token);
+        if (!isSupervisedPhase(saved.phase)) await this.release(workflow, token);
         handedToSupervisor = true;
         void this.advanceNow(workflowId);
         return saved;
@@ -1670,6 +1863,27 @@ export class MultiReviewService {
     }
   }
 
+  /** Deny late tool submissions owned by a generation being replaced. */
+  private async supersedeRestartedResults(
+    workflow: MultiReviewWorkflow,
+    reviewers: MultiReviewWorkflow["reviewers"],
+  ): Promise<void> {
+    const keys = new Set<string>();
+    const alreadyApplied = new Set(workflow.pendingResultConsumptions ?? []);
+    if (workflow.activeRequest?.resultTransport === "tool-v1") {
+      keys.add(workflow.activeRequest.requestId);
+    }
+    for (const reviewer of reviewers) {
+      if (reviewer.resultTransport === "tool-v1" && reviewer.requestId) {
+        keys.add(reviewer.requestId);
+      }
+    }
+    for (const resultKey of alreadyApplied) keys.delete(resultKey);
+    await Promise.all(
+      Array.from(keys, (resultKey) => this.options.workflowResults?.close(resultKey, "superseded")),
+    );
+  }
+
   /**
    * The reviewer fan-out, as this workflow's owner sees it.
    *
@@ -2369,7 +2583,12 @@ export class MultiReviewService {
         return;
       }
       workflow.consolidatedReport = provenance.report;
-      workflow.phase = "ready";
+      if (workflow.restartFixAfterConsolidation) {
+        delete workflow.restartFixAfterConsolidation;
+        queueRestartedFix(workflow);
+      } else {
+        workflow.phase = "ready";
+      }
       session.status = "idle";
       session.completedAt = nowIso();
       settleStepRuntime(workflow, "consolidate");

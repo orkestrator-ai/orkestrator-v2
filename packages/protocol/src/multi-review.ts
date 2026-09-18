@@ -246,6 +246,12 @@ export interface MultiReviewWorkflow {
   fixTabId?: string;
   /** Non-fatal failure to publish the current fix session into the pane layout. */
   presentationError?: string;
+  /** How Fix was most recently launched, retained so an upstream restart can replay it. */
+  fixLaunch?:
+    | { kind: "default" }
+    | { kind: "custom"; instruction: string; model: MultiReviewModelSelection };
+  /** Relaunch Fix after an explicitly restarted upstream step reconsolidates. */
+  restartFixAfterConsolidation?: boolean;
   activeRequest?: {
     kind: MultiReviewStepKind;
     requestId: string;
@@ -618,6 +624,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "addressPromptAttempts",
       "fixTabId",
       "presentationError",
+      "fixLaunch",
+      "restartFixAfterConsolidation",
       "activeRequest",
       "pendingResultConsumptions",
       "cancellingSince",
@@ -676,6 +684,19 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
         (value.addressPromptAttempts as number) < 0)) ||
     (value.fixTabId !== undefined && !nonBlank(value.fixTabId)) ||
     !optionalString(value.presentationError, 4_096) ||
+    (value.fixLaunch !== undefined &&
+      (!record(value.fixLaunch) ||
+        (value.fixLaunch.kind === "default"
+          ? !hasOnlyKeys(value.fixLaunch, ["kind"])
+          : value.fixLaunch.kind !== "custom" ||
+            !hasOnlyKeys(value.fixLaunch, ["kind", "instruction", "model"]) ||
+            !nonBlank(
+              value.fixLaunch.instruction,
+              MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH,
+            ) ||
+            !isMultiReviewModelSelection(value.fixLaunch.model)))) ||
+    (value.restartFixAfterConsolidation !== undefined &&
+      typeof value.restartFixAfterConsolidation !== "boolean") ||
     !optionalString(value.error, 4_096) ||
     (value.consolidatedReport !== undefined && !isStructuredReviewReport(value.consolidatedReport))
   ) {

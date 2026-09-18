@@ -611,6 +611,23 @@ test("preparation and immutable package references survive strict workflow valid
   const candidate = { ...reviewing, phase: "reviewing", reviewPackage };
   expect(isMultiReviewWorkflow(candidate)).toBe(true);
   expect(
+    isMultiReviewWorkflow({
+      ...candidate,
+      fixLaunch: {
+        kind: "custom",
+        instruction: "Repeat the selected fix from the beginning",
+        model: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+      },
+      restartFixAfterConsolidation: true,
+    }),
+  ).toBe(true);
+  expect(
+    isMultiReviewWorkflow({
+      ...candidate,
+      fixLaunch: { kind: "custom", instruction: "", model: workflow.fixModel },
+    }),
+  ).toBe(false);
+  expect(
     isMultiReviewWorkflow({ ...candidate, reviewPackage: { ...reviewPackage, sha256: "bad" } }),
   ).toBe(false);
   expect(

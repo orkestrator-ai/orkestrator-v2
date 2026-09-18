@@ -296,6 +296,15 @@ export function registerReviewWorkflowCommands(
       )
       .then(stripLoopedReviewSnapshotSecrets);
   });
+  register("restart_multi_review_step", ({ workflowId, kind }, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    if (kind !== "prepare" && kind !== "consolidate" && kind !== "fix") {
+      throw new Error("Invalid multi review step");
+    }
+    return context.multiReviews
+      .restartStep(asNonBlankString(workflowId, "workflowId"), kind)
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
   register("unstick_multi_review_reviewer", ({ workflowId, reviewerId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     return context.multiReviews

@@ -782,6 +782,7 @@ describe("backend setup wrappers", () => {
     await backendWrappers.sendBuildPipelineMessage("pipeline-1", "ship it");
     await backendWrappers.retryBuildPipelineReview("pipeline-1");
     await backendWrappers.retryBuildPipelineStage("pipeline-1");
+    await backendWrappers.restartBuildPipelineStep("pipeline-1", "review-session");
     await backendWrappers.retryBuildPipelineInteractionFailure("pipeline-1");
     const legacySnapshots = [{ id: "legacy-pipeline" }];
     await backendWrappers.importLegacyBuildPipelines("project-1", legacySnapshots);
@@ -806,6 +807,7 @@ describe("backend setup wrappers", () => {
       ],
       ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
       ["retry_build_pipeline_stage", { pipelineId: "pipeline-1" }],
+      ["restart_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "review-session" }],
       [
         "retry_build_pipeline_interaction_failure",
         {
@@ -1848,6 +1850,14 @@ describe("backend native agent and looped review wrappers", () => {
     expect(invokeMock).toHaveBeenLastCalledWith("restart_multi_review_reviewer", {
       workflowId: "multi-1",
       reviewerId: "reviewer-1",
+    });
+
+    await expect(backendWrappers.restartMultiReviewStep("multi-1", "consolidate")).resolves.toBe(
+      workflow,
+    );
+    expect(invokeMock).toHaveBeenLastCalledWith("restart_multi_review_step", {
+      workflowId: "multi-1",
+      kind: "consolidate",
     });
 
     await expect(backendWrappers.unstickMultiReviewReviewer("multi-1", "reviewer-1")).resolves.toBe(

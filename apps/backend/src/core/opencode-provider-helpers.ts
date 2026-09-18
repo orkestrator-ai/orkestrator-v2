@@ -233,11 +233,14 @@ export function openCodeWorkflowResultTurnTools(selectedTool?: string): Record<s
 }
 
 export function openCodeWorkflowResultPermissionRules(selectedTool: string) {
-  return [selectedTool, "get_workflow_result_status"].map((tool) => ({
-    permission: openCodeWorkflowResultToolId(tool),
-    pattern: "*",
-    action: "allow" as const,
-  }));
+  return [
+    ...openCodeWorkflowResultDenyPermissionRules(),
+    ...[selectedTool, "get_workflow_result_status"].map((tool) => ({
+      permission: openCodeWorkflowResultToolId(tool),
+      pattern: "*",
+      action: "allow" as const,
+    })),
+  ];
 }
 
 export function openCodeWorkflowResultDenyPermissionRules() {

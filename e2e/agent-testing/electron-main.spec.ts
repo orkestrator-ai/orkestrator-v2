@@ -232,6 +232,9 @@ test("real Electron main process shares one backend across independent windows",
     // Selecting the other entry must move focus to that window.
     const targetLabel = windowMenu.labels.find((label) => !windowMenu.selected.includes(label));
     if (!targetLabel) throw new Error("Window menu has no inactive entry to switch to");
+    const targetPage = targetLabel.endsWith("(1)") ? window : secondWindow;
+    const targetBrowserWindow = await app.browserWindow(targetPage);
+    const targetWindowId = await targetBrowserWindow.evaluate((candidate) => candidate.id);
     await app.evaluate(({ BrowserWindow, Menu }, label) => {
       const windowMenu = Menu.getApplicationMenu()?.items.find((item) => item.label === "Window");
       const target = windowMenu?.submenu?.items.find(
@@ -243,6 +246,25 @@ test("real Electron main process shares one backend across independent windows",
       }
       target.click(undefined, focusedWindow, focusedWindow.webContents);
     }, targetLabel);
+    if (process.platform === "linux") {
+      // The suite runs under a headless Linux display server, where Electron
+      // never reports either BrowserWindow as natively focused. macOS and
+      // Windows retain the independent OS-focus assertion below.
+      test.info().annotations.push({
+        type: "skip-os-focus",
+        description: "Headless Linux does not expose BrowserWindow native focus",
+      });
+    } else {
+      await expect
+        .poll(() =>
+          app.evaluate(
+            ({ BrowserWindow }, expectedId) =>
+              BrowserWindow.fromId(expectedId)?.isFocused() ?? false,
+            targetWindowId,
+          ),
+        )
+        .toBe(true);
+    }
     await expect.poll(async () => (await readWindowMenu()).selected).toEqual([targetLabel]);
 
     await secondWindow

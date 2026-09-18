@@ -485,6 +485,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
   test("Bun: CI validates every supported host download and container architecture", () => {
     const workflow = read(".github/workflows/validate-bun-runtime.yml");
+    const publishWorkflow = read(".github/workflows/publish-container.yml");
     const lintWorkflow = read(".github/workflows/lint.yml");
     const configuredRunners = workflow
       .split("\n")
@@ -505,6 +506,13 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(workflow).toContain("platform: linux/amd64");
     expect(workflow).toContain("platform: linux/arm64");
     expect(workflow).toContain("platforms: ${{ matrix.platform }}");
+    expect(publishWorkflow).toContain("runner: ubuntu-24.04");
+    expect(publishWorkflow).toContain("runner: ubuntu-24.04-arm");
+    expect(publishWorkflow).toContain("platforms: ${{ matrix.platform }}");
+    expect(publishWorkflow).toContain("push-by-digest=true,name-canonical=true,push=true");
+    expect(publishWorkflow).toContain("docker buildx imagetools create");
+    expect(publishWorkflow).not.toContain("docker/setup-qemu-action@");
+    expect(publishWorkflow).not.toContain("platforms: linux/amd64,linux/arm64");
   });
 
   test("Claude bridge: musl variant is stripped from the vendored runtime tree, not top-level node_modules", () => {

@@ -13,8 +13,10 @@ import {
 import { openCodeIncompleteTurnRequestId } from "./opencode-turn-recovery.js";
 import {
   openCodeWorkflowResultDenyPermissionRules,
+  openCodeWorkflowResultPermissionRules,
   openCodeWorkflowResultToolId,
 } from "./opencode-provider-helpers.js";
+import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
   deferred,
   expectedOpenCodeMessageId,
@@ -22,6 +24,22 @@ import {
   openCodeProvider,
   waitUntil,
 } from "./agent-provider-test-support.js";
+
+type PermissionRule = { permission: string; pattern: string; action: string };
+
+// Mirrors OpenCode's simple-glob and last-match-wins permission evaluator.
+function actionFor(update: Record<string, unknown>, tool: string, pattern = "*") {
+  const matches = (candidate: string, value: string) => {
+    const source = candidate
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replaceAll("*", ".*")
+      .replaceAll("?", ".");
+    return new RegExp(`^${source}$`, "s").test(value);
+  };
+  return (update.permission as PermissionRule[]).findLast(
+    (rule) => matches(rule.permission, tool) && matches(rule.pattern, pattern),
+  )?.action;
+}
 
 describe("OpenCode provider dispatch", () => {
   test("registers the persistent result broker during attach and isolates tools via session rules", async () => {
@@ -52,10 +70,12 @@ describe("OpenCode provider dispatch", () => {
       const selected = openCodeWorkflowResultToolId("submit_review_report");
       const other = openCodeWorkflowResultToolId("submit_fix_result");
       const status = openCodeWorkflowResultToolId("get_workflow_result_status");
-      expect(fake.updateCalls[0]?.permission).toEqual([
-        { permission: selected, pattern: "*", action: "allow" },
-        { permission: status, pattern: "*", action: "allow" },
-      ]);
+      expect(fake.updateCalls[0]?.permission).toEqual(
+        openCodeWorkflowResultPermissionRules("submit_review_report"),
+      );
+      expect(actionFor(fake.updateCalls[0]!, selected)).toBe("allow");
+      expect(actionFor(fake.updateCalls[0]!, other)).toBe("deny");
+      expect(actionFor(fake.updateCalls[0]!, status)).toBe("allow");
 
       await provider.send("owned-session", "prompt", {
         requestId: "request-1",
@@ -75,6 +95,46 @@ describe("OpenCode provider dispatch", () => {
           { permission: other, pattern: "*", action: "deny" },
           { permission: status, pattern: "*", action: "deny" },
         ]),
+      );
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("keeps sibling workflow-result tools denied after reviewer-shell rules", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    const agentMcp = {
+      url: "http://127.0.0.1:43123/mcp",
+      token: "broker-token",
+      workflowResultCapability: "signed-attempt-capability",
+    };
+    const policy = resolveNativeAgentExecutionPolicy(
+      { environmentType: "local", networkAccessMode: "full" },
+      "looped-review",
+    );
+    fake.setCreateResponse({ data: { id: "review-session" } });
+    try {
+      const sessionId = await provider.createSession("review", "Independent reviewer", {
+        mode: "plan",
+        readOnly: true,
+        reviewerSession: true,
+        policy,
+      });
+      await provider.send(sessionId, "Inspect evidence", {
+        requestId: "review-request",
+        mode: "plan",
+        readOnly: true,
+        reviewShellPolicy: policy,
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
+
+      const tail = fake.updateCalls.at(-1)!;
+      expect(actionFor(tail, openCodeWorkflowResultToolId("submit_review_report"))).toBe("allow");
+      expect(actionFor(tail, openCodeWorkflowResultToolId("submit_fix_result"))).toBe("deny");
+      expect(actionFor(tail, openCodeWorkflowResultToolId("get_workflow_result_status"))).toBe(
+        "allow",
       );
     } finally {
       await provider.dispose?.();
@@ -278,10 +338,12 @@ describe("OpenCode provider dispatch", () => {
           JSON.stringify(update.permission) === JSON.stringify(deny),
       );
       expect(idleRestores.length).toBeGreaterThanOrEqual(2);
-      expect(Array.isArray(afterFirst) && afterFirst.length - startingLength).toBe(deny.length + 2);
+      expect(Array.isArray(afterFirst) && afterFirst.length - startingLength).toBe(
+        deny.length * 2 + 2,
+      );
       expect(
         Array.isArray(afterSecond) && afterSecond.length - (afterFirst as unknown[]).length,
-      ).toBe(deny.length + 2);
+      ).toBe(deny.length * 2 + 2);
     } finally {
       await restored.dispose?.();
     }

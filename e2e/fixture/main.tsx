@@ -20,6 +20,7 @@ import {
   COMPOSE_MIN_INPUT_HEIGHT,
 } from "../../apps/web/src/components/chat/compose-metrics";
 import { DiffViewerTab } from "../../apps/web/src/components/terminal/DiffViewerTab";
+import { MonacoFileEditor } from "../../apps/web/src/components/terminal/MonacoFileEditor";
 import { ChangedFileItem } from "../../apps/web/src/components/files-panel/ChangedFileItem";
 import { MobileAppShellLayout } from "../../apps/web/src/components/layout/MobileAppShellLayout";
 import { SystemUsageIndicator } from "../../apps/web/src/components/layout/SystemUsageIndicator";
@@ -468,6 +469,7 @@ function GlobalStylesFixture() {
           isUser={true}
           authorLabel="You"
           timestampLabel="1:01 PM"
+          onUserLongPress={() => undefined}
           actions={
             <button data-testid="user-message-action" type="button">
               Fork
@@ -554,6 +556,27 @@ function GlobalStylesFixture() {
       <div data-testid="context-item" data-slot="context-menu-item">
         Context item
       </div>
+    </main>
+  );
+}
+
+function MonacoRuntimeFixture() {
+  const [value, setValue] = useState("const answer: number = 42;\n");
+
+  return (
+    <main className="h-screen bg-background p-4 text-foreground">
+      <section data-testid="monaco-runtime-editor" className="h-[32rem] border border-border">
+        <MonacoFileEditor
+          language="typescript"
+          value={value}
+          onChange={setValue}
+          onSave={() => undefined}
+          isActive
+        />
+      </section>
+      <output data-testid="monaco-runtime-value" className="sr-only">
+        {value}
+      </output>
     </main>
   );
 }
@@ -1212,6 +1235,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/native-hydrating-preview") {
     return <NativeHydratingPreviewFixture />;
   }
+  if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   if (window.location.pathname === "/system-usage") return <SystemUsageFixture />;
   if (window.location.pathname === "/workspace-bar-height") {

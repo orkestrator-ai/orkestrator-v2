@@ -194,6 +194,35 @@ test("message actions use viewport and input capability instead of width alone",
   }
 });
 
+test("copyable user messages compile the native callout suppression utility", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "desktop-chromium",
+    "desktop coverage is sufficient for the compiled utility",
+  );
+  await page.goto("/styles");
+
+  const bubble = page.getByTestId("user-message-shell").locator(".rounded-xl");
+  await expect(bubble).toBeVisible();
+  const compiled = await bubble.evaluate((element) => {
+    const utility = Array.from(element.classList).find((name) => name.includes("touch-callout"));
+    if (!utility) throw new Error("Copyable message is missing its touch-callout utility");
+    const selector = `.${CSS.escape(utility)}`;
+    const source = Array.from(document.querySelectorAll("style"))
+      .map((style) => style.textContent ?? "")
+      .join("\n");
+    return {
+      selector,
+      selectorMatches: element.matches(selector),
+      source,
+    };
+  });
+  expect(compiled.selectorMatches).toBe(true);
+  expect(compiled.source).toContain(`${compiled.selector} {`);
+  expect(compiled.source).toContain("-webkit-touch-callout: none");
+});
+
 test("global dark surfaces, fonts, terminal, and scrollbar rules compile into browser styles", async ({
   page,
 }, testInfo) => {

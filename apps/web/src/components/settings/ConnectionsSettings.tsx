@@ -37,6 +37,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
+import { reloadAfterConnectionChange } from "@/lib/client-platform";
 import { publishConnections, subscribeToConnections } from "@/lib/connections";
 import { cn } from "@/lib/utils";
 
@@ -127,7 +128,7 @@ export function ConnectionsSettings() {
     setFormError(null);
     try {
       await api.connect({ address, token });
-      window.location.reload();
+      reloadAfterConnectionChange();
     } catch (error) {
       setFormError(errorMessage(error));
       setBusyId(null);
@@ -144,7 +145,7 @@ export function ConnectionsSettings() {
       publish(list);
       if (tokenIntent === "connect") {
         await api.use(tokenTarget.id);
-        window.location.reload();
+        reloadAfterConnectionChange();
         return;
       }
       setTokenTarget(null);
@@ -166,7 +167,7 @@ export function ConnectionsSettings() {
     setBusyId(connection.id);
     try {
       await api.use(connection.id);
-      window.location.reload();
+      reloadAfterConnectionChange();
     } catch (error) {
       setBusyId(null);
       toast.error("Could not switch servers", { description: errorMessage(error) });
@@ -180,7 +181,7 @@ export function ConnectionsSettings() {
     try {
       const list = await api.forget(target.id);
       if (target.active) {
-        window.location.reload();
+        reloadAfterConnectionChange();
         return;
       }
       publish(list);

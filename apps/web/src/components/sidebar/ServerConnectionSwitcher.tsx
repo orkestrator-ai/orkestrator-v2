@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { reloadAfterConnectionChange } from "@/lib/client-platform";
 import { subscribeToConnections } from "@/lib/connections";
 
 type ConnectionsApi = NonNullable<NonNullable<Window["orkestrator"]>["connections"]>;
@@ -42,21 +43,6 @@ function readinessLabel(readiness: DisplayReadiness): string {
   if (readiness === "needs-token") return "token required";
   if (readiness === "unchecked") return "not checked";
   return readiness;
-}
-
-function reloadAfterConnectionChange(): void {
-  const platform = window.__orkestratorClientPlatform;
-  if (
-    platform === "ios-wkwebview" ||
-    platform === "ipad-wkwebview" ||
-    platform === "iphone-wkwebview"
-  ) {
-    // The native connection bridge reauthenticates and navigates its WKWebView.
-    // Reloading the old page races that navigation and iOS can route it to the
-    // system browser as an external server URL.
-    return;
-  }
-  window.location.reload();
 }
 
 export function ServerConnectionSwitcher() {

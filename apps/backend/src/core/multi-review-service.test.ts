@@ -2625,7 +2625,9 @@ test("MultiReviewService bounds repeated provenance repairs", async () => {
 
       const failed = await snapshot(started.id);
       expect(failed?.activeRequest?.schemaRepairAttempts).toBe(3);
-      expect(failed?.error).toContain("3 repair attempts");
+      expect(failed?.error).toContain(
+        "The consolidation model could not produce a valid consolidated report in 3 repair attempts.",
+      );
       expect(
         [...provider.sends.values()].filter((sent) =>
           sent.prompt.includes("<structured-review-contract-errors-json>"),
@@ -3793,7 +3795,38 @@ test("MultiReviewService bounds a blocked reviewer and clears the count once it 
   });
 });
 
-test("MultiReviewService bounds a blocked fix model", async () => {
+test("MultiReviewService identifies the preparation model when it returns no result", async () => {
+  const provider = new Provider(false);
+  await withService(
+    "env-idle-preparation-model",
+    provider,
+    async ({ service, snapshot }) => {
+      const started = await service.start({
+        environmentId: "env-idle-preparation-model",
+        projectId: "project-1",
+        targetBranch: "main",
+        reviewers: [{ agent: "claude", model: "reviewer" }],
+        reviewModel: { agent: "opencode", model: "preparation-model" },
+        fixModel: { agent: "codex", model: "fix-model" },
+      });
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "failed";
+      });
+
+      expect(await snapshot(started.id)).toMatchObject({
+        phase: "failed",
+        activeRequest: { kind: "prepare" },
+        reviewSession: { agent: "opencode", model: "preparation-model" },
+        error: "The preparation model became idle without returning its review package preparation",
+      });
+      expect((await snapshot(started.id))?.fixSession).toBeUndefined();
+    },
+    { packageFlow: true },
+  );
+});
+
+test("MultiReviewService bounds a blocked consolidation model", async () => {
   const provider = new Provider();
   provider.statusOverrides.set("session-2", "blocked");
   await withService("env-blocked-fix", provider, async ({ service, start, snapshot }) => {
@@ -3802,7 +3835,9 @@ test("MultiReviewService bounds a blocked fix model", async () => {
 
     const failed = await snapshot(started.id);
     expect(failed?.phase).toBe("failed");
-    expect(failed?.error).toBe("The fix model stayed blocked without a resolvable interaction");
+    expect(failed?.error).toBe(
+      "The consolidation model stayed blocked without a resolvable interaction",
+    );
   });
 });
 

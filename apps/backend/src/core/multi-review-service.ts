@@ -154,6 +154,20 @@ function reviewModel(workflow: MultiReviewWorkflow): MultiReviewModelSelection {
   return workflow.reviewModel ?? workflow.fixModel;
 }
 
+function stepModelLabel(kind: MultiReviewStepKind): "preparation" | "consolidation" | "fix" {
+  return kind === "prepare" ? "preparation" : kind === "consolidate" ? "consolidation" : "fix";
+}
+
+function stepResultLabel(
+  kind: MultiReviewStepKind,
+): "review package preparation" | "consolidated report" | "fix result" {
+  return kind === "prepare"
+    ? "review package preparation"
+    : kind === "consolidate"
+      ? "consolidated report"
+      : "fix result";
+}
+
 function reviewSession(workflow: MultiReviewWorkflow): MultiReviewFixSession | undefined {
   return workflow.reviewSession ?? (workflow.reviewModel ? undefined : workflow.fixSession);
 }
@@ -2223,7 +2237,6 @@ export class MultiReviewService {
     const preparing = workflow.phase === "preparing";
     const coordinating = preparing || workflow.phase === "consolidating";
     const separateReviewSession = coordinating && workflow.reviewModel !== undefined;
-    const sessionLabel = preparing ? "preparation" : "consolidation";
     const selection = coordinating ? reviewModel(workflow) : workflow.fixModel;
     const provider = await this.provider(workflow, selection);
     await this.assertFence(workflow.id, token);
@@ -2323,6 +2336,8 @@ export class MultiReviewService {
       await this.save(workflow, token);
     }
     const request = workflow.activeRequest;
+    const modelLabel = stepModelLabel(request.kind);
+    const resultLabel = stepResultLabel(request.kind);
     if (request.state === "prepared") {
       // Built while the dispatch is still unjournaled, for the same reason the
       // reviewer prompt is: the worktree probe must not widen the window in
@@ -2469,17 +2484,17 @@ export class MultiReviewService {
       request.idleResultPolls = (request.idleResultPolls ?? 0) + 1;
       await this.save(workflow, token);
       if (request.idleResultPolls >= MAX_IDLE_RESULT_POLLS) {
-        throw new Error("The fix model stayed blocked without a resolvable interaction");
+        throw new Error(`The ${modelLabel} model stayed blocked without a resolvable interaction`);
       }
       return;
     }
     if (status === "error" || status === "missing") {
       throw new Error(
         status === "missing"
-          ? `The ${sessionLabel} session no longer exists`
+          ? `The ${modelLabel} session no longer exists`
           : statusDetail
-            ? `The ${sessionLabel} session failed: ${statusDetail}`
-            : `The ${sessionLabel} session failed`,
+            ? `The ${modelLabel} session failed: ${statusDetail}`
+            : `The ${modelLabel} session failed`,
       );
     }
     if (request.resultTransport === "tool-v1") {
@@ -2494,9 +2509,7 @@ export class MultiReviewService {
       request.idleResultPolls = (request.idleResultPolls ?? 0) + 1;
       await this.save(workflow, token);
       if (request.idleResultPolls >= MAX_IDLE_RESULT_POLLS) {
-        throw new Error(
-          `The fix model became idle without returning its ${request.kind === "prepare" ? "review package preparation" : request.kind === "fix" ? "fix result" : "consolidated report"}`,
-        );
+        throw new Error(`The ${modelLabel} model became idle without returning its ${resultLabel}`);
       }
       return;
     }
@@ -2684,7 +2697,7 @@ export class MultiReviewService {
     const attempt = (request.schemaRepairAttempts ?? 0) + 1;
     if (attempt > MAX_SCHEMA_REPAIR_ATTEMPTS) {
       throw new Error(
-        `${error.message} The fix model could not produce a valid ${request.kind === "prepare" ? "review package preparation" : request.kind === "fix" ? "fix result" : "consolidated report"} in ${MAX_SCHEMA_REPAIR_ATTEMPTS} repair attempts.`,
+        `${error.message} The ${stepModelLabel(request.kind)} model could not produce a valid ${stepResultLabel(request.kind)} in ${MAX_SCHEMA_REPAIR_ATTEMPTS} repair attempts.`,
       );
     }
     const previousRequestId = request.requestId;

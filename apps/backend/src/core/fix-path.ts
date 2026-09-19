@@ -62,7 +62,8 @@ export function fixPath(): void {
 
   const separator = path.delimiter;
   const existing = (process.env.PATH ?? "").split(separator).filter(Boolean);
-  const fromShell = (loginShellPath() ?? "").split(separator).filter(Boolean);
+  const loginPath = loginShellPath();
+  const fromShell = (loginPath ?? "").split(separator).filter(Boolean);
 
   const merged: string[] = [];
   const seen = new Set<string>();
@@ -74,4 +75,19 @@ export function fixPath(): void {
   }
 
   process.env.PATH = merged.join(separator);
+  // Content-free startup evidence: paths themselves can contain usernames or
+  // private directory names, but the source/count metadata is enough to tell
+  // whether an updater relaunch lost the login-shell environment.
+  console.info(
+    [
+      "[Backend] Host executable discovery ready:",
+      `version=${process.env.ORKESTRATOR_VERSION?.trim() || "unknown"}`,
+      `platform=${process.platform}`,
+      `shellSet=${Boolean(process.env.SHELL?.trim())}`,
+      `loginShellPathResolved=${loginPath !== null}`,
+      `inheritedPathEntries=${existing.length}`,
+      `loginShellPathEntries=${fromShell.length}`,
+      `mergedPathEntries=${merged.length}`,
+    ].join(" "),
+  );
 }

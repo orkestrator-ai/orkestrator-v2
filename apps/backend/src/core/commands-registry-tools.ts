@@ -1,4 +1,5 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import type { CommandContext } from "./commands-context.js";
 import {
   readAgentSkillFile,
   scanAgentSkills,
@@ -11,11 +12,33 @@ import {
   asAgentSkillProvider,
   assertOnlyKeys,
   runEnvironmentAgentSkills,
-  hasPackagedOrPathBinary,
   hasCursorSdkBridge,
   hasManagedAcpBinary,
   getContainerGitHubCredentialStatus,
+  resolveManagedBinary,
 } from "./commands-helpers.js";
+
+type HostToolSource = "managed" | "path" | "missing";
+
+const lastHostToolSource = new Map<string, HostToolSource>();
+
+function logHostToolAvailability(name: string, source: HostToolSource): void {
+  if (lastHostToolSource.get(name) === source) return;
+  lastHostToolSource.set(name, source);
+  const message = `[Tooling] Host tool availability: tool=${name} available=${source !== "missing"} source=${source}`;
+  if (source === "missing") console.warn(message);
+  else console.info(message);
+}
+
+async function checkHostTool(context: CommandContext, name: string) {
+  if (resolveManagedBinary(context, name)) {
+    logHostToolAvailability(name, "managed");
+    return true;
+  }
+  const available = await commandExists(name);
+  logHostToolAvailability(name, available ? "path" : "missing");
+  return available;
+}
 
 export function registerToolingCommands(
   register: CommandRegistrar,
@@ -81,19 +104,19 @@ export function registerToolingCommands(
     available: await commands.get("has_claude_credentials")?.({}, context),
     expiresAt: null,
   }));
-  register("check_claude_cli", (_args, context) => hasPackagedOrPathBinary(context, "claude"));
+  register("check_claude_cli", (_args, context) => checkHostTool(context, "claude"));
   register("check_claude_config", (_args, context) => {
     if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("claude"))
       return false;
     return pathExists(homePath(".claude.json"));
   });
-  register("check_opencode_cli", (_args, context) => hasPackagedOrPathBinary(context, "opencode"));
-  register("check_codex_cli", (_args, context) => hasPackagedOrPathBinary(context, "codex"));
+  register("check_opencode_cli", (_args, context) => checkHostTool(context, "opencode"));
+  register("check_codex_cli", (_args, context) => checkHostTool(context, "codex"));
   // Kept under the existing command name for protocol compatibility. Cursor
   // no longer has a CLI; availability means the SDK bridge is packaged.
   register("check_cursor_cli", (_args, context) => hasCursorSdkBridge(context));
   register("check_grok_cli", (_args, context) => hasManagedAcpBinary(context, "grok"));
-  register("check_pi_cli", (_args, context) => hasPackagedOrPathBinary(context, "pi"));
+  register("check_pi_cli", (_args, context) => checkHostTool(context, "pi"));
   register("check_github_cli", () => commandExists("gh"));
   register("get_container_github_credential_status", async (_args, context) =>
     getContainerGitHubCredentialStatus((await context.storage.loadConfig()).global),
@@ -101,25 +124,25 @@ export function registerToolingCommands(
   register(
     "check_any_ai_cli",
     async (_args, context) =>
-      (await hasPackagedOrPathBinary(context, "claude")) ||
-      (await hasPackagedOrPathBinary(context, "opencode")) ||
-      (await hasPackagedOrPathBinary(context, "codex")) ||
+      (await checkHostTool(context, "claude")) ||
+      (await checkHostTool(context, "opencode")) ||
+      (await checkHostTool(context, "codex")) ||
       (await hasCursorSdkBridge(context)) ||
       (await hasManagedAcpBinary(context, "grok")) ||
-      (await hasPackagedOrPathBinary(context, "pi")),
+      (await checkHostTool(context, "pi")),
   );
   register("get_available_ai_cli", async (_args, context) =>
-    (await hasPackagedOrPathBinary(context, "claude"))
+    (await checkHostTool(context, "claude"))
       ? "claude"
-      : (await hasPackagedOrPathBinary(context, "opencode"))
+      : (await checkHostTool(context, "opencode"))
         ? "opencode"
-        : (await hasPackagedOrPathBinary(context, "codex"))
+        : (await checkHostTool(context, "codex"))
           ? "codex"
           : (await hasCursorSdkBridge(context))
             ? "cursor"
             : (await hasManagedAcpBinary(context, "grok"))
               ? "grok"
-              : (await hasPackagedOrPathBinary(context, "pi"))
+              : (await checkHostTool(context, "pi"))
                 ? "pi"
                 : null,
   );

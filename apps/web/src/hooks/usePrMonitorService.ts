@@ -26,6 +26,7 @@ import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { useEnvironmentStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
+import { playConfiguredNotificationSound } from "@/lib/notification-sounds";
 
 export function usePrMonitorService(): void {
   const applySnapshot = usePrMonitorStore((s) => s.applySnapshot);
@@ -58,6 +59,7 @@ export function usePrMonitorService(): void {
         description: environment?.branch,
         id: `branch-merged-${event.environmentId}`,
       });
+      void playConfiguredNotificationSound("pr-merged");
     };
 
     const requestRehydrate = () => {

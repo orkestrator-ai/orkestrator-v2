@@ -63,6 +63,10 @@ import {
 } from "@orkestrator/protocol/debug-logging";
 import { MAX_SSH_AGENT_SOCKET_PATH_CHARS } from "@orkestrator/protocol/ssh-agent-socket";
 import {
+  DEFAULT_NOTIFICATION_SOUND_SETTINGS,
+  normalizeNotificationSoundSettings,
+} from "@orkestrator/protocol/notification-sounds";
+import {
   COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
   normalizeCoordinatorProviderTierDefaultVersion,
 } from "@orkestrator/protocol/coordinator";
@@ -1626,6 +1630,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     globalMb: global.terminalHistoryGlobalRetentionMb,
     days: global.terminalHistoryRetentionDays,
   });
+  const notificationSounds = normalizeNotificationSoundSettings(global.notificationSounds);
   const sshAgentSocketPath =
     typeof global.sshAgentSocketPath === "string" &&
     global.sshAgentSocketPath.trim().length <= MAX_SSH_AGENT_SOCKET_PATH_CHARS &&
@@ -1759,6 +1764,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     JSON.stringify(global.openCodeModelProviders) === JSON.stringify(openCodeModelProviders) &&
     JSON.stringify(global.agentSettings) === JSON.stringify(agentSettings) &&
     JSON.stringify(global.agentMessaging) === JSON.stringify(agentMessaging) &&
+    JSON.stringify(global.notificationSounds) === JSON.stringify(notificationSounds) &&
     global.coordinatorProviderTiers === coordinatorProviderTiers &&
     global.coordinatorProviderTierDefaultVersion === coordinatorProviderTierDefaultVersion &&
     config.schemaVersion === 2
@@ -1784,6 +1790,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       favoriteModels,
       openCodeModelProviders,
       agentMessaging,
+      notificationSounds,
     } as unknown as AppConfig["global"],
   };
 }
@@ -1911,6 +1918,7 @@ export function defaultConfig(): AppConfig {
       debugLogging: false,
       debugLogRetentionDays: DEFAULT_DEBUG_LOG_RETENTION_DAYS,
       webClientEnabled: true,
+      notificationSounds: { ...DEFAULT_NOTIFICATION_SOUND_SETTINGS },
     },
     repositories: {},
   };

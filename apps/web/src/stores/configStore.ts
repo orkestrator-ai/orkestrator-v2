@@ -12,6 +12,7 @@ import {
   DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
   DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
 } from "@orkestrator/protocol/terminal-history";
+import { DEFAULT_NOTIFICATION_SOUND_SETTINGS } from "@orkestrator/protocol/notification-sounds";
 
 const DEFAULT_CONFIG: AppConfig = {
   schemaVersion: 2,
@@ -118,6 +119,7 @@ const DEFAULT_CONFIG: AppConfig = {
     experimentalCodexRawEventLogging: true,
     debugLogRetentionDays: DEFAULT_DEBUG_LOG_RETENTION_DAYS,
     webClientEnabled: true,
+    notificationSounds: { ...DEFAULT_NOTIFICATION_SOUND_SETTINGS },
   },
   repositories: {},
 };

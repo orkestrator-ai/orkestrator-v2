@@ -47,6 +47,7 @@ import {
 import { usePrMonitorService } from "@/hooks/usePrMonitorService";
 import { useGlobalActivityMonitor } from "@/hooks/useGlobalActivityMonitor";
 import { useUnreadEnvironmentSync } from "@/hooks/useUnreadEnvironmentSync";
+import { useNotificationSoundService } from "@/hooks/useNotificationSoundService";
 import { useEnvironments, useEnvironmentLifecycleService } from "@/hooks";
 import {
   AlertDialog,
@@ -221,6 +222,9 @@ function App() {
   usePrMonitorService();
   // Monitor agent activity for ALL environments (regardless of selected project)
   useGlobalActivityMonitor();
+  // Sounds follow backend-owned unread transitions, even when an environment
+  // or agent tab is not mounted in the foreground.
+  useNotificationSoundService();
   // Single registration for setup lifecycle events and resume/reconnect
   // reconciliation (previously duplicated per useEnvironments call site).
   useEnvironmentLifecycleService();

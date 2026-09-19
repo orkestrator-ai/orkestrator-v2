@@ -2,6 +2,7 @@ import * as shared from "./storage-shared.js";
 import path from "node:path";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
+import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
 import {
   COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
   coordinatorProviderTierSetting,
@@ -497,6 +498,7 @@ export abstract class StorageConfig extends StorageProjects {
     }
     const validated: AppConfig["global"] = {
       ...reviewValidated,
+      notificationSounds: normalizeNotificationSoundSettings(reviewValidated.notificationSounds),
       sshAgentSocketPath: requestedSshAgentSocketPath || undefined,
       debugLogRetentionDays: normalizeDebugLogRetentionDays(reviewValidated.debugLogRetentionDays),
       terminalHistoryEnabled: terminalHistoryRetention.enabled,

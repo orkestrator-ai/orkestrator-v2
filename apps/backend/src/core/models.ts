@@ -780,6 +780,8 @@ export interface AppConfig {
     /** Number of days production application logs remain on disk. */
     debugLogRetentionDays?: number;
     webClientEnabled?: boolean;
+    /** Audible cues for background events that need the user's attention. */
+    notificationSounds?: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings;
     /** Editable preference embedded inside Orkestrator's fixed review contract. */
     reviewInstruction?: string;
     agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;

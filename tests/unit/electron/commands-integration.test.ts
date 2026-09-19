@@ -168,6 +168,10 @@ describe("storage-backed command delegation", () => {
           return config;
         },
       ),
+      updateNotificationSoundSettings: mock(async (notificationSounds: unknown) => ({
+        ...config,
+        global: { ...config.global, notificationSounds },
+      })),
       setGitHubToken: mock(async (token: string | null) => {
         const { githubToken: _removed, ...global } = config.global;
         config = {
@@ -353,6 +357,22 @@ describe("storage-backed command delegation", () => {
       },
       { preserveCredentials: true },
     );
+
+    await expect(
+      commands.get("update_notification_sound_settings")?.(
+        { settings: { agentStopped: false, prMerged: true } },
+        context,
+      ),
+    ).resolves.toMatchObject({
+      global: {
+        allowedDomains: ["github.com"],
+        notificationSounds: { agentStopped: false, prMerged: true },
+      },
+    });
+    expect(storage.updateNotificationSoundSettings).toHaveBeenLastCalledWith({
+      agentStopped: false,
+      prMerged: true,
+    });
 
     await expect(
       commands.get("set_github_token")?.({ token: " replacement_token " }, context),

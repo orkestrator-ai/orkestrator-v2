@@ -3,10 +3,87 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION } from "@orkestrator/protocol/coordinator";
-import { defaultConfig } from "./storage-shared.js";
+import { defaultConfig, normalizePersistedConfig } from "./storage-shared.js";
 import { StorageService } from "./storage.js";
 
 describe("StorageService config migration", () => {
+  test("adds default notification settings to persisted legacy config", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-sound-settings-migration-"));
+    try {
+      const legacy = defaultConfig();
+      delete legacy.global.notificationSounds;
+      await fs.writeFile(path.join(dataDir, "config.json"), `${JSON.stringify(legacy, null, 2)}\n`);
+
+      const storage = new StorageService(dataDir);
+      await storage.init();
+      expect((await storage.loadConfig()).global.notificationSounds).toEqual({
+        agentStopped: true,
+        prMerged: true,
+      });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("preserves object identity when notification settings are already normalized", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-sound-settings-normalized-"));
+    try {
+      const storage = new StorageService(dataDir);
+      await storage.init();
+      const normalized = await storage.loadConfig();
+
+      expect(normalizePersistedConfig(normalized)).toBe(normalized);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("patches notification settings atomically and normalizes malformed writes", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-sound-settings-update-"));
+    try {
+      const storage = new StorageService(dataDir);
+      await storage.init();
+      const current = await storage.loadConfig();
+      const globalWrite = storage.updateGlobalConfig({
+        ...current.global,
+        terminalAppearance: { ...current.global.terminalAppearance, fontSize: 19 },
+      });
+      const soundWrite = storage.updateNotificationSoundSettings({
+        agentStopped: false,
+        prMerged: true,
+      });
+
+      await Promise.all([globalWrite, soundWrite]);
+      const combined = await storage.loadConfig();
+      expect(combined.global.terminalAppearance?.fontSize).toBe(19);
+      expect(combined.global.notificationSounds).toEqual({
+        agentStopped: false,
+        prMerged: true,
+      });
+
+      const malformedWholeGlobal = await storage.updateGlobalConfig({
+        ...combined.global,
+        notificationSounds: { agentStopped: "yes", prMerged: null } as never,
+      });
+      expect(malformedWholeGlobal.global.notificationSounds).toEqual({
+        agentStopped: true,
+        prMerged: true,
+      });
+
+      const malformed = await storage.updateNotificationSoundSettings({
+        agentStopped: "yes",
+        prMerged: null,
+      });
+      expect(malformed.global.notificationSounds).toEqual({
+        agentStopped: true,
+        prMerged: true,
+      });
+      expect(malformed.global.terminalAppearance?.fontSize).toBe(19);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("migrates once under the config lock without reverting a concurrent update", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-config-migration-"));
     try {

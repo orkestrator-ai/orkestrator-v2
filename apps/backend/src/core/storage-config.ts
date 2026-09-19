@@ -547,6 +547,21 @@ export abstract class StorageConfig extends StorageProjects {
     });
   }
 
+  /** Atomically patch renderer-owned sound preferences without replacing global config. */
+  async updateNotificationSoundSettings(settings: unknown): Promise<AppConfig> {
+    const notificationSounds = normalizeNotificationSoundSettings(settings);
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      config.global = {
+        ...config.global,
+        notificationSounds,
+      };
+      await this.saveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return config;
+    });
+  }
+
   async setGitHubToken(token: string | null): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();

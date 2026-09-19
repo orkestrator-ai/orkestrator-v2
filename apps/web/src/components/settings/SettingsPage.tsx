@@ -127,12 +127,12 @@ export function SettingsPage({ open, onOpenChange, defaultSection }: SettingsPag
           <McpSettings />
         ) : activeSection === "messaging" ? (
           <MessagingSettings />
-        ) : activeSection === "sounds" ? (
-          <SoundsSettings />
         ) : isLoading && !initialLoadDone ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
+        ) : activeSection === "sounds" ? (
+          <SoundsSettings />
         ) : (
           <GlobalSettings activeSection={activeSection} />
         )

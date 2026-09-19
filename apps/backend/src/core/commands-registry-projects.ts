@@ -880,6 +880,9 @@ export function registerProjectCommands(
     await pruneTerminalHistoryStorage(storage.getDataDir());
     return redactAppConfig(updated);
   });
+  register("update_notification_sound_settings", async ({ settings }, { storage }) =>
+    redactAppConfig(await storage.updateNotificationSoundSettings(settings)),
+  );
   register("set_github_token", async ({ token }, { storage }) => {
     const nextToken = token === null ? null : asString(token, "token").trim();
     if (nextToken !== null && !nextToken) {

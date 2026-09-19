@@ -403,6 +403,32 @@ describe("GlobalSettings defaults section", () => {
     expect(savedActionDefaults()).toEqual(stored);
   });
 
+  test("carries notification preferences through an unrelated global save", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          notificationSounds: { agentStopped: false, prMerged: true },
+        },
+      },
+    }));
+    render(<GlobalSettings activeSection="review" />);
+
+    fireEvent.change(screen.getByLabelText("Review instruction"), {
+      target: { value: "Preserve unrelated preferences." },
+    });
+    await flushAutoSave();
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    expect(mockUpdateGlobalConfig.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({
+        notificationSounds: { agentStopped: false, prMerged: true },
+      }),
+    );
+  });
+
   test("edits a two-column variable reviewer list shared with Defaults", async () => {
     const view = render(<GlobalSettings activeSection="review" />);
 

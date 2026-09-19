@@ -25,3 +25,22 @@
   groups in 341.2 s. The root group passed 4,073 tests, skipped three and
   failed zero in 102.1 s; no terminal worker crash recurred. This passing
   observation does not establish the cause or close the worker-kill incident.
+
+## Recurrence — 2026-09-19
+
+- **Original command:** `mise run test:changed` with the standard four affected
+  groups and four root workers.
+- **Failure:** `Electron backend command registry > reports a target ref the
+  container cannot resolve` exceeded its 5,000 ms test budget. Its expected
+  target-ref diagnostic was replaced by the generic fake-Docker command
+  failure after the fixture process was killed. The root group reported 2,371
+  passed, two skipped, 13 failed and 10 unhandled errors across 82 files in
+  188.2 s; several sibling fake-Docker tests failed in the same run.
+- **Isolated rerun:** `mise run test:logged -- --name isolate-terminal-registry
+  -- bun test ./tests/unit/electron/commands-registry-terminal.test.ts
+  --parallel=1 --only-failures` passed all tests in 26.6 s without source
+  changes to this owner.
+- **Hypothesis:** this recurrence strengthens the existing concurrent-load
+  hypothesis: the owner passes alone, while the aggregate run killed its
+  fixture and then timed out at the outer test deadline. It does not identify
+  which process terminated the fixture.

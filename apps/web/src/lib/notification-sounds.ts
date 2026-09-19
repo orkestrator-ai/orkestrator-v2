@@ -96,3 +96,9 @@ export async function primeNotificationSounds(): Promise<boolean> {
     return false;
   }
 }
+
+export const __testing = {
+  resetAudioContext(): void {
+    audioContext = null;
+  },
+};

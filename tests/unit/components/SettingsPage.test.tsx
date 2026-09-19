@@ -165,6 +165,17 @@ describe("SettingsPage", () => {
     expect(container.querySelector(".animate-spin") === null).toBe(true);
   });
 
+  test("keeps sound controls unavailable while the initial config is loading", async () => {
+    invokeMock.mockImplementationOnce(() => new Promise(() => undefined));
+
+    const { container } = render(<SettingsPage open onOpenChange={() => undefined} />);
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
+    fireEvent.click(screen.getByRole("button", { name: "Sounds" }));
+
+    expect(container.querySelector(".animate-spin")).toBeTruthy();
+    expect(screen.queryByRole("switch", { name: "Agent stopped sound" })).toBeNull();
+  });
+
   test("opens the read-only Skills browser without waiting for config or rendering GlobalSettings", async () => {
     invokeMock.mockImplementationOnce(() => new Promise(() => undefined));
 

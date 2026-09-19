@@ -19,32 +19,39 @@ export function SoundsSettings() {
   const [settings, setSettings] = useState<NotificationSoundSettings>(() =>
     normalizeNotificationSoundSettings(storedSettings),
   );
+  const settingsRef = useRef(settings);
   const [saving, setSaving] = useState(false);
   const saveGenerationRef = useRef(0);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
-    if (!saving) setSettings(normalizeNotificationSoundSettings(storedSettings));
+    if (!saving) {
+      const next = normalizeNotificationSoundSettings(storedSettings);
+      settingsRef.current = next;
+      setSettings(next);
+    }
   }, [saving, storedSettings]);
 
-  const updateSettings = (next: NotificationSoundSettings) => {
+  const updateSettings = (updates: Partial<NotificationSoundSettings>) => {
+    const next = { ...settingsRef.current, ...updates };
+    settingsRef.current = next;
     const generation = ++saveGenerationRef.current;
     setSettings(next);
     setSaving(true);
     // Keep root-level notification services in sync immediately. Persistence
     // is serialized below so fast toggles cannot land at the backend out of order.
     updateGlobalConfig({ notificationSounds: next });
-    saveQueueRef.current = saveQueueRef.current
-      .catch(() => undefined)
-      .then(async () => {
-        const global = useConfigStore.getState().config.global;
-        const savedConfig = await backend.updateGlobalConfig({
-          ...global,
-          notificationSounds: next,
-        });
+    const previousSave = saveQueueRef.current;
+    const queuedSave = (async () => {
+      try {
+        await previousSave;
+      } catch {
+        // A failed older generation must not block the latest preference.
+      }
+      try {
+        const savedConfig = await backend.updateNotificationSoundSettings(next);
         if (generation === saveGenerationRef.current) setConfig(savedConfig);
-      })
-      .catch(async (error) => {
+      } catch (error) {
         if (generation !== saveGenerationRef.current) return;
         toast.error("Sound settings were not saved", {
           description: error instanceof Error ? error.message : String(error),
@@ -52,14 +59,17 @@ export function SoundsSettings() {
         try {
           const config = await backend.getConfig();
           setConfig(config);
-          setSettings(normalizeNotificationSoundSettings(config.global.notificationSounds));
+          const restored = normalizeNotificationSoundSettings(config.global.notificationSounds);
+          settingsRef.current = restored;
+          setSettings(restored);
         } catch {
           // The config resource stream will reconcile the optimistic state.
         }
-      })
-      .finally(() => {
+      } finally {
         if (generation === saveGenerationRef.current) setSaving(false);
-      });
+      }
+    })();
+    saveQueueRef.current = queuedSave;
   };
 
   const preview = async (kind: NotificationSoundKind) => {
@@ -91,14 +101,14 @@ export function SoundsSettings() {
           label="Agent stopped"
           description="Play a cue when an environment raises the same completed-activity indicator as the bell icon."
           enabled={settings.agentStopped}
-          onEnabledChange={(agentStopped) => updateSettings({ ...settings, agentStopped })}
+          onEnabledChange={(agentStopped) => updateSettings({ agentStopped })}
           onPreview={() => void preview("agent-stopped")}
         />
         <SoundRow
           label="Pull request merged"
           description="Play a different cue when GitHub confirms that a monitored pull request was merged."
           enabled={settings.prMerged}
-          onEnabledChange={(prMerged) => updateSettings({ ...settings, prMerged })}
+          onEnabledChange={(prMerged) => updateSettings({ prMerged })}
           onPreview={() => void preview("pr-merged")}
         />
       </div>

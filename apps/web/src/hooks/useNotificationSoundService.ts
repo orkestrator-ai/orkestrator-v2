@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
+import { useUIStore } from "@/stores/uiStore";
 import {
   playConfiguredNotificationSound,
   primeNotificationSounds,
@@ -14,6 +15,7 @@ import {
  */
 export function useNotificationSoundService(): void {
   const environments = useEnvironmentStore((state) => state.environments);
+  const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const agentStoppedSoundEnabled = useConfigStore(
     (state) =>
       normalizeNotificationSoundSettings(state.config.global.notificationSounds).agentStopped,
@@ -33,25 +35,38 @@ export function useNotificationSoundService(): void {
 
     for (const [environmentId, unread] of nextUnread) {
       // A newly discovered environment belongs to snapshot hydration, not a
-      // renderer-observed edge. Only an existing false -> true badge is new.
-      if (unread && previousUnread.get(environmentId) === false) {
+      // renderer-observed edge. The selected environment can optimistically
+      // clear this bit before an authoritative snapshot restores it, so its
+      // raw badge edge is not a semantic background completion.
+      if (
+        environmentId !== selectedEnvironmentId &&
+        unread &&
+        previousUnread.get(environmentId) === false
+      ) {
         void playConfiguredNotificationSound("agent-stopped");
+        break;
       }
     }
-  }, [environments]);
+  }, [environments, selectedEnvironmentId]);
 
   useEffect(() => {
     if (!agentStoppedSoundEnabled && !prMergedSoundEnabled) return;
+    let priming = false;
+    let disposed = false;
     const prime = () => {
+      if (priming) return;
+      priming = true;
       void primeNotificationSounds().then((ready) => {
-        if (!ready) return;
+        priming = false;
+        if (!ready || disposed) return;
         window.removeEventListener("pointerdown", prime);
         window.removeEventListener("keydown", prime);
       });
     };
-    window.addEventListener("pointerdown", prime, { once: true });
-    window.addEventListener("keydown", prime, { once: true });
+    window.addEventListener("pointerdown", prime);
+    window.addEventListener("keydown", prime);
     return () => {
+      disposed = true;
       window.removeEventListener("pointerdown", prime);
       window.removeEventListener("keydown", prime);
     };

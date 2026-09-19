@@ -42,9 +42,13 @@ async function main(): Promise<void> {
 
   // Wait for the engine to finish its handshake; index.ts starts it in the
   // background so the HTTP server is up even if the child is slow.
+  const readyTimeoutMs = Math.max(
+    50,
+    Number.parseInt(process.env.CODEX_BRIDGE_HTTP_HARNESS_READY_TIMEOUT_MS ?? "5000", 10) || 5_000,
+  );
   let ready = false;
   let lastState = "unknown";
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < Math.ceil(readyTimeoutMs / 50); attempt += 1) {
     const health = (await (await app.request("/global/health")).json()) as {
       appServer?: { state?: string };
       engine?: string;
@@ -60,7 +64,9 @@ async function main(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   if (!ready) {
-    throw new Error(`app-server did not become ready within 5 seconds (last state: ${lastState})`);
+    throw new Error(
+      `app-server did not become ready within ${readyTimeoutMs / 1_000} seconds (last state: ${lastState})`,
+    );
   }
 
   await record("health", await app.request("/global/health"));

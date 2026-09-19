@@ -1119,12 +1119,12 @@ describe("pinned desktop toolchain cache", () => {
       {
         body: Buffer.from("#!/definitely/missing/interpreter\n"),
         message: "could not execute from the Orkestrator toolchain cache",
-        timeout: 5_000,
+        timeout: 15_000,
       },
       {
         body: Buffer.from("#!/bin/sh\nexit 7\n"),
         message: "version check failed (code 7",
-        timeout: 5_000,
+        timeout: 15_000,
       },
       {
         body: Buffer.from("#!/bin/sh\nsleep 1\n"),

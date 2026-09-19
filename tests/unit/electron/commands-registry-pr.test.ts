@@ -603,12 +603,14 @@ exit 43
     }
   });
 
-  test("reports a queued container PR as pending when the captured PR remains open", async () => {
-    const { context } = createContext(createEnvironment());
-    const commands = createCommandRegistry();
+  test(
+    "reports a queued container PR as pending when the captured PR remains open",
+    async () => {
+      const { context } = createContext(createEnvironment());
+      const commands = createCommandRegistry();
 
-    await withFakeDocker(
-      `#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 command=""
 for arg in "$@"; do command="$arg"; done
 command="$(printf '%s\\n' "$command" | tail -n 1)"
@@ -630,16 +632,18 @@ fi
 printf 'unexpected docker command: %s\\n' "$command" >&2
 exit 1
 `,
-      async () => {
-        await expect(
-          commands.get("merge_pr")?.(
-            { containerId: "container-1", method: "rebase", deleteBranch: true },
-            context,
-          ),
-        ).resolves.toEqual({ outcome: "pending" });
-      },
-    );
-  });
+        async () => {
+          await expect(
+            commands.get("merge_pr")?.(
+              { containerId: "container-1", method: "rebase", deleteBranch: true },
+              context,
+            ),
+          ).resolves.toEqual({ outcome: "pending" });
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("reports an unknown container merge outcome when post-submit verification fails", async () => {
     const { context } = createContext(createEnvironment());

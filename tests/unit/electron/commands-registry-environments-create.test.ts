@@ -1557,120 +1557,128 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
     ASYNC_TEST_BUDGET_MS,
   );
 
-  test("keeps the stored branch when a local rollback took effect but reported failure", async () => {
-    const worktreePath = await createGitRepoOnBranch("old-branch");
-    await runGit(worktreePath, ["config", "branch.old-branch.remote", "origin"]);
-    await runGit(worktreePath, ["config", "branch.old-branch.merge", "refs/heads/old-branch"]);
-    // A detached HEAD is what makes `git branch --show-current` useless here: it
-    // reports an empty string whichever of the two branch names actually exists.
-    await runGit(worktreePath, ["checkout", "--detach"]);
-    const environment = createEnvironment({
-      environmentType: "local",
-      worktreePath,
-      branch: "old-branch",
-      prUrl: "https://github.com/acme/repo/pull/1",
-      prState: "open",
-      hasMergeConflicts: true,
-    });
-    const { context } = createContext(environment);
-    await isolateCodexBinaryLookup(context);
-    const commands = createCommandRegistry();
+  test(
+    "keeps the stored branch when a local rollback took effect but reported failure",
+    async () => {
+      const worktreePath = await createGitRepoOnBranch("old-branch");
+      await runGit(worktreePath, ["config", "branch.old-branch.remote", "origin"]);
+      await runGit(worktreePath, ["config", "branch.old-branch.merge", "refs/heads/old-branch"]);
+      // A detached HEAD is what makes `git branch --show-current` useless here: it
+      // reports an empty string whichever of the two branch names actually exists.
+      await runGit(worktreePath, ["checkout", "--detach"]);
+      const environment = createEnvironment({
+        environmentType: "local",
+        worktreePath,
+        branch: "old-branch",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      const { context } = createContext(environment);
+      await isolateCodexBinaryLookup(context);
+      const commands = createCommandRegistry();
 
-    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      await withGitArgumentStub(
-        `  *" config --worktree push.default "*) echo "forced config failure" >&2; exit 42 ;;
+      await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+        await withGitArgumentStub(
+          `  *" config --worktree push.default "*) echo "forced config failure" >&2; exit 42 ;;
   *" branch -m -- review-oauth-flow-envlocal-r1 old-branch"*) real_git "$@"; echo "forced timeout" >&2; exit 42 ;;`,
-        async () => {
-          await expect(
-            commands.get("rename_environment_from_prompt")?.(
-              { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-              context,
-            ),
-          ).resolves.toBeUndefined();
-        },
-      );
-    });
+          async () => {
+            await expect(
+              commands.get("rename_environment_from_prompt")?.(
+                { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+                context,
+              ),
+            ).resolves.toBeUndefined();
+          },
+        );
+      });
 
-    // The rollback did land, so the stored branch and its PR metadata must survive.
-    expect(
-      await gitOutput(worktreePath, [
-        "branch",
-        "--list",
-        "old-branch",
-        "--format=%(refname:short)",
-      ]),
-    ).toBe("old-branch");
-    expect(
-      await gitOutput(worktreePath, ["branch", "--list", "review-oauth-flow-envlocal-r1"]),
-    ).toBe("");
-    expect(environment.branch).toBe("old-branch");
-    expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
-    expect(environment.prState).toBe("open");
-    expect(environment.hasMergeConflicts).toBe(true);
-  });
+      // The rollback did land, so the stored branch and its PR metadata must survive.
+      expect(
+        await gitOutput(worktreePath, [
+          "branch",
+          "--list",
+          "old-branch",
+          "--format=%(refname:short)",
+        ]),
+      ).toBe("old-branch");
+      expect(
+        await gitOutput(worktreePath, ["branch", "--list", "review-oauth-flow-envlocal-r1"]),
+      ).toBe("");
+      expect(environment.branch).toBe("old-branch");
+      expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
+      expect(environment.prState).toBe("open");
+      expect(environment.hasMergeConflicts).toBe(true);
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
-  test("renames the running container git branch and advances stored branch", async () => {
-    const environment = createEnvironment({
-      id: "env-container-rename",
-      environmentType: "containerized",
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-      pendingAgentLaunch: true,
-      initialAgentModel: "gpt-5.6-sol",
-      initialReasoningEffort: "high",
-      branch: "old-branch",
-      prUrl: "https://github.com/acme/repo/pull/1",
-      prState: "open",
-      hasMergeConflicts: true,
-    });
-    const { context } = createContext(environment);
-    await isolateCodexBinaryLookup(context);
-    const commands = createCommandRegistry();
+  test(
+    "renames the running container git branch and advances stored branch",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-rename",
+        environmentType: "containerized",
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
+        pendingAgentLaunch: true,
+        initialAgentModel: "gpt-5.6-sol",
+        initialReasoningEffort: "high",
+        branch: "old-branch",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      const { context } = createContext(environment);
+      await isolateCodexBinaryLookup(context);
+      const commands = createCommandRegistry();
 
-    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      await withFakeDocker(
-        `#!/bin/sh
+      await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+        await withFakeDocker(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 fi
 exit 0
 `,
-        async (logs) => {
-          await expect(
-            commands.get("rename_environment_from_prompt")?.(
-              { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-              context,
-            ),
-          ).resolves.toBeUndefined();
+          async (logs) => {
+            await expect(
+              commands.get("rename_environment_from_prompt")?.(
+                { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+                context,
+              ),
+            ).resolves.toBeUndefined();
 
-          expect(environment.name).toBe("review-oauth-flow");
-          expect(environment.branch).toBe("review-oauth-flow-envcontainer-r1");
-          expect(environment.prUrl).toBeNull();
+            expect(environment.name).toBe("review-oauth-flow");
+            expect(environment.branch).toBe("review-oauth-flow-envcontainer-r1");
+            expect(environment.prUrl).toBeNull();
 
-          const execLog = await fs.readFile(logs.exec, "utf8");
-          expect(execLog).toContain(
-            "git -C /workspace branch -m -- 'old-branch' 'review-oauth-flow-envcontainer-r1'",
-          );
-          expect(execLog).toContain("git -C /workspace config --local push.default current");
-          expect(execLog).toContain("git -C /workspace config --local push.autoSetupRemote true");
-          // The upstream the rename carried over from the old name has to go, or the
-          // renamed branch keeps comparing itself against origin/old-branch.
-          expect(execLog).toContain(
-            "git -C /workspace config --local --unset-all 'branch.review-oauth-flow-envcontainer-r1.merge'",
-          );
-          expect(execLog).toContain(
-            "git -C /workspace config --local --unset-all 'branch.review-oauth-flow-envcontainer-r1.remote'",
-          );
-          // Nothing may pre-create an upstream for a branch that has never been pushed.
-          expect(execLog).not.toContain(
-            "config --local 'branch.review-oauth-flow-envcontainer-r1.merge' 'refs/heads/review-oauth-flow-envcontainer-r1'",
-          );
-        },
-      );
-    });
-  });
+            const execLog = await fs.readFile(logs.exec, "utf8");
+            expect(execLog).toContain(
+              "git -C /workspace branch -m -- 'old-branch' 'review-oauth-flow-envcontainer-r1'",
+            );
+            expect(execLog).toContain("git -C /workspace config --local push.default current");
+            expect(execLog).toContain("git -C /workspace config --local push.autoSetupRemote true");
+            // The upstream the rename carried over from the old name has to go, or the
+            // renamed branch keeps comparing itself against origin/old-branch.
+            expect(execLog).toContain(
+              "git -C /workspace config --local --unset-all 'branch.review-oauth-flow-envcontainer-r1.merge'",
+            );
+            expect(execLog).toContain(
+              "git -C /workspace config --local --unset-all 'branch.review-oauth-flow-envcontainer-r1.remote'",
+            );
+            // Nothing may pre-create an upstream for a branch that has never been pushed.
+            expect(execLog).not.toContain(
+              "config --local 'branch.review-oauth-flow-envcontainer-r1.merge' 'refs/heads/review-oauth-flow-envcontainer-r1'",
+            );
+          },
+        );
+      });
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("rolls back a container rename when push configuration fails", async () => {
     const environment = createEnvironment({
@@ -1727,26 +1735,28 @@ exit 0
     });
   });
 
-  test("advances storage after push configuration and container rollback both fail", async () => {
-    const environment = createEnvironment({
-      id: "env-container-rename-rollback-failure",
-      environmentType: "containerized",
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-      branch: "old-branch",
-      prUrl: "https://github.com/acme/repo/pull/1",
-      prState: "open",
-      hasMergeConflicts: true,
-    });
-    const { context } = createContext(environment);
-    await isolateCodexBinaryLookup(context);
-    const commands = createCommandRegistry();
+  test(
+    "advances storage after push configuration and container rollback both fail",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-rename-rollback-failure",
+        environmentType: "containerized",
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
+        branch: "old-branch",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      const { context } = createContext(environment);
+      await isolateCodexBinaryLookup(context);
+      const commands = createCommandRegistry();
 
-    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      // Only the new branch resolves, so the rename is the state that survived.
-      await withFakeDocker(
-        `#!/bin/sh
+      await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+        // Only the new branch resolves, so the rename is the state that survived.
+        await withFakeDocker(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
@@ -1760,54 +1770,58 @@ if [ "$1" = "exec" ]; then
 fi
 exit 0
 `,
-        async (logs) => {
-          await expect(
-            commands.get("rename_environment_from_prompt")?.(
-              { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-              context,
-            ),
-          ).resolves.toBeUndefined();
+          async (logs) => {
+            await expect(
+              commands.get("rename_environment_from_prompt")?.(
+                { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+                context,
+              ),
+            ).resolves.toBeUndefined();
 
-          expect(environment.branch).toBe("review-oauth-flow-envcontainer-r1");
-          expect(environment.prUrl).toBeNull();
-          expect(environment.prState).toBeNull();
-          expect(environment.hasMergeConflicts).toBeNull();
+            expect(environment.branch).toBe("review-oauth-flow-envcontainer-r1");
+            expect(environment.prUrl).toBeNull();
+            expect(environment.prState).toBeNull();
+            expect(environment.hasMergeConflicts).toBeNull();
 
-          const execCalls = (await fs.readFile(logs.exec, "utf8")).trim().split("\n");
-          expect(execCalls).toHaveLength(5);
-          expect(execCalls[2]).toContain(
-            "git -C /workspace branch -m -- 'review-oauth-flow-envcontainer-r1' 'old-branch'",
-          );
-          expect(execCalls[3]).toContain(
-            "rev-parse --verify --quiet 'refs/heads/review-oauth-flow-envcontainer-r1'",
-          );
-          expect(execCalls[4]).toContain("rev-parse --verify --quiet 'refs/heads/old-branch'");
-        },
-      );
-    });
-  });
+            const execCalls = (await fs.readFile(logs.exec, "utf8")).trim().split("\n");
+            expect(execCalls).toHaveLength(5);
+            expect(execCalls[2]).toContain(
+              "git -C /workspace branch -m -- 'review-oauth-flow-envcontainer-r1' 'old-branch'",
+            );
+            expect(execCalls[3]).toContain(
+              "rev-parse --verify --quiet 'refs/heads/review-oauth-flow-envcontainer-r1'",
+            );
+            expect(execCalls[4]).toContain("rev-parse --verify --quiet 'refs/heads/old-branch'");
+          },
+        );
+      });
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
-  test("keeps the stored branch when a container rollback outcome cannot be established", async () => {
-    const environment = createEnvironment({
-      id: "env-container-rename-rollback-unverifiable",
-      environmentType: "containerized",
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-      branch: "old-branch",
-      prUrl: "https://github.com/acme/repo/pull/1",
-      prState: "open",
-      hasMergeConflicts: true,
-    });
-    const { context } = createContext(environment);
-    await isolateCodexBinaryLookup(context);
-    const commands = createCommandRegistry();
+  test(
+    "keeps the stored branch when a container rollback outcome cannot be established",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-rename-rollback-unverifiable",
+        environmentType: "containerized",
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
+        branch: "old-branch",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      const { context } = createContext(environment);
+      await isolateCodexBinaryLookup(context);
+      const commands = createCommandRegistry();
 
-    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      // Both names resolve, so the rollback may well have landed; clearing the PR
-      // metadata on that guess is not recoverable, and keeping the branch is.
-      await withFakeDocker(
-        `#!/bin/sh
+      await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+        // Both names resolve, so the rollback may well have landed; clearing the PR
+        // metadata on that guess is not recoverable, and keeping the branch is.
+        await withFakeDocker(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
@@ -1820,23 +1834,25 @@ if [ "$1" = "exec" ]; then
 fi
 exit 0
 `,
-        async () => {
-          await expect(
-            commands.get("rename_environment_from_prompt")?.(
-              { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-              context,
-            ),
-          ).resolves.toBeUndefined();
+          async () => {
+            await expect(
+              commands.get("rename_environment_from_prompt")?.(
+                { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+                context,
+              ),
+            ).resolves.toBeUndefined();
 
-          expect(environment.name).toBe("review-oauth-flow");
-          expect(environment.branch).toBe("old-branch");
-          expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
-          expect(environment.prState).toBe("open");
-          expect(environment.hasMergeConflicts).toBe(true);
-        },
-      );
-    });
-  });
+            expect(environment.name).toBe("review-oauth-flow");
+            expect(environment.branch).toBe("old-branch");
+            expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
+            expect(environment.prState).toBe("open");
+            expect(environment.hasMergeConflicts).toBe(true);
+          },
+        );
+      });
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("keeps the stored branch when a container rollback fails and the container is unreachable", async () => {
     const environment = createEnvironment({

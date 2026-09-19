@@ -47,3 +47,14 @@
   queued fakes rather than plain shim latency. The isolated file takes 31.7 s in
   total with no single case near 5 s, so recording which stubbed command actually
   answered distinguishes the two before any budget is raised.
+- **Recurrence and resolution (2026-09-19):** `mise run test` reported five more
+  five-second fixture-shim timeouts: `reports a queued container PR as pending
+  when the captured PR remains open` (5,002.71 ms) plus four branch-rename cases
+  in `commands-registry-environments-create.test.ts` (5,001.29–5,002.76 ms).
+  Their owning files passed alone in 22.1 s and 30.9 s respectively. The tests
+  now use the shared 30-second `ASYNC_TEST_BUDGET_MS`, so their real shim work
+  can finish and any shared wait helper can report its named failure instead of
+  Bun terminating the test at five seconds. A combined focused rerun of the
+  changed root files passed in 58.2 s, then `mise run test` passed all four
+  groups under the full eight-worker host budget in 142.3 s. A subsequent
+  `mise run test:all` also passed those groups and the iOS group.

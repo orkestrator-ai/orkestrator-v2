@@ -190,6 +190,8 @@ export type MultiReviewFixSession = MultiReviewSession;
 export type MultiReviewWorktreeSnapshot = ReviewWorktreeSnapshotRecord;
 
 export interface MultiReviewWorkflow {
+  /** Launch the ordinary Fix handoff after successful consolidation; absent means off. */
+  autoFix?: boolean;
   version: typeof MULTI_REVIEW_WORKFLOW_VERSION;
   controller: "backend";
   /** Backend-only storage lease fence. Renderer responses omit it. */
@@ -277,6 +279,8 @@ export interface MultiReviewWorkflow {
 }
 
 export interface StartMultiReviewInput {
+  /** Launch the ordinary Fix handoff after successful consolidation; absent means off. */
+  autoFix?: boolean;
   environmentId: string;
   projectId: string;
   targetBranch: string;
@@ -289,6 +293,8 @@ export interface StartMultiReviewInput {
 
 /** Complete environment button action. Selections are the launch dialog's exact rows. */
 export interface LaunchMultiReviewActionInput {
+  /** Launch the ordinary Fix handoff after successful consolidation; omitted uses saved defaults. */
+  autoFix?: boolean;
   requestId: string;
   environmentId: string;
   reviewers: MultiReviewModelSelection[];
@@ -328,6 +334,7 @@ export function isLaunchMultiReviewActionInput(
       "fixModel",
       "targetBranch",
       "reviewInstruction",
+      "autoFix",
     ]) &&
     nonBlank(value.requestId, 256) &&
     (!hasReviewInstruction ||
@@ -343,6 +350,7 @@ export function isLaunchMultiReviewActionInput(
       reviewers: value.reviewers,
       reviewModel: value.reviewModel,
       fixModel: value.fixModel,
+      autoFix: value.autoFix,
     })
   );
 }
@@ -378,6 +386,7 @@ export function isStartMultiReviewInput(value: unknown): value is StartMultiRevi
       "projectId",
       "targetBranch",
       "reviewInstruction",
+      "autoFix",
       "reviewers",
       "reviewModel",
       "fixModel",
@@ -386,6 +395,7 @@ export function isStartMultiReviewInput(value: unknown): value is StartMultiRevi
     !nonBlank(value.projectId) ||
     !isSafeLoopedReviewTargetBranch(value.targetBranch) ||
     getReviewInstructionValidationError(value.reviewInstruction) !== null ||
+    (value.autoFix !== undefined && typeof value.autoFix !== "boolean") ||
     !Array.isArray(value.reviewers) ||
     value.reviewers.length < MULTI_REVIEW_MIN_REVIEWERS ||
     value.reviewers.length > MULTI_REVIEW_MAX_REVIEWERS ||
@@ -600,6 +610,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "projectId",
       "targetBranch",
       "reviewInstruction",
+      "autoFix",
       "reviewers",
       "reviewModel",
       "reviewSessionKey",
@@ -641,6 +652,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     !nonBlank(value.projectId) ||
     !isSafeLoopedReviewTargetBranch(value.targetBranch) ||
     getReviewInstructionValidationError(value.reviewInstruction) !== null ||
+    (value.autoFix !== undefined && typeof value.autoFix !== "boolean") ||
     !PHASES.has(value.phase as MultiReviewPhase) ||
     !Array.isArray(value.reviewers) ||
     value.reviewers.length < MULTI_REVIEW_MIN_REVIEWERS ||

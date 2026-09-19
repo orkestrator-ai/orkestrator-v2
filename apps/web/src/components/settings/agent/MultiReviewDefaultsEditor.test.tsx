@@ -108,6 +108,43 @@ function SettingsHarness({
 }
 
 describe("MultiReviewDefaultsEditor Fast defaults", () => {
+  test("toggles auto-fix and retains it when changing the reviewer count", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+    render(<SettingsHarness canInherit={false} onChange={onChange} />);
+    const checkbox = screen.getByRole("checkbox", { name: "Auto-fix" });
+    expect(checkbox.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(checkbox);
+    expect(onChange.mock.calls.at(-1)?.[0].multiReview?.autoFix).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Use one more reviewer" }));
+    expect(onChange.mock.calls.at(-1)?.[0].multiReview).toEqual({
+      autoFix: true,
+      reviewerCount: 3,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Use one fewer reviewer" }));
+    expect(onChange.mock.calls.at(-1)?.[0].multiReview).toEqual({ autoFix: true });
+    fireEvent.click(checkbox);
+    expect(onChange.mock.calls.at(-1)?.[0].multiReview?.autoFix).toBe(false);
+  });
+
+  test("shows the edited tier instead of an inherited auto-fix value", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+    render(
+      <MultiReviewDefaultsEditor
+        tier={{}}
+        onChange={onChange}
+        tiers={{ global: { multiReview: { autoFix: true } }, repository: {} }}
+        canInherit
+        enabledPlatforms={["claude", "codex"]}
+        catalog={catalog}
+      />,
+    );
+
+    const checkbox = screen.getByRole("checkbox", { name: "Auto-fix" });
+    expect(checkbox.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(checkbox);
+    expect(onChange.mock.calls.at(-1)?.[0].multiReview?.autoFix).toBe(true);
+  });
+
   test("says feature and ticket builds use the same reviewer count", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
     render(<SettingsHarness canInherit={false} onChange={onChange} />);

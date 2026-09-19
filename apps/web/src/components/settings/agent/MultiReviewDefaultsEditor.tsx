@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { Minus, Plus, RotateCcw } from "lucide-react";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
@@ -88,6 +89,7 @@ function withReviewerCount(tier: AgentSettingsTier, reviewerCount: number): Agen
     additionalCount,
   );
   const multiReview = {
+    ...(tier.multiReview?.autoFix !== undefined ? { autoFix: tier.multiReview.autoFix } : {}),
     ...(reviewerCount !== DEFAULT_MULTI_REVIEW_REVIEWER_COUNT ? { reviewerCount } : {}),
     ...(additionalReviewers.length > 0 ? { additionalReviewers } : {}),
   };
@@ -344,6 +346,25 @@ export function MultiReviewDefaultsEditor({
             <Plus className="size-3.5" />
           </Button>
         </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="multi-review-auto-fix"
+            checked={tier.multiReview?.autoFix ?? false}
+            disabled={disabled}
+            onCheckedChange={(checked) =>
+              onChange({ ...tier, multiReview: { ...tier.multiReview, autoFix: checked === true } })
+            }
+            aria-describedby="multi-review-auto-fix-description"
+          />
+          <Label htmlFor="multi-review-auto-fix">Auto-fix</Label>
+        </div>
+        <p id="multi-review-auto-fix-description" className="text-xs text-muted-foreground">
+          Automatically start Fix after a manual Multi Review consolidates, addressing the report’s
+          issues and coverage gaps.
+        </p>
       </div>
 
       <div

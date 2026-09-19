@@ -231,6 +231,21 @@ function fixStepHasStarted(workflow: MultiReviewWorkflow): boolean {
   );
 }
 
+function queueDefaultFix(workflow: MultiReviewWorkflow): void {
+  workflow.phase = "interactive";
+  workflow.fixLaunch = { kind: "default" };
+  workflow.addressPromptPending = true;
+  workflow.addressPromptAttempts = 0;
+  workflow.addressSessionKey = `multi-review:${workflow.id}:interactive`;
+  workflow.addressRequestId = `multi-review-address:${workflow.id}`;
+  workflow.addressTabId = workflow.fixTabId ?? `multi-review-fix:${workflow.id}`;
+  delete workflow.customFixInstruction;
+  delete workflow.customFixModel;
+  delete workflow.presentationError;
+  delete workflow.activeRequest;
+  delete workflow.error;
+}
+
 function queueRestartedFix(workflow: MultiReviewWorkflow): void {
   const launch = workflow.fixLaunch ?? { kind: "default" as const };
   workflow.fixLaunch = launch;
@@ -536,6 +551,7 @@ export class MultiReviewService {
       environmentId: input.environmentId,
       projectId: input.projectId,
       targetBranch: input.targetBranch,
+      autoFix: input.autoFix ?? false,
       ...(input.reviewInstruction ? { reviewInstruction: input.reviewInstruction } : {}),
       reviewers: reviewers.map((selection) => ({
         id: randomUUID(),
@@ -592,18 +608,7 @@ export class MultiReviewService {
         // supervisor adopts the idle consolidation session and dispatches the
         // prompt from `advance`; a renderer can disappear immediately after this
         // save without delaying or losing the work.
-        workflow.phase = "interactive";
-        workflow.fixLaunch = { kind: "default" };
-        workflow.addressPromptPending = true;
-        workflow.addressPromptAttempts = 0;
-        workflow.addressSessionKey = `multi-review:${workflow.id}:interactive`;
-        workflow.addressRequestId = `multi-review-address:${workflow.id}`;
-        workflow.addressTabId = workflow.fixTabId ?? `multi-review-fix:${workflow.id}`;
-        delete workflow.customFixInstruction;
-        delete workflow.customFixModel;
-        delete workflow.presentationError;
-        delete workflow.activeRequest;
-        delete workflow.error;
+        queueDefaultFix(workflow);
         const saved = await this.save(workflow, token);
         this.addressDispatchRetryAt.delete(workflow.id);
         this.foregroundAddressDispatches.add(workflow.id);
@@ -2603,6 +2608,14 @@ export class MultiReviewService {
       if (workflow.restartFixAfterConsolidation) {
         delete workflow.restartFixAfterConsolidation;
         queueRestartedFix(workflow);
+      } else if (
+        workflow.autoFix &&
+        (workflow.consolidatedReport.issues.length > 0 ||
+          workflow.consolidatedReport.testCoverageGaps.length > 0)
+      ) {
+        // Save the report and fix intent atomically, so a restart cannot lose
+        // the handoff or send it twice. The supervisor owns delivery.
+        queueDefaultFix(workflow);
       } else {
         workflow.phase = "ready";
       }

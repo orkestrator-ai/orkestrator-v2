@@ -373,6 +373,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const fixReviewIssuesLaunchDefaults = configuredLaunchDialogDefaultsFor("fixReviewIssues");
   const prLaunchDefaults = launchDialogDefaultsFor("pr");
   const resolveLaunchDefaults = launchDialogDefaultsFor("resolve");
+  const multiReviewAutoFix = config.global.agentSettings?.multiReview?.autoFix ?? false;
   const storedReviewerCount =
     config.global.agentSettings?.multiReview?.reviewerCount ?? DEFAULT_MULTI_REVIEW_REVIEWER_COUNT;
   const multiReviewReviewerCount = Math.min(
@@ -409,6 +410,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     isRunning,
     multiReviewLaunchPending,
     multiReviewReviewerDefaults,
+    multiReviewAutoFix,
     reviewLaunchDefaults,
     reviewPreparationLaunchDefaults,
     reviewModelCatalog,
@@ -424,6 +426,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     isRunning,
     multiReviewLaunchPending,
     multiReviewReviewerDefaults,
+    multiReviewAutoFix,
     reviewLaunchDefaults,
     reviewPreparationLaunchDefaults,
     reviewModelCatalog,
@@ -468,6 +471,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           preferredModels: state.reviewLaunchDefaults.preferredModels,
           preferredReasoningEfforts: state.reviewLaunchDefaults.preferredReasoningEfforts,
           preferredFastModes: state.reviewLaunchDefaults.preferredFastModes,
+          defaultAutoFix: state.multiReviewAutoFix,
           reviewerDefaults: state.multiReviewReviewerDefaults,
           reviewModelDefaults: state.reviewPreparationLaunchDefaults,
           fixModelDefaults: state.fixReviewIssuesLaunchDefaults,
@@ -884,6 +888,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                             preferredReasoningEfforts:
                               reviewLaunchDefaults.preferredReasoningEfforts,
                             preferredFastModes: reviewLaunchDefaults.preferredFastModes,
+                            defaultAutoFix: multiReviewAutoFix,
                             reviewerDefaults: multiReviewReviewerDefaults,
                             reviewModelDefaults: reviewPreparationLaunchDefaults,
                             fixModelDefaults: fixReviewIssuesLaunchDefaults,
@@ -1473,6 +1478,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         preferredModels={reviewLaunchDefaults.preferredModels}
         preferredReasoningEfforts={reviewLaunchDefaults.preferredReasoningEfforts}
         preferredFastModes={reviewLaunchDefaults.preferredFastModes}
+        defaultAutoFix={multiReviewAutoFix}
         reviewerDefaults={multiReviewReviewerDefaults}
         reviewModelDefaults={reviewPreparationLaunchDefaults}
         fixModelDefaults={fixReviewIssuesLaunchDefaults}

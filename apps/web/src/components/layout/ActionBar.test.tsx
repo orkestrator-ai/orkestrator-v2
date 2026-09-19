@@ -4208,6 +4208,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
     currentWorkspaceReady = true;
+    currentMultiReviewSettings = { autoFix: true };
     render(<ActionBar />);
 
     const toolbarButtons = screen.getAllByRole("button");
@@ -4220,6 +4221,11 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.blur(multiReviewButton);
     fireEvent.contextMenu(multiReviewButton);
     expect(screen.getByRole("dialog", { name: "Configure Multi Review" })).toBeTruthy();
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Auto-fix after consolidation" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
     expect(startMultiReviewMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -4232,6 +4238,7 @@ describe("ActionBar workflow tabs", () => {
           environmentId: "env-1",
           projectId: "project-1",
           targetBranch: "main",
+          autoFix: true,
           reviewers: expect.arrayContaining([
             expect.objectContaining({ agent: "codex", model: expect.any(String) }),
           ]),
@@ -4244,6 +4251,27 @@ describe("ActionBar workflow tabs", () => {
       displayTitle: "Multi Review",
     });
     expect(installMultiReviewWorkflowMock).toHaveBeenCalledWith(startedMultiReview);
+  });
+
+  test("right-click Multi Review can override auto-fix for one launch", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    currentMultiReviewSettings = { autoFix: true };
+    render(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Auto-fix after consolidation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+    await waitFor(() =>
+      expect(startMultiReviewMock).toHaveBeenCalledWith(
+        expect.objectContaining({ autoFix: false }),
+      ),
+    );
+    expect(currentMultiReviewSettings.autoFix).toBe(true);
   });
 
   test("opens Multi Review settings on mobile long press without launching defaults", async () => {

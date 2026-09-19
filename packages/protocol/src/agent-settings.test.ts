@@ -227,6 +227,24 @@ describe("resolveActionDefaults", () => {
 });
 
 describe("resolveMultiReviewSettings", () => {
+  test("auto-fix defaults off and preserves an explicit false override", () => {
+    expect(resolveMultiReviewSettings({}).autoFix).toBe(false);
+    const global = { multiReview: { autoFix: true } };
+    expect(resolveMultiReviewSettings({ global }).autoFix).toBe(true);
+    expect(
+      resolveMultiReviewSettings({ global, repository: { multiReview: { autoFix: false } } })
+        .autoFix,
+    ).toBe(false);
+    for (const autoFix of [true, false]) {
+      const normalized = normalizeAgentSettings({ multiReview: { autoFix } });
+      expect(normalized.multiReview).toEqual({ autoFix });
+      expect(isEmptyAgentSettings(normalized)).toBe(false);
+    }
+    expect(
+      normalizeAgentSettings({ multiReview: { autoFix: "true" } }).multiReview,
+    ).toBeUndefined();
+  });
+
   test("resolves count and reviewer rows from the narrowest tier that sets each field", () => {
     expect(
       resolveMultiReviewSettings({
@@ -237,6 +255,7 @@ describe("resolveMultiReviewSettings", () => {
         global: { multiReview: { reviewerCount: 4 } },
       }),
     ).toEqual({
+      autoFix: false,
       reviewerCount: 3,
       additionalReviewers: [{ platform: "codex", model: "gpt-5.6" }],
     });

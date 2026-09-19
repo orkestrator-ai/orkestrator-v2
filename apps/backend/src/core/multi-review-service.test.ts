@@ -803,67 +803,159 @@ test("MultiReviewService fails recoverably when the consolidation session is mis
   );
 });
 
-test("MultiReviewService dispatches a durable address intent without a renderer", async () => {
+test.each([undefined, false, true])(
+  "MultiReviewService snapshots auto-fix opt-in independently of saved defaults (%s)",
+  async (autoFix) => {
+    const provider = new Provider();
+    provider.reviewerReport = consolidatedReport;
+    let dispatches = 0;
+    await withService(
+      "env-auto-fix-default",
+      provider,
+      async ({ service, storage, start, snapshot }) => {
+        const config = await storage.loadConfig();
+        await storage.updateGlobalConfig({
+          ...config.global,
+          agentSettings: { multiReview: { autoFix: true } },
+        });
+        const started = await start();
+        expect(started.autoFix).toBe(autoFix ?? false);
+        // Later settings edits must not change a launched review's authorization.
+        await storage.updateGlobalConfig({
+          ...config.global,
+          agentSettings: { multiReview: { autoFix: false } },
+        });
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          const workflow = await snapshot(started.id);
+          return autoFix !== true
+            ? workflow?.phase === "ready"
+            : workflow?.phase === "interactive" && !workflow.addressPromptPending;
+        });
+        await service.advanceNow(started.id);
+        expect(dispatches).toBe(autoFix !== true ? 0 : 1);
+        expect((await snapshot(started.id))?.autoFix).toBe(autoFix ?? false);
+      },
+      {
+        packageFlow: true,
+        autoFix,
+        serviceOptions: {
+          dispatchAddressPrompt: async () => {
+            dispatches += 1;
+          },
+        },
+      },
+    );
+  },
+);
+
+test("MultiReviewService does not auto-fix a clean consolidated report", async () => {
   const provider = new Provider();
-  let releaseDispatch!: () => void;
-  const dispatchGate = new Promise<void>((resolve) => {
-    releaseDispatch = resolve;
-  });
-  let dispatchStarted!: () => void;
-  const startedDispatch = new Promise<void>((resolve) => {
-    dispatchStarted = resolve;
-  });
-  const dispatched: MultiReviewWorkflow[] = [];
+  provider.consolidationReport = cleanReport;
+  let dispatches = 0;
   await withService(
-    "env-address-backend",
+    "env-auto-fix-clean",
     provider,
-    async ({ service, start, snapshot, storage }) => {
+    async ({ service, start, snapshot }) => {
       const started = await start();
       await waitUntil(async () => {
         await service.advanceNow(started.id);
         return (await snapshot(started.id))?.phase === "ready";
       });
 
-      const addressed = await service.address(started.id);
-      expect(addressed).toMatchObject({ phase: "interactive", addressPromptPending: true });
-      await startedDispatch;
-      // The backend callback is already running, while the command has returned
-      // and the authoritative intent remains recoverable.
-      expect((await snapshot(started.id))?.addressPromptPending).toBe(true);
-      expect(await storage.getEnvironment("env-address-backend")).toMatchObject({
-        agentActivitySources: { "multi-review": { state: "working" } },
-      });
-
-      releaseDispatch();
-      await waitUntil(async () => {
-        const [workflow, environment] = await Promise.all([
-          snapshot(started.id),
-          storage.getEnvironment("env-address-backend"),
-        ]);
-        return (
-          workflow?.addressPromptPending !== true &&
-          environment?.agentActivitySources?.["multi-review"]?.state === "idle"
-        );
-      });
-      expect(dispatched).toHaveLength(1);
-      expect((await snapshot(started.id))?.stepRuntimes?.fix).toMatchObject({
-        startedAt: expect.any(String),
-      });
-      expect(await storage.getEnvironment("env-address-backend")).toMatchObject({
-        agentActivitySources: { "multi-review": { state: "idle" } },
-      });
+      const ready = (await snapshot(started.id))!;
+      expect(ready.autoFix).toBe(true);
+      expect(ready.consolidatedReport).toMatchObject({ issues: [], testCoverageGaps: [] });
+      expect(ready.addressPromptPending).toBeUndefined();
+      expect(dispatches).toBe(0);
     },
     {
+      autoFix: true,
+      packageFlow: true,
       serviceOptions: {
-        dispatchAddressPrompt: async (workflow) => {
-          dispatched.push(workflow);
-          dispatchStarted();
-          await dispatchGate;
+        dispatchAddressPrompt: async () => {
+          dispatches += 1;
         },
       },
     },
   );
 });
+
+test.each([false, true])(
+  "MultiReviewService dispatches a durable address intent without a renderer (auto-fix %s)",
+  async (autoFix) => {
+    const provider = new Provider();
+    provider.reviewerReport = consolidatedReport;
+    let releaseDispatch!: () => void;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    let dispatchStarted!: () => void;
+    const startedDispatch = new Promise<void>((resolve) => {
+      dispatchStarted = resolve;
+    });
+    const dispatched: MultiReviewWorkflow[] = [];
+    await withService(
+      "env-address-backend",
+      provider,
+      async ({ service, start, snapshot, storage }) => {
+        const started = await start();
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.phase === (autoFix ? "interactive" : "ready");
+        });
+
+        const addressed = autoFix
+          ? (await snapshot(started.id))!
+          : await service.address(started.id);
+        if (autoFix) void service.advanceNow(started.id);
+        expect(addressed).toMatchObject({ phase: "interactive", addressPromptPending: true });
+        await startedDispatch;
+        // The backend callback is already running, while the command has returned
+        // and the authoritative intent remains recoverable.
+        expect((await snapshot(started.id))?.addressPromptPending).toBe(true);
+        expect(await storage.getEnvironment("env-address-backend")).toMatchObject({
+          agentActivitySources: { "multi-review": { state: "working" } },
+        });
+
+        releaseDispatch();
+        await waitUntil(async () => {
+          const [workflow, environment] = await Promise.all([
+            snapshot(started.id),
+            storage.getEnvironment("env-address-backend"),
+          ]);
+          return (
+            workflow?.addressPromptPending !== true &&
+            environment?.agentActivitySources?.["multi-review"]?.state === "idle"
+          );
+        });
+        expect(dispatched).toHaveLength(1);
+        expect(dispatched[0]?.consolidatedReport?.issues).toHaveLength(1);
+        expect(dispatched[0]?.consolidatedReport?.testCoverageGaps).toHaveLength(1);
+        await service.advanceNow(started.id);
+        await service.address(started.id);
+        expect(dispatched).toHaveLength(1);
+        expect((await snapshot(started.id))?.stepRuntimes?.fix).toMatchObject({
+          startedAt: expect.any(String),
+        });
+        expect(await storage.getEnvironment("env-address-backend")).toMatchObject({
+          agentActivitySources: { "multi-review": { state: "idle" } },
+        });
+      },
+      {
+        autoFix,
+        packageFlow: autoFix,
+        serviceOptions: {
+          dispatchAddressPrompt: async (workflow) => {
+            dispatched.push(workflow);
+            dispatchStarted();
+            await dispatchGate;
+          },
+        },
+      },
+    );
+  },
+);
 
 test("MultiReviewService persists a seeded replacement for a missing interactive Fix session", async () => {
   const provider = new Provider();
@@ -1251,140 +1343,164 @@ test("MultiReviewService honors address backoff and resumes a transient failure 
   );
 });
 
-test("MultiReviewService bounds permanent address failures and retires activity", async () => {
-  const provider = new Provider();
-  let dispatches = 0;
-  await withService(
-    "env-address-permanent",
-    provider,
-    async ({ service, storage, start, snapshot }) => {
-      const started = await start();
-      await waitUntil(async () => {
-        await service.advanceNow(started.id);
-        return (await snapshot(started.id))?.phase === "ready";
-      });
-
-      await service.address(started.id);
-      await waitUntil(async () => {
-        await service.advanceNow(started.id);
-        return (await snapshot(started.id))?.phase === "failed";
-      });
-      expect(dispatches).toBe(3);
-      expect(await snapshot(started.id)).toMatchObject({
-        phase: "failed",
-        error: "credentials are invalid",
-      });
-      expect((await snapshot(started.id))?.addressPromptPending).toBeUndefined();
-      expect(await storage.getEnvironment("env-address-permanent")).toMatchObject({
-        agentActivitySources: { "multi-review": { state: "idle" } },
-      });
-    },
-    {
-      serviceOptions: {
-        addressDispatchRetryMs: 0,
-        maxAddressDispatchAttempts: 3,
-        dispatchAddressPrompt: async () => {
-          dispatches += 1;
-          throw new Error("credentials are invalid");
-        },
-      },
-    },
-  );
-});
-
-test("MultiReviewService resumes a persisted address attempt after restart", async () => {
-  const provider = new Provider();
-  let dispatches = 0;
-  const activationRequests: boolean[] = [];
-  await withService(
-    "env-address-restart",
-    provider,
-    async ({ service, storage, start, snapshot }) => {
-      const started = await start();
-      await waitUntil(async () => {
-        await service.advanceNow(started.id);
-        return (await snapshot(started.id))?.phase === "ready";
-      });
-      await storage.savePaneLayout(
-        started.environmentId,
-        {
-          version: PANE_LAYOUT_VERSION,
-          containerId: null,
-          activePaneId: "default",
-          root: {
-            kind: "leaf",
-            id: "default",
-            tabs: [{ id: "stay-active", type: "plain" }],
-            activeTabId: "stay-active",
-          },
-        },
-        0,
-      );
-      await service.address(started.id);
-      await waitUntil(async () => (await snapshot(started.id))?.addressPromptAttempts === 1);
-      await service.shutdown();
-
-      const restarted = new MultiReviewService(storage, stableReviewInvoker, {
-        autoAdvance: true,
-        pollIntervalMs: 5,
-        provider: async () => provider,
-        dispatchAddressPrompt: async (workflow, presentation) => {
-          dispatches += 1;
-          activationRequests.push(presentation.activateTab);
-          await storage.ensureNativeAgentJobTab({
-            environmentId: workflow.environmentId,
-            tabId: workflow.addressTabId ?? `multi-review-fix:${workflow.id}`,
-            agent: workflow.fixModel.agent,
-            providerSessionId: workflow.fixSession?.providerSessionId,
-            title: "Fix",
-            isReviewTab: true,
-            activate: presentation.activateTab,
+test.each([false, true])(
+  "MultiReviewService bounds permanent address failures and retry does not re-arm auto-fix (%s)",
+  async (autoFix) => {
+    const provider = new Provider();
+    provider.reviewerReport = consolidatedReport;
+    let dispatches = 0;
+    const environmentId = `env-address-permanent-${autoFix}`;
+    await withService(
+      environmentId,
+      provider,
+      async ({ service, storage, start, snapshot }) => {
+        const started = await start();
+        if (!autoFix) {
+          await waitUntil(async () => {
+            await service.advanceNow(started.id);
+            return (await snapshot(started.id))?.phase === "ready";
           });
-        },
-      });
-      try {
-        await restarted.init();
+          await service.address(started.id);
+        }
         await waitUntil(async () => {
-          const [workflow, environment] = await Promise.all([
-            snapshot(started.id),
-            storage.getEnvironment("env-address-restart"),
-          ]);
-          return (
-            workflow?.addressPromptPending !== true &&
-            environment?.agentActivitySources?.["multi-review"]?.state === "idle"
-          );
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.phase === "failed";
+        });
+        expect(dispatches).toBe(3);
+        expect(await snapshot(started.id)).toMatchObject({
+          phase: "failed",
+          autoFix,
+          error: "credentials are invalid",
         });
         expect((await snapshot(started.id))?.addressPromptPending).toBeUndefined();
-        expect(dispatches).toBe(2);
-        expect(activationRequests).toEqual([true, false]);
-        const layout = await storage.getPaneLayout(started.environmentId);
-        expect(layout?.root).toMatchObject({
-          kind: "leaf",
-          activeTabId: "stay-active",
-          tabs: [
-            { id: "stay-active" },
-            { id: `multi-review-fix:${started.id}`, type: "agent-native" },
-          ],
-        });
-        expect(await storage.getEnvironment("env-address-restart")).toMatchObject({
+        expect(await storage.getEnvironment(environmentId)).toMatchObject({
           agentActivitySources: { "multi-review": { state: "idle" } },
         });
-      } finally {
-        await restarted.shutdown();
-      }
-    },
-    {
-      serviceOptions: {
-        addressDispatchRetryMs: 60_000,
-        dispatchAddressPrompt: async (_workflow, presentation) => {
-          dispatches += 1;
-          activationRequests.push(presentation.activateTab);
-          throw new Error("temporary disconnect");
+
+        const retried = await service.retry(started.id);
+        expect(retried).toMatchObject({ phase: "ready", autoFix });
+        expect(retried.addressPromptPending).toBeUndefined();
+        await service.advanceNow(started.id);
+        expect(dispatches).toBe(3);
+      },
+      {
+        autoFix,
+        packageFlow: autoFix,
+        serviceOptions: {
+          addressDispatchRetryMs: 0,
+          maxAddressDispatchAttempts: 3,
+          dispatchAddressPrompt: async () => {
+            dispatches += 1;
+            throw new Error("credentials are invalid");
+          },
         },
       },
-    },
-  );
-});
+    );
+  },
+);
+
+test.each([false, true])(
+  "MultiReviewService resumes a persisted address attempt after restart (auto-fix %s)",
+  async (autoFix) => {
+    const provider = new Provider();
+    provider.reviewerReport = consolidatedReport;
+    let dispatches = 0;
+    const activationRequests: boolean[] = [];
+    await withService(
+      "env-address-restart",
+      provider,
+      async ({ service, storage, start, snapshot }) => {
+        const started = await start();
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.phase === (autoFix ? "interactive" : "ready");
+        });
+        await storage.savePaneLayout(
+          started.environmentId,
+          {
+            version: PANE_LAYOUT_VERSION,
+            containerId: null,
+            activePaneId: "default",
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [{ id: "stay-active", type: "plain" }],
+              activeTabId: "stay-active",
+            },
+          },
+          0,
+        );
+        if (autoFix) await service.advanceNow(started.id);
+        else await service.address(started.id);
+        await waitUntil(async () => (await snapshot(started.id))?.addressPromptAttempts === 1);
+        await service.shutdown();
+
+        const restarted = new MultiReviewService(storage, stableReviewInvoker, {
+          autoAdvance: true,
+          pollIntervalMs: 5,
+          provider: async () => provider,
+          dispatchAddressPrompt: async (workflow, presentation) => {
+            dispatches += 1;
+            activationRequests.push(presentation.activateTab);
+            await storage.ensureNativeAgentJobTab({
+              environmentId: workflow.environmentId,
+              tabId: workflow.addressTabId ?? `multi-review-fix:${workflow.id}`,
+              agent: workflow.fixModel.agent,
+              providerSessionId: workflow.fixSession?.providerSessionId,
+              title: "Fix",
+              isReviewTab: true,
+              activate: presentation.activateTab,
+            });
+          },
+        });
+        try {
+          await restarted.init();
+          await waitUntil(async () => {
+            const [workflow, environment] = await Promise.all([
+              snapshot(started.id),
+              storage.getEnvironment("env-address-restart"),
+            ]);
+            return (
+              workflow?.addressPromptPending !== true &&
+              environment?.agentActivitySources?.["multi-review"]?.state === "idle"
+            );
+          });
+          expect((await snapshot(started.id))?.addressPromptPending).toBeUndefined();
+          expect(dispatches).toBe(2);
+          expect(activationRequests).toEqual([!autoFix, false]);
+          await restarted.advanceNow(started.id);
+          expect(dispatches).toBe(2);
+          const layout = await storage.getPaneLayout(started.environmentId);
+          expect(layout?.root).toMatchObject({
+            kind: "leaf",
+            activeTabId: "stay-active",
+            tabs: [
+              { id: "stay-active" },
+              { id: `multi-review-fix:${started.id}`, type: "agent-native" },
+            ],
+          });
+          expect(await storage.getEnvironment("env-address-restart")).toMatchObject({
+            agentActivitySources: { "multi-review": { state: "idle" } },
+          });
+        } finally {
+          await restarted.shutdown();
+        }
+      },
+      {
+        autoFix,
+        packageFlow: autoFix,
+        serviceOptions: {
+          addressDispatchRetryMs: 60_000,
+          dispatchAddressPrompt: async (_workflow, presentation) => {
+            dispatches += 1;
+            activationRequests.push(presentation.activateTab);
+            throw new Error("temporary disconnect");
+          },
+        },
+      },
+    );
+  },
+);
 
 test("MultiReviewService leaves a pending address untouched after losing its fence", async () => {
   const provider = new Provider();
@@ -2038,6 +2154,7 @@ async function withService(
   }) => Promise<void>,
   options: {
     packageFlow?: boolean;
+    autoFix?: boolean;
     createProvider?: NonNullable<MultiReviewServiceOptions["provider"]>;
     serviceOptions?: Partial<MultiReviewServiceOptions>;
     /** Backend command runner; defaults to a stable clean review snapshot. */
@@ -2099,6 +2216,7 @@ async function withService(
           environmentId,
           projectId: "project-1",
           targetBranch: "main",
+          autoFix: options.autoFix,
           reviewers,
           fixModel,
         }),
@@ -4328,6 +4446,78 @@ test("MultiReviewService rewinds consolidation when a completed reviewer is rest
             startedAt: new Date().toISOString(),
           },
         }),
+      },
+    },
+  );
+});
+
+test("MultiReviewService gives restarted auto-fix a fresh durable identity", async () => {
+  const provider = new Provider();
+  provider.reviewerReport = consolidatedReport;
+  provider.idempotentSessionKeys = true;
+  const dispatches: Array<{
+    sessionKey: string;
+    requestId: string;
+    tabId: string;
+  }> = [];
+  await withService(
+    "env-restart-auto-fix",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (
+          dispatches.length === 1 && (await snapshot(started.id))?.addressPromptPending !== true
+        );
+      });
+      const first = dispatches[0]!;
+      expect(first).toEqual({
+        sessionKey: `multi-review:${started.id}:interactive`,
+        requestId: `multi-review-address:${started.id}`,
+        tabId: `multi-review-fix:${started.id}`,
+      });
+
+      const interactive = (await snapshot(started.id))!;
+      const restarted = await service.restartReviewer(started.id, interactive.reviewers[0]!.id);
+      expect(restarted.restartFixAfterConsolidation).toBe(true);
+      expect(restarted.phase).toBe("reviewing");
+
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (
+          dispatches.length === 2 && (await snapshot(started.id))?.addressPromptPending !== true
+        );
+      });
+      const replayed = dispatches[1]!;
+      expect(replayed.sessionKey).toStartWith(`multi-review:${started.id}:interactive:`);
+      expect(replayed.requestId).toStartWith(`multi-review-address:${started.id}:`);
+      expect(replayed.tabId).toStartWith(`multi-review-fix:${started.id}:`);
+      expect(replayed).not.toEqual(first);
+      expect((await snapshot(started.id))?.restartFixAfterConsolidation).toBeUndefined();
+    },
+    {
+      autoFix: true,
+      packageFlow: true,
+      serviceOptions: {
+        dispatchAddressPrompt: async (workflow) => {
+          dispatches.push({
+            sessionKey: workflow.addressSessionKey!,
+            requestId: workflow.addressRequestId!,
+            tabId: workflow.addressTabId!,
+          });
+          return {
+            tabId: workflow.addressTabId!,
+            fixSession: {
+              ...workflow.fixModel,
+              sessionKey: workflow.addressSessionKey!,
+              providerSessionId: `provider-auto-fix-${dispatches.length}`,
+              requestIds: [workflow.addressRequestId!],
+              status: "running",
+              startedAt: new Date().toISOString(),
+            },
+          };
+        },
       },
     },
   );

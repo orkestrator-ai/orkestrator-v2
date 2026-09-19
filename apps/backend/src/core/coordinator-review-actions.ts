@@ -98,6 +98,7 @@ export function registerCoordinatorReviewActions(register: CommandRegistrar): vo
         reviewers: input.reviewers,
         reviewModel: input.reviewModel,
         fixModel: input.fixModel,
+        autoFix: input.autoFix ?? config.global.agentSettings?.multiReview?.autoFix ?? false,
       };
       const reservedId = `action-${createHash("sha256").update(`${caller.coordinatorId}\0${input.requestId}`).digest("hex").slice(0, 32)}`;
       const payloadHash = actionHash({ action: "launch-multi-review", input });

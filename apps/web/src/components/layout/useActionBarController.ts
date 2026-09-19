@@ -904,6 +904,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           reviewers: selection.reviewers,
           reviewModel: selection.reviewModel,
           fixModel: selection.fixModel,
+          autoFix: selection.autoFix,
         });
         workflowId = workflow.id;
         useMultiReviewStore.getState().replaceWorkflow(workflow);

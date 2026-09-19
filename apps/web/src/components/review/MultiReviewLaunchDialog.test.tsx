@@ -305,6 +305,7 @@ describe("MultiReviewLaunchDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
     expect(onConfirm.mock.calls[0]?.[0]).toEqual({
+      autoFix: false,
       reviewers: [
         { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
         { agent: "cursor", model: "grok-4.6" },
@@ -344,6 +345,7 @@ describe("MultiReviewLaunchDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
     expect(onConfirm.mock.calls[0]?.[0]).toEqual({
+      autoFix: false,
       reviewers: [
         { agent: "claude", model: "opus", reasoningEffort: "high" },
         { agent: "codex", model: "gpt-5.6", reasoningEffort: "medium" },
@@ -614,6 +616,7 @@ describe("MultiReviewLaunchDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
     expect(onConfirm.mock.calls[0]?.[0]).toEqual({
+      autoFix: false,
       reviewers: [
         { agent: "claude", model: "opus" },
         { agent: "claude", model: "opus" },
@@ -650,6 +653,7 @@ describe("MultiReviewLaunchDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
     expect(onConfirm.mock.calls[0]?.[0]).toEqual({
+      autoFix: false,
       reviewers: [
         { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
         { agent: "claude", model: "opus" },
@@ -658,4 +662,51 @@ describe("MultiReviewLaunchDialog", () => {
       fixModel: { agent: "claude", model: "opus" },
     });
   });
+});
+
+describe("MultiReviewLaunchDialog auto-fix", () => {
+  test("plain launch uses the saved default and defaults off for old settings", () => {
+    expect(defaultMultiReviewLaunchSelection({ defaultAgent: "claude", catalog }).autoFix).toBe(
+      false,
+    );
+    expect(
+      defaultMultiReviewLaunchSelection({ defaultAgent: "claude", catalog, defaultAutoFix: true })
+        .autoFix,
+    ).toBe(true);
+  });
+
+  test.each([true, false])(
+    "can override saved auto-fix %s for one launch and resets on reopen",
+    (defaultAutoFix) => {
+      const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+      const props = {
+        defaultAgent: "claude" as const,
+        catalog,
+        defaultAutoFix,
+        onConfirm,
+        onOpenChange: () => undefined,
+      };
+      const { rerender } = render(<MultiReviewLaunchDialog {...props} open />);
+      const checkbox = screen.getByRole("checkbox", { name: "Auto-fix after consolidation" });
+      expect(checkbox.getAttribute("aria-checked")).toBe(String(defaultAutoFix));
+      fireEvent.click(checkbox);
+      // Catalogue/default refresh while open must not erase the user's choice.
+      rerender(<MultiReviewLaunchDialog {...props} catalog={{ ...catalog }} open />);
+      fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+      expect(onConfirm.mock.calls[0]?.[0].autoFix).toBe(!defaultAutoFix);
+      rerender(<MultiReviewLaunchDialog {...props} open={false} />);
+      rerender(<MultiReviewLaunchDialog {...props} open />);
+      expect(
+        screen
+          .getByRole("checkbox", { name: "Auto-fix after consolidation" })
+          .getAttribute("aria-checked"),
+      ).toBe(String(defaultAutoFix));
+      rerender(<MultiReviewLaunchDialog {...props} open busy />);
+      expect(
+        screen
+          .getByRole("checkbox", { name: "Auto-fix after consolidation" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+    },
+  );
 });

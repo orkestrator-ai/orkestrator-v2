@@ -32,6 +32,7 @@ import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realButton from "@/components/ui/button";
 import * as realPrMonitorService from "@/hooks/usePrMonitorService";
 import * as realGlobalActivityMonitor from "@/hooks/useGlobalActivityMonitor";
+import * as realNotificationSoundService from "@/hooks/useNotificationSoundService";
 import * as realHooks from "@/hooks";
 import * as realBackend from "@/lib/backend";
 import * as realLucideReact from "lucide-react";
@@ -51,6 +52,7 @@ const realAlertDialogSnapshot = { ...realAlertDialog };
 const realButtonSnapshot = { ...realButton };
 const realPrMonitorServiceSnapshot = { ...realPrMonitorService };
 const realGlobalActivityMonitorSnapshot = { ...realGlobalActivityMonitor };
+const realNotificationSoundServiceSnapshot = { ...realNotificationSoundService };
 const realHooksSnapshot = { ...realHooks };
 const realBackendSnapshot = { ...realBackend };
 const realLucideReactSnapshot = { ...realLucideReact };
@@ -211,6 +213,10 @@ mock.module("@/hooks/usePrMonitorService", () => ({
 
 mock.module("@/hooks/useGlobalActivityMonitor", () => ({
   useGlobalActivityMonitor: () => {},
+}));
+
+mock.module("@/hooks/useNotificationSoundService", () => ({
+  useNotificationSoundService: () => {},
 }));
 
 mock.module("@/hooks", () => ({
@@ -586,6 +592,7 @@ afterAll(() => {
   mock.module("@/components/ui/button", () => realButtonSnapshot);
   mock.module("@/hooks/usePrMonitorService", () => realPrMonitorServiceSnapshot);
   mock.module("@/hooks/useGlobalActivityMonitor", () => realGlobalActivityMonitorSnapshot);
+  mock.module("@/hooks/useNotificationSoundService", () => realNotificationSoundServiceSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("lucide-react", () => realLucideReactSnapshot);

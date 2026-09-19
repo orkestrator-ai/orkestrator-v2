@@ -73,6 +73,13 @@ describe("defaultConfig", () => {
     expectTypeOf<AppConfig["global"]["codexMaxConcurrentThreads"]>().toEqualTypeOf<number>();
   });
 
+  test("enables distinct completion sounds by default", () => {
+    expect(defaultConfig().global.notificationSounds).toEqual({
+      agentStopped: true,
+      prMerged: true,
+    });
+  });
+
   test("uses the built-in shared review instruction until one is saved", () => {
     expect(defaultConfig().global.reviewInstruction).toBeUndefined();
     expectTypeOf<AppConfig["global"]["reviewInstruction"]>().toEqualTypeOf<string | undefined>();

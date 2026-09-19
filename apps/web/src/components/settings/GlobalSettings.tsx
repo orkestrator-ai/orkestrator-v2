@@ -743,6 +743,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         debugLogging: boolean;
         debugLogRetentionDays: number;
         webClientEnabled: boolean;
+        notificationSounds?: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings;
         reviewInstruction?: string;
       } = {
         containerResources: { cpuCores, memoryGb },
@@ -772,6 +773,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         debugLogging,
         debugLogRetentionDays,
         webClientEnabled,
+        notificationSounds: global.notificationSounds,
         // `update_global_config` replaces the stored global wholesale, so this
         // has to be sent from every section's save, not only the Defaults tab.
       };

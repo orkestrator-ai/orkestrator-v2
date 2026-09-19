@@ -544,6 +544,8 @@ export interface GlobalConfig {
   debugLogRetentionDays?: number;
   /** Serve the app to authenticated browsers on the host's Tailscale network */
   webClientEnabled?: boolean;
+  /** Audible cues for background events that need the user's attention. */
+  notificationSounds?: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings;
   /**
    * Application-wide agent defaults — the widest tier. Supersedes
    * `defaultAgent`, the three `*Mode` fields, `claudeNativeBackend`,

@@ -2,6 +2,7 @@ import * as shared from "./storage-shared.js";
 import path from "node:path";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
+import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
 import {
   COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
   coordinatorProviderTierSetting,
@@ -497,6 +498,7 @@ export abstract class StorageConfig extends StorageProjects {
     }
     const validated: AppConfig["global"] = {
       ...reviewValidated,
+      notificationSounds: normalizeNotificationSoundSettings(reviewValidated.notificationSounds),
       sshAgentSocketPath: requestedSshAgentSocketPath || undefined,
       debugLogRetentionDays: normalizeDebugLogRetentionDays(reviewValidated.debugLogRetentionDays),
       terminalHistoryEnabled: terminalHistoryRetention.enabled,
@@ -539,6 +541,21 @@ export abstract class StorageConfig extends StorageProjects {
               : {}),
           }
         : validated;
+      await this.saveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return config;
+    });
+  }
+
+  /** Atomically patch renderer-owned sound preferences without replacing global config. */
+  async updateNotificationSoundSettings(settings: unknown): Promise<AppConfig> {
+    const notificationSounds = normalizeNotificationSoundSettings(settings);
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      config.global = {
+        ...config.global,
+        notificationSounds,
+      };
       await this.saveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;

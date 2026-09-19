@@ -17,6 +17,7 @@ import {
   Cable,
   MessagesSquare,
   RadioTower,
+  Volume2,
 } from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
@@ -25,6 +26,7 @@ import { McpSettings } from "./McpSettings";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 import { MessagingSettings } from "./MessagingSettings";
 import { ConnectionsSettings } from "./ConnectionsSettings";
+import { SoundsSettings } from "./SoundsSettings";
 import type { GlobalSettingsSection } from "@/lib/settings-navigation";
 
 const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
@@ -69,6 +71,7 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "web-client", label: "Web client", icon: <Globe2 className="h-4 w-4" /> },
   { id: "mcp", label: "MCP", icon: <Cable className="h-4 w-4" /> },
   { id: "messaging", label: "Messaging", icon: <MessagesSquare className="h-4 w-4" /> },
+  { id: "sounds", label: "Sounds", icon: <Volume2 className="h-4 w-4" /> },
   { id: "container", label: "Container", icon: <Container className="h-4 w-4" /> },
   { id: "experimental", label: "Experimental", icon: <FlaskConical className="h-4 w-4" /> },
   { id: "debug", label: "Debug", icon: <Bug className="h-4 w-4" /> },
@@ -128,6 +131,8 @@ export function SettingsPage({ open, onOpenChange, defaultSection }: SettingsPag
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
+        ) : activeSection === "sounds" ? (
+          <SoundsSettings />
         ) : (
           <GlobalSettings activeSection={activeSection} />
         )

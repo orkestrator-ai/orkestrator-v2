@@ -157,6 +157,12 @@ export async function updateGlobalConfig(global: GlobalConfig): Promise<AppConfi
   return invoke<AppConfig>("update_global_config", { global });
 }
 
+export async function updateNotificationSoundSettings(
+  settings: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings,
+): Promise<AppConfig> {
+  return invoke<AppConfig>("update_notification_sound_settings", { settings });
+}
+
 export async function setGitHubToken(token: string | null): Promise<AppConfig> {
   return invoke<AppConfig>("set_github_token", { token });
 }

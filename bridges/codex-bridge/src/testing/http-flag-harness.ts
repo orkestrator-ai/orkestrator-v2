@@ -10,6 +10,7 @@
  * Invoked by `app-server-http.test.ts`; not part of the shipped bundle.
  */
 import { app } from "../index.js";
+import { resolveHttpHarnessReadyProbeConfig } from "./http-flag-harness-config.js";
 
 interface StepResult {
   step: string;
@@ -42,13 +43,12 @@ async function main(): Promise<void> {
 
   // Wait for the engine to finish its handshake; index.ts starts it in the
   // background so the HTTP server is up even if the child is slow.
-  const readyTimeoutMs = Math.max(
-    50,
-    Number.parseInt(process.env.CODEX_BRIDGE_HTTP_HARNESS_READY_TIMEOUT_MS ?? "5000", 10) || 5_000,
+  const readyProbe = resolveHttpHarnessReadyProbeConfig(
+    process.env.CODEX_BRIDGE_HTTP_HARNESS_READY_TIMEOUT_MS,
   );
   let ready = false;
   let lastState = "unknown";
-  for (let attempt = 0; attempt < Math.ceil(readyTimeoutMs / 50); attempt += 1) {
+  for (let attempt = 0; attempt < readyProbe.attempts; attempt += 1) {
     const health = (await (await app.request("/global/health")).json()) as {
       appServer?: { state?: string };
       engine?: string;
@@ -61,11 +61,11 @@ async function main(): Promise<void> {
       ready = true;
       break;
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, readyProbe.pollIntervalMs));
   }
   if (!ready) {
     throw new Error(
-      `app-server did not become ready within ${readyTimeoutMs / 1_000} seconds (last state: ${lastState})`,
+      `app-server did not become ready within ${readyProbe.timeoutMs / 1_000} seconds (last state: ${lastState})`,
     );
   }
 

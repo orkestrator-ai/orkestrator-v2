@@ -108,6 +108,10 @@ import type {
   RepositoryConfig,
 } from "./command-fixtures";
 
+function shimTest(name: string, run: () => Promise<void>): void {
+  test(name, run, ASYNC_TEST_BUDGET_MS);
+}
+
 describe("Electron backend command registry", () => {
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
@@ -1680,7 +1684,7 @@ exit 0
     ASYNC_TEST_BUDGET_MS,
   );
 
-  test("rolls back a container rename when push configuration fails", async () => {
+  shimTest("rolls back a container rename when push configuration fails", async () => {
     const environment = createEnvironment({
       id: "env-container-rename-config-failure",
       environmentType: "containerized",
@@ -1854,25 +1858,27 @@ exit 0
     ASYNC_TEST_BUDGET_MS,
   );
 
-  test("keeps the stored branch when a container rollback fails and the container is unreachable", async () => {
-    const environment = createEnvironment({
-      id: "env-container-rename-rollback-unreachable",
-      environmentType: "containerized",
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-      branch: "old-branch",
-      prUrl: "https://github.com/acme/repo/pull/1",
-      prState: "open",
-      hasMergeConflicts: true,
-    });
-    const { context } = createContext(environment);
-    await isolateCodexBinaryLookup(context);
-    const commands = createCommandRegistry();
+  shimTest(
+    "keeps the stored branch when a container rollback fails and the container is unreachable",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-rename-rollback-unreachable",
+        environmentType: "containerized",
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
+        branch: "old-branch",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      const { context } = createContext(environment);
+      await isolateCodexBinaryLookup(context);
+      const commands = createCommandRegistry();
 
-    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      await withFakeDocker(
-        `#!/bin/sh
+      await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+        await withFakeDocker(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
@@ -1884,20 +1890,21 @@ if [ "$1" = "exec" ]; then
 fi
 exit 0
 `,
-        async () => {
-          await expect(
-            commands.get("rename_environment_from_prompt")?.(
-              { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-              context,
-            ),
-          ).resolves.toBeUndefined();
+          async () => {
+            await expect(
+              commands.get("rename_environment_from_prompt")?.(
+                { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+                context,
+              ),
+            ).resolves.toBeUndefined();
 
-          expect(environment.branch).toBe("old-branch");
-          expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
-        },
-      );
-    });
-  });
+            expect(environment.branch).toBe("old-branch");
+            expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
+          },
+        );
+      });
+    },
+  );
 
   test("keeps stored branch and PR metadata when the live git branch rename fails", async () => {
     // worktreePath is a plain directory (not a git repo) so `git branch -m` fails.

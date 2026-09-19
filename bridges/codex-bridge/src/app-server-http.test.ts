@@ -158,7 +158,10 @@ describe("app-server engine over HTTP", () => {
   }, 60_000);
 
   test("reports a bounded, actionable error when the handshake never completes", async () => {
-    const output = await run({ FAKE_CODEX_SCRIPT: "no-initialize" });
+    const output = await run({
+      CODEX_BRIDGE_HTTP_HARNESS_READY_TIMEOUT_MS: "5000",
+      FAKE_CODEX_SCRIPT: "no-initialize",
+    });
 
     expect(output.results).toBeUndefined();
     expect(output.error).toMatch(

@@ -195,7 +195,7 @@ describe("useVirtuosoScrollState", () => {
       expect(result.current.scrollProps.followOutput(false)).toBe("auto");
     });
 
-    test("returns false after a user-initiated scroll up releases stick intent", () => {
+    test("returns false after a user-initiated scroll up even while Virtuoso reports scrolling", () => {
       const { result } = renderHook(() => useVirtuosoScrollState());
       const el = document.createElement("div");
       document.body.appendChild(el);
@@ -208,6 +208,11 @@ describe("useVirtuosoScrollState", () => {
           result.current.scrollProps.atBottomStateChange(false);
         });
         expect(result.current.scrollProps.followOutput(false)).toBe(false);
+        // Virtuoso 4.18 passes `isAtBottom || scrollingInProgress` to a
+        // functional followOutput callback. New output can therefore arrive
+        // with true here while this upward scroll is still moving, even though
+        // the down button is visible. Released stick intent must still win.
+        expect(result.current.scrollProps.followOutput(true)).toBe(false);
       } finally {
         document.body.removeChild(el);
       }

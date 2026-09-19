@@ -265,15 +265,18 @@ export function useVirtuosoScrollState(
     }
   }, []);
 
-  // Always "auto", never "smooth". Virtuoso re-invokes followOutput on every
-  // item change, and a native smooth scroll restarts its easing from scratch
-  // each time it is re-issued — so against a target that keeps moving (tokens
-  // streaming in) it never converges. The tail drifts progressively lower,
-  // then snaps back up when the stream pauses and the animation finally lands.
-  // Instant follow is what actually *reads* as smooth: content grows, the
-  // viewport stays pinned to the bottom, nothing bobs.
-  const followOutput = useCallback((atBottom: boolean): "auto" | false => {
-    return atBottom || wantsStickRef.current ? "auto" : false;
+  // User intent is authoritative here. Virtuoso 4.18 invokes a functional
+  // followOutput with `isAtBottom || scrollingInProgress`, so its argument can
+  // be true while the user is actively scrolling upward and our down button is
+  // visible. Letting that value override released stick intent snaps the reader
+  // straight back to the tail when a message arrives mid-scroll.
+  //
+  // Always return "auto", never "smooth", while sticky. Virtuoso re-invokes
+  // followOutput on every item change, and a native smooth scroll restarts its
+  // easing from scratch each time it is re-issued. Instant follow keeps the
+  // viewport pinned without the streaming tail bobbing.
+  const followOutput = useCallback((_atBottom: boolean): "auto" | false => {
+    return wantsStickRef.current ? "auto" : false;
   }, []);
 
   const scrollerRef = useCallback((el: HTMLElement | Window | null) => {

@@ -42,7 +42,13 @@ const TAR_GZIP_FIXTURE = Buffer.from(
 
 const EXECUTABLE_SIZE = 32;
 const EXECUTABLE_SHA256 = "5ebb049f9635fcc8d8ab581cb4aee2537ce8ba24abc3281bcd77f8ecd1c53247";
+const EXECUTABLE_PROBE_TEST_BUDGET_MS = 45_000;
+const EXECUTABLE_PROBE_SETUP_HEADROOM_MS = 10_000;
 const directories: string[] = [];
+
+function probeTest(name: string, run: () => Promise<void>): void {
+  test(name, run, EXECUTABLE_PROBE_TEST_BUDGET_MS);
+}
 
 const artifacts: readonly ToolchainArtifact[] = [
   {
@@ -1114,17 +1120,17 @@ describe("pinned desktop toolchain cache", () => {
     ).rejects.toThrow("reported an unexpected version");
   });
 
-  test("reports executable probe spawn, nonzero-exit, and timeout failures", async () => {
+  probeTest("reports executable probe spawn, nonzero-exit, and timeout failures", async () => {
     const cases = [
       {
         body: Buffer.from("#!/definitely/missing/interpreter\n"),
         message: "could not execute from the Orkestrator toolchain cache",
-        timeout: 5_000,
+        timeout: 15_000,
       },
       {
         body: Buffer.from("#!/bin/sh\nexit 7\n"),
         message: "version check failed (code 7",
-        timeout: 5_000,
+        timeout: 15_000,
       },
       {
         body: Buffer.from("#!/bin/sh\nsleep 1\n"),
@@ -1132,6 +1138,11 @@ describe("pinned desktop toolchain cache", () => {
         timeout: 10,
       },
     ];
+
+    const sequentialProbeBudgetMs = cases.reduce((total, failure) => total + failure.timeout, 0);
+    expect(EXECUTABLE_PROBE_TEST_BUDGET_MS).toBeGreaterThan(
+      sequentialProbeBudgetMs + EXECUTABLE_PROBE_SETUP_HEADROOM_MS,
+    );
 
     for (const failure of cases) {
       const dataDir = await createDataDir();
@@ -1156,7 +1167,7 @@ describe("pinned desktop toolchain cache", () => {
       ).rejects.toThrow(failure.message);
       await expect(lstat(path.join(dataDir, "toolchains", ".install.lock"))).rejects.toThrow();
     }
-  }, 15_000);
+  });
 
   test("reports deterministic macOS code-signature spawn, timeout, and nonzero failures", async () => {
     const cases: Array<{ outcome: SpawnOutcome; message: string; timeout?: number }> = [

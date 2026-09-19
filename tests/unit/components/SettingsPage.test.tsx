@@ -173,7 +173,7 @@ describe("SettingsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sounds" }));
 
     expect(container.querySelector(".animate-spin")).toBeTruthy();
-    expect(screen.queryByRole("switch", { name: "Agent stopped sound" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Agent stopped sound" }) === null).toBe(true);
   });
 
   test("opens the read-only Skills browser without waiting for config or rendering GlobalSettings", async () => {

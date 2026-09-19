@@ -1,4 +1,4 @@
-# Electron command-registry fixture-shim timeouts (four tests, three files)
+# Electron command-registry fixture-shim timeouts (ten tests, four files)
 
 - **ID:** 0130
 - **Status:** resolved
@@ -8,6 +8,12 @@
   - `Electron backend command registry > advances the stored branch when a local rollback fails and the new branch is the only one left` (`tests/unit/electron/commands-registry-environments.test.ts:1709`, assertion at `:1717`)
   - `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`tests/unit/electron/commands-registry-terminal.test.ts:1408`, assertion at `:1418`)
   - `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`tests/unit/electron/commands-registry-pr.test.ts:634`, assertion at `:650`)
+  - `Electron backend command registry > verifies a PR against the trusted project and environment branches` (`tests/unit/electron/commands-registry-pr.test.ts`)
+  - `Electron backend command registry > reports a queued container PR as pending when the captured PR remains open` (`tests/unit/electron/commands-registry-pr.test.ts`)
+  - `Electron backend command registry > keeps the stored branch when a local rollback took effect but reported failure` (`tests/unit/electron/commands-registry-environments-create.test.ts`)
+  - `Electron backend command registry > renames the running container git branch and advances stored branch` (`tests/unit/electron/commands-registry-environments-create.test.ts`)
+  - `Electron backend command registry > advances storage after push configuration and container rollback both fail` (`tests/unit/electron/commands-registry-environments-create.test.ts`)
+  - `Electron backend command registry > keeps the stored branch when a container rollback outcome cannot be established` (`tests/unit/electron/commands-registry-environments-create.test.ts`)
 - **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`, at `19a1001123b16a89e2a09324a0033ae9b26eb74f` on `agent-jsonl-acp`.
 - **Worker configuration:** The root group ran on its own with `--parallel=4`, not under `scripts/test-all.ts`. No other suite was running against this clone.
 - **Failure:** all four are Bun's generic `this test timed out after 5000ms`, at 5,004.99 ms, 5,004.18 ms, 5,002.52 ms and 5,017.16 ms respectively. Each is accompanied by an "Unhandled error between tests" block showing its fixture shim was already gone when the command finally ran:
@@ -47,3 +53,23 @@
   queued fakes rather than plain shim latency. The isolated file takes 31.7 s in
   total with no single case near 5 s, so recording which stubbed command actually
   answered distinguishes the two before any budget is raised.
+- **Recurrence and resolution (2026-09-19):** `mise run test` reported five more
+  five-second fixture-shim timeouts: `reports a queued container PR as pending
+  when the captured PR remains open` (5,002.71 ms) plus four branch-rename cases
+  in `commands-registry-environments-create.test.ts` (5,001.29–5,002.76 ms).
+  Their owning files passed alone in 22.1 s and 30.9 s respectively. The tests
+  now use the shared 30-second `ASYNC_TEST_BUDGET_MS`, so their real shim work
+  can finish and any shared wait helper can report its named failure instead of
+  Bun terminating the test at five seconds. A combined focused rerun of the
+  changed root files passed in 58.2 s, then `mise run test` passed all four
+  groups under the full eight-worker host budget in 142.3 s. A subsequent
+  `mise run test:all` also passed those groups and the iOS group.
+- **Preventive follow-up (2026-09-19):** the two remaining container-rename
+  siblings in `commands-registry-environments-create.test.ts` and every test in
+  `commands-registry-pr.test.ts` that owns a real `docker` or `gh` fixture shim
+  now use `ASYNC_TEST_BUDGET_MS`. This keeps the whole fixture family on the
+  named helper deadlines instead of waiting for another five-second aggregate
+  timeout before applying the same fix. The three changed root files passed
+  together with one worker in 35.7 s; `mise run test:changed` passed all four
+  affected groups in 119.7 s, and the subsequent full `mise run test` passed all
+  four groups in 142.5 s.

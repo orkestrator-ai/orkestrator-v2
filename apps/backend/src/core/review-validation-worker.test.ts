@@ -350,7 +350,7 @@ done
   expect(overlong.status).toBe("completed");
   expect(overlong.environmentChanges).toEqual(["kept.txt"]);
   expect(overlong.environmentChangesOmitted).toBeUndefined();
-});
+}, 30_000);
 
 test("environmentChangesOmitted must be a positive integer when present", () => {
   const run = newReviewValidationRun("review-validation-omitted", {

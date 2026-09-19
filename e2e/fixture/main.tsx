@@ -23,11 +23,15 @@ import { DiffViewerTab } from "../../apps/web/src/components/terminal/DiffViewer
 import { MonacoFileEditor } from "../../apps/web/src/components/terminal/MonacoFileEditor";
 import { ChangedFileItem } from "../../apps/web/src/components/files-panel/ChangedFileItem";
 import { MobileAppShellLayout } from "../../apps/web/src/components/layout/MobileAppShellLayout";
-import { PullRequestCheckStatus } from "../../apps/web/src/components/layout/PullRequestCheckStatus";
+import {
+  PullRequestCheckStatus,
+  PullRequestCheckStatusAnnouncement,
+} from "../../apps/web/src/components/layout/PullRequestCheckStatus";
 import { SystemUsageIndicator } from "../../apps/web/src/components/layout/SystemUsageIndicator";
 import { TAB_STRIP_CLASS } from "../../apps/web/src/components/pane-layout/TabShell";
 import { ProjectSearchBar } from "../../apps/web/src/components/sidebar/ProjectSearchBar";
 import { Button } from "../../apps/web/src/components/ui/button";
+import { cn } from "../../apps/web/src/lib/utils";
 import { useProjectStore } from "../../apps/web/src/stores";
 import {
   ReviewLaunchDialog,
@@ -1209,12 +1213,28 @@ function WorkspaceBarHeightFixture() {
 
 function PullRequestCheckStatusFixture() {
   const [summary, setSummary] = useState({ passed: 3, total: 4, pending: 1 });
-  const isGrid = new URLSearchParams(window.location.search).has("grid");
+  const searchParams = new URLSearchParams(window.location.search);
+  const isGrid = searchParams.has("grid");
+  const isDark = searchParams.has("dark");
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", isDark);
+    return () => document.documentElement.classList.add("dark");
+  }, [isDark]);
 
   return (
     <main className="min-h-screen bg-background p-4 text-foreground">
-      <PullRequestCheckStatus checkSummary={summary} isGrid={isGrid} />
+      <div className={cn(isGrid ? "grid w-40 grid-cols-1" : "flex items-center")}>
+        <Button size="sm" variant={isGrid ? "ghost" : "outline"} className="min-w-0 gap-2">
+          <span className={cn(isGrid && "truncate text-xs")}>View PR</span>
+          <PullRequestCheckStatus checkSummary={summary} className={cn(isGrid && "text-xs")} />
+        </Button>
+        <PullRequestCheckStatusAnnouncement checkSummary={summary} />
+      </div>
       <div className="mt-4 flex gap-2">
+        <button type="button" onClick={() => setSummary({ passed: 1, total: 4, pending: 2 })}>
+          Continue with failure
+        </button>
         <button type="button" onClick={() => setSummary({ passed: 3, total: 4, pending: 0 })}>
           Complete with failure
         </button>

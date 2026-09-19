@@ -32,6 +32,12 @@ function makeScroller({
   return el;
 }
 
+function wheelUp(scroller: HTMLElement, nextScrollTop: number, deltaY = -20) {
+  scroller.dispatchEvent(new WheelEvent("wheel", { deltaY }));
+  scroller.scrollTop = nextScrollTop;
+  scroller.dispatchEvent(new Event("scroll"));
+}
+
 type ObserverHarness = {
   resizeObserved: Element[];
   resizeCallback?: ResizeObserverCallback;
@@ -174,15 +180,40 @@ describe("useVirtuosoScrollState", () => {
       });
       expect(result.current.isAtBottomRef.current).toBe(true);
     });
+
+    test("does not re-arm released intent from a transient at-bottom report away from bottom", () => {
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+      try {
+        scroller.scrollTop = 700;
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        act(() => {
+          wheelUp(scroller, 500);
+          result.current.scrollProps.atBottomStateChange(true);
+        });
+
+        expect(result.current.scrollProps.followOutput(true)).toBe(false);
+
+        scroller.scrollTop = 700;
+        act(() => {
+          result.current.scrollProps.atBottomStateChange(true);
+        });
+        expect(result.current.scrollProps.followOutput(false)).toBe("auto");
+      } finally {
+        document.body.removeChild(scroller);
+      }
+    });
   });
 
   describe("followOutput", () => {
-    test("returns 'auto' when isAtBottom is true", () => {
+    test("returns 'auto' while default stick intent is engaged", () => {
       // Never "smooth": a native smooth scroll restarts its easing every time
       // Virtuoso re-issues it, so it never converges while tokens stream and
       // the tail visibly bobs. Instant follow is what reads as smooth.
       const { result } = renderHook(() => useVirtuosoScrollState());
       expect(result.current.scrollProps.followOutput(true)).toBe("auto");
+      expect(result.current.scrollProps.followOutput(false)).toBe("auto");
     });
 
     test("returns 'auto' while stick intent is still true even if not at bottom", () => {
@@ -197,12 +228,12 @@ describe("useVirtuosoScrollState", () => {
 
     test("returns false after a user-initiated scroll up even while Virtuoso reports scrolling", () => {
       const { result } = renderHook(() => useVirtuosoScrollState());
-      const el = document.createElement("div");
-      document.body.appendChild(el);
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       try {
+        el.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(el));
         act(() => {
-          el.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+          wheelUp(el, 500);
         });
         act(() => {
           result.current.scrollProps.atBottomStateChange(false);
@@ -213,6 +244,23 @@ describe("useVirtuosoScrollState", () => {
         // with true here while this upward scroll is still moving, even though
         // the down button is visible. Released stick intent must still win.
         expect(result.current.scrollProps.followOutput(true)).toBe(false);
+      } finally {
+        document.body.removeChild(el);
+      }
+    });
+
+    test("keeps follow armed when a wheel nudge stays within the bottom threshold", () => {
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+      try {
+        el.scrollTop = 700;
+        act(() => result.current.scrollProps.scrollerRef(el));
+        act(() => {
+          wheelUp(el, 699, -1);
+        });
+
+        expect(result.current.scrollProps.followOutput(true)).toBe("auto");
       } finally {
         document.body.removeChild(el);
       }
@@ -285,8 +333,7 @@ describe("useVirtuosoScrollState", () => {
 
     test("does not scroll on total list height changes after user scrolls up", () => {
       const { result } = renderHook(() => useVirtuosoScrollState());
-      const el = document.createElement("div");
-      document.body.appendChild(el);
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
 
       const scrollToIndexCalls: any[] = [];
       result.current.virtuosoRef.current = {
@@ -296,9 +343,10 @@ describe("useVirtuosoScrollState", () => {
       } as any;
 
       try {
+        el.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(el));
         act(() => {
-          el.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+          wheelUp(el, 500);
         });
         act(() => {
           result.current.scrollProps.totalListHeightChanged(1200);
@@ -694,16 +742,17 @@ describe("useVirtuosoScrollState", () => {
       scroller.appendChild(document.createElement("div"));
 
       try {
+        scroller.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(scroller));
         act(() => {
-          scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+          wheelUp(scroller, 200);
         });
 
         act(() => {
           harness.resizeCallback?.([], {} as ResizeObserver);
         });
 
-        expect(scroller.scrollTop).toBe(0);
+        expect(scroller.scrollTop).toBe(200);
       } finally {
         unmount();
         document.body.removeChild(scroller);
@@ -981,6 +1030,7 @@ describe("useVirtuosoScrollState", () => {
         });
 
         expect(result.current.scrollProps.followOutput(false)).toBe(false);
+        expect(result.current.scrollProps.followOutput(true)).toBe(false);
       } finally {
         document.body.removeChild(scroller);
       }
@@ -1128,12 +1178,34 @@ describe("useVirtuosoScrollState", () => {
         act(() => {
           scroller.dispatchEvent(new Event("touchstart"));
         });
-        scroller.scrollTop = 690;
+        scroller.scrollTop = 600;
         act(() => {
           scroller.dispatchEvent(new Event("touchmove"));
         });
 
         expect(result.current.scrollProps.followOutput(false)).toBe(false);
+        expect(result.current.scrollProps.followOutput(true)).toBe(false);
+      } finally {
+        document.body.removeChild(scroller);
+      }
+    });
+
+    test("keeps stick intent when an upward touch drag stays within the bottom threshold", () => {
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+      try {
+        scroller.scrollTop = 700;
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        act(() => {
+          scroller.dispatchEvent(new Event("touchstart"));
+        });
+        scroller.scrollTop = 670;
+        act(() => {
+          scroller.dispatchEvent(new Event("touchmove"));
+        });
+
+        expect(result.current.scrollProps.followOutput(true)).toBe("auto");
       } finally {
         document.body.removeChild(scroller);
       }
@@ -1166,16 +1238,42 @@ describe("useVirtuosoScrollState", () => {
       const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
 
       try {
+        scroller.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(scroller));
         act(() => {
           scroller.dispatchEvent(new KeyboardEvent("keydown", { key }));
+          scroller.scrollTop = 500;
+          scroller.dispatchEvent(new Event("scroll"));
         });
 
         expect(result.current.scrollProps.followOutput(false)).toBe(false);
+        expect(result.current.scrollProps.followOutput(true)).toBe(false);
       } finally {
         document.body.removeChild(scroller);
       }
     });
+
+    test.each(["ArrowUp", "PageUp", "Home"])(
+      "keeps stick intent when %s leaves the viewport within the bottom threshold",
+      (key) => {
+        const { result } = renderHook(() => useVirtuosoScrollState());
+        const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+        try {
+          scroller.scrollTop = 700;
+          act(() => result.current.scrollProps.scrollerRef(scroller));
+          act(() => {
+            scroller.dispatchEvent(new KeyboardEvent("keydown", { key }));
+            scroller.scrollTop = 670;
+            scroller.dispatchEvent(new Event("scroll"));
+          });
+
+          expect(result.current.scrollProps.followOutput(true)).toBe("auto");
+        } finally {
+          document.body.removeChild(scroller);
+        }
+      },
+    );
 
     test.each(["ArrowDown", "PageDown", "End"])("keeps stick intent on %s", (key) => {
       const { result } = renderHook(() => useVirtuosoScrollState());
@@ -1228,12 +1326,12 @@ describe("useVirtuosoScrollState", () => {
 
       // Simulate a user scroll up so stick intent is released; the snapshot
       // should then be restored on remount.
-      const el = document.createElement("div");
-      document.body.appendChild(el);
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       try {
+        el.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(el));
         act(() => {
-          el.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+          wheelUp(el, 500);
         });
 
         result.current.virtuosoRef.current = {
@@ -1428,9 +1526,9 @@ describe("useVirtuosoScrollState", () => {
         getState: () => {},
       } as any;
 
-      const el = document.createElement("div");
-      document.body.appendChild(el);
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       try {
+        el.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(el));
 
         // Start a scroll. This sets both wantsStickRef=true AND
@@ -1445,7 +1543,7 @@ describe("useVirtuosoScrollState", () => {
         // scrollToIndex calls after re-activation come solely from our own
         // scrollToBottom() — which proves scrollInFlightRef was cleared.
         act(() => {
-          el.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+          wheelUp(el, 500);
         });
 
         // Deactivate before the in-flight retry loop resolves — leaves
@@ -1537,13 +1635,13 @@ describe("useVirtuosoScrollState", () => {
         getState: () => {},
       } as any;
 
-      const el = document.createElement("div");
-      document.body.appendChild(el);
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       try {
         // Release stick intent via a wheel-up.
+        el.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(el));
         act(() => {
-          el.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+          wheelUp(el, 500);
         });
 
         rerender({ isActive: false });
@@ -1578,12 +1676,12 @@ describe("useVirtuosoScrollState", () => {
         getState: () => {},
       } as any;
 
-      const el = document.createElement("div");
-      document.body.appendChild(el);
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       try {
+        el.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(el));
         act(() => {
-          el.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+          wheelUp(el, 500);
         });
         expect(result.current.scrollProps.followOutput(false)).toBe(false);
 
@@ -1882,14 +1980,14 @@ describe("useVirtuosoScrollState", () => {
       const scrollToCalls: any[] = [];
       result.current.virtuosoRef.current = makeHandle(scrollToIndexCalls, scrollToCalls);
 
-      const el = document.createElement("div");
-      document.body.appendChild(el);
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       try {
         // Release stick intent via a wheel-up: without an env switch this
         // would suppress the re-activation jump.
+        el.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(el));
         act(() => {
-          el.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+          wheelUp(el, 500);
         });
 
         // Switch environments away and back while the view is inactive.
@@ -1932,12 +2030,12 @@ describe("useVirtuosoScrollState", () => {
       const scrollToCalls: any[] = [];
       result.current.virtuosoRef.current = makeHandle(scrollToIndexCalls, scrollToCalls);
 
-      const el = document.createElement("div");
-      document.body.appendChild(el);
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       try {
+        el.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(el));
         act(() => {
-          el.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+          wheelUp(el, 500);
         });
 
         // Deactivate/re-activate without any environment change (simulates
@@ -2023,13 +2121,13 @@ describe("useVirtuosoScrollState", () => {
         { initialProps: { isActive: true } },
       );
 
-      const el = document.createElement("div");
-      document.body.appendChild(el);
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       try {
         // Release stick so the persisted entry records wantsStick=false.
+        el.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(el));
         act(() => {
-          el.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+          wheelUp(el, 500);
         });
 
         result.current.virtuosoRef.current = {
@@ -2181,12 +2279,12 @@ describe("useVirtuosoScrollState", () => {
       );
 
       // Release stick intent so the snapshot will be restored on remount.
-      const el = document.createElement("div");
-      document.body.appendChild(el);
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       try {
+        el.scrollTop = 700;
         act(() => result.current.scrollProps.scrollerRef(el));
         act(() => {
-          el.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+          wheelUp(el, 500);
         });
 
         result.current.virtuosoRef.current = {

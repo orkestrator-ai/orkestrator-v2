@@ -1,4 +1,4 @@
-import type { VirtuosoHandle } from "react-virtuoso";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { StrictMode, createRef, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../../apps/web/src/index.css";
@@ -55,6 +55,7 @@ import type { GitFileChange } from "../../apps/web/src/lib/backend";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
+import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 
 declare global {
   interface Window {
@@ -1261,6 +1262,44 @@ function WorkspaceBarHeightFixture() {
   );
 }
 
+const initialVirtuosoMessages = Array.from({ length: 80 }, (_, index) => index + 1);
+
+function VirtuosoFollowFixture() {
+  const [messages, setMessages] = useState(initialVirtuosoMessages);
+  const [lastFollowDecision, setLastFollowDecision] = useState<string>("unset");
+  const { isAtBottom, scrollProps, virtuosoRef } = useVirtuosoScrollState();
+
+  return (
+    <main className="min-h-screen bg-background p-4 text-foreground">
+      <div className="mb-3 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => {
+            setLastFollowDecision(String(scrollProps.followOutput(false)));
+            setMessages((current) => [...current, current.length + 1]);
+          }}
+        >
+          Append message
+        </button>
+        <output data-testid="virtuoso-follow-count">{messages.length}</output>
+        <output data-testid="virtuoso-at-bottom">{String(isAtBottom)}</output>
+        <output data-testid="virtuoso-follow-decision">{lastFollowDecision}</output>
+      </div>
+      <Virtuoso
+        {...scrollProps}
+        ref={virtuosoRef}
+        data={messages}
+        fixedItemHeight={40}
+        initialTopMostItemIndex={initialVirtuosoMessages.length - 1}
+        itemContent={(_index, message) => (
+          <div className="h-10 border-b border-border px-3 py-2">Message {message}</div>
+        )}
+        style={{ height: 320, width: 480 }}
+      />
+    </main>
+  );
+}
+
 function PullRequestCheckStatusFixture() {
   const [summary, setSummary] = useState({ passed: 3, total: 4, pending: 1 });
   const searchParams = new URLSearchParams(window.location.search);
@@ -1337,6 +1376,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/workspace-bar-height") {
     return <WorkspaceBarHeightFixture />;
   }
+  if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;
   return <CreateEnvironmentFixture />;
 }
 

@@ -75,6 +75,7 @@ import {
 import { subscribeToConnections } from "@/lib/connections";
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
+export const DOCKER_STARTUP_CONFIRMATION_DELAY_MS = 1_500;
 
 function desktopConnectionScopeSeed(): {
   activeConnectionId: string | null;
@@ -90,9 +91,10 @@ function desktopConnectionScopeSeed(): {
 }
 
 /**
- * How many consecutive failed probes it takes to declare an outage once Docker
- * has been seen healthy. One is not enough: a false negative disables every
- * container control and is not corrected until the next poll.
+ * How many consecutive failed probes it takes to confirm a transient Docker
+ * outage. Startup publishes the first result immediately so a confirmation
+ * never extends the full-screen loading state. A daemon that was already seen
+ * healthy stays available until the confirmation completes.
  */
 export const DOCKER_UNAVAILABLE_CONFIRMATIONS = 2;
 
@@ -115,6 +117,12 @@ async function probeDocker(source: "startup" | "retry" | "poll"): Promise<Docker
     console.error(`[App] Docker ${source} check failed:`, error);
     return { available: false, reason: "daemon-unavailable" };
   }
+}
+
+function waitForDockerStartupConfirmation(): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, DOCKER_STARTUP_CONFIRMATION_DELAY_MS);
+  });
 }
 
 function dockerUnavailableMessage(reason: DockerUnavailableReason | null): {
@@ -422,26 +430,50 @@ function App() {
       const previous = dockerAvailableRef.current;
       let result = await probeDocker(source);
       let available = result.available;
+      const firstFailureReason = available ? null : result.reason;
+
+      const publishResult = (next: DockerAvailability) => {
+        dockerAvailableRef.current = next.available;
+        setDockerAvailable(next.available);
+        setDockerUnavailableReason(next.reason);
+      };
+
+      // Startup must never hide the app behind the loading overlay while a
+      // confirming probe runs. Show the first bounded diagnostic immediately;
+      // a later successful confirmation will clear it again.
+      if (source === "startup") publishResult(result);
 
       // A single failed probe is not evidence of an outage. `check_docker`
       // shells out to `docker info` with a 10s timeout and reports any failure
-      // - including that timeout - as "unavailable", so a loaded host can
-      // produce a false negative. Tearing down container-backed UI on one of
-      // those is destructive, so confirm before believing a daemon that was
-      // healthy a moment ago went away.
+      // - including that timeout - as "unavailable", so a loaded host or a
+      // startup race can produce a false negative. Tearing down container-backed
+      // UI on one of those is destructive, so confirm transient failures at
+      // startup as well as when a daemon that was healthy a moment ago appears
+      // to go away. A fast startup failure is delayed so Docker Desktop or
+      // dockerd has time to finish starting. Missing binaries, durable permission
+      // denials, and a probe that already consumed its 10s timeout do not benefit
+      // from another blocking startup probe.
       for (
         let attempt = 1;
-        !available && previous === true && attempt < DOCKER_UNAVAILABLE_CONFIRMATIONS;
+        !available &&
+        (previous === true || source === "startup") &&
+        result.reason !== "not-installed" &&
+        result.reason !== "permission-denied" &&
+        !(source === "startup" && result.reason === "timed-out") &&
+        attempt < DOCKER_UNAVAILABLE_CONFIRMATIONS;
         attempt++
       ) {
+        if (source === "startup") await waitForDockerStartupConfirmation();
         result = await probeDocker(source);
         available = result.available;
       }
 
+      if (!available && firstFailureReason !== null) {
+        result = { available: false, reason: firstFailureReason };
+      }
+
       rendererDebugLog(`[App] Docker ${source} check:`, available);
-      dockerAvailableRef.current = available;
-      setDockerAvailable(available);
-      setDockerUnavailableReason(result.reason);
+      publishResult(result);
 
       // Reconcile container identities on startup and when Docker comes back,
       // but not on every healthy poll.

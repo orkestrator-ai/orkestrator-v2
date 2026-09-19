@@ -34,7 +34,7 @@ let consoleErrorSpy: ReturnType<typeof spyOn> | undefined;
 let nextAnimationFrameId = 0;
 const pendingAnimationFrames = new Set<number>();
 
-function setBrowserTab(url = "") {
+function setBrowserTab(url = "", includeNativeAgent = false) {
   usePaneLayoutStore.setState({
     activeEnvironmentId: "env-1",
     environments: new Map([
@@ -44,7 +44,18 @@ function setBrowserTab(url = "") {
           root: {
             kind: "leaf",
             id: "pane-1",
-            tabs: [{ id: "browser-1", type: "browser", browserData: { url } }],
+            tabs: [
+              { id: "browser-1", type: "browser", browserData: { url } },
+              ...(includeNativeAgent
+                ? [
+                    {
+                      id: "agent-1",
+                      type: "agent-native" as const,
+                      nativeAgentData: { environmentId: "env-1", platform: "codex" as const },
+                    },
+                  ]
+                : []),
+            ],
             activeTabId: "browser-1",
           },
           activePaneId: "pane-1",
@@ -91,6 +102,9 @@ function installNativePreview(overrides: Record<string, unknown> = {}) {
     goForward: mock(async () => previewState()),
     reload: mock(async () => previewState()),
     openDevTools: mock(async () => previewState()),
+    startAnnotation: mock(async () => ({ status: "active" as const })),
+    getAnnotationStatus: mock(async () => ({ status: "active" as const })),
+    cancelAnnotation: mock(async () => undefined),
     destroy: mock(async () => {}),
     ...overrides,
   };
@@ -576,6 +590,33 @@ describe("BrowserTab", () => {
     await waitFor(() => expect(devToolsButton.hasAttribute("disabled")).toBe(false));
     fireEvent.click(devToolsButton);
     await waitFor(() => expect(openDevTools).toHaveBeenCalledWith("browser-1"));
+  });
+
+  test("starts and stops annotation mode for a preview with an open native session", async () => {
+    setBrowserTab("http://localhost:3000/", true);
+    const native = installNativePreview();
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+
+    const annotate = screen.getByRole("button", { name: "Annotate preview" });
+    await waitFor(() => expect(annotate.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(annotate);
+
+    await waitFor(() =>
+      expect(native.browserPreview.startAnnotation).toHaveBeenCalledWith("browser-1"),
+    );
+    const stop = await screen.findByRole("button", { name: "Stop annotating preview" });
+    expect(stop.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(stop);
+    await waitFor(() =>
+      expect(native.browserPreview.cancelAnnotation).toHaveBeenCalledWith("browser-1"),
+    );
   });
 
   test("hides an attached native preview when the client becomes unsupported", async () => {

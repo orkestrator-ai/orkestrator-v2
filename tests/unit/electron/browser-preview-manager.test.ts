@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, mock, test } from "bun:test";
 import { BrowserPreviewManager } from "../../../apps/desktop/electron/browser-preview-manager";
+import { BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT } from "../../../apps/desktop/electron/browser-preview-annotation-script";
 import type { ContextMenuParams, MenuItemConstructorOptions } from "electron";
 
 class FakeWebContents extends EventEmitter {
@@ -17,6 +18,17 @@ class FakeWebContents extends EventEmitter {
   });
   readonly reload = mock(() => undefined);
   readonly openDevTools = mock(() => undefined);
+  annotationStatus = JSON.stringify({ status: "active" });
+  readonly executeJavaScript = mock(async (script: string) =>
+    script === BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT ? this.annotationStatus : undefined,
+  );
+  readonly capturePage = mock(async () => ({
+    getSize: () => ({ width: 800, height: 600 }),
+    resize: () => {
+      throw new Error("small screenshots should not be resized");
+    },
+    toDataURL: () => "data:image/png;base64,c2NyZWVuc2hvdA==",
+  }));
   readonly inspectElement = mock(() => undefined);
   readonly copyImageAt = mock((_x: number, _y: number) => undefined);
   readonly replaceMisspelling = mock((_suggestion: string) => undefined);
@@ -271,6 +283,78 @@ describe("BrowserPreviewManager", () => {
     expect(view.webContents.openDevTools).toHaveBeenCalledWith({
       mode: "detach",
     });
+  });
+
+  test("captures a submitted element annotation while its highlight is visible", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+    const element = {
+      pageUrl: input.url,
+      pageTitle: "Dashboard",
+      viewport: { width: 800, height: 600, devicePixelRatio: 2 },
+      tagName: "button",
+      selector: "button#save",
+      cssPath: "html > body > button#save",
+      xpath: "/html/body/button",
+      id: "save",
+      classNames: ["primary"],
+      role: null,
+      ariaLabel: "Save changes",
+      testId: "save-button",
+      text: "Save",
+      outerHtml: '<button id="save">Save</button>',
+      attributes: { id: "save" },
+      rect: {
+        x: 20,
+        y: 30,
+        width: 100,
+        height: 40,
+        top: 30,
+        right: 120,
+        bottom: 70,
+        left: 20,
+      },
+      styles: { color: "rgb(255, 255, 255)", "font-size": "14px" },
+      hierarchy: [
+        {
+          tagName: "html",
+          selector: "html",
+          id: null,
+          classNames: [],
+          role: null,
+          ariaLabel: null,
+          testId: null,
+        },
+        {
+          tagName: "button",
+          selector: "button#save",
+          id: "save",
+          classNames: ["primary"],
+          role: null,
+          ariaLabel: "Save changes",
+          testId: "save-button",
+        },
+      ],
+    };
+
+    await expect(harness.manager.startAnnotation(input.tabId)).resolves.toEqual({
+      status: "active",
+    });
+    contents.annotationStatus = JSON.stringify({
+      status: "submitted",
+      comment: "Make this action clearer",
+      element,
+    });
+
+    await expect(harness.manager.getAnnotationStatus(input.tabId)).resolves.toEqual({
+      status: "submitted",
+      comment: "Make this action clearer",
+      element,
+      screenshotDataUrl: "data:image/png;base64,c2NyZWVuc2hvdA==",
+    });
+    expect(contents.capturePage).toHaveBeenCalledTimes(1);
+    expect(contents.executeJavaScript).toHaveBeenCalledTimes(3);
   });
 
   test("offers Interrogate and inspects the clicked element in that preview", async () => {

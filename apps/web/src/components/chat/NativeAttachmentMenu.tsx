@@ -41,6 +41,8 @@ export interface WorkspaceAttachment {
   path: string;
   name: string;
   previewUrl?: string;
+  /** Shared browser annotation that owns this generated screenshot. */
+  annotationId?: string;
 }
 
 interface NativeAttachmentMenuProps {

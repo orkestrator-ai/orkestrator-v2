@@ -5,7 +5,9 @@ import type {
 } from "@orkestrator/protocol/browser-preview";
 import {
   attachBrowserPreview,
+  cancelBrowserPreviewAnnotation,
   destroyBrowserPreview,
+  getBrowserPreviewAnnotationStatus,
   goBackBrowserPreview,
   goForwardBrowserPreview,
   hasNativeBrowserPreview,
@@ -14,6 +16,7 @@ import {
   reloadBrowserPreview,
   setBrowserPreviewBounds,
   setBrowserPreviewVisible,
+  startBrowserPreviewAnnotation,
 } from "./browser-preview";
 
 const originalOrkestrator = window.orkestrator;
@@ -45,6 +48,9 @@ describe("native browser preview wrapper", () => {
       goForward: mock(async () => current),
       reload: mock(async () => current),
       openDevTools: mock(async () => current),
+      startAnnotation: mock(async () => ({ status: "active" as const })),
+      getAnnotationStatus: mock(async () => ({ status: "active" as const })),
+      cancelAnnotation: mock(async () => undefined),
       destroy: mock(async () => {}),
     };
     window.orkestrator = { browserPreview } as Window["orkestrator"];
@@ -64,6 +70,9 @@ describe("native browser preview wrapper", () => {
     await goForwardBrowserPreview("browser-1");
     await reloadBrowserPreview("browser-1");
     await openBrowserPreviewDevTools("browser-1");
+    await startBrowserPreviewAnnotation("browser-1");
+    await getBrowserPreviewAnnotationStatus("browser-1");
+    await cancelBrowserPreviewAnnotation("browser-1");
     await destroyBrowserPreview("browser-1");
 
     expect(browserPreview.attach).toHaveBeenCalledWith(input);
@@ -74,6 +83,9 @@ describe("native browser preview wrapper", () => {
     expect(browserPreview.goForward).toHaveBeenCalledWith("browser-1");
     expect(browserPreview.reload).toHaveBeenCalledWith("browser-1");
     expect(browserPreview.openDevTools).toHaveBeenCalledWith("browser-1");
+    expect(browserPreview.startAnnotation).toHaveBeenCalledWith("browser-1");
+    expect(browserPreview.getAnnotationStatus).toHaveBeenCalledWith("browser-1");
+    expect(browserPreview.cancelAnnotation).toHaveBeenCalledWith("browser-1");
     expect(browserPreview.destroy).toHaveBeenCalledWith("browser-1");
   });
 
@@ -105,5 +117,12 @@ describe("native browser preview wrapper", () => {
     await expect(goForwardBrowserPreview("browser-1")).rejects.toThrow(unavailable);
     await expect(reloadBrowserPreview("browser-1")).rejects.toThrow(unavailable);
     await expect(openBrowserPreviewDevTools("browser-1")).rejects.toThrow(unavailable);
+    await expect(startBrowserPreviewAnnotation("browser-1")).rejects.toThrow(
+      "Browser preview annotations are unavailable",
+    );
+    await expect(getBrowserPreviewAnnotationStatus("browser-1")).rejects.toThrow(
+      "Browser preview annotations are unavailable",
+    );
+    await expect(cancelBrowserPreviewAnnotation("browser-1")).resolves.toBeUndefined();
   });
 });

@@ -91,7 +91,10 @@ import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persis
 import { composerOccupiedError } from "@/lib/prompt-queue-errors";
 import { modelSupportsSpeed } from "@/lib/agent-launch";
 import { buildReviewModelCatalog } from "@/lib/review-launch-options";
-import { resolveWorkspaceAttachment } from "@/lib/chat/workspace-attachments";
+import {
+  resolveWorkspaceAttachment,
+  retainSupportedAttachments,
+} from "@/lib/chat/workspace-attachments";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -421,6 +424,9 @@ export function SharedNativeAgentController({
   }, [activeNoticeIds, noticeSessionIdentity, projection, reconcileNoticeDismissals]);
   const updateDraft = useNativeComposeStore((state) => state.updateDraft);
   const clearDraft = useNativeComposeStore((state) => state.clearDraft);
+  const consumeBrowserAnnotations = useNativeComposeStore(
+    (state) => state.consumeBrowserAnnotations,
+  );
   useNativeComposeDraftPersistence(
     platform,
     data.environmentId,
@@ -941,11 +947,21 @@ export function SharedNativeAgentController({
       // this comparison the ownership check which prevents a late transcript
       // echo from deleting the user's next prompt.
       if (current?.requestId !== requestId) return false;
+      const browserAnnotationIds = current.annotations
+        .filter((annotation) => annotation.source === "browser")
+        .map((annotation) => annotation.id);
       clearDraft(sessionKey);
+      consumeBrowserAnnotations(data.environmentId, browserAnnotationIds);
       discardProvisionalDraft();
       return true;
     },
-    [clearDraft, discardProvisionalDraft, sessionKey],
+    [
+      clearDraft,
+      consumeBrowserAnnotations,
+      data.environmentId,
+      discardProvisionalDraft,
+      sessionKey,
+    ],
   );
 
   useEffect(() => {
@@ -1054,7 +1070,17 @@ export function SharedNativeAgentController({
       const restoreComposerFocus = Boolean(
         inputContainerRef.current?.contains(document.activeElement),
       );
-      const submittedAttachments = [...draft.attachments];
+      const providerSupportedAttachments = retainSupportedAttachments(
+        draft.attachments,
+        adapter.capabilities.attachments,
+      );
+      const submittedAttachments =
+        selectedModel?.supportsImageInput === false
+          ? providerSupportedAttachments.filter((attachment) => attachment.type !== "image")
+          : providerSupportedAttachments;
+      const submittedBrowserAnnotationIds = draft.annotations
+        .filter((annotation) => annotation.source === "browser")
+        .map((annotation) => annotation.id);
       const basePrompt = preparedPrompt
         ? text.trim()
         : buildInitialPromptWithAttachmentReferences(
@@ -1216,6 +1242,7 @@ export function SharedNativeAgentController({
           await enqueue(prompt, options);
           setOptimisticPrompt(null);
           clearDraft(sessionKey);
+          consumeBrowserAnnotations(data.environmentId, submittedBrowserAnnotationIds);
           discardProvisionalDraft();
           if (agentHandoffId) consumeTabAgentHandoff(tabId, data.environmentId);
           return true;
@@ -1227,6 +1254,7 @@ export function SharedNativeAgentController({
         if (outcome.outcome === "accepted" || transcriptConfirmed) {
           transcriptConfirmedRequestIdRef.current = null;
           clearDraft(sessionKey);
+          consumeBrowserAnnotations(data.environmentId, submittedBrowserAnnotationIds);
           discardProvisionalDraft();
           if (agentHandoffId) consumeTabAgentHandoff(tabId, data.environmentId);
           return true;
@@ -1272,6 +1300,7 @@ export function SharedNativeAgentController({
       return false;
     },
     [
+      adapter.capabilities.attachments,
       clearDraft,
       composer?.fastModeEnabled,
       composer?.selectedModeId,
@@ -1283,6 +1312,7 @@ export function SharedNativeAgentController({
       canQueue,
       agentHandoffId,
       consumeTabAgentHandoff,
+      consumeBrowserAnnotations,
       data.environmentId,
       discardProvisionalDraft,
       draft.attachments,
@@ -1301,6 +1331,7 @@ export function SharedNativeAgentController({
       projection?.slashCommands,
       recoverableDispatch,
       actionableDispatch,
+      selectedModel?.supportsImageInput,
       send,
       sendLocked,
       serializeForLLM,
@@ -2162,7 +2193,14 @@ export function SharedNativeAgentController({
           annotations={draft.annotations}
           onClearAnnotations={() => {
             if (draft.submissionPending) return;
-            updateDraft(sessionKey, { annotations: [] });
+            const annotationIds = new Set(draft.annotations.map((annotation) => annotation.id));
+            updateDraft(sessionKey, {
+              annotations: [],
+              attachments: draft.attachments.filter(
+                (attachment) =>
+                  !attachment.annotationId || !annotationIds.has(attachment.annotationId),
+              ),
+            });
           }}
           inputRef={inputRef}
           inputContainerRef={inputContainerRef}

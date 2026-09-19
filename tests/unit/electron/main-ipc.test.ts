@@ -123,6 +123,9 @@ function createHarness(
     goForward: mock(() => browserPreviewState),
     reload: mock(() => browserPreviewState),
     openDevTools: mock(() => browserPreviewState),
+    startAnnotation: mock(async () => ({ status: "active" as const })),
+    getAnnotationStatus: mock(async () => ({ status: "active" as const })),
+    cancelAnnotation: mock(async () => undefined),
     destroy: mock(() => undefined),
   };
 
@@ -400,6 +403,9 @@ describe("main IPC registration", () => {
     await harness.invoke("orkestrator:browser-preview:go-forward", "browser-1");
     await harness.invoke("orkestrator:browser-preview:reload", "browser-1");
     await harness.invoke("orkestrator:browser-preview:open-devtools", "browser-1");
+    await harness.invoke("orkestrator:browser-preview:annotation-start", "browser-1");
+    await harness.invoke("orkestrator:browser-preview:annotation-status", "browser-1");
+    await harness.invoke("orkestrator:browser-preview:annotation-cancel", "browser-1");
     await harness.invoke("orkestrator:browser-preview:destroy", "browser-1");
 
     expect(harness.browserPreviews.attach).toHaveBeenCalledWith({
@@ -418,6 +424,9 @@ describe("main IPC registration", () => {
     expect(harness.browserPreviews.goForward).toHaveBeenCalledWith("browser-1");
     expect(harness.browserPreviews.reload).toHaveBeenCalledWith("browser-1");
     expect(harness.browserPreviews.openDevTools).toHaveBeenCalledWith("browser-1");
+    expect(harness.browserPreviews.startAnnotation).toHaveBeenCalledWith("browser-1");
+    expect(harness.browserPreviews.getAnnotationStatus).toHaveBeenCalledWith("browser-1");
+    expect(harness.browserPreviews.cancelAnnotation).toHaveBeenCalledWith("browser-1");
     expect(harness.browserPreviews.destroy).toHaveBeenCalledWith("browser-1");
     await expect(
       harness.invoke("orkestrator:browser-preview:attach", { tabId: "", url: 42 }),

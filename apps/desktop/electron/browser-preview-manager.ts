@@ -3,6 +3,7 @@ import type {
   ContextMenuParams,
   InputEvent,
   MenuItemConstructorOptions,
+  NativeImage,
   Rectangle,
   Session,
   WebContents,
@@ -10,12 +11,19 @@ import type {
   WebContentsViewConstructorOptions,
 } from "electron";
 import type {
+  BrowserPreviewAnnotationStatus,
   BrowserPreviewAttachInput,
   BrowserPreviewBounds,
+  BrowserPreviewElementDetails,
   BrowserPreviewOpenLinkEvent,
   BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
 import { createContextMenuTemplate, type MenuLike } from "./context-menu.js";
+import {
+  BROWSER_PREVIEW_ANNOTATION_CANCEL_SCRIPT,
+  BROWSER_PREVIEW_ANNOTATION_START_SCRIPT,
+  BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT,
+} from "./browser-preview-annotation-script.js";
 
 type WebContentsViewConstructor = new (
   options?: WebContentsViewConstructorOptions,
@@ -45,6 +53,7 @@ export interface BrowserPreviewManagerOptions {
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
 const CLIPBOARD_USER_ACTIVATION_WINDOW_MS = 5_000;
+const MAX_ANNOTATION_SCREENSHOT_DIMENSION = 2_000;
 const CLIPBOARD_USER_ACTIVATION_INPUTS = new Set<InputEvent["type"]>([
   "mouseDown",
   "pointerDown",
@@ -131,6 +140,116 @@ function assertTabId(tabId: unknown): asserts tabId is string {
   if (typeof tabId !== "string" || tabId.length === 0 || tabId.length > 256) {
     throw new Error("Expected a browser preview tab ID");
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return (
+    isRecord(value) &&
+    Object.entries(value).every(
+      ([key, entry]) => key.length <= 200 && typeof entry === "string" && entry.length <= 12_000,
+    )
+  );
+}
+
+function isFiniteRect(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return ["x", "y", "width", "height", "top", "right", "bottom", "left"].every(
+    (key) => typeof value[key] === "number" && Number.isFinite(value[key]),
+  );
+}
+
+function isElementDetails(value: unknown): value is BrowserPreviewElementDetails {
+  if (!isRecord(value) || !isRecord(value.viewport) || !isFiniteRect(value.rect)) return false;
+  const boundedStrings = [
+    [value.pageUrl, 4_000],
+    [value.pageTitle, 1_000],
+    [value.tagName, 100],
+    [value.selector, 2_000],
+    [value.cssPath, 8_000],
+    [value.xpath, 8_000],
+    [value.text, 4_000],
+    [value.outerHtml, 12_000],
+  ] as const;
+  if (
+    boundedStrings.some(([entry, limit]) => typeof entry !== "string" || entry.length > limit) ||
+    ![value.viewport.width, value.viewport.height, value.viewport.devicePixelRatio].every(
+      (entry) => typeof entry === "number" && Number.isFinite(entry),
+    ) ||
+    !isStringRecord(value.attributes) ||
+    !isStringRecord(value.styles) ||
+    !Array.isArray(value.classNames) ||
+    value.classNames.length > 50 ||
+    value.classNames.some((entry) => typeof entry !== "string" || entry.length > 500) ||
+    !Array.isArray(value.hierarchy) ||
+    value.hierarchy.length > 32
+  ) {
+    return false;
+  }
+  for (const nullable of [value.id, value.role, value.ariaLabel, value.testId]) {
+    if (nullable !== null && (typeof nullable !== "string" || nullable.length > 2_000))
+      return false;
+  }
+  return value.hierarchy.every((ancestor) => {
+    if (!isRecord(ancestor)) return false;
+    return (
+      typeof ancestor.tagName === "string" &&
+      ancestor.tagName.length <= 100 &&
+      typeof ancestor.selector === "string" &&
+      ancestor.selector.length <= 2_000 &&
+      Array.isArray(ancestor.classNames) &&
+      ancestor.classNames.length <= 50 &&
+      ancestor.classNames.every((entry) => typeof entry === "string" && entry.length <= 500) &&
+      [ancestor.id, ancestor.role, ancestor.ariaLabel, ancestor.testId].every(
+        (entry) => entry === null || (typeof entry === "string" && entry.length <= 2_000),
+      )
+    );
+  });
+}
+
+function parseAnnotationRuntimeStatus(
+  value: unknown,
+):
+  | { status: "inactive" | "active" | "cancelled" }
+  | { status: "submitted"; comment: string; element: BrowserPreviewElementDetails } {
+  if (typeof value !== "string" || value.length > 65_536) return { status: "inactive" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return { status: "inactive" };
+  }
+  if (!isRecord(parsed) || typeof parsed.status !== "string") return { status: "inactive" };
+  if (parsed.status === "active" || parsed.status === "cancelled" || parsed.status === "inactive") {
+    return { status: parsed.status };
+  }
+  if (
+    parsed.status === "submitted" &&
+    typeof parsed.comment === "string" &&
+    parsed.comment.trim().length > 0 &&
+    parsed.comment.length <= 2_000 &&
+    isElementDetails(parsed.element)
+  ) {
+    return { status: "submitted", comment: parsed.comment, element: parsed.element };
+  }
+  return { status: "inactive" };
+}
+
+function annotationScreenshotDataUrl(image: NativeImage): string {
+  const size = image.getSize();
+  const longestSide = Math.max(size.width, size.height);
+  if (longestSide <= MAX_ANNOTATION_SCREENSHOT_DIMENSION) return image.toDataURL();
+  const scale = MAX_ANNOTATION_SCREENSHOT_DIMENSION / longestSide;
+  return image
+    .resize({
+      width: Math.max(1, Math.round(size.width * scale)),
+      height: Math.max(1, Math.round(size.height * scale)),
+      quality: "best",
+    })
+    .toDataURL();
 }
 
 function validateBounds(bounds: BrowserPreviewBounds, zoomFactor: number): Rectangle {
@@ -265,6 +384,38 @@ export class BrowserPreviewManager {
     const preview = this.get(tabId);
     preview.view.webContents.openDevTools({ mode: "detach" });
     return this.snapshot(tabId, preview);
+  }
+
+  async startAnnotation(tabId: string): Promise<BrowserPreviewAnnotationStatus> {
+    const preview = this.get(tabId);
+    await preview.view.webContents.executeJavaScript(BROWSER_PREVIEW_ANNOTATION_START_SCRIPT, true);
+    return { status: "active" };
+  }
+
+  async getAnnotationStatus(tabId: string): Promise<BrowserPreviewAnnotationStatus> {
+    const preview = this.get(tabId);
+    const encoded = await preview.view.webContents.executeJavaScript(
+      BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT,
+      true,
+    );
+    const status = parseAnnotationRuntimeStatus(encoded);
+    if (status.status !== "submitted") return status;
+
+    const screenshot = await preview.view.webContents.capturePage();
+    await preview.view.webContents
+      .executeJavaScript(BROWSER_PREVIEW_ANNOTATION_CANCEL_SCRIPT, true)
+      .catch(() => undefined);
+    return {
+      ...status,
+      screenshotDataUrl: annotationScreenshotDataUrl(screenshot),
+    };
+  }
+
+  async cancelAnnotation(tabId: string): Promise<void> {
+    const preview = this.get(tabId);
+    await preview.view.webContents
+      .executeJavaScript(BROWSER_PREVIEW_ANNOTATION_CANCEL_SCRIPT, true)
+      .catch(() => undefined);
   }
 
   destroy(tabId: string): void {

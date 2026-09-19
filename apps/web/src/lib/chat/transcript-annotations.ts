@@ -6,6 +6,10 @@ export interface TranscriptAnnotation {
   id: string;
   text: string;
   comment: string;
+  /** Omitted on legacy transcript excerpts. */
+  source?: "transcript" | "browser";
+  /** Workspace path for the highlighted browser-frame capture. */
+  screenshotPath?: string;
 }
 
 export interface PromptTranscriptReference {
@@ -36,7 +40,12 @@ export function isTranscriptAnnotation(value: unknown): value is TranscriptAnnot
     annotation.text.trim().length > 0 &&
     annotation.text.length <= MAX_TRANSCRIPT_ANNOTATION_TEXT_LENGTH &&
     typeof annotation.comment === "string" &&
-    annotation.comment.length <= MAX_TRANSCRIPT_ANNOTATION_COMMENT_LENGTH
+    annotation.comment.length <= MAX_TRANSCRIPT_ANNOTATION_COMMENT_LENGTH &&
+    (annotation.source === undefined ||
+      annotation.source === "transcript" ||
+      annotation.source === "browser") &&
+    (annotation.screenshotPath === undefined ||
+      (typeof annotation.screenshotPath === "string" && annotation.screenshotPath.length <= 4_096))
   );
 }
 

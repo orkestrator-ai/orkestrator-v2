@@ -2,6 +2,7 @@ import type { BrowserWindow, OpenDialogOptions } from "electron";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import type { ConnectToRemoteInput, ConnectionList } from "@orkestrator/protocol/connections";
 import type {
+  BrowserPreviewAnnotationStatus,
   BrowserPreviewAttachInput,
   BrowserPreviewBounds,
   BrowserPreviewState,
@@ -80,6 +81,9 @@ export type BrowserPreviewController = {
   goForward(tabId: string): BrowserPreviewState;
   reload(tabId: string): BrowserPreviewState;
   openDevTools(tabId: string): BrowserPreviewState;
+  startAnnotation(tabId: string): Promise<BrowserPreviewAnnotationStatus>;
+  getAnnotationStatus(tabId: string): Promise<BrowserPreviewAnnotationStatus>;
+  cancelAnnotation(tabId: string): Promise<void>;
   destroy(tabId: string): void;
 };
 
@@ -394,6 +398,15 @@ export function registerMainIpc({
   );
   handle("orkestrator:browser-preview:open-devtools", (event, tabId: unknown) =>
     previews(event).openDevTools(browserPreviewTabId(tabId)),
+  );
+  handle("orkestrator:browser-preview:annotation-start", (event, tabId: unknown) =>
+    previews(event).startAnnotation(browserPreviewTabId(tabId)),
+  );
+  handle("orkestrator:browser-preview:annotation-status", (event, tabId: unknown) =>
+    previews(event).getAnnotationStatus(browserPreviewTabId(tabId)),
+  );
+  handle("orkestrator:browser-preview:annotation-cancel", (event, tabId: unknown) =>
+    previews(event).cancelAnnotation(browserPreviewTabId(tabId)),
   );
   handle("orkestrator:browser-preview:destroy", (event, tabId: unknown) =>
     previews(event).destroy(browserPreviewTabId(tabId)),

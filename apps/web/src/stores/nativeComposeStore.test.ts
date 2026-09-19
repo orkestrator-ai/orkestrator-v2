@@ -167,4 +167,48 @@ describe("nativeComposeStore", () => {
       useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation,
     ).toBeUndefined();
   });
+
+  test("consumes one shared browser annotation across an environment", () => {
+    const browserAnnotation = {
+      id: "browser-reference",
+      source: "browser" as const,
+      text: "button#save",
+      comment: "Make this clearer",
+      screenshotPath: "/workspace/.orkestrator/annotations/save.png",
+    };
+    const transcriptAnnotation = {
+      id: "transcript-reference",
+      text: "Earlier answer",
+      comment: "Keep this",
+    };
+    for (const sessionKey of ["env-env-1:tab-a", "env-env-1:tab-b", "env-env-2:tab-c"]) {
+      useNativeComposeStore.getState().updateDraft(sessionKey, {
+        text: `draft for ${sessionKey}`,
+        annotations: [browserAnnotation, transcriptAnnotation],
+        attachments: [
+          {
+            id: `screen-${sessionKey}`,
+            annotationId: browserAnnotation.id,
+            type: "image",
+            path: browserAnnotation.screenshotPath,
+            name: "save.png",
+          },
+        ],
+      });
+    }
+
+    useNativeComposeStore.getState().consumeBrowserAnnotations("env-1", [browserAnnotation.id]);
+
+    for (const sessionKey of ["env-env-1:tab-a", "env-env-1:tab-b"]) {
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toMatchObject({
+        text: `draft for ${sessionKey}`,
+        annotations: [transcriptAnnotation],
+        attachments: [],
+      });
+    }
+    expect(useNativeComposeStore.getState().drafts.get("env-env-2:tab-c")).toMatchObject({
+      annotations: [browserAnnotation, transcriptAnnotation],
+      attachments: [expect.objectContaining({ annotationId: browserAnnotation.id })],
+    });
+  });
 });

@@ -77,7 +77,8 @@ function isPersistedAttachment(namespace: NativeDraftNamespace, value: unknown):
     typeof value.id !== "string" ||
     typeof value.name !== "string" ||
     typeof value.path !== "string" ||
-    (value.previewUrl !== undefined && typeof value.previewUrl !== "string")
+    (value.previewUrl !== undefined && typeof value.previewUrl !== "string") ||
+    (value.annotationId !== undefined && typeof value.annotationId !== "string")
   ) {
     return false;
   }

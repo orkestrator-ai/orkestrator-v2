@@ -2794,6 +2794,86 @@ test("MultiReviewService does not treat provider fix failures as schema repair w
   }
 });
 
+test.each([
+  ["error", "The fix session failed"],
+  ["missing", "The fix session no longer exists"],
+] as const)(
+  "MultiReviewService identifies a persisted fix session when it becomes %s",
+  async (status, message) => {
+    const environmentId = `env-legacy-fix-${status}`;
+    const provider = new Provider();
+    provider.statusOverrides.set("session-legacy-fix", status);
+    await withService(environmentId, provider, async ({ service, storage, snapshot }) => {
+      const workflowId = await seedLegacyFixingWorkflow(storage, environmentId);
+      await service.advanceNow(workflowId);
+
+      expect(await snapshot(workflowId)).toMatchObject({
+        phase: "failed",
+        activeRequest: { kind: "fix" },
+        fixSession: { providerSessionId: "session-legacy-fix", status: "failed" },
+        error: message,
+      });
+    });
+  },
+);
+
+test("MultiReviewService reports terminal detail from a persisted fix session", async () => {
+  const detail = "fix model reached its usage limit";
+  const provider = new Provider();
+  provider.sessionFailures.set("session-legacy-fix", detail);
+  await withService("env-legacy-fix-terminal", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-legacy-fix-terminal");
+    await service.advanceNow(workflowId);
+
+    expect((await snapshot(workflowId))?.error).toBe(`The fix session failed: ${detail}`);
+  });
+});
+
+test("MultiReviewService bounds a blocked persisted fix model", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-legacy-fix", "blocked");
+  await withService("env-legacy-fix-blocked", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-legacy-fix-blocked");
+    for (let attempt = 0; attempt < 6; attempt++) await service.advanceNow(workflowId);
+
+    expect((await snapshot(workflowId))?.error).toBe(
+      "The fix model stayed blocked without a resolvable interaction",
+    );
+  });
+});
+
+test("MultiReviewService bounds a persisted fix model that returns no result", async () => {
+  const provider = new Provider(false);
+  await withService("env-legacy-fix-idle", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-legacy-fix-idle");
+    for (let attempt = 0; attempt < 6; attempt++) await service.advanceNow(workflowId);
+
+    expect((await snapshot(workflowId))?.error).toBe(
+      "The fix model became idle without returning its fix result",
+    );
+  });
+});
+
+test("MultiReviewService identifies a stalled persisted fix session", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-legacy-fix", "running");
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Fixing" }];
+  await withService(
+    "env-legacy-fix-stall",
+    provider,
+    async ({ service, storage, snapshot }) => {
+      const workflowId = await seedLegacyFixingWorkflow(storage, "env-legacy-fix-stall");
+      await waitUntil(async () => {
+        await service.advanceNow(workflowId);
+        return (await snapshot(workflowId))?.phase === "failed";
+      });
+
+      expect((await snapshot(workflowId))?.error).toContain("fix session produced no activity");
+    },
+    { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } },
+  );
+});
+
 test("MultiReviewService retries an incomplete legacy fix turn from the consolidated report", async () => {
   const provider = new Provider();
   provider.fixComplete = false;

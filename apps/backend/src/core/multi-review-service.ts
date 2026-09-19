@@ -2032,7 +2032,7 @@ export class MultiReviewService {
   }
 
   /**
-   * The consolidation and fix session carries the same hazard as a reviewer: it
+   * The preparation, consolidation, and fix session carries the same hazard as a reviewer: it
    * can report `running` forever while a sub-agent it is waiting on has stopped
    * producing anything. Abandoning it fails the workflow, which is recoverable
    * through Retry, rather than leaving it supervised indefinitely.
@@ -2043,6 +2043,7 @@ export class MultiReviewService {
     provider: BuildPipelineProvider,
     session: NonNullable<MultiReviewWorkflow["fixSession"]>,
     observedUsage: { sessionTokens?: number } | undefined,
+    kind: MultiReviewStepKind,
   ): Promise<void> {
     const previousDigest = session.progressDigest;
     let usageChanged = await this.refreshFixSessionUsage(
@@ -2100,7 +2101,7 @@ export class MultiReviewService {
       );
       this.progress.forget(session.providerSessionId);
       throw new Error(
-        `The ${workflow.phase === "preparing" ? "preparation" : workflow.phase === "fixing" ? "fix" : "consolidation"} session produced no activity for ${stalledMinutes(elapsedMs)} minutes`,
+        `The ${stepModelLabel(kind)} session produced no activity for ${stalledMinutes(elapsedMs)} minutes`,
       );
     }
     if (elapsedMs >= this.stallWarningMs() && session.stalledSince === undefined) {
@@ -2462,6 +2463,7 @@ export class MultiReviewService {
         provider,
         session,
         observation.contextUsage,
+        request.kind,
       );
       return;
     }

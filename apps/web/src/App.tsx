@@ -77,6 +77,9 @@ import { subscribeToConnections } from "@/lib/connections";
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 export const DOCKER_STARTUP_CONFIRMATION_DELAY_MS = 1_500;
+export const HOST_TOOL_STARTUP_CONFIRMATION_DELAY_MS = 250;
+
+type StartupCheckStatus = "checking" | "complete" | "error";
 
 function desktopConnectionScopeSeed(): {
   activeConnectionId: string | null;
@@ -93,9 +96,10 @@ function desktopConnectionScopeSeed(): {
 
 /**
  * How many consecutive failed probes it takes to confirm a transient Docker
- * outage. Startup publishes the first result immediately so a confirmation
- * never extends the full-screen loading state. A daemon that was already seen
- * healthy stays available until the confirmation completes.
+ * outage. Startup keeps the bounded loading state visible for an updater-
+ * sensitive missing-binary result; other diagnostics remain non-blocking while
+ * confirmation runs. A daemon that was already seen healthy stays available
+ * until the confirmation completes.
  */
 export const DOCKER_UNAVAILABLE_CONFIRMATIONS = 2;
 
@@ -105,7 +109,9 @@ export const DOCKER_UNAVAILABLE_CONFIRMATIONS = 2;
  * fallback keeps the renderer compatible with an older backend during a dev
  * hot reload.
  */
-async function probeDocker(source: "startup" | "retry" | "poll"): Promise<DockerAvailability> {
+async function probeDocker(
+  source: "startup" | "retry" | "poll",
+): Promise<DockerAvailability | null> {
   try {
     const result: DockerAvailability | boolean = await checkDocker();
     if (typeof result === "boolean") {
@@ -116,13 +122,22 @@ async function probeDocker(source: "startup" | "retry" | "poll"): Promise<Docker
     return result;
   } catch (error) {
     console.error(`[App] Docker ${source} check failed:`, error);
-    return { available: false, reason: "daemon-unavailable" };
+    // A failed request says nothing about Docker. In particular, treating an
+    // IPC/gateway startup race as `available: false` used to produce both the
+    // Docker warning and the AI CLI onboarding dialog after an app upgrade.
+    return null;
   }
 }
 
 function waitForDockerStartupConfirmation(): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, DOCKER_STARTUP_CONFIRMATION_DELAY_MS);
+  });
+}
+
+function waitForHostToolStartupConfirmation(): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, HOST_TOOL_STARTUP_CONFIRMATION_DELAY_MS);
   });
 }
 
@@ -209,6 +224,7 @@ function App() {
     useState<DockerUnavailableReason | null>(null);
   const [isCheckingDocker, setIsCheckingDocker] = useState(false);
   const [dockerWarningDismissed, setDockerWarningDismissed] = useState(false);
+  const [dockerCheckStatus, setDockerCheckStatus] = useState<StartupCheckStatus>("checking");
   const dockerAvailableRef = useRef<boolean | null>(null);
   const dockerCheckInFlightRef = useRef<Promise<boolean> | null>(null);
   const [macOsPermissions, setMacOsPermissions] = useState<MacOsPermissionsStatus | null>(() =>
@@ -307,6 +323,7 @@ function App() {
   const [codexCliAvailable, setCodexCliAvailable] = useState<boolean | null>(null);
   const [githubCliAvailable, setGithubCliAvailable] = useState<boolean | null>(null);
   const [availableAiCli, setAvailableAiCli] = useState<string | null>(null);
+  const [hostToolCheckStatus, setHostToolCheckStatus] = useState<StartupCheckStatus>("checking");
   const [isCheckingClaude, setIsCheckingClaude] = useState(false);
   const [githubCliWarningDismissed, setGithubCliWarningDismissed] = useState(false);
   const [localBackendUnavailableMessage, setLocalBackendUnavailableMessage] = useState<
@@ -432,7 +449,18 @@ function App() {
 
     const check = (async () => {
       const previous = dockerAvailableRef.current;
+      if (source !== "poll") setDockerCheckStatus("checking");
       let result = await probeDocker(source);
+
+      if (result === null && source === "startup") {
+        await waitForDockerStartupConfirmation();
+        result = await probeDocker(source);
+      }
+      if (result === null) {
+        setDockerCheckStatus("error");
+        return previous === true;
+      }
+
       let available = result.available;
       const firstFailureReason = available ? null : result.reason;
 
@@ -442,42 +470,55 @@ function App() {
         setDockerUnavailableReason(next.reason);
       };
 
-      // Startup must never hide the app behind the loading overlay while a
-      // confirming probe runs. Show the first bounded diagnostic immediately;
-      // a later successful confirmation will clear it again.
-      if (source === "startup") publishResult(result);
+      // Keep the established non-blocking startup behavior for daemon and
+      // permission diagnostics. A first `not-installed` result is the special
+      // updater-sensitive case: confirm it before telling the user a binary
+      // that worked in the previous process has disappeared.
+      const firstResultWasPublished =
+        source === "startup" && (available || result.reason !== "not-installed");
+      if (firstResultWasPublished) {
+        publishResult(result);
+      }
 
       // A single failed probe is not evidence of an outage. `check_docker`
       // shells out to `docker info` with a 10s timeout and reports any failure
       // - including that timeout - as "unavailable", so a loaded host or a
       // startup race can produce a false negative. Tearing down container-backed
-      // UI on one of those is destructive, so confirm transient failures at
-      // startup as well as when a daemon that was healthy a moment ago appears
-      // to go away. A fast startup failure is delayed so Docker Desktop or
-      // dockerd has time to finish starting. Missing binaries, durable permission
-      // denials, and a probe that already consumed its 10s timeout do not benefit
-      // from another blocking startup probe.
+      // UI on one of those is destructive, so confirm transient failures before
+      // publishing them. This also includes a first `not-installed` result: an
+      // updater relaunch can briefly expose an incomplete host execution
+      // environment even though the next launch finds the same binary normally.
+      // Durable permission denials and a probe that already consumed its 10s
+      // timeout do not benefit from another blocking startup probe.
       for (
         let attempt = 1;
         !available &&
         (previous === true || source === "startup") &&
-        result.reason !== "not-installed" &&
         result.reason !== "permission-denied" &&
         !(source === "startup" && result.reason === "timed-out") &&
         attempt < DOCKER_UNAVAILABLE_CONFIRMATIONS;
         attempt++
       ) {
         if (source === "startup") await waitForDockerStartupConfirmation();
-        result = await probeDocker(source);
+        const confirmation = await probeDocker(source);
+        if (confirmation === null) {
+          setDockerCheckStatus("error");
+          return previous === true;
+        }
+        result = confirmation;
         available = result.available;
       }
 
-      if (!available && firstFailureReason !== null) {
+      // Preserve a diagnostic that the user may already be reading, but never
+      // restore the deliberately withheld `not-installed` diagnosis after a
+      // confirming probe proves that the Docker binary exists.
+      if (!available && firstResultWasPublished && firstFailureReason !== null) {
         result = { available: false, reason: firstFailureReason };
       }
 
       rendererDebugLog(`[App] Docker ${source} check:`, available);
       publishResult(result);
+      setDockerCheckStatus("complete");
 
       // Reconcile container identities on startup and when Docker comes back,
       // but not on every healthy poll.
@@ -537,37 +578,79 @@ function App() {
   // the daemon probe so local worktree workflows receive the same onboarding.
   useEffect(() => {
     if (!macOsPermissionsReady) return;
-    Promise.all([
-      checkClaudeCli(),
-      checkClaudeConfig(),
-      checkOpencodeCli(),
-      checkCodexCli(),
-      checkGithubCli(),
-      getAvailableAiCli(),
-    ])
-      .then(([claudeCli, claudeConfig, opencodeCli, codexCli, githubCli, aiCli]) => {
+    let active = true;
+    const checkHostTools = async () => {
+      setHostToolCheckStatus("checking");
+      let results = await Promise.allSettled([
+        checkClaudeCli(),
+        checkClaudeConfig(),
+        checkOpencodeCli(),
+        checkCodexCli(),
+        checkGithubCli(),
+        getAvailableAiCli(),
+      ]);
+
+      const firstClaudeCli = results[0]?.status === "fulfilled" ? results[0].value : undefined;
+      const firstClaudeConfig = results[1]?.status === "fulfilled" ? results[1].value : undefined;
+      const firstGithubCli = results[4]?.status === "fulfilled" ? results[4].value : undefined;
+      const firstAiCli = results[5]?.status === "fulfilled" ? results[5].value : undefined;
+      const needsConfirmation =
+        results.some((result) => result.status === "rejected") ||
+        !firstAiCli ||
+        firstGithubCli === false ||
+        (firstClaudeCli === true && firstClaudeConfig === false);
+      if (needsConfirmation) {
+        await waitForHostToolStartupConfirmation();
+        if (!active) return;
+        results = await Promise.allSettled([
+          checkClaudeCli(),
+          checkClaudeConfig(),
+          checkOpencodeCli(),
+          checkCodexCli(),
+          checkGithubCli(),
+          getAvailableAiCli(),
+        ]);
+      }
+      if (!active) return;
+
+      const failures = results.flatMap((result, index) =>
+        result.status === "rejected" ? [{ index, reason: result.reason }] : [],
+      );
+      if (failures.length > 0) {
+        for (const failure of failures) {
+          console.error(`[App] CLI startup check ${failure.index + 1} failed:`, failure.reason);
+        }
+        // Unknown is not absent. Keep all definitive fulfilled values, but do
+        // not show installation onboarding from an incomplete capability set.
+        setHostToolCheckStatus("error");
+      } else {
+        setHostToolCheckStatus("complete");
+      }
+
+      const [claudeCli, claudeConfig, opencodeCli, codexCli, githubCli] = results.map((result) =>
+        result.status === "fulfilled" ? result.value : null,
+      );
+      const aiCli = results[5]?.status === "fulfilled" ? results[5].value : undefined;
+      if (typeof claudeCli === "boolean") setClaudeCliAvailable(claudeCli);
+      if (typeof claudeConfig === "boolean") setClaudeConfigAvailable(claudeConfig);
+      if (typeof opencodeCli === "boolean") setOpencodeCliAvailable(opencodeCli);
+      if (typeof codexCli === "boolean") setCodexCliAvailable(codexCli);
+      if (typeof githubCli === "boolean") setGithubCliAvailable(githubCli);
+      if (typeof aiCli === "string" || aiCli === null) setAvailableAiCli(aiCli);
+
+      if (failures.length === 0) {
         rendererDebugLog("[App] Claude CLI available:", claudeCli);
         rendererDebugLog("[App] Claude config available:", claudeConfig);
         rendererDebugLog("[App] OpenCode CLI available:", opencodeCli);
         rendererDebugLog("[App] Codex CLI available:", codexCli);
         rendererDebugLog("[App] GitHub CLI available:", githubCli);
         rendererDebugLog("[App] Available AI CLI:", aiCli);
-        setClaudeCliAvailable(claudeCli);
-        setClaudeConfigAvailable(claudeConfig);
-        setOpencodeCliAvailable(opencodeCli);
-        setCodexCliAvailable(codexCli);
-        setGithubCliAvailable(githubCli);
-        setAvailableAiCli(aiCli);
-      })
-      .catch((error) => {
-        console.error("[App] CLI check failed:", error);
-        setClaudeCliAvailable(false);
-        setClaudeConfigAvailable(false);
-        setOpencodeCliAvailable(false);
-        setCodexCliAvailable(false);
-        setGithubCliAvailable(false);
-        setAvailableAiCli(null);
-      });
+      }
+    };
+    void checkHostTools();
+    return () => {
+      active = false;
+    };
   }, [macOsPermissionsReady]);
 
   // Load config from backend on startup
@@ -586,6 +669,7 @@ function App() {
   // Handle retrying Docker check
   const handleRetryDockerCheck = async () => {
     setIsCheckingDocker(true);
+    setDockerCheckStatus("checking");
     try {
       await refreshDockerAvailability("retry");
     } finally {
@@ -615,6 +699,7 @@ function App() {
   // Handle retrying CLI checks (Claude, OpenCode, GitHub)
   const handleRetryClaudeCheck = async () => {
     setIsCheckingClaude(true);
+    setHostToolCheckStatus("checking");
     try {
       const [claudeCli, claudeConfig, opencodeCli, codexCli, githubCli, aiCli] = await Promise.all([
         checkClaudeCli(),
@@ -642,14 +727,16 @@ function App() {
       setCodexCliAvailable(codexCli);
       setGithubCliAvailable(githubCli);
       setAvailableAiCli(aiCli);
+      setHostToolCheckStatus("complete");
     } catch (error) {
       console.error("[App] CLI retry check failed:", error);
-      setClaudeCliAvailable(false);
-      setClaudeConfigAvailable(false);
-      setOpencodeCliAvailable(false);
-      setCodexCliAvailable(false);
-      setGithubCliAvailable(false);
-      setAvailableAiCli(null);
+      // The retry controls live in the current warning. Keep that warning
+      // reachable and report the transient failure instead of silently
+      // unmounting the user's only recovery path.
+      setHostToolCheckStatus("complete");
+      toast.error("Could not check CLI tools", {
+        description: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       setIsCheckingClaude(false);
     }
@@ -775,25 +862,30 @@ function App() {
   // When Docker is down, let its outage warning lead; host-tool onboarding is
   // shown after the user chooses to continue without containers.
   const hostToolWarningsVisible =
-    dockerAvailable === true || (dockerAvailable === false && dockerWarningDismissed);
+    (dockerCheckStatus === "error" && dockerAvailable === null) ||
+    dockerAvailable === true ||
+    (dockerAvailable === false && dockerWarningDismissed);
 
-  const isCheckingCliTools =
-    hostToolWarningsVisible && availableAiCli === null && claudeCliAvailable === null;
+  const isCheckingCliTools = hostToolWarningsVisible && hostToolCheckStatus === "checking";
 
   const noAiCliAvailable =
     hostToolWarningsVisible &&
+    hostToolCheckStatus === "complete" &&
+    availableAiCli === null &&
     claudeCliAvailable === false &&
     opencodeCliAvailable === false &&
     codexCliAvailable === false;
 
   const claudeNeedsLogin =
     hostToolWarningsVisible &&
+    hostToolCheckStatus === "complete" &&
     claudeCliAvailable === true &&
     claudeConfigAvailable === false &&
     opencodeCliAvailable === false;
 
   const showGithubWarning =
     hostToolWarningsVisible &&
+    hostToolCheckStatus === "complete" &&
     (claudeCliAvailable === true || opencodeCliAvailable === true) &&
     githubCliAvailable === false &&
     !githubCliWarningDismissed;
@@ -1029,6 +1121,27 @@ function App() {
         <Toaster />
         <ErrorDetailsDialog />
 
+        {macOsPermissionsReady && dockerCheckStatus === "error" && dockerAvailable === null && (
+          <div
+            role="alert"
+            className="fixed inset-x-4 bottom-4 z-[90] flex items-center justify-between gap-4 rounded-lg border border-amber-500/40 bg-amber-950/95 px-4 py-3 text-sm text-amber-100 shadow-xl"
+          >
+            <span>
+              Orkestrator could not check Docker availability. Container actions remain disabled
+              until the check succeeds.
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleRetryDockerCheck}
+              disabled={isCheckingDocker}
+            >
+              {isCheckingDocker ? "Checking..." : "Check Docker Again"}
+            </Button>
+          </div>
+        )}
+
         {/* macOS privacy access is resolved before any Docker probe starts. */}
         {showStartupBlocker && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background px-6">
@@ -1221,7 +1334,7 @@ function App() {
         )}
 
         {/* Loading overlay while checking Docker */}
-        {macOsPermissionsReady && dockerAvailable === null && (
+        {macOsPermissionsReady && dockerCheckStatus === "checking" && dockerAvailable === null && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
             <div className="flex flex-col items-center gap-4">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />

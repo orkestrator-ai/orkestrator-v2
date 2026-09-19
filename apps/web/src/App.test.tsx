@@ -373,6 +373,7 @@ mock.module("@/lib/native/process", () => ({
 import App, {
   DOCKER_AVAILABILITY_POLL_INTERVAL_MS,
   DOCKER_STARTUP_CONFIRMATION_DELAY_MS,
+  HOST_TOOL_STARTUP_CONFIRMATION_DELAY_MS,
 } from "./App";
 import { activateFeatureBuildEnvironment } from "@/lib/feature-build-activation";
 
@@ -394,6 +395,35 @@ function deferDockerStartupConfirmation() {
     releaseNext: async () => {
       const callback = confirmationCallbacks.shift();
       if (!callback) throw new Error("No Docker startup confirmation is pending");
+      await act(async () => {
+        callback();
+        await Promise.resolve();
+      });
+    },
+    restore: () => {
+      window.setTimeout = originalSetTimeout;
+    },
+  };
+}
+
+function deferHostToolStartupConfirmation() {
+  const originalSetTimeout = window.setTimeout;
+  const confirmationCallbacks: Array<() => void> = [];
+  window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+    if (timeout === HOST_TOOL_STARTUP_CONFIRMATION_DELAY_MS) {
+      confirmationCallbacks.push(() => {
+        if (typeof handler === "function") handler(...args);
+      });
+      return 43;
+    }
+    return originalSetTimeout(handler, timeout, ...args);
+  }) as typeof window.setTimeout;
+
+  return {
+    confirmationCallbacks,
+    releaseNext: async () => {
+      const callback = confirmationCallbacks.shift();
+      if (!callback) throw new Error("No host-tool startup confirmation is pending");
       await act(async () => {
         callback();
         await Promise.resolve();
@@ -2023,7 +2053,6 @@ describe("App Docker availability", () => {
   });
 
   test.each([
-    ["not-installed", "Docker Is Not Installed", /Install Docker/i],
     ["timed-out", "Docker Check Timed Out", /did not respond within 10 seconds/i],
     ["unknown", "Docker Is Unavailable", /docker info.*failed/i],
     ["daemon-unavailable", "Docker Is Not Running", /Start the Docker service/i],
@@ -2038,7 +2067,84 @@ describe("App Docker availability", () => {
     expect(mockCheckDocker).toHaveBeenCalledTimes(1);
   });
 
-  test.each(["not-installed", "permission-denied", "timed-out"] as const)(
+  test("confirms a missing Docker binary before showing installation guidance", async () => {
+    const deferredConfirmation = deferDockerStartupConfirmation();
+    mockCheckDocker.mockImplementation(async () => ({
+      available: false,
+      reason: "not-installed",
+    }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    try {
+      render(<App />);
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      expect(screen.queryByText("Docker Is Not Installed") === null).toBe(true);
+      expect(screen.getByText("Checking Docker availability...")).toBeTruthy();
+
+      await deferredConfirmation.releaseNext();
+      expect(await screen.findByText("Docker Is Not Installed")).toBeTruthy();
+      expect(screen.getByText(/Install Docker, then restart Orkestrator/i)).toBeTruthy();
+      expect(mockCheckDocker).toHaveBeenCalledTimes(2);
+    } finally {
+      deferredConfirmation.restore();
+    }
+  });
+
+  test.each([
+    ["daemon-unavailable", "Docker Is Not Running"],
+    ["permission-denied", "Docker Permission Required"],
+    ["timed-out", "Docker Check Timed Out"],
+  ] as const)(
+    "uses the confirming %s diagnosis after a withheld missing-binary result",
+    async (reason, title) => {
+      const deferredConfirmation = deferDockerStartupConfirmation();
+      mockCheckDocker
+        .mockImplementationOnce(async () => ({
+          available: false,
+          reason: "not-installed" as const,
+        }))
+        .mockImplementationOnce(async () => ({ available: false, reason }));
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+      try {
+        render(<App />);
+        await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+        expect(screen.queryByText("Docker Is Not Installed") === null).toBe(true);
+
+        await deferredConfirmation.releaseNext();
+        expect(await screen.findByText(title)).toBeTruthy();
+        expect(screen.queryByText("Docker Is Not Installed") === null).toBe(true);
+      } finally {
+        deferredConfirmation.restore();
+      }
+    },
+  );
+
+  test("suppresses a transient missing-binary warning during an updater-style startup", async () => {
+    const deferredConfirmation = deferDockerStartupConfirmation();
+    mockCheckDocker
+      .mockImplementationOnce(async () => ({
+        available: false,
+        reason: "not-installed" as const,
+      }))
+      .mockImplementationOnce(async () => ({ available: true, reason: null }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    try {
+      render(<App />);
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      expect(screen.queryByText("Docker Is Not Installed") === null).toBe(true);
+
+      await deferredConfirmation.releaseNext();
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
+      expect(screen.queryByText("Docker Is Not Installed") === null).toBe(true);
+      expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(1);
+    } finally {
+      deferredConfirmation.restore();
+    }
+  });
+
+  test.each(["permission-denied", "timed-out"] as const)(
     "does not schedule a confirming startup probe for %s",
     async (reason) => {
       const deferredConfirmation = deferDockerStartupConfirmation();
@@ -2060,19 +2166,42 @@ describe("App Docker availability", () => {
     },
   );
 
-  test("treats startup check failures as unavailable and keeps sync failures non-fatal", async () => {
+  test("keeps Docker fail-closed with an immediate recovery action after startup requests fail", async () => {
+    const deferredConfirmation = deferDockerStartupConfirmation();
     const originalConsoleError = console.error;
     const consoleError = mock(() => {});
     console.error = consoleError;
 
     try {
-      mockCheckDocker.mockImplementation(async () => {
-        throw new Error("docker socket unavailable");
+      mockCheckDocker
+        .mockImplementationOnce(async () => {
+          throw new Error("docker socket unavailable");
+        })
+        .mockImplementationOnce(async () => {
+          throw new Error("docker socket unavailable");
+        })
+        .mockImplementationOnce(async () => true);
+      resetStores({
+        environments: [makeEnvironment("env-unknown", "project-1")],
+        selectedProjectId: "project-1",
+        selectedEnvironmentId: "env-unknown",
       });
-      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       const first = render(<App />);
 
-      expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      await deferredConfirmation.releaseNext();
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
+      expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
+      expect(screen.queryByText("Checking Docker availability...") === null).toBe(true);
+      expect(screen.getByText(/could not check Docker availability/i)).toBeTruthy();
+
+      act(() => screen.getByRole("button", { name: "Check Docker Again" }).click());
+      await waitFor(() => {
+        expect(mockCheckDocker).toHaveBeenCalledTimes(3);
+        expect(screen.queryByText(/could not check Docker availability/i) === null).toBe(true);
+      });
+      act(() => screen.getByTestId("start-env-unknown").click());
+      await waitFor(() => expect(mockStartEnvironment).toHaveBeenCalledTimes(1));
       expect(consoleError).toHaveBeenCalledWith(
         "[App] Docker startup check failed:",
         expect.any(Error),
@@ -2096,6 +2225,7 @@ describe("App Docker availability", () => {
       expect(screen.getByTestId("app-shell")).toBeTruthy();
     } finally {
       console.error = originalConsoleError;
+      deferredConfirmation.restore();
     }
   });
 
@@ -2129,6 +2259,40 @@ describe("App Docker availability", () => {
       expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
       expect(screen.getByTestId("app-shell")).toBeTruthy();
       expect(mockExit).not.toHaveBeenCalled();
+    } finally {
+      console.error = originalConsoleError;
+      deferredConfirmation.restore();
+    }
+  });
+
+  test("keeps host-tool dialogs behind a published Docker outage when retry fails", async () => {
+    const deferredConfirmation = deferDockerStartupConfirmation();
+    const originalConsoleError = console.error;
+    console.error = mock(() => {});
+    mockCheckDocker
+      .mockImplementationOnce(async () => false)
+      .mockImplementationOnce(async () => false)
+      .mockImplementationOnce(async () => {
+        throw new Error("retry failed");
+      });
+    mockCheckClaudeCli.mockImplementation(async () => false);
+    mockCheckClaudeConfig.mockImplementation(async () => false);
+    mockCheckOpencodeCli.mockImplementation(async () => false);
+    mockCheckCodexCli.mockImplementation(async () => false);
+    mockGetAvailableAiCli.mockImplementation(async () => null);
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+      expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+      await deferredConfirmation.releaseNext();
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
+
+      act(() => screen.getByRole("button", { name: "Check Again" }).click());
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(3));
+
+      expect(screen.getByText("Docker Is Not Running")).toBeTruthy();
+      expect(screen.queryByText("AI CLI Required") === null).toBe(true);
     } finally {
       console.error = originalConsoleError;
       deferredConfirmation.restore();
@@ -2248,6 +2412,98 @@ describe("App Docker availability", () => {
       expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(1);
     } finally {
       cleanup();
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+    }
+  });
+
+  test("keeps the last healthy Docker snapshot when a background poll request fails", async () => {
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    const originalConsoleError = console.error;
+    const pollCallbacks: Array<() => void> = [];
+    window.setInterval = ((handler: TimerHandler, timeout?: number) => {
+      if (timeout === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
+        pollCallbacks.push(handler as () => void);
+      }
+      return 42;
+    }) as typeof window.setInterval;
+    window.clearInterval = mock(() => {}) as typeof window.clearInterval;
+    console.error = mock(() => {});
+    mockCheckDocker
+      .mockImplementationOnce(async () => true)
+      .mockImplementationOnce(async () => {
+        throw new Error("poll failed");
+      });
+    resetStores({
+      environments: [makeEnvironment("env-visible", "project-1")],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    try {
+      render(<App />);
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        pollCallbacks.forEach((poll) => poll());
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
+
+      expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
+      expect(screen.queryByText(/could not check Docker availability/i) === null).toBe(true);
+      expect(
+        screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"),
+      ).toBe("true");
+    } finally {
+      cleanup();
+      console.error = originalConsoleError;
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+    }
+  });
+
+  test("keeps the last healthy Docker snapshot when an outage confirmation request fails", async () => {
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    const originalConsoleError = console.error;
+    const pollCallbacks: Array<() => void> = [];
+    window.setInterval = ((handler: TimerHandler, timeout?: number) => {
+      if (timeout === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
+        pollCallbacks.push(handler as () => void);
+      }
+      return 42;
+    }) as typeof window.setInterval;
+    window.clearInterval = mock(() => {}) as typeof window.clearInterval;
+    console.error = mock(() => {});
+    mockCheckDocker
+      .mockImplementationOnce(async () => true)
+      .mockImplementationOnce(async () => false)
+      .mockImplementationOnce(async () => {
+        throw new Error("confirmation failed");
+      });
+    resetStores({
+      environments: [makeEnvironment("env-visible", "project-1")],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    try {
+      render(<App />);
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        pollCallbacks.forEach((poll) => poll());
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(3));
+
+      expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
+      expect(
+        screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"),
+      ).toBe("true");
+    } finally {
+      cleanup();
+      console.error = originalConsoleError;
       window.setInterval = originalSetInterval;
       window.clearInterval = originalClearInterval;
     }
@@ -2420,7 +2676,7 @@ describe("App startup checks and global events", () => {
 
     await waitFor(
       () => {
-        expect(mockCheckClaudeCli).toHaveBeenCalledTimes(2);
+        expect(mockCheckClaudeCli).toHaveBeenCalledTimes(3);
         expect(screen.queryByText("AI CLI Required") === null).toBe(true);
       },
       {
@@ -2430,6 +2686,81 @@ describe("App startup checks and global events", () => {
       },
     );
   }, 15_000);
+
+  test("suppresses AI onboarding when the confirmed startup check finds a CLI", async () => {
+    mockCheckClaudeCli
+      .mockImplementationOnce(async () => false)
+      .mockImplementationOnce(async () => true);
+    mockCheckClaudeConfig.mockImplementation(async () => true);
+    mockCheckOpencodeCli.mockImplementation(async () => false);
+    mockCheckCodexCli.mockImplementation(async () => false);
+    mockGetAvailableAiCli
+      .mockImplementationOnce(async () => null)
+      .mockImplementationOnce(async () => "claude");
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    await waitFor(() => expect(mockGetAvailableAiCli).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("AI CLI Required") === null).toBe(true);
+    expect(screen.queryByText("Checking CLI tools installation...") === null).toBe(true);
+  });
+
+  test("confirms a GitHub CLI miss before showing its warning", async () => {
+    const deferredConfirmation = deferHostToolStartupConfirmation();
+    mockCheckGithubCli
+      .mockImplementationOnce(async () => false)
+      .mockImplementationOnce(async () => true);
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    try {
+      render(<App />);
+      await waitFor(() => expect(mockCheckGithubCli).toHaveBeenCalledTimes(1));
+      expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
+      expect(deferredConfirmation.confirmationCallbacks).toHaveLength(1);
+
+      await deferredConfirmation.releaseNext();
+      await waitFor(() => expect(mockCheckGithubCli).toHaveBeenCalledTimes(2));
+      expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
+    } finally {
+      deferredConfirmation.restore();
+    }
+  });
+
+  test("confirms a Claude login miss before showing its warning", async () => {
+    const deferredConfirmation = deferHostToolStartupConfirmation();
+    mockCheckClaudeConfig
+      .mockImplementationOnce(async () => false)
+      .mockImplementationOnce(async () => true);
+    mockCheckOpencodeCli.mockImplementation(async () => false);
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    try {
+      render(<App />);
+      await waitFor(() => expect(mockCheckClaudeConfig).toHaveBeenCalledTimes(1));
+      expect(screen.queryByText("Claude Code Login Required") === null).toBe(true);
+      expect(deferredConfirmation.confirmationCallbacks).toHaveLength(1);
+
+      await deferredConfirmation.releaseNext();
+      await waitFor(() => expect(mockCheckClaudeConfig).toHaveBeenCalledTimes(2));
+      expect(screen.queryByText("Claude Code Login Required") === null).toBe(true);
+    } finally {
+      deferredConfirmation.restore();
+    }
+  });
+
+  test("accepts a supported managed agent outside the legacy three CLI checks", async () => {
+    mockCheckClaudeCli.mockImplementation(async () => false);
+    mockCheckOpencodeCli.mockImplementation(async () => false);
+    mockCheckCodexCli.mockImplementation(async () => false);
+    mockGetAvailableAiCli.mockImplementation(async () => "cursor");
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    await waitFor(() => expect(mockGetAvailableAiCli).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("AI CLI Required") === null).toBe(true);
+  });
 
   test("checks host CLIs and shows onboarding after continuing without Docker", async () => {
     mockCheckDocker.mockImplementation(async () => false);
@@ -2446,12 +2777,12 @@ describe("App startup checks and global events", () => {
     act(() => screen.getByRole("button", { name: "Continue Without Docker" }).click());
 
     expect(await screen.findByText("AI CLI Required")).toBeTruthy();
-    expect(mockCheckClaudeCli).toHaveBeenCalledTimes(1);
-    expect(mockCheckClaudeConfig).toHaveBeenCalledTimes(1);
-    expect(mockCheckOpencodeCli).toHaveBeenCalledTimes(1);
-    expect(mockCheckCodexCli).toHaveBeenCalledTimes(1);
-    expect(mockCheckGithubCli).toHaveBeenCalledTimes(1);
-    expect(mockGetAvailableAiCli).toHaveBeenCalledTimes(1);
+    expect(mockCheckClaudeCli).toHaveBeenCalledTimes(2);
+    expect(mockCheckClaudeConfig).toHaveBeenCalledTimes(2);
+    expect(mockCheckOpencodeCli).toHaveBeenCalledTimes(2);
+    expect(mockCheckCodexCli).toHaveBeenCalledTimes(2);
+    expect(mockCheckGithubCli).toHaveBeenCalledTimes(2);
+    expect(mockGetAvailableAiCli).toHaveBeenCalledTimes(2);
   });
 
   test("shows the host GitHub CLI warning after continuing without Docker", async () => {
@@ -2500,7 +2831,7 @@ describe("App startup checks and global events", () => {
     });
   });
 
-  test("handles initial and retried CLI check rejection", async () => {
+  test("does not misreport a rejected CLI check as no installed tools", async () => {
     const originalConsoleError = console.error;
     const consoleError = mock(() => {});
     console.error = consoleError;
@@ -2512,18 +2843,74 @@ describe("App startup checks and global events", () => {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
 
-      expect(await screen.findByText("AI CLI Required")).toBeTruthy();
-      expect(consoleError).toHaveBeenCalledWith("[App] CLI check failed:", expect.any(Error));
-
-      consoleError.mockClear();
-      act(() => screen.getByRole("button", { name: "Retry" }).click());
       await waitFor(() => {
         expect(consoleError).toHaveBeenCalledWith(
-          "[App] CLI retry check failed:",
+          "[App] CLI startup check 1 failed:",
           expect.any(Error),
         );
       });
+      expect(mockCheckClaudeCli).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText("AI CLI Required") === null).toBe(true);
+      expect(screen.queryByText("Checking CLI tools installation...") === null).toBe(true);
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  test("does not publish partial host-tool results when confirmation remains incomplete", async () => {
+    const originalConsoleError = console.error;
+    console.error = mock(() => {});
+    mockCheckClaudeCli.mockImplementation(async () => true);
+    mockCheckClaudeConfig.mockImplementation(async () => false);
+    mockCheckOpencodeCli.mockImplementation(async () => {
+      throw new Error("opencode probe failed");
+    });
+    mockCheckCodexCli.mockImplementation(async () => false);
+    mockCheckGithubCli.mockImplementation(async () => false);
+    mockGetAvailableAiCli.mockImplementation(async () => {
+      throw new Error("AI CLI selection failed");
+    });
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      await waitFor(() => expect(mockGetAvailableAiCli).toHaveBeenCalledTimes(2));
+      expect(screen.queryByText("AI CLI Required") === null).toBe(true);
+      expect(screen.queryByText("Claude Code Login Required") === null).toBe(true);
+      expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
+      expect(screen.queryByText("Checking CLI tools installation...") === null).toBe(true);
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  test("keeps the AI CLI dialog retryable when a retry request fails", async () => {
+    const originalConsoleError = console.error;
+    console.error = mock(() => {});
+    mockCheckClaudeCli.mockImplementation(async () => false);
+    mockCheckClaudeConfig.mockImplementation(async () => false);
+    mockCheckOpencodeCli.mockImplementation(async () => false);
+    mockCheckCodexCli.mockImplementation(async () => false);
+    mockGetAvailableAiCli.mockImplementation(async () => null);
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+      expect(await screen.findByText("AI CLI Required")).toBeTruthy();
+
+      mockCheckClaudeCli.mockImplementationOnce(async () => {
+        throw new Error("retry failed");
+      });
+      act(() => screen.getByRole("button", { name: "Retry" }).click());
+
+      await waitFor(() => {
+        expect(mockToastError).toHaveBeenCalledWith("Could not check CLI tools", {
+          description: "retry failed",
+        });
+      });
       expect(screen.getByText("AI CLI Required")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     } finally {
       console.error = originalConsoleError;
     }

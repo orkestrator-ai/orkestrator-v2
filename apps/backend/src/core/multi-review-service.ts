@@ -2608,7 +2608,11 @@ export class MultiReviewService {
       if (workflow.restartFixAfterConsolidation) {
         delete workflow.restartFixAfterConsolidation;
         queueRestartedFix(workflow);
-      } else if (workflow.autoFix) {
+      } else if (
+        workflow.autoFix &&
+        (workflow.consolidatedReport.issues.length > 0 ||
+          workflow.consolidatedReport.testCoverageGaps.length > 0)
+      ) {
         // Save the report and fix intent atomically, so a restart cannot lose
         // the handoff or send it twice. The supervisor owns delivery.
         queueDefaultFix(workflow);

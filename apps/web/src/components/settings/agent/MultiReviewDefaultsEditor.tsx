@@ -23,7 +23,6 @@ import { actionDefaultEntry, type AgentActionDefault } from "@orkestrator/protoc
 import {
   DEFAULT_MULTI_REVIEW_REVIEWER_COUNT,
   resolveAgentPlatformSettings,
-  resolveMultiReviewSettings,
   resolveDefaultAgent,
   type AgentSettingsTier,
   type AgentSettingsTiers,
@@ -353,7 +352,7 @@ export function MultiReviewDefaultsEditor({
         <div className="flex items-center gap-2">
           <Checkbox
             id="multi-review-auto-fix"
-            checked={resolveMultiReviewSettings(tiers).autoFix}
+            checked={tier.multiReview?.autoFix ?? false}
             disabled={disabled}
             onCheckedChange={(checked) =>
               onChange({ ...tier, multiReview: { ...tier.multiReview, autoFix: checked === true } })

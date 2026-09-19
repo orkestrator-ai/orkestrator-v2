@@ -89,3 +89,16 @@ test("auto-fix supports keyboard toggling and resets the launch override on reop
   await page.getByRole("button", { name: "Reopen Multi Review dialog" }).click();
   await expect(autoFix).not.toBeChecked();
 });
+
+test("saved auto-fix flows through launch and opens Fix after consolidation", async ({ page }) => {
+  await page.goto("/multi-review-auto-fix");
+
+  await page.getByRole("checkbox", { name: "Auto-fix" }).click();
+  await page.getByRole("button", { name: "Save settings" }).click();
+  await page.getByRole("button", { name: "Configure Multi Review" }).click();
+
+  await expect(page.getByRole("checkbox", { name: "Auto-fix after consolidation" })).toBeChecked();
+  await page.getByRole("button", { name: "Start 2-model review" }).click();
+  await page.getByRole("button", { name: "Complete consolidation" }).click();
+  await expect(page.getByRole("tab", { name: "Fix" })).toBeVisible();
+});

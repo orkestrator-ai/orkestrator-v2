@@ -38,8 +38,12 @@ import {
   type ReviewLaunchSelection,
   type ReviewModelCatalog,
 } from "../../apps/web/src/components/review/ReviewLaunchDialog";
-import { MultiReviewLaunchDialog } from "../../apps/web/src/components/review/MultiReviewLaunchDialog";
+import {
+  MultiReviewLaunchDialog,
+  type MultiReviewLaunchSelection,
+} from "../../apps/web/src/components/review/MultiReviewLaunchDialog";
 import { MultiReviewTab } from "../../apps/web/src/components/review/MultiReviewTab";
+import { MultiReviewDefaultsEditor } from "../../apps/web/src/components/settings/agent/MultiReviewDefaultsEditor";
 import { ReviewValidationStatus } from "../../apps/web/src/components/review/ReviewValidationStatus";
 import { BuildChatTab } from "../../apps/web/src/components/build-pipeline/BuildChatTab";
 import {
@@ -49,6 +53,7 @@ import {
 import { useMultiReviewStore } from "../../apps/web/src/stores/multiReviewStore";
 import type { GitFileChange } from "../../apps/web/src/lib/backend";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 
 declare global {
@@ -304,6 +309,51 @@ function MultiReviewLaunchDialogFixture() {
         catalog={reviewModelCatalog}
         onConfirm={() => setOpen(false)}
       />
+    </main>
+  );
+}
+
+function MultiReviewAutoFixFixture() {
+  const [draft, setDraft] = useState<AgentSettingsTier>({});
+  const [saved, setSaved] = useState<AgentSettingsTier>({});
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [selection, setSelection] = useState<MultiReviewLaunchSelection>();
+  const [consolidated, setConsolidated] = useState(false);
+
+  return (
+    <main className="min-h-screen bg-background p-4 text-foreground">
+      <h1>Review settings</h1>
+      <MultiReviewDefaultsEditor
+        tier={draft}
+        onChange={setDraft}
+        tiers={{ global: draft }}
+        canInherit={false}
+        enabledPlatforms={["claude", "codex"]}
+        catalog={reviewModelCatalog}
+      />
+      <button type="button" onClick={() => setSaved(draft)}>
+        Save settings
+      </button>
+      <button type="button" onClick={() => setDialogOpen(true)}>
+        Configure Multi Review
+      </button>
+      <MultiReviewLaunchDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        defaultAutoFix={saved.multiReview?.autoFix}
+        defaultAgent="claude"
+        catalog={reviewModelCatalog}
+        onConfirm={(nextSelection) => {
+          setSelection(nextSelection);
+          setDialogOpen(false);
+        }}
+      />
+      {selection && (
+        <button type="button" onClick={() => setConsolidated(true)}>
+          Complete consolidation
+        </button>
+      )}
+      {consolidated && selection?.autoFix && <div role="tab">Fix</div>}
     </main>
   );
 }
@@ -1258,6 +1308,9 @@ function fixtureForPath() {
   if (window.location.pathname === "/path-truncation") return <PathTruncationFixture />;
   if (window.location.pathname === "/multi-review-launch") {
     return <MultiReviewLaunchDialogFixture />;
+  }
+  if (window.location.pathname === "/multi-review-auto-fix") {
+    return <MultiReviewAutoFixFixture />;
   }
   if (window.location.pathname === "/multi-review-overview") {
     return <MultiReviewOverviewFixture />;

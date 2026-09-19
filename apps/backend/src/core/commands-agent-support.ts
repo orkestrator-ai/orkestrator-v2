@@ -9,7 +9,6 @@ import {
   CODEX_BACKGROUND_TASK_REASONING_EFFORT,
   sanitizeBranchName,
   sanitizeEnvironmentName,
-  commandExists,
   runCommand,
   ENVIRONMENT_AGENT_SKILLS_SCRIPT,
 } from "./commands-dependencies.js";
@@ -573,10 +572,6 @@ export async function runEnvironmentAgentSkills(
   } catch {
     throw new Error("The environment returned an invalid skills response");
   }
-}
-
-export function hasPackagedOrPathBinary(context: CommandContext, name: string): Promise<boolean> {
-  return resolveManagedBinary(context, name) ? Promise.resolve(true) : commandExists(name);
 }
 
 export function hasCursorSdkBridge(

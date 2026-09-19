@@ -20,11 +20,20 @@ import {
 
 type HostToolSource = "managed" | "path" | "missing";
 
-const lastHostToolSource = new Map<string, HostToolSource>();
+const lastHostToolSourceByContext = new WeakMap<CommandContext, Map<string, HostToolSource>>();
 
-function logHostToolAvailability(name: string, source: HostToolSource): void {
-  if (lastHostToolSource.get(name) === source) return;
-  lastHostToolSource.set(name, source);
+function logHostToolAvailability(
+  context: CommandContext,
+  name: string,
+  source: HostToolSource,
+): void {
+  let sources = lastHostToolSourceByContext.get(context);
+  if (!sources) {
+    sources = new Map();
+    lastHostToolSourceByContext.set(context, sources);
+  }
+  if (sources.get(name) === source) return;
+  sources.set(name, source);
   const message = `[Tooling] Host tool availability: tool=${name} available=${source !== "missing"} source=${source}`;
   if (source === "missing") console.warn(message);
   else console.info(message);
@@ -32,11 +41,11 @@ function logHostToolAvailability(name: string, source: HostToolSource): void {
 
 async function checkHostTool(context: CommandContext, name: string) {
   if (resolveManagedBinary(context, name)) {
-    logHostToolAvailability(name, "managed");
+    logHostToolAvailability(context, name, "managed");
     return true;
   }
   const available = await commandExists(name);
-  logHostToolAvailability(name, available ? "path" : "missing");
+  logHostToolAvailability(context, name, available ? "path" : "missing");
   return available;
 }
 

@@ -984,6 +984,66 @@ exit 0
     }
   });
 
+  test("logs managed, PATH, and missing host-tool sources once per command context", async () => {
+    const managedRoot = await createTempDir("ork-electron-cli-source-managed-");
+    const pathRoot = await createTempDir("ork-electron-cli-source-path-");
+    const secondRoot = await createTempDir("ork-electron-cli-source-second-");
+    const { context } = createContext(createEnvironment());
+    context.appRoot = managedRoot;
+    context.resourceRoot = managedRoot;
+    context.toolchainBinDir = managedRoot;
+    const { context: secondContext } = createContext(createEnvironment());
+    secondContext.appRoot = secondRoot;
+    secondContext.resourceRoot = secondRoot;
+    secondContext.toolchainBinDir = secondRoot;
+    const commands = createCommandRegistry();
+    const previousPath = process.env.PATH;
+    const info = spyOn(console, "info").mockImplementation(() => {});
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await fs.writeFile(path.join(managedRoot, "codex"), "managed codex");
+      process.env.PATH = "";
+      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(true);
+
+      expect(info.mock.calls.filter(([message]) => String(message).includes("tool=codex"))).toEqual(
+        [["[Tooling] Host tool availability: tool=codex available=true source=managed"]],
+      );
+
+      await fs.rm(path.join(managedRoot, "codex"));
+      await fs.writeFile(path.join(pathRoot, "codex"), "#!/bin/sh\nexit 0\n");
+      await fs.chmod(path.join(pathRoot, "codex"), 0o755);
+      process.env.PATH = `${pathRoot}:/usr/bin:/bin`;
+      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(true);
+
+      expect(info.mock.calls.filter(([message]) => String(message).includes("tool=codex"))).toEqual(
+        [
+          ["[Tooling] Host tool availability: tool=codex available=true source=managed"],
+          ["[Tooling] Host tool availability: tool=codex available=true source=path"],
+        ],
+      );
+
+      await fs.rm(path.join(pathRoot, "codex"));
+      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("check_codex_cli")?.({}, secondContext)).resolves.toBe(false);
+
+      expect(warn.mock.calls.filter(([message]) => String(message).includes("tool=codex"))).toEqual(
+        [
+          ["[Tooling] Host tool availability: tool=codex available=false source=missing"],
+          ["[Tooling] Host tool availability: tool=codex available=false source=missing"],
+        ],
+      );
+    } finally {
+      info.mockRestore();
+      warn.mockRestore();
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
   test("checks the packaged Cursor bridge under resourceRoot in production", async () => {
     const appRoot = await createTempDir("ork-electron-app-root-");
     const resourceRoot = await createTempDir("ork-electron-resource-root-");

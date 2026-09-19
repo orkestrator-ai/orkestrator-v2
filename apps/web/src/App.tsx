@@ -474,7 +474,9 @@ function App() {
       // permission diagnostics. A first `not-installed` result is the special
       // updater-sensitive case: confirm it before telling the user a binary
       // that worked in the previous process has disappeared.
-      if (source === "startup" && (available || result.reason !== "not-installed")) {
+      const firstResultWasPublished =
+        source === "startup" && (available || result.reason !== "not-installed");
+      if (firstResultWasPublished) {
         publishResult(result);
       }
 
@@ -507,7 +509,10 @@ function App() {
         available = result.available;
       }
 
-      if (!available && firstFailureReason !== null) {
+      // Preserve a diagnostic that the user may already be reading, but never
+      // restore the deliberately withheld `not-installed` diagnosis after a
+      // confirming probe proves that the Docker binary exists.
+      if (!available && firstResultWasPublished && firstFailureReason !== null) {
         result = { available: false, reason: firstFailureReason };
       }
 
@@ -585,9 +590,15 @@ function App() {
         getAvailableAiCli(),
       ]);
 
+      const firstClaudeCli = results[0]?.status === "fulfilled" ? results[0].value : undefined;
+      const firstClaudeConfig = results[1]?.status === "fulfilled" ? results[1].value : undefined;
+      const firstGithubCli = results[4]?.status === "fulfilled" ? results[4].value : undefined;
       const firstAiCli = results[5]?.status === "fulfilled" ? results[5].value : undefined;
       const needsConfirmation =
-        results.some((result) => result.status === "rejected") || !firstAiCli;
+        results.some((result) => result.status === "rejected") ||
+        !firstAiCli ||
+        firstGithubCli === false ||
+        (firstClaudeCli === true && firstClaudeConfig === false);
       if (needsConfirmation) {
         await waitForHostToolStartupConfirmation();
         if (!active) return;
@@ -616,9 +627,10 @@ function App() {
         setHostToolCheckStatus("complete");
       }
 
-      const [claudeCli, claudeConfig, opencodeCli, codexCli, githubCli, aiCli] = results.map(
-        (result) => (result.status === "fulfilled" ? result.value : null),
+      const [claudeCli, claudeConfig, opencodeCli, codexCli, githubCli] = results.map((result) =>
+        result.status === "fulfilled" ? result.value : null,
       );
+      const aiCli = results[5]?.status === "fulfilled" ? results[5].value : undefined;
       if (typeof claudeCli === "boolean") setClaudeCliAvailable(claudeCli);
       if (typeof claudeConfig === "boolean") setClaudeConfigAvailable(claudeConfig);
       if (typeof opencodeCli === "boolean") setOpencodeCliAvailable(opencodeCli);
@@ -718,7 +730,13 @@ function App() {
       setHostToolCheckStatus("complete");
     } catch (error) {
       console.error("[App] CLI retry check failed:", error);
-      setHostToolCheckStatus("error");
+      // The retry controls live in the current warning. Keep that warning
+      // reachable and report the transient failure instead of silently
+      // unmounting the user's only recovery path.
+      setHostToolCheckStatus("complete");
+      toast.error("Could not check CLI tools", {
+        description: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       setIsCheckingClaude(false);
     }
@@ -844,7 +862,7 @@ function App() {
   // When Docker is down, let its outage warning lead; host-tool onboarding is
   // shown after the user chooses to continue without containers.
   const hostToolWarningsVisible =
-    dockerCheckStatus === "error" ||
+    (dockerCheckStatus === "error" && dockerAvailable === null) ||
     dockerAvailable === true ||
     (dockerAvailable === false && dockerWarningDismissed);
 
@@ -860,12 +878,14 @@ function App() {
 
   const claudeNeedsLogin =
     hostToolWarningsVisible &&
+    hostToolCheckStatus === "complete" &&
     claudeCliAvailable === true &&
     claudeConfigAvailable === false &&
     opencodeCliAvailable === false;
 
   const showGithubWarning =
     hostToolWarningsVisible &&
+    hostToolCheckStatus === "complete" &&
     (claudeCliAvailable === true || opencodeCliAvailable === true) &&
     githubCliAvailable === false &&
     !githubCliWarningDismissed;
@@ -1100,6 +1120,27 @@ function App() {
         </DockerAvailabilityProvider>
         <Toaster />
         <ErrorDetailsDialog />
+
+        {macOsPermissionsReady && dockerCheckStatus === "error" && dockerAvailable === null && (
+          <div
+            role="alert"
+            className="fixed inset-x-4 bottom-4 z-[90] flex items-center justify-between gap-4 rounded-lg border border-amber-500/40 bg-amber-950/95 px-4 py-3 text-sm text-amber-100 shadow-xl"
+          >
+            <span>
+              Orkestrator could not check Docker availability. Container actions remain disabled
+              until the check succeeds.
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleRetryDockerCheck}
+              disabled={isCheckingDocker}
+            >
+              {isCheckingDocker ? "Checking..." : "Check Docker Again"}
+            </Button>
+          </div>
+        )}
 
         {/* macOS privacy access is resolved before any Docker probe starts. */}
         {showStartupBlocker && (

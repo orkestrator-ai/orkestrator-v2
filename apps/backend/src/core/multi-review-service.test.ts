@@ -2625,7 +2625,9 @@ test("MultiReviewService bounds repeated provenance repairs", async () => {
 
       const failed = await snapshot(started.id);
       expect(failed?.activeRequest?.schemaRepairAttempts).toBe(3);
-      expect(failed?.error).toContain("3 repair attempts");
+      expect(failed?.error).toContain(
+        "The consolidation model could not produce a valid consolidated report in 3 repair attempts.",
+      );
       expect(
         [...provider.sends.values()].filter((sent) =>
           sent.prompt.includes("<structured-review-contract-errors-json>"),
@@ -2790,6 +2792,86 @@ test("MultiReviewService does not treat provider fix failures as schema repair w
       },
     );
   }
+});
+
+test.each([
+  ["error", "The fix session failed"],
+  ["missing", "The fix session no longer exists"],
+] as const)(
+  "MultiReviewService identifies a persisted fix session when it becomes %s",
+  async (status, message) => {
+    const environmentId = `env-legacy-fix-${status}`;
+    const provider = new Provider();
+    provider.statusOverrides.set("session-legacy-fix", status);
+    await withService(environmentId, provider, async ({ service, storage, snapshot }) => {
+      const workflowId = await seedLegacyFixingWorkflow(storage, environmentId);
+      await service.advanceNow(workflowId);
+
+      expect(await snapshot(workflowId)).toMatchObject({
+        phase: "failed",
+        activeRequest: { kind: "fix" },
+        fixSession: { providerSessionId: "session-legacy-fix", status: "failed" },
+        error: message,
+      });
+    });
+  },
+);
+
+test("MultiReviewService reports terminal detail from a persisted fix session", async () => {
+  const detail = "fix model reached its usage limit";
+  const provider = new Provider();
+  provider.sessionFailures.set("session-legacy-fix", detail);
+  await withService("env-legacy-fix-terminal", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-legacy-fix-terminal");
+    await service.advanceNow(workflowId);
+
+    expect((await snapshot(workflowId))?.error).toBe(`The fix session failed: ${detail}`);
+  });
+});
+
+test("MultiReviewService bounds a blocked persisted fix model", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-legacy-fix", "blocked");
+  await withService("env-legacy-fix-blocked", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-legacy-fix-blocked");
+    for (let attempt = 0; attempt < 6; attempt++) await service.advanceNow(workflowId);
+
+    expect((await snapshot(workflowId))?.error).toBe(
+      "The fix model stayed blocked without a resolvable interaction",
+    );
+  });
+});
+
+test("MultiReviewService bounds a persisted fix model that returns no result", async () => {
+  const provider = new Provider(false);
+  await withService("env-legacy-fix-idle", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-legacy-fix-idle");
+    for (let attempt = 0; attempt < 6; attempt++) await service.advanceNow(workflowId);
+
+    expect((await snapshot(workflowId))?.error).toBe(
+      "The fix model became idle without returning its fix result",
+    );
+  });
+});
+
+test("MultiReviewService identifies a stalled persisted fix session", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-legacy-fix", "running");
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Fixing" }];
+  await withService(
+    "env-legacy-fix-stall",
+    provider,
+    async ({ service, storage, snapshot }) => {
+      const workflowId = await seedLegacyFixingWorkflow(storage, "env-legacy-fix-stall");
+      await waitUntil(async () => {
+        await service.advanceNow(workflowId);
+        return (await snapshot(workflowId))?.phase === "failed";
+      });
+
+      expect((await snapshot(workflowId))?.error).toContain("fix session produced no activity");
+    },
+    { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } },
+  );
 });
 
 test("MultiReviewService retries an incomplete legacy fix turn from the consolidated report", async () => {
@@ -3793,7 +3875,38 @@ test("MultiReviewService bounds a blocked reviewer and clears the count once it 
   });
 });
 
-test("MultiReviewService bounds a blocked fix model", async () => {
+test("MultiReviewService identifies the preparation model when it returns no result", async () => {
+  const provider = new Provider(false);
+  await withService(
+    "env-idle-preparation-model",
+    provider,
+    async ({ service, snapshot }) => {
+      const started = await service.start({
+        environmentId: "env-idle-preparation-model",
+        projectId: "project-1",
+        targetBranch: "main",
+        reviewers: [{ agent: "claude", model: "reviewer" }],
+        reviewModel: { agent: "opencode", model: "preparation-model" },
+        fixModel: { agent: "codex", model: "fix-model" },
+      });
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "failed";
+      });
+
+      expect(await snapshot(started.id)).toMatchObject({
+        phase: "failed",
+        activeRequest: { kind: "prepare" },
+        reviewSession: { agent: "opencode", model: "preparation-model" },
+        error: "The preparation model became idle without returning its review package preparation",
+      });
+      expect((await snapshot(started.id))?.fixSession).toBeUndefined();
+    },
+    { packageFlow: true },
+  );
+});
+
+test("MultiReviewService bounds a blocked consolidation model", async () => {
   const provider = new Provider();
   provider.statusOverrides.set("session-2", "blocked");
   await withService("env-blocked-fix", provider, async ({ service, start, snapshot }) => {
@@ -3802,7 +3915,9 @@ test("MultiReviewService bounds a blocked fix model", async () => {
 
     const failed = await snapshot(started.id);
     expect(failed?.phase).toBe("failed");
-    expect(failed?.error).toBe("The fix model stayed blocked without a resolvable interaction");
+    expect(failed?.error).toBe(
+      "The consolidation model stayed blocked without a resolvable interaction",
+    );
   });
 });
 

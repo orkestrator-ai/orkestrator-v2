@@ -1,6 +1,6 @@
 # Agent Mail service aggregate timing cluster
 
-- **ID:** 0147
+- **ID:** 0150
 - **Status:** open
 - **Date observed:** 2026-09-19
 - **Tests:** `AgentMailService > converges the mailbox directory after tabs open

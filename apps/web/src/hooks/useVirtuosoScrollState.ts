@@ -261,19 +261,30 @@ export function useVirtuosoScrollState(
     // intent false when atBottom becomes false — that transition is usually
     // caused by content growing below the viewport, not by user action.
     if (atBottom) {
-      wantsStickRef.current = true;
+      const el = scrollerElRef.current;
+      const distanceFromBottom = el ? el.scrollHeight - el.clientHeight - el.scrollTop : 0;
+      // Virtuoso can briefly report at-bottom while reconciling an appended
+      // item's measured height. Do not let that transient callback undo an
+      // explicit user release while the browser geometry is still away from
+      // the tail.
+      if (distanceFromBottom <= AT_BOTTOM_THRESHOLD) {
+        wantsStickRef.current = true;
+      }
     }
   }, []);
 
-  // Always "auto", never "smooth". Virtuoso re-invokes followOutput on every
-  // item change, and a native smooth scroll restarts its easing from scratch
-  // each time it is re-issued — so against a target that keeps moving (tokens
-  // streaming in) it never converges. The tail drifts progressively lower,
-  // then snaps back up when the stream pauses and the animation finally lands.
-  // Instant follow is what actually *reads* as smooth: content grows, the
-  // viewport stays pinned to the bottom, nothing bobs.
-  const followOutput = useCallback((atBottom: boolean): "auto" | false => {
-    return atBottom || wantsStickRef.current ? "auto" : false;
+  // User intent is authoritative here. Virtuoso 4.18 invokes a functional
+  // followOutput with `isAtBottom || scrollingInProgress`, so its argument can
+  // be true while the user is actively scrolling upward and our down button is
+  // visible. Letting that value override released stick intent snaps the reader
+  // straight back to the tail when a message arrives mid-scroll.
+  //
+  // Always return "auto", never "smooth", while sticky. Virtuoso re-invokes
+  // followOutput on every item change, and a native smooth scroll restarts its
+  // easing from scratch each time it is re-issued. Instant follow keeps the
+  // viewport pinned without the streaming tail bobbing.
+  const followOutput = useCallback((_atBottom: boolean): "auto" | false => {
+    return wantsStickRef.current ? "auto" : false;
   }, []);
 
   const scrollerRef = useCallback((el: HTMLElement | Window | null) => {
@@ -510,9 +521,24 @@ export function useVirtuosoScrollState(
 
     lastObservedScrollTopRef.current = scrollerEl.scrollTop;
     let pointerHeld = false;
+    let userScrollUpPending = false;
+    let userScrollUpTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const armUserScrollUp = () => {
+      userScrollUpPending = true;
+      if (userScrollUpTimeout !== null) clearTimeout(userScrollUpTimeout);
+      // Wheel and keyboard events fire before the browser updates scrollTop.
+      // Keep the signal alive long enough for the resulting scroll event (and
+      // a short native keyboard-scroll animation), then discard it so a later
+      // programmatic correction cannot be mistaken for user intent.
+      userScrollUpTimeout = setTimeout(() => {
+        userScrollUpPending = false;
+        userScrollUpTimeout = null;
+      }, 150);
+    };
 
     const handleWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0) wantsStickRef.current = false;
+      if (e.deltaY < 0) armUserScrollUp();
     };
     const handlePointerDown = () => {
       pointerHeld = true;
@@ -525,7 +551,7 @@ export function useVirtuosoScrollState(
       const previous = lastObservedScrollTopRef.current;
       lastObservedScrollTopRef.current = st;
 
-      if (!pointerHeld) return;
+      if (!pointerHeld && !userScrollUpPending) return;
       if (st >= previous - USER_SCROLL_UP_TOLERANCE_PX) return;
       // A shrinking scrollHeight or a growing viewport also lowers scrollTop
       // while leaving the user at the bottom. Only a move that actually ends
@@ -540,14 +566,18 @@ export function useVirtuosoScrollState(
     };
     const handleTouchMove = () => {
       const st = scrollerEl.scrollTop;
-      if (st < lastScrollTopRef.current - 2) {
+      const distanceFromBottom = scrollerEl.scrollHeight - scrollerEl.clientHeight - st;
+      if (
+        st < lastScrollTopRef.current - USER_SCROLL_UP_TOLERANCE_PX &&
+        distanceFromBottom > AT_BOTTOM_THRESHOLD
+      ) {
         wantsStickRef.current = false;
       }
       lastScrollTopRef.current = st;
     };
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "ArrowUp" || e.key === "PageUp" || e.key === "Home") {
-        wantsStickRef.current = false;
+        armUserScrollUp();
       }
     };
 
@@ -573,6 +603,7 @@ export function useVirtuosoScrollState(
     scrollerEl.addEventListener("keydown", handleKeyDown);
 
     return () => {
+      if (userScrollUpTimeout !== null) clearTimeout(userScrollUpTimeout);
       scrollerEl.removeEventListener("wheel", handleWheel);
       scrollerEl.removeEventListener("scroll", handleScroll);
       scrollerEl.removeEventListener("pointerdown", handlePointerDown);

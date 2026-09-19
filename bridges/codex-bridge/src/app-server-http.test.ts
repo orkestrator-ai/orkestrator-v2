@@ -80,7 +80,7 @@ function step(output: HarnessOutput, name: string): StepResult {
 
 describe("app-server engine over HTTP", () => {
   test("serves the whole session lifecycle through the real routes", async () => {
-    const output = await run({});
+    const output = await run({ CODEX_BRIDGE_HTTP_HARNESS_READY_TIMEOUT_MS: "15000" });
     expect(output.error).toBeUndefined();
     expect(output.engine).toBe("app-server");
 
@@ -146,7 +146,10 @@ describe("app-server engine over HTTP", () => {
     // The bridge does not pin the binary version at runtime — the generated
     // protocol check does that at build time — so a mismatch must degrade
     // visibly rather than crash the bridge and leave the backend with nothing.
-    const output = await run({ FAKE_CODEX_VERSION: "0.99.0" });
+    const output = await run({
+      CODEX_BRIDGE_HTTP_HARNESS_READY_TIMEOUT_MS: "15000",
+      FAKE_CODEX_VERSION: "0.99.0",
+    });
 
     expect(output.engine).toBe("app-server");
     expect(step(output, "health").body).toMatchObject({
@@ -155,7 +158,10 @@ describe("app-server engine over HTTP", () => {
   }, 60_000);
 
   test("reports a bounded, actionable error when the handshake never completes", async () => {
-    const output = await run({ FAKE_CODEX_SCRIPT: "no-initialize" });
+    const output = await run({
+      CODEX_BRIDGE_HTTP_HARNESS_READY_TIMEOUT_MS: "5000",
+      FAKE_CODEX_SCRIPT: "no-initialize",
+    });
 
     expect(output.results).toBeUndefined();
     expect(output.error).toMatch(

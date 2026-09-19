@@ -108,6 +108,10 @@ import type {
   RepositoryConfig,
 } from "./command-fixtures";
 
+function shimTest(name: string, run: () => Promise<void>): void {
+  test(name, run, ASYNC_TEST_BUDGET_MS);
+}
+
 describe("Electron backend command registry", () => {
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
@@ -143,7 +147,7 @@ exit 1
     return created;
   }
 
-  test("detects local PRs by listing all PRs for the environment branch", async () => {
+  shimTest("detects local PRs by listing all PRs for the environment branch", async () => {
     const worktreePath = await createTempDir("ork-electron-pr-worktree-");
     const environment = createEnvironment({ worktreePath, branch: "feature/pr" });
     const { context } = createContext(environment);
@@ -179,7 +183,7 @@ printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/1","state":"CLOSED","
     );
   });
 
-  test("one-shot local detection skips check rollups", async () => {
+  shimTest("one-shot local detection skips check rollups", async () => {
     const worktreePath = await createTempDir("ork-electron-pr-check-permission-");
     const environment = createEnvironment({ worktreePath, branch: "feature/check-permission" });
     const { context } = createContext(environment);
@@ -214,7 +218,7 @@ printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/5","state":"OPEN","me
     );
   });
 
-  test("returns null when local PR listing reports no PRs", async () => {
+  shimTest("returns null when local PR listing reports no PRs", async () => {
     const worktreePath = await createTempDir("ork-electron-pr-empty-");
     const environment = createEnvironment({ worktreePath, branch: "feature/no-pr" });
     const { context } = createContext(environment);
@@ -236,38 +240,41 @@ printf '[]\\n'
     );
   });
 
-  test("detects a PR from the live branch after stored branch drift from a rename", async () => {
-    const worktreePath = await createGitRepoOnBranch("live-branch");
-    const environment = createEnvironment({
-      environmentType: "local",
-      worktreePath,
-      branch: "renamed-environment",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
+  shimTest(
+    "detects a PR from the live branch after stored branch drift from a rename",
+    async () => {
+      const worktreePath = await createGitRepoOnBranch("live-branch");
+      const environment = createEnvironment({
+        environmentType: "local",
+        worktreePath,
+        branch: "renamed-environment",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-    await withFakeGh(
-      `#!/bin/sh
+      await withFakeGh(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/17","state":"OPEN","mergeable":"MERGEABLE","updatedAt":"2026-08-25T17:43:11Z"}]'
 `,
-      async (logPath) => {
-        await expect(
-          commands.get("detect_pr_local")?.(
-            { environmentId: environment.id, branch: environment.branch },
-            context,
-          ),
-        ).resolves.toMatchObject({
-          url: "https://github.com/acme/repo/pull/17",
-          state: "open",
-        });
+        async (logPath) => {
+          await expect(
+            commands.get("detect_pr_local")?.(
+              { environmentId: environment.id, branch: environment.branch },
+              context,
+            ),
+          ).resolves.toMatchObject({
+            url: "https://github.com/acme/repo/pull/17",
+            state: "open",
+          });
 
-        const ghLog = await fs.readFile(logPath, "utf8");
-        expect(ghLog).toContain("pr list --head live-branch");
-        expect(ghLog).not.toContain("--head renamed-environment");
-      },
-    );
-  });
+          const ghLog = await fs.readFile(logPath, "utf8");
+          expect(ghLog).toContain("pr list --head live-branch");
+          expect(ghLog).not.toContain("--head renamed-environment");
+        },
+      );
+    },
+  );
 
   test.each([
     ["UNKNOWN mergeability", '"mergeable":"UNKNOWN"', null],
@@ -302,9 +309,10 @@ printf '%s\n' '[{"url":"https://github.com/acme/repo/pull/3","state":"OPEN"${com
         },
       );
     },
+    ASYNC_TEST_BUDGET_MS,
   );
 
-  test("surfaces gh failures during local PR detection", async () => {
+  shimTest("surfaces gh failures during local PR detection", async () => {
     const worktreePath = await createTempDir("ork-electron-pr-fail-");
     const environment = createEnvironment({ worktreePath, branch: "feature/fail" });
     const { context } = createContext(environment);
@@ -326,7 +334,7 @@ exit 1
     );
   });
 
-  test("throws when local PR detection output is not valid JSON", async () => {
+  shimTest("throws when local PR detection output is not valid JSON", async () => {
     const worktreePath = await createTempDir("ork-electron-pr-badjson-");
     const environment = createEnvironment({ worktreePath, branch: "feature/bad" });
     const { context } = createContext(environment);
@@ -347,7 +355,7 @@ printf 'not-json{\\n'
     );
   });
 
-  test("throws when local PR detection output is not a JSON array", async () => {
+  shimTest("throws when local PR detection output is not a JSON array", async () => {
     const worktreePath = await createTempDir("ork-electron-pr-object-");
     const environment = createEnvironment({ worktreePath, branch: "feature/object" });
     const { context } = createContext(environment);
@@ -368,7 +376,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/1"}'
     );
   });
 
-  test("detects container PRs with gh pr list instead of gh pr view", async () => {
+  shimTest("detects container PRs with gh pr list instead of gh pr view", async () => {
     const { context } = createContext(
       createEnvironment({
         id: "env-container",
@@ -418,7 +426,7 @@ exit 0
     );
   });
 
-  test("one-shot container detection skips check rollups", async () => {
+  shimTest("one-shot container detection skips check rollups", async () => {
     const { context } = createContext(
       createEnvironment({
         id: "env-container-check-permission",
@@ -468,12 +476,14 @@ exit 0
     );
   });
 
-  test("reports a container PR as merged only after verifying the captured PR URL", async () => {
-    const { context } = createContext(createEnvironment());
-    const commands = createCommandRegistry();
+  shimTest(
+    "reports a container PR as merged only after verifying the captured PR URL",
+    async () => {
+      const { context } = createContext(createEnvironment());
+      const commands = createCommandRegistry();
 
-    await withFakeDocker(
-      `#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 command=""
 for arg in "$@"; do command="$arg"; done
@@ -496,26 +506,27 @@ fi
 printf 'unexpected docker command: %s\\n' "$command" >&2
 exit 1
 `,
-      async (logs) => {
-        await expect(
-          commands.get("merge_pr")?.(
-            { containerId: "container-1", method: "squash", deleteBranch: false },
-            context,
-          ),
-        ).resolves.toEqual({ outcome: "merged" });
+        async (logs) => {
+          await expect(
+            commands.get("merge_pr")?.(
+              { containerId: "container-1", method: "squash", deleteBranch: false },
+              context,
+            ),
+          ).resolves.toEqual({ outcome: "merged" });
 
-        const execLog = await fs.readFile(logs.exec, "utf8");
-        expect(execLog).toContain(
-          "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash'",
-        );
-        expect(execLog).toContain(
-          "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'state'",
-        );
-      },
-    );
-  });
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          expect(execLog).toContain(
+            "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash'",
+          );
+          expect(execLog).toContain(
+            "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'state'",
+          );
+        },
+      );
+    },
+  );
 
-  test("marks a draft container PR ready before merging it", async () => {
+  shimTest("marks a draft container PR ready before merging it", async () => {
     const { context } = createContext(createEnvironment());
     const commands = createCommandRegistry();
 
@@ -563,7 +574,7 @@ exit 1
     );
   });
 
-  test("stops container merges when draft inspection or readiness fails", async () => {
+  shimTest("stops container merges when draft inspection or readiness fails", async () => {
     const { context } = createContext(createEnvironment());
     const commands = createCommandRegistry();
 
@@ -603,12 +614,14 @@ exit 43
     }
   });
 
-  test("reports a queued container PR as pending when the captured PR remains open", async () => {
-    const { context } = createContext(createEnvironment());
-    const commands = createCommandRegistry();
+  test(
+    "reports a queued container PR as pending when the captured PR remains open",
+    async () => {
+      const { context } = createContext(createEnvironment());
+      const commands = createCommandRegistry();
 
-    await withFakeDocker(
-      `#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 command=""
 for arg in "$@"; do command="$arg"; done
 command="$(printf '%s\\n' "$command" | tail -n 1)"
@@ -630,23 +643,27 @@ fi
 printf 'unexpected docker command: %s\\n' "$command" >&2
 exit 1
 `,
-      async () => {
-        await expect(
-          commands.get("merge_pr")?.(
-            { containerId: "container-1", method: "rebase", deleteBranch: true },
-            context,
-          ),
-        ).resolves.toEqual({ outcome: "pending" });
-      },
-    );
-  });
+        async () => {
+          await expect(
+            commands.get("merge_pr")?.(
+              { containerId: "container-1", method: "rebase", deleteBranch: true },
+              context,
+            ),
+          ).resolves.toEqual({ outcome: "pending" });
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
-  test("reports an unknown container merge outcome when post-submit verification fails", async () => {
-    const { context } = createContext(createEnvironment());
-    const commands = createCommandRegistry();
+  shimTest(
+    "reports an unknown container merge outcome when post-submit verification fails",
+    async () => {
+      const { context } = createContext(createEnvironment());
+      const commands = createCommandRegistry();
 
-    await withFakeDocker(
-      `#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 command=""
 for arg in "$@"; do command="$arg"; done
 command="$(printf '%s\\n' "$command" | tail -n 1)"
@@ -668,28 +685,31 @@ fi
 printf 'unexpected docker command: %s\\n' "$command" >&2
 exit 1
 `,
-      async () => {
-        await expect(
-          commands.get("merge_pr")?.(
-            { containerId: "container-1", method: "merge", deleteBranch: false },
-            context,
-          ),
-        ).resolves.toEqual({ outcome: "unknown" });
-      },
-    );
-  });
+        async () => {
+          await expect(
+            commands.get("merge_pr")?.(
+              { containerId: "container-1", method: "merge", deleteBranch: false },
+              context,
+            ),
+          ).resolves.toEqual({ outcome: "unknown" });
+        },
+      );
+    },
+  );
 
-  test("merges local PRs through the GitHub API without updating worktree branches", async () => {
-    const worktreePath = await createTempDir("ork-electron-merge-worktree-");
-    const environment = createEnvironment({
-      worktreePath,
-      prUrl: "https://github.com/acme/repo/pull/42",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
+  shimTest(
+    "merges local PRs through the GitHub API without updating worktree branches",
+    async () => {
+      const worktreePath = await createTempDir("ork-electron-merge-worktree-");
+      const environment = createEnvironment({
+        worktreePath,
+        prUrl: "https://github.com/acme/repo/pull/42",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-    await withFakeGh(
-      `#!/bin/sh
+      await withFakeGh(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   printf '%s\\n' 'false'
@@ -702,25 +722,26 @@ fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
 `,
-      async (logPath) => {
-        await expect(
-          commands.get("merge_pr_local")?.(
-            { environmentId: environment.id, method: "squash", deleteBranch: false },
-            context,
-          ),
-        ).resolves.toEqual({ outcome: "merged" });
+        async (logPath) => {
+          await expect(
+            commands.get("merge_pr_local")?.(
+              { environmentId: environment.id, method: "squash", deleteBranch: false },
+              context,
+            ),
+          ).resolves.toEqual({ outcome: "merged" });
 
-        const ghLog = await fs.readFile(logPath, "utf8");
-        expect(ghLog).toContain(
-          "api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash",
-        );
-        expect(ghLog).not.toContain("pr merge");
-        expect(ghLog).not.toContain("--delete-branch");
-      },
-    );
-  });
+          const ghLog = await fs.readFile(logPath, "utf8");
+          expect(ghLog).toContain(
+            "api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash",
+          );
+          expect(ghLog).not.toContain("pr merge");
+          expect(ghLog).not.toContain("--delete-branch");
+        },
+      );
+    },
+  );
 
-  test("marks a draft local PR ready before merging it through the GitHub API", async () => {
+  shimTest("marks a draft local PR ready before merging it through the GitHub API", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-draft-worktree-");
     const environment = createEnvironment({
       worktreePath,
@@ -856,7 +877,7 @@ exit 1
     ASYNC_TEST_BUDGET_MS,
   );
 
-  test("deletes the remote head branch after local API merge when requested", async () => {
+  shimTest("deletes the remote head branch after local API merge when requested", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-delete-worktree-");
     const environment = createEnvironment({
       worktreePath,
@@ -907,7 +928,7 @@ exit 1
     );
   });
 
-  test("defaults local API merge method to squash", async () => {
+  shimTest("defaults local API merge method to squash", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-default-worktree-");
     const environment = createEnvironment({
       worktreePath,
@@ -946,17 +967,19 @@ exit 1
     );
   });
 
-  test("does not report a local API merge as successful without an explicit merged response", async () => {
-    const worktreePath = await createTempDir("ork-electron-merge-unconfirmed-worktree-");
-    const environment = createEnvironment({
-      worktreePath,
-      prUrl: "https://github.com/acme/repo/pull/42",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
+  shimTest(
+    "does not report a local API merge as successful without an explicit merged response",
+    async () => {
+      const worktreePath = await createTempDir("ork-electron-merge-unconfirmed-worktree-");
+      const environment = createEnvironment({
+        worktreePath,
+        prUrl: "https://github.com/acme/repo/pull/42",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-    await withFakeGh(
-      `#!/bin/sh
+      await withFakeGh(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   printf '%s\\n' 'false'
@@ -969,28 +992,31 @@ fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
 `,
-      async () => {
-        await expect(
-          commands.get("merge_pr_local")?.(
-            { environmentId: environment.id, method: "squash", deleteBranch: false },
-            context,
-          ),
-        ).resolves.toEqual({ outcome: "unknown" });
-      },
-    );
-  });
+        async () => {
+          await expect(
+            commands.get("merge_pr_local")?.(
+              { environmentId: environment.id, method: "squash", deleteBranch: false },
+              context,
+            ),
+          ).resolves.toEqual({ outcome: "unknown" });
+        },
+      );
+    },
+  );
 
-  test("reports an unknown local API merge outcome when the response cannot be parsed", async () => {
-    const worktreePath = await createTempDir("ork-electron-merge-malformed-worktree-");
-    const environment = createEnvironment({
-      worktreePath,
-      prUrl: "https://github.com/acme/repo/pull/42",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
+  shimTest(
+    "reports an unknown local API merge outcome when the response cannot be parsed",
+    async () => {
+      const worktreePath = await createTempDir("ork-electron-merge-malformed-worktree-");
+      const environment = createEnvironment({
+        worktreePath,
+        prUrl: "https://github.com/acme/repo/pull/42",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-    await withFakeGh(
-      `#!/bin/sh
+      await withFakeGh(
+        `#!/bin/sh
 if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   printf '%s\\n' 'false'
   exit 0
@@ -1001,16 +1027,17 @@ if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
 fi
 exit 1
 `,
-      async () => {
-        await expect(
-          commands.get("merge_pr_local")?.(
-            { environmentId: environment.id, method: "squash", deleteBranch: false },
-            context,
-          ),
-        ).resolves.toEqual({ outcome: "unknown" });
-      },
-    );
-  });
+        async () => {
+          await expect(
+            commands.get("merge_pr_local")?.(
+              { environmentId: environment.id, method: "squash", deleteBranch: false },
+              context,
+            ),
+          ).resolves.toEqual({ outcome: "unknown" });
+        },
+      );
+    },
+  );
 
   test("rejects local API merge when the environment has no PR URL", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-no-pr-worktree-");
@@ -1026,7 +1053,7 @@ exit 1
     ).rejects.toThrow("Local environment PR URL is not available");
   });
 
-  test("rejects invalid local API merge inputs before invoking gh", async () => {
+  shimTest("rejects invalid local API merge inputs before invoking gh", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-invalid-worktree-");
     const environment = createEnvironment({
       worktreePath,
@@ -1062,17 +1089,19 @@ exit 1
     );
   });
 
-  test("ignores a 404 while deleting the remote head branch after local API merge", async () => {
-    const worktreePath = await createTempDir("ork-electron-merge-delete-404-worktree-");
-    const environment = createEnvironment({
-      worktreePath,
-      prUrl: "https://github.com/acme/repo/pull/42",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
+  shimTest(
+    "ignores a 404 while deleting the remote head branch after local API merge",
+    async () => {
+      const worktreePath = await createTempDir("ork-electron-merge-delete-404-worktree-");
+      const environment = createEnvironment({
+        worktreePath,
+        prUrl: "https://github.com/acme/repo/pull/42",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-    await withFakeGh(
-      `#!/bin/sh
+      await withFakeGh(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   printf '%s\\n' 'false'
@@ -1093,23 +1122,24 @@ fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
 `,
-      async (logPath) => {
-        await expect(
-          commands.get("merge_pr_local")?.(
-            { environmentId: environment.id, method: "merge", deleteBranch: true },
-            context,
-          ),
-        ).resolves.toEqual({ outcome: "merged" });
+        async (logPath) => {
+          await expect(
+            commands.get("merge_pr_local")?.(
+              { environmentId: environment.id, method: "merge", deleteBranch: true },
+              context,
+            ),
+          ).resolves.toEqual({ outcome: "merged" });
 
-        const ghLog = await fs.readFile(logPath, "utf8");
-        expect(ghLog).toContain(
-          "api repos/acme/repo/git/refs/heads/feature/already-deleted --method DELETE",
-        );
-      },
-    );
-  });
+          const ghLog = await fs.readFile(logPath, "utf8");
+          expect(ghLog).toContain(
+            "api repos/acme/repo/git/refs/heads/feature/already-deleted --method DELETE",
+          );
+        },
+      );
+    },
+  );
 
-  test("propagates non-404 remote branch delete failures after local API merge", async () => {
+  shimTest("propagates non-404 remote branch delete failures after local API merge", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-delete-fail-worktree-");
     const environment = createEnvironment({
       worktreePath,
@@ -1151,41 +1181,43 @@ exit 1
     );
   });
 
-  test("persists merge cleanup intent before dispatch and completes local cleanup in the backend", async () => {
-    const worktreePath = await createTempDir("ork-electron-merge-cleanup-local-");
-    const environment = createEnvironment({
-      id: "env-merge-cleanup-local",
-      worktreePath,
-      prUrl: "https://github.com/acme/repo/pull/42",
-      prState: "open",
-    });
-    const { context, updates } = createContext(environment);
-    const commands = createCommandRegistry();
-    const task = {
-      id: "task-merge-cleanup",
-      environmentId: environment.id,
-      status: "in-progress",
-      prUrl: environment.prUrl,
-      prState: "open",
-      prMergeCommented: false,
-      comments: [] as Array<{ text: string }>,
-    };
-    context.storage.getKanbanTasks = mock(async () => [
-      task,
-    ]) as typeof context.storage.getKanbanTasks;
-    context.storage.updateKanbanTask = mock(
-      async (_taskId: string, taskUpdates: Record<string, unknown>) => ({
+  shimTest(
+    "persists merge cleanup intent before dispatch and completes local cleanup in the backend",
+    async () => {
+      const worktreePath = await createTempDir("ork-electron-merge-cleanup-local-");
+      const environment = createEnvironment({
+        id: "env-merge-cleanup-local",
+        worktreePath,
+        prUrl: "https://github.com/acme/repo/pull/42",
+        prState: "open",
+      });
+      const { context, updates } = createContext(environment);
+      const commands = createCommandRegistry();
+      const task = {
+        id: "task-merge-cleanup",
+        environmentId: environment.id,
+        status: "in-progress",
+        prUrl: environment.prUrl,
+        prState: "open",
+        prMergeCommented: false,
+        comments: [] as Array<{ text: string }>,
+      };
+      context.storage.getKanbanTasks = mock(async () => [
+        task,
+      ]) as typeof context.storage.getKanbanTasks;
+      context.storage.updateKanbanTask = mock(
+        async (_taskId: string, taskUpdates: Record<string, unknown>) => ({
+          ...task,
+          ...taskUpdates,
+        }),
+      ) as typeof context.storage.updateKanbanTask;
+      context.storage.addKanbanComment = mock(async (_taskId: string, text: string) => ({
         ...task,
-        ...taskUpdates,
-      }),
-    ) as typeof context.storage.updateKanbanTask;
-    context.storage.addKanbanComment = mock(async (_taskId: string, text: string) => ({
-      ...task,
-      comments: [{ text }],
-    })) as typeof context.storage.addKanbanComment;
+        comments: [{ text }],
+      })) as typeof context.storage.addKanbanComment;
 
-    await withFakeGh(
-      `#!/bin/sh
+      await withFakeGh(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   printf '%s\\n' 'false'
@@ -1205,74 +1237,79 @@ fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
 `,
-      async (logPath) => {
-        await expect(
-          commands.get("merge_environment_pr")?.(
-            {
-              environmentId: environment.id,
-              method: "squash",
-              deleteBranch: true,
-              cleanupAfterMerge: true,
-            },
-            context,
-          ),
-        ).resolves.toEqual({
-          outcome: "merged",
-          cleanupOutcome: "completed",
-        });
+        async (logPath) => {
+          await expect(
+            commands.get("merge_environment_pr")?.(
+              {
+                environmentId: environment.id,
+                method: "squash",
+                deleteBranch: true,
+                cleanupAfterMerge: true,
+              },
+              context,
+            ),
+          ).resolves.toEqual({
+            outcome: "merged",
+            cleanupOutcome: "completed",
+          });
 
-        const intentIndex = updates.findIndex(
-          (update) => typeof update.cleanupAfterMergeRequestedAt === "string",
-        );
-        const mergingIndex = updates.findIndex((update) => update.lifecycleOperation === "merging");
-        expect(intentIndex).toBeGreaterThanOrEqual(0);
-        expect(mergingIndex).toBeGreaterThan(intentIndex);
-        expect(updates).toContainEqual(
-          expect.objectContaining({
+          const intentIndex = updates.findIndex(
+            (update) => typeof update.cleanupAfterMergeRequestedAt === "string",
+          );
+          const mergingIndex = updates.findIndex(
+            (update) => update.lifecycleOperation === "merging",
+          );
+          expect(intentIndex).toBeGreaterThanOrEqual(0);
+          expect(mergingIndex).toBeGreaterThan(intentIndex);
+          expect(updates).toContainEqual(
+            expect.objectContaining({
+              prState: "merged",
+              hasMergeConflicts: false,
+            }),
+          );
+          expect(context.storage.updateKanbanTask).toHaveBeenCalledWith(task.id, {
+            status: "review",
+          });
+          expect(context.storage.addKanbanComment).toHaveBeenCalledWith(
+            task.id,
+            `🎉 PR merged: ${environment.prUrl}`,
+          );
+          expect(context.storage.updateKanbanTask).toHaveBeenLastCalledWith(task.id, {
+            prUrl: environment.prUrl,
             prState: "merged",
-            hasMergeConflicts: false,
-          }),
-        );
-        expect(context.storage.updateKanbanTask).toHaveBeenCalledWith(task.id, {
-          status: "review",
-        });
-        expect(context.storage.addKanbanComment).toHaveBeenCalledWith(
-          task.id,
-          `🎉 PR merged: ${environment.prUrl}`,
-        );
-        expect(context.storage.updateKanbanTask).toHaveBeenLastCalledWith(task.id, {
-          prUrl: environment.prUrl,
-          prState: "merged",
-          prMergeCommented: true,
-        });
-        await expect(context.storage.getEnvironment(environment.id)).resolves.toBeNull();
+            prMergeCommented: true,
+          });
+          await expect(context.storage.getEnvironment(environment.id)).resolves.toBeNull();
 
-        const ghLog = await fs.readFile(logPath, "utf8");
-        expect(ghLog).toContain(
-          "api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash",
-        );
-        expect(ghLog).toContain(
-          "api repos/acme/repo/git/refs/heads/feature/backend-cleanup --method DELETE",
-        );
-      },
-    );
-  });
+          const ghLog = await fs.readFile(logPath, "utf8");
+          expect(ghLog).toContain(
+            "api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash",
+          );
+          expect(ghLog).toContain(
+            "api repos/acme/repo/git/refs/heads/feature/backend-cleanup --method DELETE",
+          );
+        },
+      );
+    },
+  );
 
-  test("keeps an unconfirmed container merge cleanup pending without deleting the environment", async () => {
-    const environment = createEnvironment({
-      id: "env-merge-cleanup-container-pending",
-      environmentType: "containerized",
-      worktreePath: undefined,
-      containerId: "container-pending",
-      status: "stopped",
-      prUrl: "https://github.com/acme/repo/pull/42",
-      prState: "open",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
+  shimTest(
+    "keeps an unconfirmed container merge cleanup pending without deleting the environment",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-merge-cleanup-container-pending",
+        environmentType: "containerized",
+        worktreePath: undefined,
+        containerId: "container-pending",
+        status: "stopped",
+        prUrl: "https://github.com/acme/repo/pull/42",
+        prState: "open",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-    await withFakeDocker(
-      `#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 command=""
 for arg in "$@"; do command="$arg"; done
@@ -1295,37 +1332,38 @@ fi
 printf 'unexpected docker command: %s\\n' "$command" >&2
 exit 1
 `,
-      async (logs) => {
-        const result = await commands.get("merge_environment_pr")?.(
-          {
-            environmentId: environment.id,
-            method: "rebase",
-            deleteBranch: true,
-            cleanupAfterMerge: true,
-          },
-          context,
-        );
-        expect(result).toEqual({
-          outcome: "pending",
-          cleanupOutcome: "pending",
-        });
+        async (logs) => {
+          const result = await commands.get("merge_environment_pr")?.(
+            {
+              environmentId: environment.id,
+              method: "rebase",
+              deleteBranch: true,
+              cleanupAfterMerge: true,
+            },
+            context,
+          );
+          expect(result).toEqual({
+            outcome: "pending",
+            cleanupOutcome: "pending",
+          });
 
-        await expect(context.storage.getEnvironment(environment.id)).resolves.toMatchObject({
-          cleanupAfterMergeRequestedAt: expect.any(String),
-          cleanupAfterMergeError: null,
-          prState: "open",
-        });
-        const execLog = await fs.readFile(logs.exec, "utf8");
-        expect(execLog).toContain(
-          "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--rebase'",
-        );
-        expect(execLog).not.toContain("--delete-branch");
-        expect(existsSync(logs.rm)).toBe(false);
-      },
-    );
-  });
+          await expect(context.storage.getEnvironment(environment.id)).resolves.toMatchObject({
+            cleanupAfterMergeRequestedAt: expect.any(String),
+            cleanupAfterMergeError: null,
+            prState: "open",
+          });
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          expect(execLog).toContain(
+            "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--rebase'",
+          );
+          expect(execLog).not.toContain("--delete-branch");
+          expect(existsSync(logs.rm)).toBe(false);
+        },
+      );
+    },
+  );
 
-  test("continues confirmed cleanup when persisting merged PR state fails once", async () => {
+  shimTest("continues confirmed cleanup when persisting merged PR state fails once", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-cleanup-persist-fail-");
     const environment = createEnvironment({
       id: "env-merge-cleanup-persist-fail",

@@ -171,6 +171,8 @@ export interface MultiReviewSession extends MultiReviewModelSelection {
   startedAt: string;
   /** Cumulative provider tokens for this provider session. */
   tokenCount?: number;
+  /** Bounded terminal polls while the provider finalizes cumulative usage. */
+  usageFinalizationPolls?: number;
   /** Last time the supervisor observed this session's transcript change. */
   progressAt?: string;
   /**
@@ -477,6 +479,7 @@ function isFixSession(value: unknown): boolean {
       "status",
       "startedAt",
       "tokenCount",
+      "usageFinalizationPolls",
       "progressAt",
       "progressDigest",
       "stalledSince",
@@ -493,6 +496,10 @@ function isFixSession(value: unknown): boolean {
     optionalDate(value.startedAt) &&
     typeof value.startedAt === "string" &&
     optionalTokenCount(value.tokenCount) &&
+    (value.usageFinalizationPolls === undefined ||
+      (Number.isSafeInteger(value.usageFinalizationPolls) &&
+        (value.usageFinalizationPolls as number) >= 0 &&
+        (value.usageFinalizationPolls as number) <= REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS)) &&
     optionalDate(value.progressAt) &&
     optionalProgressDigest(value.progressDigest) &&
     optionalDate(value.stalledSince) &&

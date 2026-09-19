@@ -697,6 +697,118 @@ test("MultiReviewService releases the controller lease when it hands off", async
   );
 });
 
+test("MultiReviewService settles the interactive Fix card in the background with final usage", async () => {
+  const provider = new Provider();
+  provider.usageTokens = 23_456;
+  await withService(
+    "env-interactive-fix-settlement",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      await service.init();
+      const started = await start();
+      await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
+
+      provider.statusValue = "running";
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+      const running = (await snapshot(started.id))!;
+      expect(running).toMatchObject({
+        phase: "interactive",
+        fixSession: { status: "running" },
+        stepRuntimes: { fix: { tokenBaseline: 0 } },
+      });
+
+      provider.statusValue = "idle";
+      await waitUntil(async () => (await snapshot(started.id))?.fixSession?.status === "idle");
+
+      const settled = (await snapshot(started.id))!;
+      expect(settled).toMatchObject({
+        phase: "interactive",
+        fixSession: {
+          status: "idle",
+          tokenCount: 23_456,
+          completedAt: expect.any(String),
+        },
+        stepRuntimes: {
+          fix: {
+            tokenBaseline: 0,
+            tokenCount: 23_456,
+            completedAt: expect.any(String),
+          },
+        },
+      });
+      expect(await storage.getEnvironment("env-interactive-fix-settlement")).toMatchObject({
+        agentActivitySources: { "multi-review": { state: "idle" } },
+      });
+    },
+    {
+      serviceOptions: {
+        autoAdvance: true,
+        pollIntervalMs: 5,
+        dispatchAddressPrompt: async (workflow) => ({
+          tabId: workflow.addressTabId!,
+          fixSession: {
+            ...workflow.fixModel,
+            sessionKey: workflow.addressSessionKey!,
+            providerSessionId: "provider-interactive-fix",
+            requestIds: [workflow.addressRequestId!],
+            status: "running",
+            startedAt: new Date().toISOString(),
+          },
+        }),
+      },
+    },
+  );
+});
+
+test("MultiReviewService bounds delayed interactive Fix usage finalization", async () => {
+  const provider = new Provider();
+  provider.usagePending = true;
+  await withService(
+    "env-interactive-fix-delayed-usage",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.fixSession).toMatchObject({
+        status: "running",
+        usageFinalizationPolls: 1,
+      });
+
+      provider.usagePending = false;
+      provider.usageTokens = 9_876;
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.fixSession).toMatchObject({
+        status: "idle",
+        tokenCount: 9_876,
+      });
+      expect((await snapshot(started.id))?.fixSession?.usageFinalizationPolls).toBeUndefined();
+    },
+    {
+      serviceOptions: {
+        dispatchAddressPrompt: async (workflow) => ({
+          tabId: workflow.addressTabId!,
+          fixSession: {
+            ...workflow.fixModel,
+            sessionKey: workflow.addressSessionKey!,
+            providerSessionId: "provider-interactive-delayed",
+            requestIds: [workflow.addressRequestId!],
+            status: "running",
+            startedAt: new Date().toISOString(),
+          },
+        }),
+      },
+    },
+  );
+});
+
 test("MultiReviewService resumes an interrupted address dispatch through the supervisor", async () => {
   const provider = new Provider();
   let dispatches = 0;
@@ -721,6 +833,9 @@ test("MultiReviewService resumes an interrupted address dispatch through the sup
       expect(resumed.addressPromptPending).toBe(true);
       expect(provider.statusCalls).toBe(statusCallsBeforeAddress);
       await waitUntil(async () => {
+        if ((await snapshot(started.id))?.addressPromptPending !== true) {
+          await service.advanceNow(started.id);
+        }
         const [workflow, environment] = await Promise.all([
           snapshot(started.id),
           storage.getEnvironment("env-address-resume"),
@@ -919,15 +1034,9 @@ test.each([false, true])(
         });
 
         releaseDispatch();
-        await waitUntil(async () => {
-          const [workflow, environment] = await Promise.all([
-            snapshot(started.id),
-            storage.getEnvironment("env-address-backend"),
-          ]);
-          return (
-            workflow?.addressPromptPending !== true &&
-            environment?.agentActivitySources?.["multi-review"]?.state === "idle"
-          );
+        await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+        expect(await storage.getEnvironment("env-address-backend")).toMatchObject({
+          agentActivitySources: { "multi-review": { state: "working" } },
         });
         expect(dispatched).toHaveLength(1);
         expect(dispatched[0]?.consolidatedReport?.issues).toHaveLength(1);
@@ -999,7 +1108,7 @@ test("MultiReviewService persists a seeded replacement for a missing interactive
       expect(recovered.fixSession).toMatchObject({
         providerSessionId: "provider-replacement",
         sessionKey: `multi-review:${started.id}:interactive`,
-        status: "idle",
+        status: "running",
       });
       expect(recovered.fixSessionKey).toBe(`multi-review:${started.id}:interactive`);
       expect(recovered.presentationError).toContain(
@@ -1092,7 +1201,7 @@ test("MultiReviewService owns a custom-fix launch after the renderer records int
         model: "gpt-5.4",
         providerSessionId: "provider-custom-fix",
         sessionKey: requested.addressSessionKey,
-        status: "idle",
+        status: "running",
       });
       expect(delivered.fixTabId).toBe(requested.addressTabId);
       expect(delivered.presentationError).toBe(

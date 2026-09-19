@@ -26,7 +26,10 @@ import {
   type StartMultiReviewCustomFixInput,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
-import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import {
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+} from "@orkestrator/protocol/agent-interactions";
 import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
@@ -321,6 +324,15 @@ function hasWorkflowActivity(workflow: MultiReviewWorkflow): boolean {
     workflow.addressPromptPending === true ||
     workflow.reviewers.some((reviewer) => reviewer.status === "running") ||
     workflow.reviewSession?.status === "running" ||
+    workflow.fixSession?.status === "running"
+  );
+}
+
+/** The initial interactive Fix turn still belongs to the backend until it settles. */
+function needsInteractiveFixObservation(workflow: MultiReviewWorkflow): boolean {
+  return (
+    workflow.phase === "interactive" &&
+    workflow.addressPromptPending !== true &&
     workflow.fixSession?.status === "running"
   );
 }
@@ -720,7 +732,15 @@ export class MultiReviewService {
         const recovered = await this.options.recoverAddressSession!(workflow, replacement);
         await this.assertFence(workflow.id, token);
         workflow.fixSession = recovered.fixSession;
+        workflow.fixSession.status = "running";
+        workflow.fixSession.startedAt = nowIso();
+        delete workflow.fixSession.completedAt;
+        delete workflow.fixSession.usageFinalizationPolls;
         workflow.fixSessionKey = recovered.fixSession.sessionKey;
+        beginStepRuntime(workflow, "fix", workflow.fixSession);
+        if (workflow.stepRuntimes?.fix && workflow.fixSession.tokenCount === undefined) {
+          workflow.stepRuntimes.fix.tokenBaseline = 0;
+        }
         workflow.fixTabId = recovered.tabId;
         workflow.presentationError = MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE;
         delete workflow.error;
@@ -1411,6 +1431,7 @@ export class MultiReviewService {
         if (!isMultiReviewWorkflow(record.snapshot)) return [];
         const workflow = record.snapshot;
         return isSupervisedPhase(workflow.phase) ||
+          needsInteractiveFixObservation(workflow) ||
           (workflow.pendingResultConsumptions?.length ?? 0) > 0 ||
           (workflow.addressPromptPending === true && this.options.dispatchAddressPrompt)
           ? [this.runLocked(record.id)]
@@ -1585,8 +1606,10 @@ export class MultiReviewService {
       existingPhase === "interactive" &&
       existing.snapshot.addressPromptPending === true &&
       this.options.dispatchAddressPrompt !== undefined;
+    const observingInteractiveFix = needsInteractiveFixObservation(existing.snapshot);
     if (
       !pendingAddress &&
+      !observingInteractiveFix &&
       !isSupervisedPhase(existingPhase) &&
       !existing.snapshot.pendingResultConsumptions?.length
     )
@@ -1605,6 +1628,8 @@ export class MultiReviewService {
       this.options.dispatchAddressPrompt
     ) {
       await this.advanceAddressPrompt(workflow, token);
+    } else if (needsInteractiveFixObservation(workflow)) {
+      await this.advanceInteractiveFix(workflow, token);
     } else if (workflow.phase === "cancelling") {
       await this.advanceCancellation(workflow, token);
     } else if (workflow.phase === "reviewing") {
@@ -1644,9 +1669,19 @@ export class MultiReviewService {
       }
       const dispatchedSession = workflow.fixSession;
       if (dispatchedSession) {
+        dispatchedSession.status = "running";
         dispatchedSession.startedAt = nowIso();
         delete dispatchedSession.completedAt;
+        delete dispatchedSession.usageFinalizationPolls;
         beginStepRuntime(workflow, "fix", dispatchedSession);
+        if (
+          workflow.stepRuntimes?.fix &&
+          dispatchedSession.tokenCount === undefined &&
+          (!previousFixSession ||
+            previousFixSession.providerSessionId !== dispatchedSession.providerSessionId)
+        ) {
+          workflow.stepRuntimes.fix.tokenBaseline = 0;
+        }
       }
       workflow.fixTabId = result?.tabId ?? workflow.addressTabId ?? workflow.fixTabId;
       if (result?.presentationError) workflow.presentationError = result.presentationError;
@@ -1722,6 +1757,83 @@ export class MultiReviewService {
         await this.save(workflow, token);
       }
     } finally {
+      await this.release(workflow, token);
+    }
+  }
+
+  /**
+   * Reconcile the initial interactive Fix turn after ownership moves to its
+   * ordinary native-agent tab. The provider remains authoritative; this copy
+   * only keeps the Multi Review card, timing, usage, and activity badge honest.
+   */
+  private async advanceInteractiveFix(workflow: MultiReviewWorkflow, token: string): Promise<void> {
+    const session = workflow.fixSession!;
+    try {
+      const provider = await this.provider(workflow, session);
+      provider.registerSession?.(session.providerSessionId, {
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        phase: "fix",
+        workflowId: workflow.id,
+        provider: session.agent,
+        fence: session.sessionKey,
+      });
+      const observation = await readProviderStatus(provider, session.providerSessionId);
+      await this.assertFence(workflow.id, token);
+      const terminalMessages =
+        observation.status !== "running" &&
+        observation.status !== "blocked" &&
+        this.validSessionTokens(observation.contextUsage) === undefined &&
+        provider.usageFromMessages
+          ? this.readFixSessionMessages(provider, session)
+          : undefined;
+      const usageChanged = await this.refreshFixSessionUsage(
+        workflow,
+        token,
+        provider,
+        session,
+        observation.contextUsage,
+        terminalMessages,
+        "fix",
+      );
+
+      if (observation.status === "running" || observation.status === "blocked") {
+        if (usageChanged) await this.save(workflow, token);
+        return;
+      }
+      if (
+        observation.status === "idle" &&
+        observation.usagePending === true &&
+        (session.usageFinalizationPolls ?? 0) < REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS
+      ) {
+        session.usageFinalizationPolls = (session.usageFinalizationPolls ?? 0) + 1;
+        await this.save(workflow, token);
+        return;
+      }
+
+      delete session.usageFinalizationPolls;
+      session.completedAt = nowIso();
+      settleStepRuntime(workflow, "fix");
+      if (observation.status === "idle") {
+        session.status = "idle";
+        delete session.error;
+      } else {
+        session.status = "failed";
+        session.error =
+          observation.status === "missing"
+            ? "The interactive fix session no longer exists"
+            : observation.error
+              ? `The interactive fix session failed: ${observation.error}`
+              : "The interactive fix session failed";
+      }
+      await this.save(workflow, token);
+      await this.release(workflow, token);
+    } catch (error) {
+      if (error instanceof ControllerFenceError) throw error;
+      console.warn(
+        "[multi-review] Reading interactive fix session state failed:",
+        errorMessage(error),
+      );
       await this.release(workflow, token);
     }
   }
@@ -2134,6 +2246,7 @@ export class MultiReviewService {
     session: NonNullable<MultiReviewWorkflow["fixSession"]>,
     observedUsage: { sessionTokens?: number } | undefined,
     messages: Promise<unknown[]> | undefined,
+    runtimeKind?: MultiReviewStepKind,
   ): Promise<boolean> {
     try {
       const observed = this.validSessionTokens(observedUsage);
@@ -2145,7 +2258,7 @@ export class MultiReviewService {
       if (reported === undefined) return false;
       await this.assertFence(workflow.id, token);
       const tokenCount = Math.max(session.tokenCount ?? 0, reported);
-      const kind = workflow.activeRequest?.kind;
+      const kind = runtimeKind ?? workflow.activeRequest?.kind;
       const runtime = kind ? workflow.stepRuntimes?.[kind] : undefined;
       const stepTokens =
         runtime?.tokenBaseline === undefined

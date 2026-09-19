@@ -364,8 +364,40 @@ mock.module("@/lib/native/process", () => ({
   restart: mockRestart,
 }));
 
-import App, { DOCKER_AVAILABILITY_POLL_INTERVAL_MS } from "./App";
+import App, {
+  DOCKER_AVAILABILITY_POLL_INTERVAL_MS,
+  DOCKER_STARTUP_CONFIRMATION_DELAY_MS,
+} from "./App";
 import { activateFeatureBuildEnvironment } from "@/lib/feature-build-activation";
+
+function deferDockerStartupConfirmation() {
+  const originalSetTimeout = window.setTimeout;
+  const confirmationCallbacks: Array<() => void> = [];
+  window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+    if (timeout === DOCKER_STARTUP_CONFIRMATION_DELAY_MS) {
+      confirmationCallbacks.push(() => {
+        if (typeof handler === "function") handler(...args);
+      });
+      return 42;
+    }
+    return originalSetTimeout(handler, timeout, ...args);
+  }) as typeof window.setTimeout;
+
+  return {
+    confirmationCallbacks,
+    releaseNext: async () => {
+      const callback = confirmationCallbacks.shift();
+      if (!callback) throw new Error("No Docker startup confirmation is pending");
+      await act(async () => {
+        callback();
+        await Promise.resolve();
+      });
+    },
+    restore: () => {
+      window.setTimeout = originalSetTimeout;
+    },
+  };
+}
 
 function makeEnvironment(id: string, projectId: string): Environment {
   return {
@@ -1931,6 +1963,7 @@ describe("App Docker availability", () => {
   });
 
   test("retry rechecks Docker and syncs environments after Docker becomes available", async () => {
+    const deferredConfirmation = deferDockerStartupConfirmation();
     // Both confirmed startup probes are unavailable. Retry: Docker is now available.
     mockCheckDocker.mockImplementationOnce(async () => false);
     mockCheckDocker.mockImplementationOnce(async () => false);
@@ -1943,24 +1976,27 @@ describe("App Docker availability", () => {
       selectedEnvironmentId: null,
     });
 
-    render(<App />);
+    try {
+      render(<App />);
 
-    // Wait for the startup check to flip dockerAvailable to false.
-    await waitFor(() => {
-      expect(mockCheckDocker).toHaveBeenCalledTimes(2);
-    });
-    expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
-    // Startup check should NOT have triggered sync because Docker was unavailable.
-    expect(mockSyncAllEnvironmentsWithDocker).not.toHaveBeenCalled();
+      expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+      expect(mockCheckDocker).toHaveBeenCalledTimes(1);
+      await deferredConfirmation.releaseNext();
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
+      // Startup check should NOT have triggered sync because Docker was unavailable.
+      expect(mockSyncAllEnvironmentsWithDocker).not.toHaveBeenCalled();
 
-    act(() => {
-      screen.getByRole("button", { name: "Check Again" }).click();
-    });
+      act(() => {
+        screen.getByRole("button", { name: "Check Again" }).click();
+      });
 
-    await waitFor(() => {
-      expect(mockCheckDocker).toHaveBeenCalledTimes(3);
-      expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(1);
-    });
+      await waitFor(() => {
+        expect(mockCheckDocker).toHaveBeenCalledTimes(3);
+        expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      deferredConfirmation.restore();
+    }
   });
 
   test("explains when Docker is installed but daemon access is denied", async () => {
@@ -1973,6 +2009,7 @@ describe("App Docker availability", () => {
     render(<App />);
 
     expect(await screen.findByText("Docker Permission Required")).toBeTruthy();
+    expect(mockCheckDocker).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/your user account cannot access the Docker daemon/i)).toBeTruthy();
     expect(screen.getByText(/Docker group membership grants root-level host access/i)).toBeTruthy();
     expect(screen.getByText(/sudo usermod -aG docker/)).toBeTruthy();
@@ -1991,7 +2028,30 @@ describe("App Docker availability", () => {
 
     expect(await screen.findByText(title)).toBeTruthy();
     expect(screen.getByText(description)).toBeTruthy();
+    expect(mockCheckDocker).toHaveBeenCalledTimes(1);
   });
+
+  test.each(["not-installed", "permission-denied", "timed-out"] as const)(
+    "does not schedule a confirming startup probe for %s",
+    async (reason) => {
+      const deferredConfirmation = deferDockerStartupConfirmation();
+      mockCheckDocker.mockImplementation(async () => ({ available: false, reason }));
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+      try {
+        render(<App />);
+        await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+        await act(async () => {
+          await Promise.resolve();
+        });
+
+        expect(deferredConfirmation.confirmationCallbacks).toHaveLength(0);
+        expect(mockCheckDocker).toHaveBeenCalledTimes(1);
+      } finally {
+        deferredConfirmation.restore();
+      }
+    },
+  );
 
   test("treats startup check failures as unavailable and keeps sync failures non-fatal", async () => {
     const originalConsoleError = console.error;
@@ -2033,6 +2093,7 @@ describe("App Docker availability", () => {
   });
 
   test("keeps a failed retry non-blocking and lets the user dismiss the warning", async () => {
+    const deferredConfirmation = deferDockerStartupConfirmation();
     const originalConsoleError = console.error;
     const consoleError = mock(() => {});
     console.error = consoleError;
@@ -2046,6 +2107,8 @@ describe("App Docker availability", () => {
       resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
       render(<App />);
       await screen.findByText("Docker Is Not Running");
+      await deferredConfirmation.releaseNext();
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
 
       act(() => screen.getByRole("button", { name: "Check Again" }).click());
       await waitFor(() => {
@@ -2061,6 +2124,7 @@ describe("App Docker availability", () => {
       expect(mockExit).not.toHaveBeenCalled();
     } finally {
       console.error = originalConsoleError;
+      deferredConfirmation.restore();
     }
   });
 
@@ -2182,16 +2246,32 @@ describe("App Docker availability", () => {
     }
   });
 
-  test("confirms a transient startup failure before declaring Docker unavailable", async () => {
+  test("delays the confirming startup probe without extending the loading overlay", async () => {
+    const deferredConfirmation = deferDockerStartupConfirmation();
     mockCheckDocker.mockImplementation(async () => false);
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
-    render(<App />);
-    expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
-    expect(mockCheckDocker).toHaveBeenCalledTimes(2);
+    try {
+      render(<App />);
+      expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+      expect(screen.queryByText("Checking Docker availability...") === null).toBe(true);
+      expect(mockCheckDocker).toHaveBeenCalledTimes(1);
+      expect(deferredConfirmation.confirmationCallbacks).toHaveLength(1);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(mockCheckDocker).toHaveBeenCalledTimes(1);
+
+      await deferredConfirmation.releaseNext();
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
+    } finally {
+      deferredConfirmation.restore();
+    }
   });
 
   test("recovers when the first startup probe is transient", async () => {
+    const deferredConfirmation = deferDockerStartupConfirmation();
     mockCheckDocker
       .mockImplementationOnce(async () => ({
         available: false,
@@ -2200,11 +2280,43 @@ describe("App Docker availability", () => {
       .mockImplementationOnce(async () => ({ available: true, reason: null }));
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
-    render(<App />);
+    try {
+      render(<App />);
 
-    await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
-    expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
-    expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(1);
+      expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
+      expect(screen.queryByText("Checking Docker availability...") === null).toBe(true);
+      expect(mockCheckDocker).toHaveBeenCalledTimes(1);
+      await deferredConfirmation.releaseNext();
+
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
+      expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
+      expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(1);
+    } finally {
+      deferredConfirmation.restore();
+    }
+  });
+
+  test("keeps the first startup diagnostic when the confirming probe fails differently", async () => {
+    const deferredConfirmation = deferDockerStartupConfirmation();
+    mockCheckDocker
+      .mockImplementationOnce(async () => ({ available: false, reason: "unknown" as const }))
+      .mockImplementationOnce(async () => ({
+        available: false,
+        reason: "daemon-unavailable" as const,
+      }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    try {
+      render(<App />);
+      expect(await screen.findByText("Docker Is Unavailable")).toBeTruthy();
+      await deferredConfirmation.releaseNext();
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
+
+      expect(screen.getByText("Docker Is Unavailable")).toBeTruthy();
+      expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
+    } finally {
+      deferredConfirmation.restore();
+    }
   });
 
   test("deduplicates Docker polls while an earlier probe is still in flight", async () => {

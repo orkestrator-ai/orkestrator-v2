@@ -51,6 +51,50 @@ describe("Docker availability classification", () => {
     expect(diagnostic).not.toContain("example.invalid");
   });
 
+  test("deduplicates an unchanged failure until Docker recovers", async () => {
+    const logWarning = mock((_message: string) => undefined);
+    let available = false;
+    const dependencies = {
+      commandExists: async () => true,
+      runCommand: async () => {
+        if (!available) {
+          throw new CommandFailedError("Cannot connect to the Docker daemon", { exitCode: 1 });
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+      logWarning,
+    };
+
+    await checkDockerAvailability(dependencies);
+    await checkDockerAvailability(dependencies);
+    await checkDockerAvailability(dependencies);
+    expect(logWarning).toHaveBeenCalledTimes(1);
+
+    available = true;
+    await expect(checkDockerAvailability(dependencies)).resolves.toEqual({
+      available: true,
+      reason: null,
+    });
+    available = false;
+    await checkDockerAvailability(dependencies);
+    expect(logWarning).toHaveBeenCalledTimes(2);
+  });
+
+  test("logs through console.warn when no warning dependency is supplied", async () => {
+    const originalConsoleWarn = console.warn;
+    const consoleWarn = mock((_message: string) => undefined);
+    console.warn = consoleWarn;
+
+    try {
+      await checkDockerAvailability({ commandExists: async () => false });
+      expect(consoleWarn).toHaveBeenCalledWith(
+        "[Docker] Availability probe failed: reason=not-installed commandExists=false",
+      );
+    } finally {
+      console.warn = originalConsoleWarn;
+    }
+  });
+
   test("distinguishes an unavailable daemon from unrelated permission failures", () => {
     expect(dockerUnavailableReason(new Error("Cannot connect to the Docker daemon"))).toBe(
       "daemon-unavailable",

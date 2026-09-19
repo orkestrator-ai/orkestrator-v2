@@ -38,6 +38,17 @@ import {
   createDockerContainer,
 } from "./commands-helpers.js";
 
+const lastDockerAvailabilityDiagnosticByLogger = new WeakMap<(message: string) => void, string>();
+
+function logDockerAvailabilityWarning(
+  logWarning: (message: string) => void,
+  diagnostic: string,
+): void {
+  if (lastDockerAvailabilityDiagnosticByLogger.get(logWarning) === diagnostic) return;
+  lastDockerAvailabilityDiagnosticByLogger.set(logWarning, diagnostic);
+  logWarning(diagnostic);
+}
+
 export function dockerUnavailableReason(error: unknown): DockerUnavailableReason {
   if (error instanceof CommandFailedError && error.timedOut) return "timed-out";
 
@@ -70,11 +81,15 @@ export async function checkDockerAvailability(
   const run = dependencies.runCommand ?? runCommand;
   const logWarning = dependencies.logWarning ?? console.warn;
   if (!(await hasCommand("docker"))) {
-    logWarning("[Docker] Availability probe failed: reason=not-installed commandExists=false");
+    logDockerAvailabilityWarning(
+      logWarning,
+      "[Docker] Availability probe failed: reason=not-installed commandExists=false",
+    );
     return { available: false, reason: "not-installed" };
   }
   try {
     await run("docker", ["info"], { timeoutMs: 10_000 });
+    lastDockerAvailabilityDiagnosticByLogger.delete(logWarning);
     return { available: true, reason: null };
   } catch (error) {
     const reason = dockerUnavailableReason(error);
@@ -86,7 +101,8 @@ export async function checkDockerAvailability(
       : error instanceof Error
         ? "Error"
         : typeof error;
-    logWarning(
+    logDockerAvailabilityWarning(
+      logWarning,
       [
         "[Docker] Availability probe failed:",
         `reason=${reason}`,

@@ -57,6 +57,8 @@ export const DEFAULT_MULTI_REVIEW_REVIEWER_COUNT = 2;
 
 /** App-wide Multi Review choices beyond the two action defaults shown on Defaults. */
 export interface MultiReviewAgentSettings {
+  /** Automatically launch Fix after a manual Multi Review consolidates. */
+  autoFix?: boolean;
   /** Number of reviewer sessions Multi Review, feature builds, and ticket builds start. */
   reviewerCount?: number;
   /** Reviewer 3 onward. Null means use the first reviewer's resolved default. */
@@ -64,6 +66,7 @@ export interface MultiReviewAgentSettings {
 }
 
 export interface ResolvedMultiReviewAgentSettings {
+  autoFix: boolean;
   reviewerCount: number;
   additionalReviewers: Array<AgentActionDefault | null>;
 }
@@ -242,6 +245,11 @@ export function resolveMultiReviewSettings(
     tiers.global?.multiReview?.additionalReviewers ??
     [];
   return {
+    autoFix:
+      tiers.environment?.multiReview?.autoFix ??
+      tiers.repository?.multiReview?.autoFix ??
+      tiers.global?.multiReview?.autoFix ??
+      false,
     reviewerCount,
     additionalReviewers: additionalReviewers.slice(
       0,
@@ -315,6 +323,7 @@ function normalizeMultiReviewSettings(value: unknown): MultiReviewAgentSettings 
   while (additionalReviewers.at(-1) === null) additionalReviewers.pop();
 
   const normalized: MultiReviewAgentSettings = {
+    ...(typeof record.autoFix === "boolean" ? { autoFix: record.autoFix } : {}),
     ...(reviewerCount !== DEFAULT_MULTI_REVIEW_REVIEWER_COUNT ? { reviewerCount } : {}),
     ...(additionalReviewers.length > 0 ? { additionalReviewers } : {}),
   };

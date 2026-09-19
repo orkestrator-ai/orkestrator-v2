@@ -52,6 +52,10 @@ describe("multi review protocol", () => {
       fixModel: { agent: "claude", model: "default" },
     };
     expect(isLaunchMultiReviewActionInput(input)).toBe(true);
+    expect(isLaunchMultiReviewActionInput({ ...input, autoFix: true })).toBe(true);
+    expect(isLaunchMultiReviewActionInput({ ...input, autoFix: false })).toBe(true);
+    expect(isLaunchMultiReviewActionInput({ ...input, autoFix: "true" })).toBe(false);
+    expect(isLaunchMultiReviewActionInput({ ...input, autoFix: null })).toBe(false);
     expect(isLaunchMultiReviewActionInput({ ...input, reviewInstruction: "" })).toBe(true);
     expect(isLaunchMultiReviewActionInput({ ...input, reviewInstruction: "   " })).toBe(true);
     for (const override of [
@@ -77,6 +81,10 @@ describe("multi review protocol", () => {
       fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
     };
     expect(isStartMultiReviewInput(input)).toBe(true);
+    expect(isStartMultiReviewInput({ ...input, autoFix: true })).toBe(true);
+    expect(isStartMultiReviewInput({ ...input, autoFix: false })).toBe(true);
+    expect(isStartMultiReviewInput({ ...input, autoFix: "true" })).toBe(false);
+    expect(isStartMultiReviewInput({ ...input, autoFix: null })).toBe(false);
     expect(isStartMultiReviewInput({ ...input, reviewers: [] })).toBe(false);
     expect(
       isStartMultiReviewInput({
@@ -116,6 +124,10 @@ describe("multi review protocol", () => {
       backendRevision: 2,
     };
     expect(isMultiReviewWorkflow(workflow)).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, autoFix: true })).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, autoFix: false })).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, autoFix: "true" })).toBe(false);
+    expect(isMultiReviewWorkflow({ ...workflow, autoFix: null })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, fixSessionKey: "next-fix-session" })).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, fixSessionKey: "" })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, phase: "interactive" })).toBe(true);

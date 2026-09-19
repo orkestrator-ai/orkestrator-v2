@@ -7,6 +7,7 @@ import {
   openCodeModelDisplayLabel,
   openCodeModelProviderId,
 } from "@orkestrator/protocol/native-agent";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -45,12 +46,14 @@ export interface MultiReviewRowDefaults {
 }
 
 export interface MultiReviewLaunchSelection {
+  autoFix: boolean;
   reviewers: MultiReviewModelSelection[];
   reviewModel: MultiReviewModelSelection;
   fixModel: MultiReviewModelSelection;
 }
 
 export interface MultiReviewLaunchDefaults {
+  defaultAutoFix?: boolean;
   defaultAgent: LaunchAgent;
   catalog: AgentModelCatalog;
   preferredModels?: Partial<Record<LaunchAgent, string>>;
@@ -223,6 +226,7 @@ export function defaultMultiReviewLaunchSelection(
 ): MultiReviewLaunchSelection {
   const rows = initialRows(defaults);
   return {
+    autoFix: defaults.defaultAutoFix ?? false,
     reviewers: rows.reviewers.map(cleanRow),
     reviewModel: cleanRow(rows.reviewModel),
     fixModel: cleanRow(rows.fixModel),
@@ -346,6 +350,7 @@ function ModelRow({
 }
 
 export function MultiReviewLaunchDialog({
+  defaultAutoFix = false,
   open,
   onOpenChange,
   defaultAgent,
@@ -384,6 +389,7 @@ export function MultiReviewLaunchDialog({
   const [reviewModel, setReviewModel] = useState<PickerRow>(() =>
     initialConfiguredRow(reviewModelDefaults, fallbackDefaults, catalog),
   );
+  const [autoFix, setAutoFix] = useState(defaultAutoFix);
   const wasOpen = useRef(false);
 
   // Only the closed -> open edge reconfigures the rows, and it runs as a layout
@@ -407,7 +413,9 @@ export function MultiReviewLaunchDialog({
     setReviewers(rows.reviewers);
     setReviewModel(rows.reviewModel);
     setFixModel(rows.fixModel);
+    setAutoFix(defaultAutoFix);
   }, [
+    defaultAutoFix,
     catalog,
     defaultAgent,
     fallbackDefaults,
@@ -445,6 +453,7 @@ export function MultiReviewLaunchDialog({
             event.preventDefault();
             if (busy) return;
             onConfirm({
+              autoFix,
               reviewers: reviewers.map(cleanRow),
               reviewModel: cleanRow(reviewModel),
               fixModel: cleanRow(fixModel),
@@ -546,6 +555,15 @@ export function MultiReviewLaunchDialog({
                 This model receives the consolidated report and addresses its issues and coverage
                 gaps in a separate session.
               </p>
+              <div className="mt-4 flex items-center gap-2">
+                <Checkbox
+                  id="multi-review-launch-auto-fix"
+                  checked={autoFix}
+                  disabled={busy}
+                  onCheckedChange={(checked) => setAutoFix(checked === true)}
+                />
+                <Label htmlFor="multi-review-launch-auto-fix">Auto-fix after consolidation</Label>
+              </div>
             </fieldset>
           </div>
 

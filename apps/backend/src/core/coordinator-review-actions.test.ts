@@ -293,10 +293,12 @@ test("saved branch and review instruction defaults match the environment button"
   await storage.updateGlobalConfig({
     ...(await storage.loadConfig()).global,
     reviewInstruction: "Check failure recovery",
+    agentSettings: { multiReview: { autoFix: true } },
   });
   const outcome = await launch();
   expect(outcome.workflow).toMatchObject({
     targetBranch: "develop",
+    autoFix: true,
     reviewInstruction: "Check failure recovery",
     reviewers: [expect.objectContaining(selection)],
     fixModel: selection,
@@ -721,4 +723,17 @@ test("a competing renderer launch wins admission once and is reopened", async ()
   expect((await launch()).workflow.id).toBe("renderer-winner");
   expect(start).toHaveBeenCalledTimes(1);
   expect(cancel).not.toHaveBeenCalled();
+});
+
+test("an explicit auto-fix override wins over the saved default", async () => {
+  await storage.updateGlobalConfig({
+    ...(await storage.loadConfig()).global,
+    agentSettings: { multiReview: { autoFix: true } },
+  });
+  const outcome = await launch({ autoFix: false });
+  expect(outcome.workflow.autoFix).toBe(false);
+  expect(start).toHaveBeenCalledWith(
+    expect.objectContaining({ autoFix: false }),
+    outcome.workflow.id,
+  );
 });

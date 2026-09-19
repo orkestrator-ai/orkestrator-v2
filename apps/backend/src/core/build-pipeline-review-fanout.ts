@@ -681,10 +681,16 @@ export class BuildPipelineReviewFanout {
       consolidation.providerSessionId,
       async () => {},
     );
-    const { status, error: statusDetail } = await readProviderStatus(
+    const {
+      status,
+      error: statusDetail,
+      turnSettled,
+    } = await readProviderStatus(
       provider,
       consolidation.providerSessionId,
+      consolidation.requestId,
     );
+    if (status === "idle" && turnSettled === false) return { kind: "working" };
     const transcriptChanged = await this.deps.refreshTranscript(session, provider);
     if (transcriptChanged && this.deps.shouldPersistTranscript(session)) {
       session.messagesPersistedAt = reviewFanoutNowIso();

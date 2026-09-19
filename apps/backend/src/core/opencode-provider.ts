@@ -45,7 +45,6 @@ import {
   type ProviderSendOptions,
   type ProviderSessionRegistration,
   type ProviderStatus,
-  ProviderDispatchPreparationError,
   ProviderUnavailableError,
   type ProviderRuntimeHealth,
 } from "./agent-provider-contract.js";
@@ -95,7 +94,6 @@ import {
   DEFAULT_MONITOR_RETRY_MS,
   DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS,
   effectiveOpenCodePolicy,
-  isOpenCodeWorkflowResultToolName,
   openCodeAgentFor,
   listOpenCodeResumableSessions,
   type OpenCodeProviderDependencies,
@@ -107,6 +105,7 @@ import {
   openCodeMessageIdScope,
   openCodeModelSelection,
   openCodePermissionRules,
+  openCodeWorkflowResultTurnTools,
   preflightOpenCodeModel,
   OPENCODE_READ_ONLY_TURN_TOOLS,
   openCodePromptParts,
@@ -225,8 +224,12 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       () => this.requestOptions(),
       (sessionId, policy) => this.sessionPolicies.set(sessionId, policy),
     );
-    this.workflowResults = new OpenCodeWorkflowResultBroker(this.client, connection.directory, () =>
-      this.requestOptions(),
+    this.workflowResults = new OpenCodeWorkflowResultBroker(
+      this.client,
+      connection.directory,
+      () => this.requestOptions(),
+      (sessionId, operation) =>
+        this.messageIds.runExclusive(openCodeMessageIdScope(connection, sessionId), operation),
     );
     this.capabilitiesAdapter = new OpenCodeCapabilities(this.client, connection.directory, () =>
       this.requestOptions(),
@@ -487,6 +490,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           .catch(() => undefined);
       }
       if (effect.reconnect) {
+        this.workflowResults.invalidate();
         this.invalidateInteractiveMetadata();
         this.lifecycle.invalidateEvents();
         this.activeStreamController?.abort();
@@ -698,16 +702,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
-    const workflowResultCapability = options.agentMcp?.workflowResultCapability;
-    if (
-      Boolean(options.workflowResultTool) !== Boolean(workflowResultCapability) ||
-      (options.workflowResultTool !== undefined &&
-        !isOpenCodeWorkflowResultToolName(options.workflowResultTool))
-    ) {
-      throw new ProviderDispatchPreparationError(
-        "OpenCode workflow-result tool configuration is incomplete",
-      );
-    }
     await this.workflowResults.prepare(sessionId, {
       agentMcp: options.agentMcp,
       workflowResultTool: options.workflowResultTool,
@@ -747,8 +741,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       const messageID = this.messageIds.resolve(scope, history, options.requestId);
       const workflowTool = options.workflowResultTool;
       const reviewEnabled = await this.reviewPermissions.enableForTurn(sessionId, options);
-      // Reassert after reviewer rules: OpenCode appends updates and the last match wins.
-      await this.workflowResults.enableForTurn(sessionId, workflowTool, reviewEnabled);
+      // Grant only inside the shared dispatch lock, after all other preparation.
+      // Always write: another provider may have owned the preceding turn.
+      await this.workflowResults.begin(sessionId, options.requestId, workflowTool);
       const dispatchStartedAt = this.now();
       this.streamState.beginTurn(sessionId, dispatchStartedAt);
       let response;
@@ -784,7 +779,12 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
                 agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options, "build"),
                 variant,
                 ...(options.readOnly && !reviewEnabled
-                  ? { tools: OPENCODE_READ_ONLY_TURN_TOOLS }
+                  ? {
+                      tools: {
+                        ...OPENCODE_READ_ONLY_TURN_TOOLS,
+                        ...openCodeWorkflowResultTurnTools(workflowTool),
+                      },
+                    }
                   : {}),
               },
               this.requestOptions(),
@@ -851,9 +851,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       }
       if (lifecycle === "running") return "running";
       if (lifecycle === "missing") return "missing";
-      const reviewerRestored = await this.reviewPermissions.restoreIfNeeded(sessionId);
-      // A recreated provider recovers reviewer identity but not the broker's enabled map.
-      await this.workflowResults.restore(sessionId, reviewerRestored);
       if (lifecycle === "idle") return "idle";
       return "error";
     } catch (error) {
@@ -861,6 +858,15 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         cause: error,
       });
     }
+  }
+
+  async settleTurn(sessionId: string, requestId: string): Promise<boolean> {
+    return this.workflowResults.settleCompleted(
+      sessionId,
+      requestId,
+      () => this.status(sessionId),
+      () => this.reviewPermissions.restoreIfNeeded(sessionId),
+    );
   }
 
   async activity(sessionId: string): Promise<ProviderActivityState> {
@@ -1450,18 +1456,11 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async abort(sessionId: string): Promise<void> {
-    try {
-      const response = await this.client.session.abort(
-        { sessionID: sessionId },
-        this.requestOptions(),
-      );
-      assertSdkResponse(response, "OpenCode abort");
-      this.streamState.endTurn(sessionId);
-    } catch (error) {
-      throw new ProviderUnavailableError("OpenCode abort is unavailable", {
-        cause: error,
-      });
-    }
+    return this.workflowResults.abort(
+      sessionId,
+      () => this.streamState.endTurn(sessionId),
+      () => this.reviewPermissions.restoreIfNeeded(sessionId),
+    );
   }
 
   async closeSession(sessionId: string): Promise<void> {

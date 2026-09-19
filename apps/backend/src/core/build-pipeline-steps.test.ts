@@ -440,6 +440,7 @@ async function withBridgeService(
   const requests: BridgeRequest[] = [];
   const originalFetch = globalThis.fetch;
   let sessionCounter = 0;
+  const openCodeSessions = new Map<string, Record<string, unknown>>();
   globalThis.fetch = (async (input: string | URL | Request, init: RequestInit = {}) => {
     const url = input instanceof Request ? input.url : String(input);
     const method = input instanceof Request ? input.method : (init.method ?? "GET");
@@ -486,7 +487,14 @@ async function withBridgeService(
       return Response.json({ sessionId: `bridge-session-${++sessionCounter}` });
     }
     if (pathname === "/session" && method === "POST") {
-      return Response.json({ id: `bridge-session-${++sessionCounter}` });
+      const session = { id: `bridge-session-${++sessionCounter}`, directory: "/tmp/build" };
+      openCodeSessions.set(`/session/${session.id}`, session);
+      return Response.json(session);
+    }
+    const openCodeSession = openCodeSessions.get(pathname);
+    if (openCodeSession) {
+      if (method === "PATCH") Object.assign(openCodeSession, JSON.parse(rawBody));
+      return Response.json(openCodeSession);
     }
     if (url.endsWith("/prompt")) return new Response(null, { status: 204 });
     if (url.includes("/prompt_async")) return new Response(null, { status: 204 });

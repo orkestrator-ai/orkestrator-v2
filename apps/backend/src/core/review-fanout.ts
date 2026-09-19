@@ -938,9 +938,14 @@ export class ReviewFanoutRunner {
     await host.resolveUnattendedInteractions(provider, reviewer.providerSessionId);
     // Read as data so the terminal-failure branch below fires whether or not
     // the provider explained itself, and can report the explanation when it did.
-    const observation = await readProviderStatus(provider, reviewer.providerSessionId);
+    const observation = await readProviderStatus(
+      provider,
+      reviewer.providerSessionId,
+      reviewer.requestId,
+    );
     const { status, error: statusDetail } = observation;
     await host.assertFence();
+    if (status === "idle" && observation.turnSettled === false) return "continue";
     const messages = this.readReviewerMessages(reviewer, provider, status);
     await this.mirrorTranscript(reviewer, index, provider, messages);
     const usageChanged = await this.refreshReviewerUsage(

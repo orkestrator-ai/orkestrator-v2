@@ -49,6 +49,8 @@ export type ProviderAgent = AgentInteractionProvider;
 
 export interface ProviderSessionObservation {
   status: ProviderStatus;
+  /** Request-scoped completion proof; never evidence of prompt dispatch. */
+  turnSettled?: boolean;
   /** Cumulative session consumption only; context-window occupancy is not interchangeable. */
   contextUsage?: NativeAgentContextUsage;
   /** A terminal provider is still reconciling its exact cumulative total. */
@@ -148,13 +150,23 @@ export class ProviderSessionFailedError extends Error {
 }
 
 export async function readProviderStatus(
-  provider: Pick<AgentSessionProvider, "status" | "observeSession">,
+  provider: Pick<AgentSessionProvider, "status" | "observeSession" | "settleTurn">,
   sessionId: string,
+  requestId?: string,
 ): Promise<ProviderSessionObservation & { error?: string }> {
   try {
-    return provider.observeSession
+    const observation = provider.observeSession
       ? await provider.observeSession(sessionId)
       : { status: await provider.status(sessionId) };
+    // Only workflow owners supply a durable request id. UI/status observers
+    // must never change another caller's turn permissions.
+    if (requestId && (observation.status === "idle" || observation.status === "error")) {
+      const settled = await provider.settleTurn?.(sessionId, requestId);
+      // Keep lifecycle truthful: an unproven completion is NOT positive
+      // evidence of a dispatch, especially while a prompt is parked.
+      if (settled !== undefined) return { ...observation, turnSettled: settled };
+    }
+    return observation;
   } catch (error) {
     if (error instanceof ProviderSessionFailedError) {
       return { status: "error", error: error.detail };
@@ -379,6 +391,12 @@ export interface AgentSessionProvider {
    * provider's own durable journal instead of being parked for the user.
    */
   dispatchStatus?(sessionId: string, requestId: string): Promise<ProviderDispatchStatus>;
+  /**
+   * Settle a completed request's temporary permissions. Returns false while
+   * completion is unproven; stale requests are successful no-ops. Status-only
+   * observers must not call this; the backend workflow supplies its request id.
+   */
+  settleTurn?(sessionId: string, requestId: string): Promise<boolean>;
   status(sessionId: string): Promise<ProviderStatus>;
   /**
    * Read lifecycle and cumulative usage from one authoritative provider

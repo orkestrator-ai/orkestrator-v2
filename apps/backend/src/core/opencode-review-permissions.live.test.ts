@@ -1,19 +1,243 @@
 import { expect, test } from "bun:test";
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
+import { AgentToolsServer } from "./agent-tools.js";
+import { StorageService } from "./storage.js";
+import { WorkflowResultService } from "./workflow-result-service.js";
+import { OpenCodeProvider } from "./opencode-provider.js";
+import { readProviderStatus } from "./agent-provider-contract.js";
 import {
   effectiveOpenCodePolicy,
   openCodePermissionRules,
   openCodeReviewPermissionRules,
   openCodeWorkflowResultPermissionRules,
   openCodeWorkflowResultTurnTools,
+  openCodeWorkflowResultToolId,
 } from "./opencode-provider-helpers.js";
 
 const liveTest = process.env.RUN_LIVE_OPENCODE_COMPATIBILITY === "1" ? test : test.skip;
+
+liveTest(
+  "a real OpenCode workflow submits despite an idle observer and settles after provider recreation",
+  async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "ork-opencode-workflow-lifecycle-")));
+    const results = new WorkflowResultService(root);
+    const tools = new AgentToolsServer(new StorageService(root), "127.0.0.1", results);
+    const resultKey = crypto.randomUUID();
+    const selected = openCodeWorkflowResultToolId("submit_validation_plan");
+    const inventories: string[][] = [];
+    let capability = "";
+    const plan = {
+      headRef: "a".repeat(40),
+      commands: [],
+      limitations: ["No validation commands are defined for this isolated fixture."],
+    };
+    const model = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(request) {
+        if (!new URL(request.url).pathname.endsWith("/chat/completions"))
+          return new Response(null, { status: 404 });
+        const body = (await request.json()) as { tools?: Array<{ function: { name: string } }> };
+        inventories.push(body.tools?.map((tool) => tool.function.name) ?? []);
+        const first = inventories.length === 1;
+        const chunk = {
+          id: "chatcmpl-lifecycle",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "fixture",
+        };
+        return completionStream([
+          {
+            ...chunk,
+            choices: [
+              {
+                index: 0,
+                delta: first
+                  ? {
+                      role: "assistant",
+                      tool_calls: [
+                        {
+                          index: 0,
+                          id: "call_submit",
+                          type: "function",
+                          function: {
+                            name: selected,
+                            arguments: JSON.stringify({ resultKey, capability, result: plan }),
+                          },
+                        },
+                      ],
+                    }
+                  : { role: "assistant", content: "Done." },
+                finish_reason: null,
+              },
+            ],
+          },
+          {
+            ...chunk,
+            choices: [{ index: 0, delta: {}, finish_reason: first ? "tool_calls" : "stop" }],
+          },
+        ]);
+      },
+    });
+    let server: ReturnType<typeof Bun.spawn> | undefined;
+    const providers: OpenCodeProvider[] = [];
+    try {
+      await tools.start();
+      await results.prepare({
+        resultKey,
+        kind: "validation-plan",
+        environmentId: "env-live",
+        projectId: "project-live",
+        provider: "opencode",
+      });
+      const agentMcp = tools.workflowResultConnection(
+        "env-live",
+        "project-live",
+        "host",
+        resultKey,
+        "opencode",
+      );
+      capability = agentMcp.workflowResultCapability!;
+      const config = join(root, "config"),
+        data = join(root, "data"),
+        state = join(root, "state"),
+        cache = join(root, "cache");
+      await Promise.all([config, data, state, cache].map((directory) => mkdir(directory)));
+      await writeFile(
+        join(root, "opencode.json"),
+        JSON.stringify({
+          provider: {
+            fixture: {
+              npm: "@ai-sdk/openai-compatible",
+              name: "Local fixture",
+              options: { baseURL: `${model.url}/v1`, apiKey: "test-key" },
+              models: { fixture: { name: "Fixture", limit: { context: 16000, output: 2000 } } },
+            },
+          },
+        }),
+      );
+      const port = await availableLoopbackPort();
+      server = Bun.spawn(
+        [
+          process.env.OPENCODE_CLI_PATH?.trim() || "opencode",
+          "serve",
+          "--pure",
+          "--hostname",
+          "127.0.0.1",
+          "--port",
+          String(port),
+        ],
+        {
+          cwd: root,
+          env: {
+            PATH: process.env.PATH,
+            HOME: root,
+            XDG_CONFIG_HOME: config,
+            XDG_DATA_HOME: data,
+            XDG_STATE_HOME: state,
+            XDG_CACHE_HOME: cache,
+          },
+          stdout: "ignore",
+          stderr: "ignore",
+        },
+      );
+      const baseUrl = `http://127.0.0.1:${port}`;
+      await waitForHealth(baseUrl, server);
+      const client = createOpencodeClient({ baseUrl, directory: root });
+      const connection = {
+        agent: "opencode" as const,
+        baseUrl,
+        authToken: "unused",
+        directory: root,
+      };
+      const makeProvider = () => {
+        const provider = new OpenCodeProvider(connection, { openCodeClient: client });
+        providers.push(provider);
+        return provider;
+      };
+      const owner = makeProvider(),
+        observer = makeProvider();
+      const sessionId = await owner.createSession("validation", "Isolated workflow lifecycle");
+      const options = {
+        requestId: resultKey,
+        workflowResultTool: "submit_validation_plan",
+        agentMcp,
+        model: "fixture/fixture",
+      };
+      await owner.prepareDispatch(sessionId, options);
+      // Observe precisely between the permission grant and the real HTTP prompt.
+      // This was the production race: another provider saw idle and revoked it.
+      const promptAsync = client.session.promptAsync.bind(client.session);
+      client.session.promptAsync = (async (...args: Parameters<typeof promptAsync>) => {
+        expect((await readProviderStatus(observer, sessionId)).status).toBe("idle");
+        const snapshot = await client.session.get({ sessionID: sessionId });
+        expect(
+          snapshot.data?.permission?.findLast((rule) => rule.permission === selected)?.action,
+        ).toBe("allow");
+        return promptAsync(...args);
+      }) as typeof promptAsync;
+      await owner.send(sessionId, "Submit the validation plan.", options);
+      client.session.promptAsync = promptAsync;
+      await observer.dispose();
+      await owner.dispose();
+      const restored = makeProvider();
+      const deadline = Date.now() + 15000;
+      while (!(await restored.settleTurn(sessionId, resultKey))) {
+        if (Date.now() >= deadline) throw new Error("Workflow turn did not settle");
+        await Bun.sleep(25);
+      }
+      expect(inventories[0]).toContain(selected);
+      expect(inventories[0]).toContain(openCodeWorkflowResultToolId("validate_workflow_result"));
+      expect(inventories[0]).not.toContain(openCodeWorkflowResultToolId("submit_review_report"));
+      const messages = await client.session.messages({ sessionID: sessionId });
+      for (const message of messages.data ?? []) {
+        if (message.info.role === "assistant") expect(message.info.error).toBeUndefined();
+        for (const part of message.parts) {
+          if (part.type === "tool" && part.tool === selected) {
+            expect(part.state.status === "error" ? part.state.error : undefined).toBeUndefined();
+            expect(part.state.status).toBe("completed");
+          }
+        }
+      }
+      expect(await results.projection(resultKey)).toBe("received");
+      expect(await results.structured(resultKey)).toMatchObject({ ok: true, value: plan });
+      const settled = await client.session.get({ sessionID: sessionId });
+      expect(
+        settled.data?.permission?.findLast((rule) => rule.permission === selected)?.action,
+      ).toBe("deny");
+      const beforeOrdinary = inventories.length;
+      await restored.send(sessionId, "Say done.", {
+        requestId: "ordinary",
+        model: "fixture/fixture",
+      });
+      while (!(await restored.settleTurn(sessionId, "ordinary"))) {
+        if (Date.now() >= deadline) throw new Error("Ordinary turn did not settle");
+        await Bun.sleep(25);
+      }
+      expect(inventories.length).toBeGreaterThan(beforeOrdinary);
+      expect(inventories.at(-1)).not.toContain(selected);
+    } finally {
+      await Promise.all(providers.map((provider) => provider.dispose()));
+      if (server && server.exitCode === null) {
+        server.kill();
+        await Promise.race([server.exited, Bun.sleep(2000)]);
+        if (server.exitCode === null) {
+          server.kill("SIGKILL");
+          await server.exited;
+        }
+      }
+      model.stop(true);
+      await tools.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  30000,
+);
 
 async function availableLoopbackPort(): Promise<number> {
   const server = createServer();
@@ -308,7 +532,18 @@ liveTest(
         parts: [{ type: "text", text: "Do not call tools." }],
       });
       if (masked.error) throw new Error("OpenCode rejected the masked prompt");
-      const replaced = await client.session.get({ sessionID: sessionId });
+      // prompt_async acknowledges before processing the tools map. Observe
+      // its persisted effect instead of racing the background prompt handler.
+      let replaced = await client.session.get({ sessionID: sessionId });
+      const deadline = Date.now() + 5000;
+      while (
+        JSON.stringify(replaced.data?.permission?.slice(-workflow.length)) ===
+          JSON.stringify(workflow) &&
+        Date.now() < deadline
+      ) {
+        await Bun.sleep(25);
+        replaced = await client.session.get({ sessionID: sessionId });
+      }
       expect(replaced.data?.permission?.slice(-workflow.length)).not.toEqual(workflow);
     } finally {
       if (server && server.exitCode === null) {

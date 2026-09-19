@@ -2432,9 +2432,14 @@ export class MultiReviewService {
     await this.resolveUnattendedInteractions(workflow, token, provider, session.providerSessionId);
     // Read as data so the terminal-failure branch below fires whether or not
     // the provider explained itself, and can report the explanation when it did.
-    const observation = await readProviderStatus(provider, session.providerSessionId);
+    const observation = await readProviderStatus(
+      provider,
+      session.providerSessionId,
+      request.requestId,
+    );
     const { status, error: statusDetail } = observation;
     await this.assertFence(workflow.id, token);
+    if (status === "idle" && observation.turnSettled === false) return;
     if (status === "running") {
       if (request.idleResultPolls !== undefined || request.usageFinalizationPolls !== undefined) {
         delete request.idleResultPolls;

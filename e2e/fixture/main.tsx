@@ -3,6 +3,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { StrictMode, createRef, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../../apps/web/src/index.css";
+import { DesignLaunchButton } from "../../apps/web/src/components/design/DesignLaunchButton";
 import {
   CreateEnvironmentDialog,
   type ClaudeOptions,
@@ -34,6 +35,7 @@ import { ProjectSearchBar } from "../../apps/web/src/components/sidebar/ProjectS
 import { Button } from "../../apps/web/src/components/ui/button";
 import { cn } from "../../apps/web/src/lib/utils";
 import { useProjectStore } from "../../apps/web/src/stores";
+import { usePaneLayoutStore } from "../../apps/web/src/stores/paneLayoutStore";
 import {
   ReviewLaunchDialog,
   type ReviewLaunchSelection,
@@ -96,6 +98,33 @@ function CreateEnvironmentFixture() {
           window.lastCreateEnvironmentOptions = options;
         }}
         defaultPortMappings={[{ containerPort: 3000, hostPort: 3000, protocol: "tcp" }]}
+      />
+    </main>
+  );
+}
+
+function DesignLaunchFixture() {
+  useEffect(() => {
+    usePaneLayoutStore.setState((state) => ({
+      hydration: new Map(state.hydration).set("design-fixture", "done"),
+    }));
+  }, []);
+
+  window.orkestrator = {
+    invoke: async <T,>(command: string) => {
+      if (command === "design_status") return { ready: true } as T;
+      if (command === "design_action") return [] as T;
+      throw new Error(`Unexpected fixture command: ${command}`);
+    },
+  } as Window["orkestrator"];
+
+  return (
+    <main className="min-h-screen bg-background p-4 text-foreground">
+      <DesignLaunchButton
+        environmentId="design-fixture"
+        disabled={false}
+        tabCount={0}
+        createTab={() => true}
       />
     </main>
   );
@@ -1362,6 +1391,7 @@ function PullRequestCheckStatusFixture() {
 
 function fixtureForPath() {
   if (window.location.pathname === "/design-canvas") return <DesignCanvasFixture />;
+  if (window.location.pathname === "/design-launch") return <DesignLaunchFixture />;
   if (window.location.pathname === "/browser") return <BrowserFixture />;
   if (window.location.pathname === "/build-pipeline-header") {
     return <BuildPipelineHeaderFixture />;

@@ -290,8 +290,10 @@ cancelled, never automatically retried.
 Ordinary discovered commands reserve half the per-suite budget (`weight: 1`) or
 its whole budget (`weight: 2`), capped at eight slots even when the host ceiling
 is higher. Exact repository `commandProfiles` can declare smaller `workers` and
-`memoryMiB` requirements for known commands. These are estimates, not OS limits;
-profile requirements exceeding the available host budget fail as incomplete.
+`memoryMiB` requirements for known commands. These are estimates, not OS limits.
+A profile describes what a command wants, not what the host has: a requirement
+larger than the frozen host budget is clamped down to it rather than refused, so
+a lowered ceiling slows a command instead of making it permanently incomplete.
 
 Use `workspace:` resource names for workspace-local directories and services, and
 `workspace:*` to exclude other commands in the same worktree. Use `host:` names
@@ -310,6 +312,12 @@ then records the redundant entry as skipped with its covering command ID. Failed
 coverage remains incomplete. Coverage is deduplicated only when the covering
 command also depends on the required prerequisites and no dependency cycle is
 introduced. Dependent checks wait for the actual covering result. The original plan stays immutable.
+
+A missing `.orkestrator-test-scheduler.json` is normal and silent. One that is
+present but unreadable, oversized, or invalid is *ignored* rather than fatal:
+the run continues with no cooperative commands and no profiles, and reports the
+reason (naming the file) on the run itself. Losing cooperative scheduling is a
+degraded run; losing every command's evidence to a config typo is not acceptable.
 
 Command timing counts wall time once: intervals with any executing group count
 as execution; intervals with only waiting groups count as queued; setup and idle

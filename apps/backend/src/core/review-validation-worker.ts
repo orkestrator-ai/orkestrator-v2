@@ -28,6 +28,9 @@ const active = new Map();
 const createScheduler = (${HOST_TEST_SCHEDULER_SOURCE});
 let scheduler;
 let policy = { cooperativeCommands: [], profiles: {} };
+// Set when the repository's scheduling config was unusable. It is reported on
+// the run but is not itself a run failure: every command still executes.
+let schedulingLimitation;
 const parseSchedulingPolicy = (${TEST_SCHEDULING_POLICY_SOURCE});
 const tickets = new Set();
 const QUEUE_TIMEOUT_MS = Math.max(1000, Math.min(7200000, Number(process.env.ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS) || 1800000));
@@ -138,8 +141,12 @@ async function execute(cmd, index) {
     const resources = scheduler.resources(owner, cmd.resources);
     if (!cooperative) {
       const suiteBudget = Math.min(8, capacity.workers);
-      const workers = profile.workers ?? (cmd.weight === 2 ? suiteBudget : Math.max(1, Math.floor(suiteBudget / 2)));
-      ticket = scheduler.enqueue({ owner, workers, memoryMiB: profile.memoryMiB ?? Math.min(capacity.memoryMiB, workers * 1024), resources });
+      // A profile declares what the command wants, not what this host has. Clamp
+      // both estimates into the frozen budget: enqueue rejects an over-budget
+      // request outright, which would make the command permanently incomplete on
+      // a small host instead of simply reserving everything available.
+      const workers = Math.max(1, Math.min(suiteBudget, profile.workers ?? (cmd.weight === 2 ? suiteBudget : Math.max(1, Math.floor(suiteBudget / 2)))));
+      ticket = scheduler.enqueue({ owner, workers, memoryMiB: Math.max(1, Math.min(capacity.memoryMiB, profile.memoryMiB ?? workers * 1024)), resources });
       tickets.add(ticket);
       persist();
       while (true) {
@@ -296,6 +303,9 @@ async function execute(cmd, index) {
     result.status = "incomplete";
     result.limitation = error.message || "Validation infrastructure was unavailable";
     result.queuedMs = Date.now() - queuedAt;
+    // A command that expired or was cancelled while queued never reaches the
+    // close handler, so clear its last scheduler explanation here too.
+    delete result.queueReason;
     // Never leave one artifact path without the other: preparation rejects a
     // one-sided pair, which would turn this failure into an unparseable result.
     result.stdoutPath = null;
@@ -346,9 +356,18 @@ async function main() {
     const configPath = path.join(root, ".orkestrator-test-scheduler.json");
     try {
       const stat = fs.lstatSync(configPath);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16384) throw new Error("Invalid test scheduling configuration file");
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16384) throw new Error("it is not a regular file of at most 16384 bytes");
       policy = parseSchedulingPolicy(JSON.parse(fs.readFileSync(configPath, "utf8")));
-    } catch (error) { if (error.code !== "ENOENT") throw error; }
+    } catch (error) {
+      // A broken repository config degrades scheduling; it must not destroy
+      // every command's evidence. Fall back to no cooperative commands and no
+      // profiles, and name the file on the run so the cause is visible.
+      if (error.code !== "ENOENT") {
+        policy = { cooperativeCommands: [], profiles: {} };
+        schedulingLimitation = (".orkestrator-test-scheduler.json was ignored: " + (error.message || "it could not be read") + ". Cooperative scheduling and command profiles are unavailable for this run.").slice(0, 1024);
+        run.error = schedulingLimitation;
+      }
+    }
     // Execution metadata is separate from the immutable discovered plan, whose
     // identity is checked on every reconnect by the controller.
     const commands = run.plan.commands.map(cmd => {
@@ -417,7 +436,7 @@ async function main() {
     await Promise.all(tasks);
     if (stopping) {
       for (const i of pending) Object.assign(run.results[i], { status: "skipped", limitation: "Validation was cancelled" });
-      run.status = run.error ? "failed" : "cancelled";
+      run.status = run.error && run.error !== schedulingLimitation ? "failed" : "cancelled";
     } else if (!headMatches()) {
       run.status = "failed";
       run.error = "Repository HEAD changed during validation; results cannot certify the discovered snapshot";

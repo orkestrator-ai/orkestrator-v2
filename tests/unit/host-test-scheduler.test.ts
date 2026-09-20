@@ -177,20 +177,85 @@ test("repository scheduling profiles are bounded and use exact command declarati
       },
     }).profiles.lint?.workers,
   ).toBe(1);
-  expect(() =>
-    testSchedulingPolicy({
+  const accepted = testSchedulingPolicy({ version: 1, cooperativeCommands: [] });
+  // Profiles are keyed by an attacker-irrelevant but prototype-sensitive string;
+  // a null prototype keeps `profiles["constructor"]` a miss rather than a hit.
+  expect(Object.getPrototypeOf(accepted.profiles)).toBeNull();
+  expect(accepted.profiles["toString"]).toBeUndefined();
+  const overflow = (count: number) => Array.from({ length: count }, (_, index) => `c${index}`);
+  for (const invalid of [
+    null,
+    "config",
+    [],
+    { version: 2, cooperativeCommands: [] },
+    { version: 1 },
+    { version: 1, cooperativeCommands: "full" },
+    { version: 1, cooperativeCommands: [""] },
+    { version: 1, cooperativeCommands: ["x".repeat(1025)] },
+    { version: 1, cooperativeCommands: overflow(33) },
+    { version: 1, cooperativeCommands: [], commandProfiles: [] },
+    { version: 1, cooperativeCommands: [], commandProfiles: null },
+    {
       version: 1,
       cooperativeCommands: [],
-      commandProfiles: { invalid: { workers: 0 } },
-    }),
-  ).toThrow();
-  expect(() =>
-    testSchedulingPolicy({
+      commandProfiles: Object.fromEntries(overflow(33).map((key) => [key, {}])),
+    },
+    { version: 1, cooperativeCommands: [], commandProfiles: { ["x".repeat(1025)]: {} } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { "": {} } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: null } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: [] } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { workers: 0 } } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { workers: 65 } } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { workers: 1.5 } } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { memoryMiB: 0 } } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { memoryMiB: 1048577 } } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { resources: [42] } } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { covers: [42] } } },
+    {
       version: 1,
       cooperativeCommands: [],
-      commandProfiles: { invalid: { resources: [42] } },
-    }),
-  ).toThrow();
+      commandProfiles: { invalid: { covers: overflow(33) } },
+    },
+  ])
+    expect(() => testSchedulingPolicy(invalid)).toThrow();
+});
+
+test("a queue created before the bypass column migrates and keeps admitting", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "test-admission-legacy-"));
+  cleanups.push(() => rmSync(directory, { recursive: true, force: true }));
+  const databasePath = path.join(directory, "queue.sqlite");
+  // The scheduler directory is versioned `v1` and is deliberately shared with
+  // worktrees running older builds, so an older row shape must still migrate.
+  const legacy = new Database(databasePath, { create: true });
+  legacy.exec(`CREATE TABLE jobs (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
+    owner TEXT NOT NULL, pid INTEGER NOT NULL, child INTEGER,
+    workers INTEGER NOT NULL, memory INTEGER NOT NULL, resources TEXT NOT NULL,
+    state TEXT NOT NULL, queued INTEGER NOT NULL, admitted INTEGER
+  ); CREATE TABLE owners (id TEXT PRIMARY KEY, served INTEGER NOT NULL);
+  CREATE TABLE budget (id INTEGER PRIMARY KEY CHECK(id=1), workers INTEGER, memory INTEGER);`);
+  legacy
+    .query(
+      "INSERT INTO jobs (id,owner,pid,workers,memory,resources,state,queued) VALUES (?,?,?,?,?,?,'running',?)",
+    )
+    .run("legacy", "a".repeat(64), process.pid, 1, 1, "[]", Date.now());
+  legacy.exec("INSERT INTO owners VALUES ('" + "a".repeat(64) + "', 0)");
+  legacy.exec("INSERT INTO budget VALUES (1, 2, 128)");
+  legacy.close();
+  const scheduler = createHostTestScheduler({ directory, workers: 2, memoryMiB: 128 });
+  cleanups.push(() => scheduler.close());
+  // The retained legacy reservation keeps the budget frozen at its own values.
+  expect(scheduler.capacity()).toEqual({ workers: 2, memoryMiB: 128 });
+  const id = scheduler.enqueue({ owner: "b".repeat(64), workers: 1, memoryMiB: 1 });
+  expect(scheduler.poll(id).state).toBe("running");
+  // Read-write, not readonly: SQLite in WAL mode needs to initialise its shared
+  // index, which a readonly handle cannot do.
+  const reader = new Database(databasePath);
+  expect(reader.query("SELECT bypasses FROM jobs WHERE id='legacy'").get()).toEqual({
+    bypasses: 0,
+  });
+  reader.close();
+  scheduler.release(id);
 });
 
 test("memory pressure and a heavy fair-turn waiter cannot be bypassed by unrelated small jobs", () => {

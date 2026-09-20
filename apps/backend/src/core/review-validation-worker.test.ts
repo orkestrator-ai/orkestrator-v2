@@ -735,6 +735,90 @@ test("coverage does not remove prerequisites or turn a failed covering suite int
   expect(existsSync(path.join(root, ".orkestrator/changed-ran"))).toBe(false);
 });
 
+test("a profile requesting more than the host budget is clamped, not refused", async () => {
+  const { root, run } = await fixture([command("heavy", "printf heavy")]);
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { "printf heavy": { resources: [], workers: 8, memoryMiB: 4096 } },
+    }),
+  );
+  // Both declarations exceed this host ceiling; enqueue would reject them
+  // outright, leaving the command permanently incomplete on a small machine.
+  const done = await waitFor(root, run, 12000, {
+    ORKESTRATOR_TEST_HOST_WORKERS: "1",
+    ORKESTRATOR_TEST_HOST_MEMORY_MIB: "256",
+  });
+  expect(done.results[0]).toMatchObject({ status: "passed", exitCode: 0, limitation: null });
+});
+
+test("an unusable scheduling config degrades to plain scheduling instead of losing every result", async () => {
+  const { root, run } = await fixture([
+    command("first", "printf first"),
+    command("second", "printf second", { dependsOn: ["first"] }),
+  ]);
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: ["printf first"],
+      commandProfiles: { "printf second": { workers: 0 } },
+    }),
+  );
+  const done = await completed(root, run);
+  expect(done.status).toBe("completed");
+  expect(done.results.map((result) => result.status)).toEqual(["passed", "passed"]);
+  expect(done.error).toContain(".orkestrator-test-scheduler.json was ignored");
+  // The declared cooperative command is scheduled as an ordinary one, so it must
+  // not be left waiting for a reservation it never makes.
+  expect(done.results[0]!.limitation).toBeNull();
+});
+
+test("malformed scheduling config JSON is ignored with the file named on the run", async () => {
+  const { root, run } = await fixture([command("only", "printf only")]);
+  await writeFile(path.join(root, ".orkestrator-test-scheduler.json"), "{not json");
+  const done = await completed(root, run);
+  expect(done.status).toBe("completed");
+  expect(done.results[0]!.status).toBe("passed");
+  expect(done.error).toContain(".orkestrator-test-scheduler.json was ignored");
+});
+
+test("a command that expires while queued keeps no stale queue explanation", async () => {
+  const { root, run } = await fixture([command("blocked", "printf blocked")]);
+  const scheduler = createHostTestScheduler({
+    directory: path.join(root, ".orkestrator", "scheduler"),
+    workers: 1,
+    memoryMiB: 64,
+  });
+  const blocker = scheduler.enqueue({ owner: "b".repeat(64), workers: 1, memoryMiB: 64 });
+  try {
+    await control(root, run, "start", { ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS: "6000" });
+    // The reason is written by the worker's heartbeat, not by the enqueue that
+    // first reports "queued", so wait for the explanation itself.
+    let queued = await waitUntilQueued(root, run);
+    const explained = Date.now() + 3000;
+    while (!queued.results[0]!.queueReason && Date.now() < explained) {
+      await Bun.sleep(50);
+      queued = await control(root, run, "status");
+    }
+    expect(queued.results[0]!.queueReason).toContain("worker slots");
+    let done = await control(root, run, "status");
+    const deadline = Date.now() + 12000;
+    while (["planned", "running"].includes(done.status) && Date.now() < deadline) {
+      await Bun.sleep(50);
+      done = await control(root, run, "status");
+    }
+    expect(done.results[0]!.status).toBe("incomplete");
+    expect(done.results[0]!.limitation).toContain("Host capacity wait expired");
+    expect(done.results[0]!.queueReason).toBeUndefined();
+  } finally {
+    scheduler.release(blocker);
+    scheduler.close();
+  }
+}, 20000);
+
 test("precise repository resource profiles admit lightweight checks with spare host capacity", async () => {
   const { root, run } = await fixture([
     command("small", "printf small", { resources: ["host:*"], weight: 2 }),

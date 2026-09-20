@@ -2669,10 +2669,51 @@ describe("MultiReviewTab pipeline step cards", () => {
       label: "Addressing findings",
       state: "running",
     });
-    expect(fixStep({ ...ready, phase: "interactive" })).toEqual({
+    expect(
+      fixStep({
+        ...ready,
+        phase: "interactive",
+        fixSession: { ...ready.fixSession!, status: "running" },
+      }),
+    ).toEqual({
       label: "Interactive fix session",
       state: "running",
     });
+    expect(
+      fixStep({
+        ...ready,
+        phase: "interactive",
+        fixSession: { ...ready.fixSession!, status: "idle" },
+      }),
+    ).toEqual({ label: "Interactive fix session", state: "running" });
+    expect(
+      fixStep({
+        ...ready,
+        phase: "interactive",
+        fixSession: { ...ready.fixSession!, status: "idle" },
+        stepRuntimes: {
+          fix: {
+            startedAt: "2026-08-14T00:10:00.000Z",
+            completedAt: "2026-08-14T00:14:00.000Z",
+          },
+        },
+      }),
+    ).toEqual({ label: "Complete", state: "complete" });
+    expect(
+      fixStep({
+        ...ready,
+        phase: "interactive",
+        fixSession: { ...ready.fixSession!, status: "failed" },
+      }),
+    ).toEqual({ label: "Failed", state: "failed" });
+    expect(
+      fixStep({
+        ...ready,
+        phase: "interactive",
+        addressPromptPending: true,
+        fixSession: { ...ready.fixSession!, status: "idle" },
+      }),
+    ).toEqual({ label: "Starting fix session", state: "running" });
     expect(fixStep({ ...ready, phase: "completed" })).toEqual({
       label: "Complete",
       state: "complete",
@@ -2885,6 +2926,102 @@ describe("MultiReviewTab pipeline step cards", () => {
     expect(card.hasAttribute("disabled")).toBe(false);
     fireEvent.click(card);
     expect(createTab).toHaveBeenCalledTimes(1);
+  });
+
+  test("shows a settled interactive Fix turn as complete with final usage", () => {
+    const ready = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...ready,
+      phase: "interactive",
+      fixSession: {
+        ...ready.fixSession!,
+        status: "idle",
+        tokenCount: 23_456,
+        completedAt: "2026-08-14T00:14:00.000Z",
+      },
+      stepRuntimes: {
+        fix: {
+          startedAt: "2026-08-14T00:10:00.000Z",
+          completedAt: "2026-08-14T00:14:00.000Z",
+          tokenBaseline: 0,
+          tokenCount: 23_456,
+        },
+      },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+      />,
+    );
+
+    expect(screen.getByText("The fix session finished and is ready for follow-up")).toBeTruthy();
+    const card = screen.getByRole("button", { name: "Open fix model session" });
+    expect(card.closest("section")?.textContent).toContain("Complete");
+    expect(screen.getByLabelText("Fix runtime").textContent).toBe("4m 0s · 23k tokens");
+    expect(card.querySelector(".animate-spin") === null).toBe(true);
+  });
+
+  test("keeps a legacy idle interactive Fix running until its runtime is settled", () => {
+    const ready = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...ready,
+      phase: "interactive",
+      fixSession: {
+        ...ready.fixSession!,
+        status: "idle",
+        completedAt: undefined,
+      },
+      stepRuntimes: {
+        fix: { startedAt: "2026-08-14T00:10:00.000Z" },
+      },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+      />,
+    );
+
+    expect(screen.getByText("The fix model is working interactively")).toBeTruthy();
+    const card = screen.getByRole("button", { name: "Open fix model session" });
+    expect(card.closest("section")?.textContent).toContain("Interactive fix session");
+    expect(card.querySelector(".animate-spin")).toBeTruthy();
+  });
+
+  test.each([
+    ["failed" as const, "Provider turn failed", "Failed"],
+    ["cancelled" as const, undefined, "Cancelled"],
+  ])("renders a %s interactive Fix outcome on the card", (status, error, label) => {
+    const ready = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...ready,
+      phase: "interactive",
+      fixSession: {
+        ...ready.fixSession!,
+        status,
+        ...(error ? { error } : {}),
+      },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+      />,
+    );
+
+    if (error) expect(screen.getByText(error)).toBeTruthy();
+    const card = screen.getByRole("button", { name: "Open fix model session" });
+    expect(card.closest("section")?.textContent).toContain(label);
   });
 
   test("warns on the card owning the stalled turn", () => {

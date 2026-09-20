@@ -78,7 +78,7 @@ interface MultiReviewTabProps {
   openReviewer?: (reviewerId: string, index: number) => void;
 }
 
-function phaseCopy(phase: MultiReviewPhase): string {
+function phaseCopy(workflow: MultiReviewWorkflow): string {
   const labels = {
     preparing: "Discovering validation, running checks, and preparing shared evidence",
     reviewing: "Independent read-only reviews are running",
@@ -91,7 +91,22 @@ function phaseCopy(phase: MultiReviewPhase): string {
     cancelled: "Multi Review cancelled",
     failed: "Multi Review needs attention",
   } as const;
-  return labels[phase];
+  if (
+    workflow.phase === "interactive" &&
+    workflow.addressPromptPending !== true &&
+    workflow.fixSession?.status === "idle" &&
+    workflow.stepRuntimes?.fix?.completedAt !== undefined
+  ) {
+    return "The fix session finished and is ready for follow-up";
+  }
+  if (
+    workflow.phase === "interactive" &&
+    workflow.addressPromptPending !== true &&
+    workflow.fixSession?.status === "failed"
+  ) {
+    return workflow.fixSession.error ?? "The fix session stopped with an error";
+  }
+  return labels[workflow.phase];
 }
 
 /**
@@ -232,7 +247,17 @@ export function consolidationStep(workflow: MultiReviewWorkflow): MultiReviewSte
 export function fixStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
   if (workflow.phase === "completed") return step("Complete", "complete");
   if (workflow.phase === "fixing") return step("Addressing findings", "running");
-  if (workflow.phase === "interactive") return step("Interactive fix session", "running");
+  if (workflow.phase === "interactive") {
+    if (workflow.addressPromptPending === true) return step("Starting fix session", "running");
+    if (
+      workflow.fixSession?.status === "idle" &&
+      workflow.stepRuntimes?.fix?.completedAt !== undefined
+    )
+      return step("Complete", "complete");
+    if (workflow.fixSession?.status === "failed") return step("Failed", "failed");
+    if (workflow.fixSession?.status === "cancelled") return step("Cancelled", "cancelled");
+    return step("Interactive fix session", "running");
+  }
   const cancelled = cancellationStep(workflow.phase);
   if (cancelled) return cancelled;
   const dispatched =
@@ -958,7 +983,7 @@ function MultiReviewOverviewTab({
                 ? "No activity from the review preparation model"
                 : fixSessionStalled
                   ? "No activity from the fix model"
-                  : phaseCopy(workflow.phase)}
+                  : phaseCopy(workflow)}
             </p>
             {workflow.activeRequest?.resultSubmission && (
               <WorkflowResultStatus

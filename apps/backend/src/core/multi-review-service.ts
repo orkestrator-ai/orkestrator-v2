@@ -26,7 +26,10 @@ import {
   type StartMultiReviewCustomFixInput,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
-import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import {
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+} from "@orkestrator/protocol/agent-interactions";
 import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
@@ -58,6 +61,7 @@ import {
   type BridgeConnection,
   type BuildPipelineProvider,
   type ProviderDependencies,
+  type ProviderSessionObservation,
   type ProviderStatus,
 } from "./build-pipeline-provider.js";
 import { addressPrompt, structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
@@ -119,6 +123,7 @@ const DEFAULT_POLL_MS = 1_000;
 const CONTROLLER_LEASE_MS = 15_000;
 const CONTROLLER_RENEW_MS = 5_000;
 const MAX_IDLE_RESULT_POLLS = 5;
+const INTERACTIVE_FIX_INITIAL_IDLE_POLLS = 1;
 const MAX_SCHEMA_REPAIR_ATTEMPTS = 3;
 const ADDRESS_DISPATCH_RETRY_MS = 5_000;
 const MAX_ADDRESS_DISPATCH_ATTEMPTS = 3;
@@ -336,6 +341,16 @@ function hasWorkflowActivity(workflow: MultiReviewWorkflow): boolean {
     workflow.reviewers.some((reviewer) => reviewer.status === "running") ||
     workflow.reviewSession?.status === "running" ||
     workflow.fixSession?.status === "running"
+  );
+}
+
+/** The initial interactive Fix turn is observed until its durable runtime settles. */
+function needsInteractiveFixObservation(workflow: MultiReviewWorkflow): boolean {
+  return (
+    workflow.phase === "interactive" &&
+    workflow.addressPromptPending !== true &&
+    (workflow.fixSession?.status === "running" || workflow.fixSession?.status === "idle") &&
+    workflow.stepRuntimes?.fix?.completedAt === undefined
   );
 }
 
@@ -734,7 +749,18 @@ export class MultiReviewService {
         const recovered = await this.options.recoverAddressSession!(workflow, replacement);
         await this.assertFence(workflow.id, token);
         workflow.fixSession = recovered.fixSession;
+        workflow.fixSession.status = "running";
+        workflow.fixSession.startedAt = nowIso();
+        delete workflow.fixSession.tokenCount;
+        delete workflow.fixSession.completedAt;
+        delete workflow.fixSession.idleResultPolls;
+        delete workflow.fixSession.observedRunning;
+        delete workflow.fixSession.usageFinalizationPolls;
         workflow.fixSessionKey = recovered.fixSession.sessionKey;
+        beginStepRuntime(workflow, "fix", workflow.fixSession);
+        if (workflow.stepRuntimes?.fix) {
+          workflow.stepRuntimes.fix.tokenBaseline = 0;
+        }
         workflow.fixTabId = recovered.tabId;
         workflow.presentationError = MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE;
         delete workflow.error;
@@ -1425,6 +1451,7 @@ export class MultiReviewService {
         if (!isMultiReviewWorkflow(record.snapshot)) return [];
         const workflow = record.snapshot;
         return isSupervisedPhase(workflow.phase) ||
+          needsInteractiveFixObservation(workflow) ||
           (workflow.pendingResultConsumptions?.length ?? 0) > 0 ||
           (workflow.addressPromptPending === true && this.options.dispatchAddressPrompt)
           ? [this.runLocked(record.id)]
@@ -1599,8 +1626,10 @@ export class MultiReviewService {
       existingPhase === "interactive" &&
       existing.snapshot.addressPromptPending === true &&
       this.options.dispatchAddressPrompt !== undefined;
+    const observingInteractiveFix = needsInteractiveFixObservation(existing.snapshot);
     if (
       !pendingAddress &&
+      !observingInteractiveFix &&
       !isSupervisedPhase(existingPhase) &&
       !existing.snapshot.pendingResultConsumptions?.length
     )
@@ -1619,6 +1648,8 @@ export class MultiReviewService {
       this.options.dispatchAddressPrompt
     ) {
       await this.advanceAddressPrompt(workflow, token);
+    } else if (needsInteractiveFixObservation(workflow)) {
+      await this.advanceInteractiveFix(workflow, token);
     } else if (workflow.phase === "cancelling") {
       await this.advanceCancellation(workflow, token);
     } else if (workflow.phase === "reviewing") {
@@ -1658,9 +1689,21 @@ export class MultiReviewService {
       }
       const dispatchedSession = workflow.fixSession;
       if (dispatchedSession) {
+        dispatchedSession.status = "running";
         dispatchedSession.startedAt = nowIso();
         delete dispatchedSession.completedAt;
+        delete dispatchedSession.idleResultPolls;
+        delete dispatchedSession.observedRunning;
+        delete dispatchedSession.usageFinalizationPolls;
         beginStepRuntime(workflow, "fix", dispatchedSession);
+        if (
+          workflow.stepRuntimes?.fix &&
+          dispatchedSession.tokenCount === undefined &&
+          (!previousFixSession ||
+            previousFixSession.providerSessionId !== dispatchedSession.providerSessionId)
+        ) {
+          workflow.stepRuntimes.fix.tokenBaseline = 0;
+        }
       }
       workflow.fixTabId = result?.tabId ?? workflow.addressTabId ?? workflow.fixTabId;
       if (result?.presentationError) workflow.presentationError = result.presentationError;
@@ -1737,6 +1780,173 @@ export class MultiReviewService {
       }
     } finally {
       await this.release(workflow, token);
+    }
+  }
+
+  /**
+   * Reconcile the initial interactive Fix turn after ownership moves to its
+   * ordinary native-agent tab. The provider remains authoritative; this copy
+   * only keeps the Multi Review card, timing, usage, and activity badge honest.
+   */
+  private async advanceInteractiveFix(workflow: MultiReviewWorkflow, token: string): Promise<void> {
+    const session = workflow.fixSession!;
+    try {
+      if (!workflow.stepRuntimes?.fix) beginStepRuntime(workflow, "fix", session);
+      const provider = await this.provider(workflow, session);
+      provider.registerSession?.(session.providerSessionId, {
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        phase: "fix",
+        workflowId: workflow.id,
+        provider: session.agent,
+        fence: session.sessionKey,
+      });
+      const activity = provider.observeActivity
+        ? (await provider.observeActivity(session.providerSessionId)).state
+        : provider.activity
+          ? await provider.activity(session.providerSessionId)
+          : undefined;
+      let observation: (ProviderSessionObservation & { error?: string }) | undefined;
+      if (activity === undefined) {
+        observation = await readProviderStatus(provider, session.providerSessionId);
+      }
+      await this.assertFence(workflow.id, token);
+      const activityState =
+        activity ??
+        (observation?.status === "running"
+          ? "working"
+          : observation?.status === "blocked"
+            ? "waiting"
+            : observation?.status === "missing"
+              ? "missing"
+              : "idle");
+
+      if (activityState === "working" || activityState === "waiting") {
+        const hadTerminalPolls =
+          session.idleResultPolls !== undefined || session.usageFinalizationPolls !== undefined;
+        const activityChanged = session.observedRunning !== true || session.status !== "running";
+        delete session.idleResultPolls;
+        delete session.usageFinalizationPolls;
+        session.observedRunning = true;
+        session.status = "running";
+        delete session.completedAt;
+        delete session.error;
+        const refreshedUsage =
+          observation?.contextUsage ?? (await provider.refreshUsage?.(session.providerSessionId));
+        const usageChanged = await this.refreshFixSessionUsage(
+          workflow,
+          token,
+          provider,
+          session,
+          refreshedUsage,
+          undefined,
+          "fix",
+        );
+        if (activityChanged || hadTerminalPolls || usageChanged) await this.save(workflow, token);
+        await this.unclaim(workflow, token);
+        return;
+      }
+
+      if (
+        activityState === "idle" &&
+        observation?.status !== "error" &&
+        observation?.status !== "missing"
+      ) {
+        if (session.observedRunning !== true) {
+          session.idleResultPolls = (session.idleResultPolls ?? 0) + 1;
+          if (session.idleResultPolls <= INTERACTIVE_FIX_INITIAL_IDLE_POLLS) {
+            await this.save(workflow, token);
+            await this.unclaim(workflow, token);
+            return;
+          }
+        }
+        if (observation === undefined) {
+          observation = await readProviderStatus(provider, session.providerSessionId);
+          await this.assertFence(workflow.id, token);
+        }
+        if (observation.status === "running" || observation.status === "blocked") {
+          delete session.idleResultPolls;
+          delete session.usageFinalizationPolls;
+          session.observedRunning = true;
+          session.status = "running";
+          await this.refreshFixSessionUsage(
+            workflow,
+            token,
+            provider,
+            session,
+            observation.contextUsage,
+            undefined,
+            "fix",
+          );
+          await this.save(workflow, token);
+          await this.unclaim(workflow, token);
+          return;
+        }
+      }
+
+      observation ??= { status: activityState === "missing" ? "missing" : "idle" };
+      const terminalMessages =
+        observation.status !== "running" &&
+        observation.status !== "blocked" &&
+        this.validSessionTokens(observation.contextUsage) === undefined &&
+        provider.usageFromMessages
+          ? this.readFixSessionMessages(provider, session)
+          : undefined;
+      await this.refreshFixSessionUsage(
+        workflow,
+        token,
+        provider,
+        session,
+        observation.contextUsage,
+        terminalMessages,
+        "fix",
+      );
+
+      if (observation.status === "running" || observation.status === "blocked") {
+        delete session.idleResultPolls;
+        delete session.usageFinalizationPolls;
+        session.observedRunning = true;
+        session.status = "running";
+        await this.save(workflow, token);
+        await this.unclaim(workflow, token);
+        return;
+      }
+      if (
+        observation.status === "idle" &&
+        observation.usagePending === true &&
+        (session.usageFinalizationPolls ?? 0) < REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS
+      ) {
+        session.usageFinalizationPolls = (session.usageFinalizationPolls ?? 0) + 1;
+        await this.save(workflow, token);
+        await this.unclaim(workflow, token);
+        return;
+      }
+
+      delete session.idleResultPolls;
+      delete session.usageFinalizationPolls;
+      session.completedAt = nowIso();
+      settleStepRuntime(workflow, "fix");
+      if (observation.status === "idle") {
+        session.status = "idle";
+        delete session.error;
+      } else {
+        session.status = "failed";
+        session.error =
+          observation.status === "missing"
+            ? "The interactive fix session no longer exists"
+            : observation.error
+              ? `The interactive fix session failed: ${observation.error}`
+              : "The interactive fix session failed";
+      }
+      await this.save(workflow, token);
+      await this.release(workflow, token);
+    } catch (error) {
+      if (error instanceof ControllerFenceError) throw error;
+      console.warn(
+        "[multi-review] Reading interactive fix session state failed:",
+        errorMessage(error),
+      );
+      await this.unclaim(workflow, token);
     }
   }
 
@@ -2149,6 +2359,7 @@ export class MultiReviewService {
     session: NonNullable<MultiReviewWorkflow["fixSession"]>,
     observedUsage: { sessionTokens?: number } | undefined,
     messages: Promise<unknown[]> | undefined,
+    runtimeKind?: MultiReviewStepKind,
   ): Promise<boolean> {
     try {
       const observed = this.validSessionTokens(observedUsage);
@@ -2160,7 +2371,7 @@ export class MultiReviewService {
       if (reported === undefined) return false;
       await this.assertFence(workflow.id, token);
       const tokenCount = Math.max(session.tokenCount ?? 0, reported);
-      const kind = workflow.activeRequest?.kind;
+      const kind = runtimeKind ?? workflow.activeRequest?.kind;
       const runtime = kind ? workflow.stepRuntimes?.[kind] : undefined;
       const stepTokens =
         runtime?.tokenBaseline === undefined
@@ -2829,10 +3040,7 @@ export class MultiReviewService {
   }
 
   private async release(workflow: MultiReviewWorkflow, token: string): Promise<void> {
-    await this.storage
-      .releaseMultiReviewController(workflow.id, this.ownerId, token)
-      .catch(() => undefined);
-    this.leases.delete(workflow.id);
+    await this.unclaim(workflow, token);
     // Every caller of `release` is settling the workflow, so no progress clock
     // it owns can be read again. Dropping them here keeps the tracker bounded by
     // live sessions rather than by how many reviews the process has supervised.
@@ -2849,6 +3057,14 @@ export class MultiReviewService {
     await Promise.allSettled(
       [...keys].map((key) => this.releaseProviderUserByKey(workflow.id, key)),
     );
+  }
+
+  /** Drop only the short controller claim while preserving observation resources. */
+  private async unclaim(workflow: MultiReviewWorkflow, token: string): Promise<void> {
+    await this.storage
+      .releaseMultiReviewController(workflow.id, this.ownerId, token)
+      .catch(() => undefined);
+    this.leases.delete(workflow.id);
   }
 
   private async releaseProviderUserByKey(workflowId: string, key: string): Promise<void> {

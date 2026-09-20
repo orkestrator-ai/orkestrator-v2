@@ -186,6 +186,36 @@ describe("multi review protocol", () => {
     expect(
       isMultiReviewWorkflow({ ...workflow, fixSession: { ...session, unknownKey: true } }),
     ).toBe(false);
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        fixSession: { ...session, usageFinalizationPolls: 12 },
+      }),
+    ).toBe(true);
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        fixSession: { ...session, usageFinalizationPolls: 13 },
+      }),
+    ).toBe(false);
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        fixSession: { ...session, idleResultPolls: 1, observedRunning: true },
+      }),
+    ).toBe(true);
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        fixSession: { ...session, idleResultPolls: 6 },
+      }),
+    ).toBe(false);
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        fixSession: { ...session, observedRunning: "yes" },
+      }),
+    ).toBe(false);
   });
 
   test("validates per-step runtimes and cumulative fix-session usage", () => {

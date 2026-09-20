@@ -40,6 +40,7 @@ import {
   AmbiguousPromptDispatchError,
   ProviderSessionFailedError,
 } from "./build-pipeline-provider.js";
+import { codexConnection, httpProvider } from "./agent-provider-test-support.js";
 import {
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
   REVIEW_FIX_RESULT_JSON_SCHEMA,
@@ -776,7 +777,10 @@ test("MultiReviewService bounds delayed interactive Fix usage finalization", asy
       await service.address(started.id);
       await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
 
-      await service.advanceNow(started.id);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.fixSession?.usageFinalizationPolls === 1;
+      });
       expect((await snapshot(started.id))?.fixSession).toMatchObject({
         status: "running",
         usageFinalizationPolls: 1,
@@ -799,6 +803,334 @@ test("MultiReviewService bounds delayed interactive Fix usage finalization", asy
             ...workflow.fixModel,
             sessionKey: workflow.addressSessionKey!,
             providerSessionId: "provider-interactive-delayed",
+            requestIds: [workflow.addressRequestId!],
+            status: "running",
+            startedAt: new Date().toISOString(),
+          },
+        }),
+      },
+    },
+  );
+});
+
+test("MultiReviewService does not settle an interactive Fix from one startup-racing idle read", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-interactive-fix-idle-race",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+
+      provider.statusValue = "idle";
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.fixSession).toMatchObject({
+        status: "running",
+        idleResultPolls: 1,
+      });
+      expect((await snapshot(started.id))?.stepRuntimes?.fix?.completedAt).toBeUndefined();
+
+      provider.statusValue = "running";
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.fixSession).toMatchObject({
+        status: "running",
+        observedRunning: true,
+      });
+      expect((await snapshot(started.id))?.fixSession?.idleResultPolls).toBeUndefined();
+      expect((await snapshot(started.id))?.fixSession?.completedAt).toBeUndefined();
+    },
+    {
+      serviceOptions: {
+        dispatchAddressPrompt: async (workflow) => ({
+          tabId: workflow.addressTabId!,
+          fixSession: {
+            ...workflow.fixModel,
+            sessionKey: workflow.addressSessionKey!,
+            providerSessionId: "provider-interactive-idle-race",
+            requestIds: [workflow.addressRequestId!],
+            status: "running",
+            startedAt: new Date().toISOString(),
+          },
+        }),
+      },
+    },
+  );
+});
+
+test("MultiReviewService adopts a legacy interactive Fix stored idle with an unsettled runtime", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-interactive-fix-legacy-idle",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      provider.statusValue = "running";
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+      await mutateStoredWorkflow(storage, started.id, (workflow) => {
+        workflow.fixSession!.status = "idle";
+        delete workflow.fixSession!.completedAt;
+        delete workflow.fixSession!.observedRunning;
+        delete workflow.stepRuntimes!.fix!.completedAt;
+      });
+
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.fixSession).toMatchObject({
+        status: "running",
+        observedRunning: true,
+      });
+      expect((await snapshot(started.id))?.stepRuntimes?.fix?.completedAt).toBeUndefined();
+    },
+    {
+      serviceOptions: {
+        dispatchAddressPrompt: async (workflow) => ({
+          tabId: workflow.addressTabId!,
+          fixSession: {
+            ...workflow.fixModel,
+            sessionKey: workflow.addressSessionKey!,
+            providerSessionId: "provider-interactive-legacy-idle",
+            requestIds: [workflow.addressRequestId!],
+            status: "running",
+            startedAt: new Date().toISOString(),
+          },
+        }),
+      },
+    },
+  );
+});
+
+test("MultiReviewService releases its controller claim while an interactive Fix keeps running", async () => {
+  const provider = new Provider();
+  provider.usageTokens = 321;
+  await withService(
+    "env-interactive-fix-running-lease",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      provider.statusValue = "running";
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+      await service.advanceNow(started.id);
+
+      expect((await snapshot(started.id))?.fixSession).toMatchObject({
+        status: "running",
+        tokenCount: 321,
+      });
+      const claimed = await storage.claimMultiReviewController(started.id, "other-owner", 15_000);
+      expect(claimed.granted).toBe(true);
+    },
+    {
+      serviceOptions: {
+        dispatchAddressPrompt: async (workflow) => ({
+          tabId: workflow.addressTabId!,
+          fixSession: {
+            ...workflow.fixModel,
+            sessionKey: workflow.addressSessionKey!,
+            providerSessionId: "provider-interactive-running-lease",
+            requestIds: [workflow.addressRequestId!],
+            status: "running",
+            startedAt: new Date().toISOString(),
+          },
+        }),
+      },
+    },
+  );
+});
+
+test("MultiReviewService keeps a blocked interactive Fix running and resets terminal usage polls", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-interactive-fix-blocked",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+
+      provider.statusValue = "idle";
+      provider.usagePending = true;
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.fixSession?.usageFinalizationPolls).toBe(1);
+
+      provider.statusValue = "blocked";
+      provider.usageTokens = 444;
+      await service.advanceNow(started.id);
+      const blocked = (await snapshot(started.id))!;
+      expect(blocked.fixSession).toMatchObject({
+        status: "running",
+        tokenCount: 444,
+        observedRunning: true,
+      });
+      expect(blocked.fixSession?.completedAt).toBeUndefined();
+      expect(blocked.fixSession?.usageFinalizationPolls).toBeUndefined();
+
+      provider.statusValue = "idle";
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.fixSession?.usageFinalizationPolls).toBe(1);
+    },
+    {
+      serviceOptions: {
+        dispatchAddressPrompt: async (workflow) => ({
+          tabId: workflow.addressTabId!,
+          fixSession: {
+            ...workflow.fixModel,
+            sessionKey: workflow.addressSessionKey!,
+            providerSessionId: "provider-interactive-blocked",
+            requestIds: [workflow.addressRequestId!],
+            status: "running",
+            startedAt: new Date().toISOString(),
+          },
+        }),
+      },
+    },
+  );
+});
+
+test.each([
+  ["missing" as const, undefined, "The interactive fix session no longer exists"],
+  ["error" as const, "provider exploded", "The interactive fix session failed: provider exploded"],
+  ["error" as const, undefined, "The interactive fix session failed"],
+])(
+  "MultiReviewService settles a %s interactive Fix observation as failed",
+  async (status, detail, expectedError) => {
+    const provider = new Provider();
+    await withService(
+      `env-interactive-fix-${status}`,
+      provider,
+      async ({ service, storage, start, snapshot }) => {
+        const started = await start();
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.phase === "ready";
+        });
+        await service.address(started.id);
+        await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+        const sessionId = (await snapshot(started.id))!.fixSession!.providerSessionId;
+        if (detail) provider.sessionFailures.set(sessionId, detail);
+        else provider.statusValue = status;
+
+        await service.advanceNow(started.id);
+        const failed = (await snapshot(started.id))!;
+        expect(failed.fixSession).toMatchObject({
+          status: "failed",
+          error: expectedError,
+          completedAt: expect.any(String),
+        });
+        expect(failed.stepRuntimes?.fix?.completedAt).toEqual(expect.any(String));
+        const claimed = await storage.claimMultiReviewController(started.id, "other-owner", 15_000);
+        expect(claimed.granted).toBe(true);
+      },
+      {
+        serviceOptions: {
+          dispatchAddressPrompt: async (workflow) => ({
+            tabId: workflow.addressTabId!,
+            fixSession: {
+              ...workflow.fixModel,
+              sessionKey: workflow.addressSessionKey!,
+              providerSessionId: `provider-interactive-${status}`,
+              requestIds: [workflow.addressRequestId!],
+              status: "running",
+              startedAt: new Date().toISOString(),
+            },
+          }),
+        },
+      },
+    );
+  },
+);
+
+test("MultiReviewService polls an HTTP interactive Fix through the no-touch activity route", async () => {
+  const fallbackProvider = new Provider();
+  const requests: string[] = [];
+  let activityState: "working" | "idle" = "working";
+  const { provider: http } = httpProvider((request) => {
+    const url = new URL(request);
+    requests.push(url.pathname);
+    if (url.pathname.endsWith("/activity")) {
+      return Response.json({ activity: activityState });
+    }
+    if (url.pathname.endsWith("/usage")) {
+      return Response.json({ contextUsage: { usedTokens: 12, sessionTokens: 12 } });
+    }
+    return Response.json({
+      status: "idle",
+      contextUsage: { usedTokens: 12, sessionTokens: 12 },
+    });
+  }, codexConnection);
+  await withService(
+    "env-interactive-fix-http-activity",
+    fallbackProvider,
+    async ({ service, snapshot }) => {
+      const started = await service.start({
+        environmentId: "env-interactive-fix-http-activity",
+        projectId: "project-1",
+        targetBranch: "main",
+        reviewers: [{ agent: "claude", model: "opus" }],
+        reviewModel: { agent: "claude", model: "opus" },
+        fixModel: { agent: "codex", model: "gpt-5.6" },
+      });
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+
+      requests.length = 0;
+      await service.advanceNow(started.id);
+      expect(requests.filter((path) => path.endsWith("/activity"))).toHaveLength(1);
+      expect(
+        requests.some(
+          (path) =>
+            path === "/session/http-interactive-fix" ||
+            path === "/session/http-interactive-fix/status",
+        ),
+      ).toBe(false);
+
+      activityState = "idle";
+      await service.advanceNow(started.id);
+      expect(requests.filter((path) => path.endsWith("/activity"))).toHaveLength(2);
+      expect(
+        requests.filter(
+          (path) =>
+            path === "/session/http-interactive-fix" ||
+            path === "/session/http-interactive-fix/status",
+        ),
+      ).toHaveLength(1);
+      expect((await snapshot(started.id))?.fixSession).toMatchObject({
+        status: "idle",
+        tokenCount: 12,
+      });
+    },
+    {
+      packageFlow: true,
+      createProvider: async (_workflow, selection) =>
+        selection.agent === "codex" ? http : fallbackProvider,
+      serviceOptions: {
+        dispatchAddressPrompt: async (workflow) => ({
+          tabId: workflow.addressTabId!,
+          fixSession: {
+            ...workflow.fixModel,
+            sessionKey: workflow.addressSessionKey!,
+            providerSessionId: "http-interactive-fix",
             requestIds: [workflow.addressRequestId!],
             status: "running",
             startedAt: new Date().toISOString(),
@@ -1048,7 +1380,7 @@ test.each([false, true])(
           startedAt: expect.any(String),
         });
         expect(await storage.getEnvironment("env-address-backend")).toMatchObject({
-          agentActivitySources: { "multi-review": { state: "idle" } },
+          agentActivitySources: { "multi-review": { state: "working" } },
         });
       },
       {
@@ -1087,7 +1419,7 @@ test("MultiReviewService persists a seeded replacement for a missing interactive
   await withService(
     "env-address-replacement",
     provider,
-    async ({ service, start, snapshot }) => {
+    async ({ service, storage, start, snapshot }) => {
       const started = await start();
       await waitUntil(async () => {
         await service.advanceNow(started.id);
@@ -1097,6 +1429,12 @@ test("MultiReviewService persists a seeded replacement for a missing interactive
       await service.address(started.id);
       await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
       const interactive = (await snapshot(started.id))!;
+      await mutateStoredWorkflow(storage, started.id, (workflow) => {
+        workflow.fixSession!.tokenCount = 50_000;
+        workflow.stepRuntimes!.fix!.tokenCount = 50_000;
+      });
+      provider.statusValue = "running";
+      provider.usageTokens = 125;
 
       const recovered = await service.recoverFixSession("env-address-replacement", {
         tabId: interactive.fixTabId!,
@@ -1110,6 +1448,8 @@ test("MultiReviewService persists a seeded replacement for a missing interactive
         sessionKey: `multi-review:${started.id}:interactive`,
         status: "running",
       });
+      expect(recovered.fixSession?.tokenCount).toBeUndefined();
+      expect(recovered.stepRuntimes?.fix).toMatchObject({ tokenBaseline: 0 });
       expect(recovered.fixSessionKey).toBe(`multi-review:${started.id}:interactive`);
       expect(recovered.presentationError).toContain(
         "fresh Fix session was created and seeded with the consolidated findings",
@@ -1125,6 +1465,10 @@ test("MultiReviewService persists a seeded replacement for a missing interactive
         fixSession: { providerSessionId: "provider-replacement" },
       });
       expect(recoverAddressSession).toHaveBeenCalledTimes(1);
+
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.fixSession?.tokenCount).toBe(125);
+      expect((await snapshot(started.id))?.stepRuntimes?.fix?.tokenCount).toBe(125);
     },
     {
       serviceOptions: {

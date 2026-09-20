@@ -173,6 +173,10 @@ export interface MultiReviewSession extends MultiReviewModelSelection {
   tokenCount?: number;
   /** Bounded terminal polls while the provider finalizes cumulative usage. */
   usageFinalizationPolls?: number;
+  /** Consecutive idle observations before an interactive dispatch is treated as settled. */
+  idleResultPolls?: number;
+  /** Positive activity evidence that the current interactive dispatch started. */
+  observedRunning?: boolean;
   /** Last time the supervisor observed this session's transcript change. */
   progressAt?: string;
   /**
@@ -480,6 +484,8 @@ function isFixSession(value: unknown): boolean {
       "startedAt",
       "tokenCount",
       "usageFinalizationPolls",
+      "idleResultPolls",
+      "observedRunning",
       "progressAt",
       "progressDigest",
       "stalledSince",
@@ -500,6 +506,8 @@ function isFixSession(value: unknown): boolean {
       (Number.isSafeInteger(value.usageFinalizationPolls) &&
         (value.usageFinalizationPolls as number) >= 0 &&
         (value.usageFinalizationPolls as number) <= REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS)) &&
+    optionalPollCount(value.idleResultPolls) &&
+    (value.observedRunning === undefined || typeof value.observedRunning === "boolean") &&
     optionalDate(value.progressAt) &&
     optionalProgressDigest(value.progressDigest) &&
     optionalDate(value.stalledSince) &&

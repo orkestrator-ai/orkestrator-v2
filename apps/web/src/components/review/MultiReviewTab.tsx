@@ -94,7 +94,8 @@ function phaseCopy(workflow: MultiReviewWorkflow): string {
   if (
     workflow.phase === "interactive" &&
     workflow.addressPromptPending !== true &&
-    workflow.fixSession?.status === "idle"
+    workflow.fixSession?.status === "idle" &&
+    workflow.stepRuntimes?.fix?.completedAt !== undefined
   ) {
     return "The fix session finished and is ready for follow-up";
   }
@@ -248,7 +249,11 @@ export function fixStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
   if (workflow.phase === "fixing") return step("Addressing findings", "running");
   if (workflow.phase === "interactive") {
     if (workflow.addressPromptPending === true) return step("Starting fix session", "running");
-    if (workflow.fixSession?.status === "idle") return step("Complete", "complete");
+    if (
+      workflow.fixSession?.status === "idle" &&
+      workflow.stepRuntimes?.fix?.completedAt !== undefined
+    )
+      return step("Complete", "complete");
     if (workflow.fixSession?.status === "failed") return step("Failed", "failed");
     if (workflow.fixSession?.status === "cancelled") return step("Cancelled", "cancelled");
     return step("Interactive fix session", "running");

@@ -129,7 +129,7 @@ export function DesignLaunchButton({
         <Paintbrush className="size-4" />
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Design workspace</DialogTitle>
             <DialogDescription>

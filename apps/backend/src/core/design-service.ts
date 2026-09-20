@@ -60,6 +60,9 @@ export class DesignService {
   private tail: Promise<unknown> = Promise.resolve();
   private pending = 0;
   private readonly events: DesignChange[] = [];
+  private readonly metadata = new Map<string, { environmentId: string; revision: number }>();
+  private initialized = false;
+  private initialization: Promise<void> | undefined;
   constructor(
     dataDir: string,
     private readonly emit: (event: string, payload: unknown) => void,
@@ -82,7 +85,34 @@ export class DesignService {
   private file(id: string) {
     return join(this.root, `${designId.parse(id)}.orkdes`);
   }
-  async get(id: string, environmentId?: string): Promise<DesignCanvas> {
+  async initialize(): Promise<void> {
+    if (this.initialized) return;
+    this.initialization ??= (async () => {
+      await mkdir(this.root, { recursive: true, mode: 0o700 });
+      this.metadata.clear();
+      for (const file of await readdir(this.root)) {
+        if (!file.endsWith(".orkdes")) continue;
+        try {
+          const canvas = await this.read(file.slice(0, -7));
+          this.metadata.set(canvas.id, {
+            environmentId: canvas.environmentId,
+            revision: canvas.revision,
+          });
+        } catch (error) {
+          console.warn(
+            `[backend] Skipping unreadable design canvas ${file}:`,
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
+      this.initialized = true;
+    })().catch((error) => {
+      this.initialization = undefined;
+      throw error;
+    });
+    await this.initialization;
+  }
+  private async read(id: string): Promise<DesignCanvas> {
     const handle = await open(this.file(id), "r");
     try {
       const stat = await handle.stat();
@@ -91,25 +121,46 @@ export class DesignService {
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
       if (bytesRead > stat.size) throw new Error("Design file changed during read");
       const canvas = canvasSchema.parse(JSON.parse(buffer.subarray(0, bytesRead).toString("utf8")));
-      if (canvas.id !== id || (environmentId && canvas.environmentId !== environmentId))
-        throw new Error("Canvas not found in this environment");
+      if (canvas.id !== id) throw new Error("Canvas id does not match its filename");
       return canvas;
     } finally {
       await handle.close();
     }
   }
+  async get(id: string, environmentId?: string): Promise<DesignCanvas> {
+    await this.initialize();
+    const canvas = await this.read(id);
+    if (environmentId && canvas.environmentId !== environmentId)
+      throw new Error("Canvas not found in this environment");
+    this.metadata.set(canvas.id, {
+      environmentId: canvas.environmentId,
+      revision: canvas.revision,
+    });
+    return canvas;
+  }
   async list(environmentId: string) {
-    await mkdir(this.root, { recursive: true, mode: 0o700 });
-    const files = (await readdir(this.root))
-      .filter((file) => file.endsWith(".orkdes"))
-      .slice(0, 256);
+    await this.initialize();
     const result: Array<{ id: string; name: string; revision: number }> = [];
-    for (const file of files) {
-      const canvas = await this.get(file.slice(0, -7));
-      if (canvas.environmentId === environmentId)
+    for (const [id, metadata] of this.metadata) {
+      if (metadata.environmentId !== environmentId) continue;
+      try {
+        const canvas = await this.get(id, environmentId);
         result.push({ id: canvas.id, name: canvas.name, revision: canvas.revision });
+      } catch (error) {
+        this.metadata.delete(id);
+        console.warn(
+          `[backend] Skipping unreadable design canvas ${id}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
     }
     return result;
+  }
+  hasCanvases(environmentId: string): boolean {
+    for (const metadata of this.metadata.values()) {
+      if (metadata.environmentId === environmentId) return true;
+    }
+    return false;
   }
   private async commit(canvas: DesignCanvas, frameId?: string) {
     canvasSchema.parse(canvas);
@@ -138,6 +189,10 @@ export class DesignService {
       ...(frameId ? { frameId } : {}),
     };
     this.events.push(event);
+    this.metadata.set(canvas.id, {
+      environmentId: canvas.environmentId,
+      revision: canvas.revision,
+    });
     if (this.events.length > 256) this.events.shift();
     // Content-free bounded hints; clients read snapshots and detect gaps.
     this.emit(DESIGN_EVENT, { ...event, generation: this.generation });
@@ -148,9 +203,8 @@ export class DesignService {
     document?: string,
   ): Promise<DesignCanvas> {
     return this.exclusive(async () => {
-      await mkdir(this.root, { recursive: true, mode: 0o700 });
-      if ((await readdir(this.root)).filter((file) => file.endsWith(".orkdes")).length >= 256)
-        throw new Error("Canvas limit reached (256)");
+      await this.initialize();
+      if (this.metadata.size >= 256) throw new Error("Canvas limit reached (256)");
       if (document && Buffer.byteLength(document) > DESIGN_MAX_DOCUMENT_BYTES)
         throw new Error("Design file exceeds 4 MiB");
       const imported = document ? canvasSchema.parse(JSON.parse(document)) : undefined;
@@ -166,6 +220,34 @@ export class DesignService {
       };
       await this.commit(canvas);
       return canvas;
+    });
+  }
+  async delete(canvasId: string, environmentId: string): Promise<void> {
+    await this.exclusive(async () => {
+      const canvas = await this.get(canvasId, environmentId);
+      await unlink(this.file(canvas.id));
+      this.metadata.delete(canvas.id);
+      for (let index = this.events.length - 1; index >= 0; index--) {
+        if (this.events[index]?.canvasId === canvas.id) this.events.splice(index, 1);
+      }
+    });
+  }
+  async deleteEnvironment(environmentId: string): Promise<number> {
+    return this.exclusive(async () => {
+      await this.initialize();
+      const ids = Array.from(this.metadata)
+        .filter(([, metadata]) => metadata.environmentId === environmentId)
+        .map(([id]) => id);
+      for (const id of ids) {
+        await unlink(this.file(id)).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "ENOENT") throw error;
+        });
+        this.metadata.delete(id);
+      }
+      for (let index = this.events.length - 1; index >= 0; index--) {
+        if (ids.includes(this.events[index]!.canvasId)) this.events.splice(index, 1);
+      }
+      return ids.length;
     });
   }
   private compare(expected: number, current: number) {
@@ -241,19 +323,26 @@ export class DesignService {
     generation: string | undefined,
     after: number,
   ): Promise<DesignChanges> {
-    const canvas = await this.get(canvasId, environmentId);
+    await this.initialize();
+    let metadata = this.metadata.get(designId.parse(canvasId));
+    if (!metadata) {
+      const canvas = await this.get(canvasId, environmentId);
+      metadata = { environmentId: canvas.environmentId, revision: canvas.revision };
+    }
+    if (metadata.environmentId !== environmentId)
+      throw new Error("Canvas not found in this environment");
     revision.parse(after);
     const events = this.events.filter(
       (event) => event.canvasId === canvasId && event.revision > after,
     );
     const reset =
       generation !== this.generation ||
-      after > canvas.revision ||
-      (after !== canvas.revision &&
-        (events[0]?.revision !== after + 1 || events.at(-1)?.revision !== canvas.revision));
+      after > metadata.revision ||
+      (after !== metadata.revision &&
+        (events[0]?.revision !== after + 1 || events.at(-1)?.revision !== metadata.revision));
     return {
       generation: this.generation,
-      revision: canvas.revision,
+      revision: metadata.revision,
       reset,
       events: reset ? [] : events,
     };

@@ -480,6 +480,7 @@ export class OrkestratorBackend {
 
   async init(): Promise<void> {
     await this.context.storage.init();
+    await this.context.design?.initialize();
     const terminalHistoryConfig = (await this.context.storage.loadConfig()).global;
     configureTerminalHistoryRetention({
       enabled: terminalHistoryConfig.terminalHistoryEnabled,

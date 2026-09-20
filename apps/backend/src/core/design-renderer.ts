@@ -4,11 +4,43 @@ import { chromium, type Browser } from "playwright-core";
 import { designBootstrap } from "@orkestrator/protocol/design-runtime";
 import type { DesignFrame, DesignOperation } from "@orkestrator/protocol/design-canvas";
 
+const SYSTEM_CHROMIUM_PATHS = [
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/google-chrome",
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
+];
+
+export function resolveDesignChromiumPath(
+  env: NodeJS.ProcessEnv = process.env,
+  candidates: readonly string[] = SYSTEM_CHROMIUM_PATHS,
+): string | undefined {
+  const configured = env.ORKESTRATOR_DESIGN_CHROMIUM_PATH?.trim();
+  if (configured) return existsSync(configured) ? configured : undefined;
+  const managed = env.PLAYWRIGHT_BROWSERS_PATH ? chromium.executablePath() : undefined;
+  return [managed, chromium.executablePath(), ...candidates].find(
+    (candidate): candidate is string => Boolean(candidate && existsSync(candidate)),
+  );
+}
+
 /** Backend DOM operations never depend on a mounted client's iframe. */
 export class DesignRenderer {
   private browser: Promise<Browser> | undefined;
   private pending = 0;
   private tail: Promise<unknown> = Promise.resolve();
+  constructor(
+    private readonly launchBrowser: typeof chromium.launch = chromium.launch.bind(chromium),
+    private readonly executablePath: () => string | undefined = resolveDesignChromiumPath,
+  ) {}
+  status(): { ready: boolean; error?: string } {
+    if (this.executablePath()) return { ready: true };
+    return {
+      ready: false,
+      error:
+        "Design workspaces require Chromium. Install Chromium or set ORKESTRATOR_DESIGN_CHROMIUM_PATH to its executable.",
+    };
+  }
   async run(
     frame: Pick<DesignFrame, "html" | "width" | "height">,
     operation: DesignOperation | { op: "capture" },
@@ -16,20 +48,11 @@ export class DesignRenderer {
     if (this.pending >= 16) throw new Error("Design renderer busy; retry later");
     this.pending++;
     const work = this.tail.then(async () => {
-      this.browser ??= chromium
-        .launch({
-          headless: true,
-          timeout: 15_000,
-          executablePath:
-            process.env.ORKESTRATOR_DESIGN_CHROMIUM_PATH ||
-            [
-              "/usr/bin/chromium",
-              "/usr/bin/chromium-browser",
-              "/usr/bin/google-chrome",
-              "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-              "/Applications/Chromium.app/Contents/MacOS/Chromium",
-            ].find(existsSync),
-        })
+      this.browser ??= this.launchBrowser({
+        headless: true,
+        timeout: 15_000,
+        executablePath: this.executablePath(),
+      })
         .then((browser) => {
           browser.once("disconnected", () => {
             this.browser = undefined;

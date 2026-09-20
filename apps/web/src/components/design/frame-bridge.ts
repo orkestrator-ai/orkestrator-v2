@@ -12,7 +12,10 @@ export class DesignFrameBridge {
       timer: ReturnType<typeof setTimeout>;
     }
   >();
-  constructor(private readonly target: Window) {
+  constructor(
+    private readonly target: Window,
+    private readonly timeoutMs = 3000,
+  ) {
     window.addEventListener("message", this.receive);
   }
   private receive = (event: MessageEvent) => {
@@ -31,7 +34,7 @@ export class DesignFrameBridge {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
         reject(new Error("Frame runtime did not respond"));
-      }, 3000);
+      }, this.timeoutMs);
       this.pending.set(requestId, { resolve: (value) => resolve(value as T), reject, timer });
       this.target.postMessage({ channel: "orkestrator-design", requestId, operation }, "*");
     });

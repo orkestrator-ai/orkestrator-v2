@@ -97,12 +97,12 @@ External stylesheets, fonts, network requests and authored scripts are disabled.
 This also makes backend captures independent of client login state.
 
 Backend element edits and captures use a separate headless Chromium context and
-the same runtime. They work with no connected frontend. **The backend host needs
-Chromium**: common Linux and macOS installations are detected automatically; otherwise set
-`ORKESTRATOR_DESIGN_CHROMIUM_PATH` to its executable, or provision Playwright's
-matching Chromium. `playwright-core` ships with the backend and standalone CLI;
-the browser binary is not bundled. Each operation has a deadline and closes its
-context. Missing Chromium is a visible error, never a client-dependent fallback.
+the same runtime. They work with no connected frontend. **Chromium is an
+installer prerequisite** for the desktop app and standalone CLI: common Linux
+and macOS installations and Playwright's pinned Chromium cache are detected, or
+`ORKESTRATOR_DESIGN_CHROMIUM_PATH` can name the executable. The launch control
+probes this prerequisite and stays gated with an actionable error when it is
+missing. Each operation has a deadline and closes its context.
 
 Bounds: 256 canvases, 64 frames per canvas, 256 KiB HTML per frame, 4 MiB per
 document, 4096 × 4096 maximum viewport, 5000 DOM elements per rendered frame,

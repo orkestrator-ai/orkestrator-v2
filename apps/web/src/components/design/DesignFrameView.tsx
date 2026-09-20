@@ -4,6 +4,14 @@ import type { DesignElement, DesignFrame, DesignLayer } from "@orkestrator/proto
 import { designBootstrap } from "@orkestrator/protocol/design-runtime";
 import { DesignFrameBridge } from "./frame-bridge";
 
+export function elementResizeChanged(
+  initial: { width: number; height: number },
+  width: number,
+  height: number,
+): boolean {
+  return width !== Math.round(initial.width) || height !== Math.round(initial.height);
+}
+
 export interface DesignSelection {
   frameId: string;
   revision: number;
@@ -208,7 +216,11 @@ export function DesignFrameView({
             }}
             onPointerUp={() => {
               const start = elementDrag.current;
-              if (start) onElementResize(start.selection, start.width, start.height);
+              if (
+                start &&
+                elementResizeChanged(start.selection.element.rect, start.width, start.height)
+              )
+                onElementResize(start.selection, start.width, start.height);
               elementDrag.current = null;
               setElementSize(null);
             }}

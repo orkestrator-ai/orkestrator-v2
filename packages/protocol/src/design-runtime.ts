@@ -2,18 +2,21 @@ import type { DesignElement, DesignLayer, DesignOperation } from "./design-canva
 
 /** Self-contained: serialized into an opaque sandbox and the backend renderer. */
 export function installDesignRuntime() {
-  const forbidden = "script,iframe,object,embed,base,meta,link,portal,applet";
+  const forbidden = "script,iframe,frame,object,embed,base,meta,link,portal,applet";
   function clean(doc: Document | DocumentFragment) {
     doc.querySelectorAll(forbidden).forEach((node) => node.remove());
     for (const node of Array.from(doc.querySelectorAll("*"))) {
       for (const attr of Array.from(node.attributes)) {
         if (
           /^on/i.test(attr.name) ||
-          ["srcdoc", "nonce", "http-equiv", "action", "formaction"].includes(attr.name)
+          ["srcdoc", "nonce", "http-equiv", "action", "formaction"].includes(attr.name) ||
+          (["href", "src", "xlink:href"].includes(attr.name.toLowerCase()) &&
+            /^(?:javascript|vbscript):/i.test(attr.value.trim()))
         ) {
           node.removeAttribute(attr.name);
         }
       }
+      if (node instanceof HTMLTemplateElement) clean(node.content);
     }
   }
   function parse(html: string) {

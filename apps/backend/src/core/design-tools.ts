@@ -30,6 +30,14 @@ export function designActions(service: DesignService, environmentId: string) {
         "Create a backend-owned design canvas. Designs use self-contained HTML/CSS; scripts and external resources are disabled.",
       run: (a: { name: string }) => service.create(environmentId, a.name),
     },
+    delete_canvas: {
+      schema: z.object(canvasInput),
+      description: "Delete a canvas in this environment and reclaim its storage quota.",
+      run: async (a: { canvasId: string }) => {
+        await service.delete(a.canvasId, environmentId);
+        return { deleted: true };
+      },
+    },
     get_canvas: {
       schema: z.object(canvasInput),
       description:

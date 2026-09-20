@@ -201,6 +201,7 @@ interface PaneLayoutState {
 
   // Tab management
   addTab: (paneId: string, tab: TabInfo, environmentId?: string) => void;
+  canAddTabInSplit: (paneId: string, environmentId: string) => boolean;
   addTabInSplit: (paneId: string, tab: TabInfo, environmentId: string) => boolean;
   removeTab: (paneId: string, tabId: string, environmentId?: string) => void;
   setActiveTab: (paneId: string, tabId: string, environmentId?: string) => void;
@@ -753,6 +754,17 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, { ...envState, root: newRoot });
     set({ environments: newEnvs });
+  },
+
+  canAddTabInSplit: (paneId, environmentId) => {
+    const state = get();
+    const environment = state.environments.get(environmentId);
+    return Boolean(
+      environment &&
+      state.hydration.get(environmentId) === "done" &&
+      findLeaf(environment.root, paneId) &&
+      getDepth(environment.root) < MAX_SPLIT_DEPTH,
+    );
   },
 
   addTabInSplit: (paneId, tab, environmentId) => {

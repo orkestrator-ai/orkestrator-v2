@@ -1506,6 +1506,7 @@ export async function deleteEnvironment(
       await storage.deleteComposeDraftsByEnvironment(environmentId);
       await storage.deleteFileDraftsByEnvironment(environmentId);
       await storage.deleteAgentHandoffsByEnvironment(environmentId);
+      await context.design?.deleteEnvironment(environmentId);
       context.agentTools?.revokeEnvironment(environmentId);
       await storage.removeEnvironment(environmentId);
       await storage.deletePaneLayout(environmentId).catch(() => undefined);

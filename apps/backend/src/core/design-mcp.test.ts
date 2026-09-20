@@ -37,6 +37,21 @@ test("design MCP has a separate tool inventory, authentication and environment b
       order: 0,
     });
     await server.start();
+    const disabledConnection = server.connection(environment.id, project.id, "host");
+    expect(disabledConnection.design).toBeUndefined();
+    expect(
+      (
+        await fetch(new URL("/design-mcp", disabledConnection.url), {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${disabledConnection.token}`,
+            "Content-Type": "application/json",
+          },
+          body: "{}",
+        })
+      ).status,
+    ).toBe(404);
+    await design.create(environment.id, "Workspace");
     const connection = server.connection(environment.id, project.id, "host");
     expect(connection.design).toBe(true);
     const rpc = async (path: string, token: string, method: string, params?: unknown) => {
@@ -75,6 +90,60 @@ test("design MCP has a separate tool inventory, authentication and environment b
       arguments: { canvasId: foreign.id },
     });
     expect(denied.body).toMatchObject({ result: { isError: true } });
+
+    const originalList = design.list.bind(design);
+    let release!: () => void;
+    let started = 0;
+    let markAllStarted!: () => void;
+    const allStarted = new Promise<void>((resolve) => {
+      markAllStarted = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    design.list = async (environmentId) => {
+      started++;
+      if (started === 16) markAllStarted();
+      await blocked;
+      return originalList(environmentId);
+    };
+    const inFlight = Array.from({ length: 16 }, () =>
+      rpc("/design-mcp", connection.token, "tools/call", {
+        name: "list_canvases",
+        arguments: {},
+      }),
+    );
+    await allStarted;
+    expect(
+      (
+        await rpc("/design-mcp", connection.token, "tools/call", {
+          name: "list_canvases",
+          arguments: {},
+        })
+      ).status,
+    ).toBe(429);
+    release();
+    expect((await Promise.all(inFlight)).every((result) => result.status === 200)).toBe(true);
+    design.list = async () => {
+      throw new Error("injected list failure");
+    };
+    expect(
+      (
+        await rpc("/design-mcp", connection.token, "tools/call", {
+          name: "list_canvases",
+          arguments: {},
+        })
+      ).body.result.isError,
+    ).toBe(true);
+    design.list = originalList;
+    expect(
+      (
+        await rpc("/design-mcp", connection.token, "tools/call", {
+          name: "list_canvases",
+          arguments: {},
+        })
+      ).status,
+    ).toBe(200);
     server.revokeEnvironment(environment.id);
     expect((await rpc("/design-mcp", connection.token, "tools/list")).status).toBe(401);
   } finally {

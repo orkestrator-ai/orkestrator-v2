@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DESIGN_MAX_HTML_BYTES } from "@orkestrator/protocol/design-canvas";
@@ -107,5 +107,87 @@ describe("backend design canvases", () => {
         frameId: created.frame.id,
       }),
     ).rejects.toThrow("not found");
+  });
+
+  test("skips unreadable files without hiding healthy canvases", async () => {
+    const canvas = await service.create("env-1", "Healthy");
+    await service.close();
+    const root = join(dir, "design-canvases");
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, "not-a-uuid.orkdes"), "{}");
+    await writeFile(join(root, `${crypto.randomUUID()}.orkdes`), "{not-json");
+    service = new DesignService(dir, () => {});
+
+    expect(await service.list("env-1")).toEqual([{ id: canvas.id, name: "Healthy", revision: 1 }]);
+  });
+
+  test("deleting canvases and environments reclaims the global quota across restart", async () => {
+    const ids: string[] = [];
+    for (let index = 0; index < 256; index++) {
+      ids.push((await service.create(index % 2 ? "env-keep" : "env-delete", `Canvas ${index}`)).id);
+    }
+    await expect(service.create("env-keep", "Over quota")).rejects.toThrow("Canvas limit");
+    await service.delete(ids[1]!, "env-keep");
+    await expect(service.create("env-keep", "Reclaimed one")).resolves.toMatchObject({
+      name: "Reclaimed one",
+    });
+    expect(await service.deleteEnvironment("env-delete")).toBe(128);
+    await service.close();
+    service = new DesignService(dir, () => {});
+    await service.initialize();
+    expect(service.hasCanvases("env-delete")).toBe(false);
+    await expect(service.create("env-keep", "After restart")).resolves.toMatchObject({
+      name: "After restart",
+    });
+  });
+
+  test("answers current change cursors from metadata without rereading the document", async () => {
+    const canvas = await service.create("env-1");
+    const originalGet = service.get.bind(service);
+    let reads = 0;
+    service.get = async (...args) => {
+      reads++;
+      return originalGet(...args);
+    };
+    for (let index = 0; index < 5; index++) {
+      expect(await service.changes(canvas.id, "env-1", service.generation, 1)).toMatchObject({
+        revision: 1,
+        reset: false,
+      });
+    }
+    expect(reads).toBe(0);
+  });
+
+  test("bounds the pending write queue and recovers after work settles", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await service.close();
+    service = new DesignService(dir, () => {}, {
+      status: () => ({ ready: true }),
+      run: async (frame: { html: string }) => {
+        await blocked;
+        return frame.html;
+      },
+      close: async () => {},
+    } as never);
+    const canvas = await service.create("env-1");
+    const { frame: created } = await service.createFrame(canvas.id, "env-1", 1, frame);
+    const writes = Array.from({ length: 32 }, () =>
+      service.mutate(canvas.id, "env-1", created.id, 1, {
+        op: "appendHtml" as const,
+        html: "<p>x</p>",
+      }),
+    );
+    await expect(service.mutate(canvas.id, "env-1", created.id, 1, { x: 2 })).rejects.toThrow(
+      "queue full",
+    );
+    release();
+    const results = await Promise.allSettled(writes);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    await expect(
+      service.mutate(canvas.id, "env-1", created.id, 2, { x: 3 }),
+    ).resolves.toBeDefined();
   });
 });

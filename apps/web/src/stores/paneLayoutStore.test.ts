@@ -3747,6 +3747,50 @@ describe("paneLayoutStore guard branches", () => {
     expect(usePaneLayoutStore.getState().getRoot("env-split-depth")).toBe(root);
   });
 
+  test("addTabInSplit publishes a new adjacent tab and rejects duplicates", () => {
+    seedSingleTabEnvironment("env-add-split", null, { id: "tab-one", type: "plain" });
+    usePaneLayoutStore.getState().finishHydration("env-add-split");
+    const store = usePaneLayoutStore.getState();
+    const tab = { id: "design-one", type: "design-canvas" as const };
+
+    expect(store.canAddTabInSplit("default", "env-add-split")).toBe(true);
+    expect(store.addTabInSplit("default", tab, "env-add-split")).toBe(true);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-add-split")).toContainEqual(tab);
+    expect(store.addTabInSplit("default", tab, "env-add-split")).toBe(false);
+  });
+
+  test("addTabInSplit refuses a tree at maximum depth without changing state", () => {
+    let root: any = {
+      kind: "leaf",
+      id: "deep-target",
+      tabs: [{ id: "tab-one", type: "plain" }],
+      activeTabId: "tab-one",
+    };
+    for (let depth = 1; depth <= 9; depth += 1) {
+      root = {
+        kind: "split",
+        id: `add-split-${depth}`,
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth,
+        children: [root, { kind: "leaf", id: `add-filler-${depth}`, tabs: [], activeTabId: null }],
+      };
+    }
+    seedPaneTree(root, "deep-target", "env-add-split-depth");
+    usePaneLayoutStore.getState().finishHydration("env-add-split-depth");
+    const store = usePaneLayoutStore.getState();
+
+    expect(store.canAddTabInSplit("deep-target", "env-add-split-depth")).toBe(false);
+    expect(
+      store.addTabInSplit(
+        "deep-target",
+        { id: "design", type: "design-canvas" },
+        "env-add-split-depth",
+      ),
+    ).toBe(false);
+    expect(usePaneLayoutStore.getState().getRoot("env-add-split-depth")).toBe(root);
+  });
+
   test("finishHydration with nothing restored only marks hydration done", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-fresh");

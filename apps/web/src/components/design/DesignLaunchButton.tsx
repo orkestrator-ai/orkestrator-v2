@@ -1,5 +1,5 @@
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Paintbrush } from "lucide-react";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
 import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
@@ -14,6 +14,8 @@ import {
 } from "@/components/ui/dialog";
 import { invoke } from "@/lib/native/backend";
 import { designAction } from "./design-client";
+import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
+import { importAndOpenDesign, launchDesignWorkspace } from "./design-launch";
 
 export function DesignLaunchButton({
   environmentId,
@@ -31,13 +33,43 @@ export function DesignLaunchButton({
   );
   const [open, setOpen] = useState(false),
     [busy, setBusy] = useState(false);
+  const [renderer, setRenderer] = useState<{
+    environmentId: string;
+    ready: boolean;
+    error?: string;
+  } | null>(null);
   const [name, setName] = useState("Untitled design");
   const [agent, setAgent] = useState<"claude" | "codex">("claude");
   const [prompt, setPrompt] = useState("");
   const [existing, setExisting] = useState<Array<{ id: string; name: string }>>([]);
   const [error, setError] = useState<string | null>(null);
+  const rendererReady =
+    renderer !== null && renderer.environmentId === environmentId && renderer.ready;
+  const rendererError =
+    renderer !== null && renderer.environmentId === environmentId && !renderer.ready
+      ? renderer.error
+      : undefined;
   const fail = (reason: unknown) =>
     setError(reason instanceof Error ? reason.message : String(reason));
+  useEffect(() => {
+    if (!environmentId || !hydrated) return;
+    let active = true;
+    void invoke<{ ready: boolean; error?: string }>("design_status")
+      .then((status) => {
+        if (active) setRenderer({ environmentId, ...status });
+      })
+      .catch((reason) => {
+        if (active)
+          setRenderer({
+            environmentId,
+            ready: false,
+            error: reason instanceof Error ? reason.message : String(reason),
+          });
+      });
+    return () => {
+      active = false;
+    };
+  }, [environmentId, hydrated]);
   const openCanvas = (canvasId: string) => {
     if (!createTab?.("design-canvas", { canvasId }))
       throw new Error("No room for a design tab. Close a tab and try again.");
@@ -45,16 +77,31 @@ export function DesignLaunchButton({
   };
   const create = async () => {
     if (!environmentId || !createTab) return;
+    const paneStore = usePaneLayoutStore.getState();
+    const activePaneId = paneStore.environments.get(environmentId)?.activePaneId;
+    if (!activePaneId || !paneStore.canAddTabInSplit(activePaneId, environmentId)) {
+      fail(
+        "The active pane cannot be split. Close a pane or reduce the layout depth and try again.",
+      );
+      return;
+    }
     setBusy(true);
     setError(null);
+    const agentTabId = createUniqueTabId("design-agent");
     try {
-      const canvas = await designAction<DesignCanvas>(environmentId, "create_canvas", { name });
-      // The ordinary native chat owns approvals, prompts and background work.
-      // The adjacent design tab carries no duplicated session or document state.
-      const initialPrompt = `Use the orkestrator-design MCP server for this design workspace. Canvas ID: ${canvas.id}. First call get_canvas. Review the current repository, then build HTML/CSS mockups in this canvas. Designs must be self-contained, with embedded CSS and data-URL images/fonts; authored scripts and remote resources are disabled. Use frame revisions for edits, re-read on conflicts, and capture_frame to review your work. Save the finished export_canvas JSON to a .orkdes file in this repository.\n\n${prompt.trim() || "Review this repository and propose an initial design mockup."}`;
-      if (!createTab(agent, { agentLaunchMode: "native", displayTitle: "Design", initialPrompt }))
-        throw new Error("Could not open design agent");
-      openCanvas(canvas.id);
+      await launchDesignWorkspace({
+        name,
+        agent,
+        prompt,
+        agentTabId,
+        action: (action, input) => designAction(environmentId, action, input),
+        createTab,
+        openCanvas,
+        removeAgentTab: (tabId) => {
+          const pane = usePaneLayoutStore.getState().findPaneWithTab(tabId, environmentId);
+          if (pane) usePaneLayoutStore.getState().removeTab(pane.id, tabId, environmentId);
+        },
+      });
     } catch (reason) {
       fail(reason);
     } finally {
@@ -68,7 +115,8 @@ export function DesignLaunchButton({
         size="icon"
         className="h-8 w-8"
         aria-label="New design workspace"
-        disabled={disabled || !environmentId || !hydrated}
+        title={rendererError}
+        disabled={disabled || !environmentId || !hydrated || rendererReady !== true}
         onClick={() => {
           setOpen(true);
           setError(null);
@@ -180,9 +228,15 @@ export function DesignLaunchButton({
                 void file
                   .text()
                   .then((document) =>
-                    invoke<DesignCanvas>("design_import", { environmentId, document }),
+                    importAndOpenDesign({
+                      document,
+                      importCanvas: (value) =>
+                        invoke<DesignCanvas>("design_import", { environmentId, document: value }),
+                      openCanvas,
+                      deleteCanvas: (canvasId) =>
+                        designAction(environmentId, "delete_canvas", { canvasId }),
+                    }),
                   )
-                  .then((canvas) => openCanvas(canvas.id))
                   .catch(fail)
                   .finally(() => setBusy(false));
               }}

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DesignService } from "../apps/backend/src/core/design-service";
 import { runDesignAction } from "../apps/backend/src/core/design-tools";
+import { DESIGN_EVENT } from "@orkestrator/protocol/design-canvas";
 
 test("canvas edits, script isolation, missed events, conflict and reload", async ({
   page,
@@ -18,18 +19,22 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
       y: 0,
       width: 480,
       height: 400,
-      html: `<style>body{margin:0;padding:24px;font-family:system-ui}h1{color:rgb(20,30,40)}</style><h1 id="title">A better workspace</h1><script>document.body.textContent="EXECUTED"</script><img onerror="document.body.textContent='EXECUTED'" src="https://example.invalid/x"><div id="target"></div>`,
+      html: `<style>body{margin:0;padding:24px;font-family:system-ui}h1{color:rgb(20,30,40)}</style><h1 id="title">A better workspace</h1><script>document.body.textContent="EXECUTED"</script><img onerror="document.body.textContent='EXECUTED'" src="https://example.invalid/x"><template id="nested"><script>bad()</script><iframe src="data:text/html,bad"></iframe><frame src="bad"></frame></template><div id="target"></div>`,
     });
+    const changeGenerations: Array<string | undefined> = [];
     await page.exposeFunction("designInvoke", (command: string, args: Record<string, unknown>) => {
-      if (command === "design_changes")
+      if (command === "design_changes") {
+        changeGenerations.push(args.generation as string | undefined);
         return service.changes(
           String(args.canvasId),
           "design-fixture",
           args.generation as string | undefined,
           args.after as number,
         );
+      }
       if (command === "design_action")
         return runDesignAction(service, "design-fixture", args.action as string, args.input);
+      if (command === "design_save") return { filePath: args.filePath, revision: 1 };
       throw new Error("Unexpected fixture command");
     });
     await page.goto(`/design-canvas?canvasId=${canvas.id}`);
@@ -38,10 +43,34 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
     await expect(embedded.getByRole("heading")).toHaveText("A better workspace");
     await expect(embedded.locator("script")).toHaveCount(0);
     await expect(embedded.locator("img")).not.toHaveAttribute("onerror");
+    expect(
+      await embedded
+        .locator("#nested")
+        .evaluate((node) =>
+          Array.from(
+            (node as HTMLTemplateElement).content.querySelectorAll("script,iframe,frame"),
+          ).map((child) => child.tagName),
+        ),
+    ).toEqual([]);
     const headingBounds = await embedded.getByRole("heading").boundingBox();
     expect(headingBounds).not.toBeNull();
     await page.mouse.click(headingBounds!.x + 8, headingBounds!.y + 8);
     await expect(page.getByRole("complementary", { name: "Element inspector" })).toBeVisible();
+    await page
+      .getByRole("button", { name: "Resize selected element" })
+      .dispatchEvent("pointerdown", {
+        button: 0,
+        pointerId: 1,
+        clientX: 100,
+        clientY: 100,
+      });
+    await page.getByRole("button", { name: "Resize selected element" }).dispatchEvent("pointerup", {
+      button: 0,
+      pointerId: 1,
+      clientX: 100,
+      clientY: 100,
+    });
+    expect((await service.getFrame(canvas.id, "design-fixture", frame.id)).revision).toBe(1);
     await page.screenshot({ path: testInfo.outputPath("design-inspector.png") });
     await page.getByLabel("color", { exact: true }).fill("rgb(240, 10, 20)");
     await page.getByRole("button", { name: "Apply styles" }).click();
@@ -52,7 +81,23 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
       html: "<h1 id='title'>Changed while away</h1>",
     });
     await page.getByRole("button", { name: "Switch tab" }).click();
+    await page.evaluate(
+      ({ event, canvasId, revision }) =>
+        window.dispatchEvent(
+          new CustomEvent(`orkestrator-fixture:${event}`, {
+            detail: { canvasId, revision },
+          }),
+        ),
+      { event: DESIGN_EVENT, canvasId: canvas.id, revision: 3 },
+    );
     await expect(embedded.getByRole("heading")).toHaveText("Changed while away");
+    const undefinedGenerations = changeGenerations.filter((value) => value === undefined).length;
+    await page.evaluate(() =>
+      window.dispatchEvent(new CustomEvent("orkestrator-fixture:native-event-stream-connected")),
+    );
+    await expect
+      .poll(() => changeGenerations.filter((value) => value === undefined).length)
+      .toBeGreaterThan(undefinedGenerations);
     await page.reload();
     await expect(embedded.getByRole("heading")).toHaveText("Changed while away");
     await page.getByRole("button", { name: "title", exact: true }).click();
@@ -104,6 +149,12 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
     expect((await service.getFrame(canvas.id, "design-fixture", frame.id)).html).toContain(
       "box-sizing: border-box",
     );
+    await page.getByRole("button", { name: "Save design to repository" }).click();
+    await expect(page.getByText("Saved Design-QA.orkdes", { exact: true })).toBeVisible();
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Download orkdes" }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe("Design-QA.orkdes");
   } finally {
     await service.close();
     await rm(dir, { recursive: true, force: true });

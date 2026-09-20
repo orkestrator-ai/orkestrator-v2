@@ -16,6 +16,7 @@ import { designAction, getCanvas, getChanges } from "./design-client";
 import { DesignFrameView, type DesignSelection } from "./DesignFrameView";
 import { DesignInspector } from "./DesignInspector";
 import { DesignFrameBridge } from "./frame-bridge";
+import { LatestMutationQueue } from "./latest-mutation-queue";
 
 export function DesignCanvasTab({
   canvasId,
@@ -39,6 +40,18 @@ export function DesignCanvasTab({
   const viewport = useRef<HTMLElement>(null);
   const bridges = useRef(new Map<string, DesignFrameBridge>());
   const sync = useRef<(() => Promise<void>) | null>(null);
+  const canvasRef = useRef<DesignCanvas | null>(null);
+  const mutationWorker = useRef(
+    async (_request: { action: string; input: Record<string, unknown> }) => {},
+  );
+  const mutationQueue = useRef<LatestMutationQueue<{
+    action: string;
+    input: Record<string, unknown>;
+  }> | null>(null);
+  mutationQueue.current ??= new LatestMutationQueue(
+    (request) => mutationWorker.current(request),
+    setBusy,
+  );
   const errorOf = useCallback(
     (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)),
     [],
@@ -77,6 +90,8 @@ export function DesignCanvasTab({
           if (changes.reset || changes.revision !== after) {
             const snapshot = await getCanvas(environmentId, canvasId);
             if (disposed) return;
+            if (!canvasRef.current || canvasRef.current.revision <= snapshot.revision)
+              canvasRef.current = snapshot;
             setCanvas((current) =>
               current && current.revision > snapshot.revision ? current : snapshot,
             );
@@ -112,21 +127,32 @@ export function DesignCanvasTab({
       reconnect?.();
     };
   }, [canvasId, environmentId, isActive, errorOf]);
-  const mutate = async (action: string, input: Record<string, unknown>) => {
-    if (busy) return;
-    setBusy(true);
+  mutationWorker.current = async (request) => {
     setError(null);
     setNotice("");
+    const frameId = typeof request.input.frameId === "string" ? request.input.frameId : null;
+    const latestFrame = frameId
+      ? canvasRef.current?.frames.find((frame) => frame.id === frameId)
+      : undefined;
+    const input =
+      latestFrame && "expectedRevision" in request.input
+        ? { ...request.input, expectedRevision: latestFrame.revision }
+        : request.input;
     try {
-      await designAction(environmentId, action, { canvasId, ...input });
+      await designAction(environmentId, request.action, { canvasId, ...input });
+    } catch (reason) {
+      errorOf(reason);
+    }
+    try {
       await sync.current?.();
     } catch (reason) {
       errorOf(reason);
-      await sync.current?.();
-    } finally {
-      setBusy(false);
     }
   };
+  const mutate = useCallback((action: string, input: Record<string, unknown>) => {
+    const key = typeof input.frameId === "string" ? input.frameId : "canvas";
+    mutationQueue.current!.enqueue(key, { action, input });
+  }, []);
   const selectLayer = (frame: DesignFrame, selector: string) => {
     const bridge = bridges.current.get(frame.id);
     if (!bridge || bridge.renderedRevision !== frame.revision) return;

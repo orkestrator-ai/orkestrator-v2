@@ -20,6 +20,10 @@ export function registerDesignCommands(
       args.input,
     );
   });
+  register("design_status", async (_args, context) => {
+    if (!context.design) return { ready: false, error: "Design service unavailable" };
+    return context.design.renderer.status();
+  });
   register("design_changes", async (args, context) => {
     if (!context.design) throw new Error("Design service unavailable");
     return context.design.changes(

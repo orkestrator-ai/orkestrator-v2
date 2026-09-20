@@ -583,7 +583,7 @@ export class AgentToolsServer {
     return {
       url: `http://${hostname}:${this.port}${AGENT_MCP_PATH}`,
       token: credential.token,
-      ...(this.design ? { design: true } : {}),
+      ...(this.design?.hasCanvases(environmentId) ? { design: true } : {}),
     };
   }
 
@@ -706,6 +706,10 @@ export class AgentToolsServer {
     }
 
     if (url.pathname === "/design-mcp") {
+      if (!this.design?.hasCanvases(scope.environmentId)) {
+        jsonResponse(response, 404, { error: "Design tools are not enabled for this environment" });
+        return;
+      }
       const environment = await this.storage.getEnvironment(scope.environmentId);
       if (
         scope.workflowResultKey ||

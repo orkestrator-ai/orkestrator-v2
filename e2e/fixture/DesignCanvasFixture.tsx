@@ -9,7 +9,12 @@ export function DesignCanvasFixture() {
       (
         window as unknown as { designInvoke: (command: string, args: unknown) => Promise<unknown> }
       ).designInvoke(command, args),
-    listen: () => () => {},
+    listen: (event: string, handler: (payload: unknown) => void) => {
+      const eventName = `orkestrator-fixture:${event}`;
+      const listener = (value: Event) => handler((value as CustomEvent).detail);
+      window.addEventListener(eventName, listener);
+      return () => window.removeEventListener(eventName, listener);
+    },
   } as unknown as typeof window.orkestrator;
   return (
     <div className="h-screen bg-background text-foreground">

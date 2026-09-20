@@ -1,5 +1,8 @@
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
-import { HOST_TEST_SCHEDULER_SOURCE } from "@orkestrator/protocol/host-test-scheduler";
+import {
+  HOST_TEST_SCHEDULER_SOURCE,
+  TEST_SCHEDULING_POLICY_SOURCE,
+} from "@orkestrator/protocol/host-test-scheduler";
 import {
   REVIEW_VALIDATION_ENVIRONMENT_CHANGE_PATH_MAX,
   REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX,
@@ -24,6 +27,8 @@ const lockPath = path.join(path.dirname(directory), ".validation-lock");
 const active = new Map();
 const createScheduler = (${HOST_TEST_SCHEDULER_SOURCE});
 let scheduler;
+let policy = { cooperativeCommands: [], profiles: {} };
+const parseSchedulingPolicy = (${TEST_SCHEDULING_POLICY_SOURCE});
 const tickets = new Set();
 const QUEUE_TIMEOUT_MS = Math.max(1000, Math.min(7200000, Number(process.env.ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS) || 1800000));
 // A cooperative child does real setup before its first publish (shell profile,
@@ -117,15 +122,8 @@ async function execute(cmd, index) {
   const queuedAt = Date.now();
   result.status = "queued";
   result.queuedMs = 0;
-  let cooperative = false;
-  try {
-    const configPath = path.join(root, ".orkestrator-test-scheduler.json");
-    const stat = fs.lstatSync(configPath);
-    if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 4096 && cmd.cwd === ".") {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      cooperative = config.version === 1 && Array.isArray(config.cooperativeCommands) && config.cooperativeCommands.includes(cmd.command);
-    }
-  } catch {}
+  const cooperative = cmd.cwd === "." && policy.cooperativeCommands.includes(cmd.command);
+  const profile = cmd.cwd === "." ? policy.profiles[cmd.command] ?? {} : {};
   // Occupy this command's local slot even while it waits on the host. Otherwise
   // later commands could leapfrog its dependency/resource reservation. A
   // cooperative command admits itself inside its child, so it does not consume
@@ -135,15 +133,19 @@ async function execute(cmd, index) {
   active.set(cmd.id, { cmd, stop: () => {}, weight: cooperative ? 0 : cmd.weight });
   const channel = path.join(directory, "scheduler-" + index + ".json");
   try {
+    scheduler ??= createScheduler();
+    const capacity = scheduler.capacity(), owner = scheduler.owner(root);
+    const resources = scheduler.resources(owner, cmd.resources);
     if (!cooperative) {
-      scheduler ??= createScheduler();
-      const capacity = scheduler.capacity(), owner = scheduler.owner(root);
-      const workers = cmd.weight === 2 ? capacity.workers : Math.max(1, Math.floor(capacity.workers / 2));
-      ticket = scheduler.enqueue({ owner, workers, memoryMiB: Math.min(capacity.memoryMiB, workers * 1024),
-        resources: cmd.resources.map(resource => resource === "*" ? "*" : "resource:" + createHash("sha256").update(resource).digest("hex")) });
+      const suiteBudget = Math.min(8, capacity.workers);
+      const workers = profile.workers ?? (cmd.weight === 2 ? suiteBudget : Math.max(1, Math.floor(suiteBudget / 2)));
+      ticket = scheduler.enqueue({ owner, workers, memoryMiB: profile.memoryMiB ?? Math.min(capacity.memoryMiB, workers * 1024), resources });
       tickets.add(ticket);
       persist();
-      while (scheduler.poll(ticket).state !== "running") {
+      while (true) {
+        const status = scheduler.poll(ticket);
+        result.queueReason = status.queueReason;
+        if (status.state === "running") break;
         result.queuedMs = Date.now() - queuedAt;
         if (stopping) throw new Error("Validation was cancelled while queued");
         if (result.queuedMs >= QUEUE_TIMEOUT_MS) throw new Error("Host capacity wait expired; command did not run");
@@ -190,7 +192,7 @@ async function execute(cmd, index) {
     delete env.ORKESTRATOR_TEST_PARENT_RESERVATION;
     delete env.ORKESTRATOR_VALIDATION_RESOURCES;
     if (!cooperative) env.ORKESTRATOR_TEST_PARENT_RESERVATION = run.id;
-    if (cooperative) env.ORKESTRATOR_VALIDATION_RESOURCES = JSON.stringify(cmd.resources.map(resource => resource === "*" ? "*" : "resource:" + createHash("sha256").update(resource).digest("hex")));
+    if (cooperative) env.ORKESTRATOR_VALIDATION_RESOURCES = JSON.stringify(resources);
     if (cooperative) { env.ORKESTRATOR_VALIDATION_SCHEDULER_STATE = channel; env.ORKESTRATOR_VALIDATION_HEAD_REF = run.plan.headRef; }
     const child = spawn("bash", ["-lc", shell, "review-validation", cmd.command, String(process.pid)], { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let failure;
@@ -205,6 +207,7 @@ async function execute(cmd, index) {
     try { if (ticket && child.pid) scheduler.registerChild(ticket, child.pid); }
     catch { stopJob("Validation reservation could not record its child; evidence is incomplete"); }
     let projection;
+    let legacyAt = performance.now(), legacyExecutionMs = 0, legacyQueuedMs = 0;
     // Measure staleness from the last successful read, not from spawn. Before
     // the first publish the channel does not exist, so every read fails; a cold
     // startup must not be mistaken for a dead runner.
@@ -218,14 +221,25 @@ async function execute(cmd, index) {
         if (value.version !== 1 || !["queued", "running", "completed", "incomplete"].includes(value.state) ||
             !Number.isSafeInteger(value.executionMs) || value.executionMs < 0 || !Number.isSafeInteger(value.queuedMs) || value.queuedMs < 0 ||
             !Number.isFinite(value.heartbeat) || Date.now() - value.heartbeat > COOPERATIVE_STALE_MS) throw new Error();
+        const readAt = performance.now();
+        if (value.version === 1 && value.timing !== "wall") {
+          // Old worktrees report summed group times. Integrate their state
+          // locally instead of treating those totals as elapsed deadlines.
+          if (projection?.state === "running") legacyExecutionMs += readAt - legacyAt;
+          else if (projection?.state === "queued") legacyQueuedMs += readAt - legacyAt;
+          value.executionMs = Math.floor(legacyExecutionMs);
+          value.queuedMs = Math.floor(legacyQueuedMs);
+        }
+        legacyAt = readAt;
         projection = value;
-        lastProgressAt = performance.now();
+        lastProgressAt = readAt;
         result.status = value.state === "queued" ? "queued" : "running";
         result.durationMs = value.executionMs;
         result.queuedMs = value.queuedMs;
         result.executionUpdatedAt = new Date(value.heartbeat).toISOString();
+        result.queueReason = typeof value.queueReason === "string" && value.queueReason.length > 0 && value.queueReason.length <= 1024 ? value.queueReason : undefined;
         const job = active.get(cmd.id);
-        if (job && value.state === "running") job.weight = cmd.weight;
+        if (job) job.weight = value.state === "running" ? cmd.weight : 0;
         if (value.queuedMs >= QUEUE_TIMEOUT_MS) stopJob("Host capacity wait expired; validation is incomplete");
         if (value.executionMs >= cmd.timeoutMs) stopJob("Validation command timed out");
       } catch {
@@ -258,6 +272,7 @@ async function execute(cmd, index) {
       result.exitCode = typeof code === "number" ? code : null;
       const unavailable = failure ?? (code === null ? "Validation command ended without an exit code" : code === 75 ? "Validation reported infrastructure unavailability (exit 75); inspect captured output" : cooperative && (!projection || !["completed", "incomplete"].includes(projection.state)) ? "Cooperative runner did not seal its scheduling result" : projection?.state === "incomplete" ? "One or more groups could not complete; inspect captured output" : null);
       result.status = unavailable ? "incomplete" : code === 0 ? "passed" : "failed";
+      delete result.queueReason;
       result.limitation = unavailable;
       result.durationMs = cooperative && projection ? projection.executionMs : Math.round(performance.now() - started);
       try {
@@ -328,11 +343,56 @@ async function main() {
       if (!headMatches()) throw new Error("Repository HEAD changed after discovery; rediscover validation against the current snapshot");
       noteWorktreeDrift();
     }
-    const pending = new Set(run.plan.commands.map((_, i) => i));
+    const configPath = path.join(root, ".orkestrator-test-scheduler.json");
+    try {
+      const stat = fs.lstatSync(configPath);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16384) throw new Error("Invalid test scheduling configuration file");
+      policy = parseSchedulingPolicy(JSON.parse(fs.readFileSync(configPath, "utf8")));
+    } catch (error) { if (error.code !== "ENOENT") throw error; }
+    // Execution metadata is separate from the immutable discovered plan, whose
+    // identity is checked on every reconnect by the controller.
+    const commands = run.plan.commands.map(cmd => {
+      const profile = cmd.cwd === "." ? policy.profiles[cmd.command] ?? {} : {};
+      return { ...cmd, resources: profile.resources ?? cmd.resources, weight: profile.workers === 1 ? 1 : cmd.weight };
+    });
+    const coveredBy = new Map();
+    const dependsOn = (index, target, seen = new Set()) => {
+      if (seen.has(index)) return false;
+      seen.add(index);
+      if (coveredBy.has(index)) {
+        const covering = coveredBy.get(index);
+        return covering === target || dependsOn(covering, target, seen);
+      }
+      return commands[index].dependsOn.some(id => {
+        const dependency = commands.findIndex(cmd => cmd.id === id);
+        return dependency === target || dependsOn(dependency, target, seen);
+      });
+    };
+    const candidates = commands.map((cmd, index) => ({ index, covers: cmd.cwd === "." ? policy.profiles[cmd.command]?.covers ?? [] : [] }))
+      .sort((a, b) => b.covers.length - a.covers.length || a.index - b.index);
+    for (const candidate of candidates) {
+      if (coveredBy.has(candidate.index)) continue;
+      for (const [index, cmd] of commands.entries()) {
+        if (index !== candidate.index && cmd.cwd === "." && !coveredBy.has(index) && !Array.from(coveredBy.values()).includes(index) && candidate.covers.includes(cmd.command) && !dependsOn(candidate.index, index) && cmd.dependsOn.every(id => dependsOn(candidate.index, commands.findIndex(dependency => dependency.id === id)))) coveredBy.set(index, candidate.index);
+      }
+    }
+    const pending = new Set(commands.map((_, i) => i));
     while ((pending.size || tasks.size) && !stopping) {
       for (const index of Array.from(pending)) {
-        const cmd = run.plan.commands[index];
-        const dependencies = cmd.dependsOn.map(id => run.results.find(result => result.id === id));
+        const cmd = commands[index];
+        const coveringIndex = coveredBy.get(index);
+        if (coveringIndex !== undefined) {
+          const covering = run.results[coveringIndex];
+          if (["pending", "queued", "running"].includes(covering.status)) continue;
+          Object.assign(run.results[index], { status: covering.status === "passed" ? "skipped" : "incomplete", limitation: covering.status === "passed" ? "Covered by " + covering.id + " (repository-declared coverage)" : "Covering validation " + covering.id + " did not pass" });
+          pending.delete(index);
+          persist();
+          continue;
+        }
+        const dependencies = cmd.dependsOn.map(id => {
+          const dependency = commands.findIndex(cmd => cmd.id === id);
+          return run.results[coveredBy.get(dependency) ?? dependency];
+        });
         if (dependencies.some(result => ["pending", "queued", "running"].includes(result.status))) continue;
         if (dependencies.some(result => result.status !== "passed")) {
           Object.assign(run.results[index], { status: "skipped", limitation: "A prerequisite did not pass" });
@@ -342,7 +402,7 @@ async function main() {
         }
         const jobs = Array.from(active.values());
         if (jobs.reduce((sum, job) => sum + job.weight, 0) + cmd.weight > 2) continue;
-        if (jobs.some(job => cmd.resources.includes("*") || job.cmd.resources.includes("*") || cmd.resources.some(resource => job.cmd.resources.includes(resource)))) continue;
+        if (jobs.some(job => cmd.resources.some(resource => ["*", "workspace:*", "host:*"].includes(resource)) || job.cmd.resources.some(resource => ["*", "workspace:*", "host:*"].includes(resource)) || cmd.resources.some(resource => job.cmd.resources.includes(resource)))) continue;
         pending.delete(index);
         const task = execute(cmd, index).catch(() => {
           run.error = "Validation execution or artifact capture failed";

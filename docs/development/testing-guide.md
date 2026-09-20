@@ -49,14 +49,15 @@ specifications, package tests, and intentionally malformed fixtures. Use
 | Group | Contents | Scheduling |
 | --- | --- | --- |
 | Workspace | Web, backend, desktop, public web, CLI, and protocol package tests | Turbo runs at most two package tasks; each package gets one Bun worker on a large host |
-| Root | Root tests plus agent artifact and fixture-server support tests | Receives the remaining worker budget, up to four workers on a large host |
+| Root | Root tests plus agent artifact and fixture-server support tests | Receives the remaining worker budget, up to three workers on a large host |
 | Bridges | ACP, Claude, Codex, Cursor, and Pi bridge tests | Turbo runs two bridge tasks, each with one Bun worker |
 | Protocol | Regeneration check for the committed Codex protocol lockfile | One independent command |
 
-All cooperating runs share a host budget: at most eight worker slots, leaving
+All cooperating runs share a host budget: eight worker slots by default, leaving
 two logical cores free where possible, plus a memory admission budget of 65% of
 physical memory. The protocol check reserves one slot too. Groups run together
 when they fit; smaller machines queue groups instead of spawning extra workers.
+The per-suite plan includes the protocol slot in its eight-slot ceiling.
 Each ordinary group reserves an estimated 1 GiB per worker (bounded by the host
 memory budget). These are admission estimates, not operating-system CPU or
 memory limits; measure peak use before increasing concurrency.
@@ -238,8 +239,11 @@ daemon must remain mounted or connected.
 Worker and memory reservations are fixed for each running group. Worktrees
 take fair turns, with FIFO ordering within a worktree. When the next eligible
 request is too large for the remaining capacity, it holds its place rather
-than allowing a stream of smaller jobs to starve it. This can deliberately
-leave some slots idle briefly. Repeated instances of the same group in one
+than allowing a stream of smaller jobs to starve it. A bounded exception allows
+an already-running resource holder's cohort to finish compatible work in spare
+slots (at most 32 admissions past any blocked request, FIFO within each worktree).
+Unrelated small jobs cannot bypass the waiter. This can deliberately leave some
+slots idle briefly. Repeated instances of the same group in one
 worktree also share an exclusive resource; iOS excludes every host job.
 
 Queueing is cancellable and bounded: the default wait budget is 30 minutes,
@@ -253,12 +257,19 @@ Configuration (use the same settings in all participating launchers):
 
 | Environment variable | Purpose |
 | --- | --- |
-| `ORKESTRATOR_TEST_HOST_WORKERS` | Lower the host worker ceiling |
+| `ORKESTRATOR_TEST_HOST_WORKERS` | Set the host ceiling (default 8; capped at logical CPUs minus 2, minimum 1, maximum 64) |
 | `ORKESTRATOR_TEST_HOST_MEMORY_MIB` | Lower the estimated host memory budget |
 | `ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS` | Wait deadline, from 1 second to 2 hours |
 | `ORKESTRATOR_TEST_SCHEDULER_DIR` | Private same-user SQLite directory; normally leave unset |
 | `ORKESTRATOR_COOPERATIVE_STARTUP_MS` | First-publish allowance before a cooperative runner is treated as stalled |
 | `ORKESTRATOR_COOPERATIVE_STALE_MS` | Silence after its last channel read before a cooperative runner is treated as stalled |
+
+The host ceiling and per-suite ceiling are separate. To evaluate more host
+parallelism, set `ORKESTRATOR_TEST_HOST_WORKERS=10` (or 12 on a sufficiently large
+host) consistently in all launchers, keeping the per-suite layout bounded. Compare
+cold and warm multi-worktree completion times, memory pressure/swap, process-tree
+peak memory, responsiveness, and test failures before adopting a higher setting.
+CPU percentage alone does not measure safe available capacity.
 
 An active queue keeps its original budget; changed settings apply when idle.
 The old `ORKESTRATOR_TEST_ALLOW_CONCURRENT` override no longer bypasses admission.
@@ -276,13 +287,42 @@ command; the UI rehydrates from that state. Cancellation removes pending tickets
 and terminates owned processes. A stale worker remains uncertain until explicitly
 cancelled, never automatically retried.
 
-Ordinary discovered commands reserve half the host workers (`weight: 1`) or the
-whole budget (`weight: 2`), plus named exclusive resources. These declarations
-must honestly describe internally parallel commands. This repository declares
-its exact aggregate commands in `.orkestrator-test-scheduler.json`: they instead
-reserve their constituent groups and publish bounded scheduling state through a
-private per-command channel, avoiding nested/double reservations. A cooperative
-runner's startup (shell profile, toolchain resolution, transpilation) is allowed
+Ordinary discovered commands reserve half the per-suite budget (`weight: 1`) or
+its whole budget (`weight: 2`), capped at eight slots even when the host ceiling
+is higher. Exact repository `commandProfiles` can declare smaller `workers` and
+`memoryMiB` requirements for known commands. These are estimates, not OS limits;
+profile requirements exceeding the available host budget fail as incomplete.
+
+Use `workspace:` resource names for workspace-local directories and services, and
+`workspace:*` to exclude other commands in the same worktree. Use `host:` names
+for shared ports, databases, or simulators; `host:*` excludes the whole host.
+Legacy unprefixed names and `*` retain host scope so older discovered plans do
+not silently lose exclusions. Repository-owned profiles override discovery's
+resource guesses for exact root-directory commands.
+
+This repository declares its aggregate commands in
+`.orkestrator-test-scheduler.json`. They reserve their constituent groups and
+publish bounded scheduling state through a private per-command channel, avoiding
+double reservations. `cooperativeCommands` lists eligible alternatives, not a
+checklist. `commandProfiles[command].covers` explicitly declares overlapping
+coverage: when both commands appear, the worker runs the covering command once,
+then records the redundant entry as skipped with its covering command ID. Failed
+coverage remains incomplete. Coverage is deduplicated only when the covering
+command also depends on the required prerequisites and no dependency cycle is
+introduced. Dependent checks wait for the actual covering result. The original plan stays immutable.
+
+Command timing counts wall time once: intervals with any executing group count
+as execution; intervals with only waiting groups count as queued; setup and idle
+gaps count as neither. Each ticket also keeps its own queue deadline. Parallel
+work never multiplies command timeouts. Older runner channels without the wall
+clock marker are timed from their observed state by the validation worker.
+
+Queue explanations (resource holder, worker slots, estimated memory, or fairness)
+are persisted with command results and survive inactive views and reconnects.
+Only bounded hashed worktree identifiers, process IDs, and resource counts appear
+in diagnostics, never command contents or credentials.
+
+A cooperative runner's startup (shell profile, toolchain resolution, transpilation) is allowed
 a generous first-publish window before it is considered stalled; staleness is
 then measured from its last successful read, not from spawn. A missing or stale
 cooperative heartbeat makes validation incomplete.
@@ -290,12 +330,13 @@ Declared exclusive resources also reach those groups: constituents of one
 command may share them internally, but another command cannot use them while
 an owning group is running.
 
-Discovery must use those exact entries as separate commands. An unconfigured
-wrapper that launches an aggregate runner while holding its own reservation
+Discovery must use selected entries verbatim as separate commands, choosing the
+smallest non-overlapping set that satisfies the repository requirements. An
+unconfigured wrapper that launches an aggregate runner while holding its own reservation
 stops with an explicit infrastructure limitation (exit 75), instead of waiting
 for its own capacity forever. Declare the wrapper's cooperation before using it.
 
-After admission, the worker (and each cooperative group) rechecks clean HEAD.
+After admission, the worker (and each cooperative group) rechecks HEAD.
 Changed snapshots require rediscovery rather than certifying stale code. One
 validation run still feeds the round's shared, hashed, immutable review artifacts;
 reviewers do not each launch full suites. `incomplete` evidence carries a reason

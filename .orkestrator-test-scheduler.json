@@ -1,4 +1,38 @@
 {
   "version": 1,
-  "cooperativeCommands": ["mise run test", "mise run test:all", "mise run test:changed"]
+  "cooperativeCommands": ["mise run test", "mise run test:all", "mise run test:changed"],
+  "commandProfiles": {
+    "mise run test:changed": {
+      "resources": ["workspace:*"]
+    },
+    "mise run test": {
+      "resources": ["workspace:*"],
+      "covers": ["mise run test:changed"]
+    },
+    "mise run test:all": {
+      "resources": ["workspace:*"],
+      "covers": ["mise run test", "mise run test:changed"]
+    },
+    "mise run format:check": {
+      "resources": [],
+      "workers": 1,
+      "memoryMiB": 256
+    },
+    "mise run lint": {
+      "resources": [],
+      "workers": 1,
+      "memoryMiB": 512
+    },
+    "mise tasks validate": {
+      "resources": [],
+      "workers": 1,
+      "memoryMiB": 128
+    },
+    "mise run test:browser": {
+      "resources": ["host:tcp:1422", "workspace:output/playwright"]
+    },
+    "mise run test:logged -- --name browser -- mise run test:browser": {
+      "resources": ["host:tcp:1422", "workspace:output/playwright"]
+    }
+  }
 }

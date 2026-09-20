@@ -177,7 +177,7 @@ describe("scripts/test-all.ts", () => {
 
     expect(workspaceGroup.args).toContain("--concurrency=2");
     expect(workspaceGroup.env).toEqual({ [WORKSPACE_WORKERS_ENV]: "1" });
-    expect(rootGroup.args).toContain("--parallel=4");
+    expect(rootGroup.args).toContain("--parallel=3");
     expect(rootGroup.args.slice(0, 2)).toEqual(["test", "./tests"]);
     expect(rootGroup.args).toContain("./e2e/agent-testing/artifact-sanitizer.test.ts");
     expect(rootGroup.args).toContain("./test-fixtures/agent-project/server.test.ts");
@@ -271,7 +271,7 @@ describe("scripts/test-all.ts", () => {
           Number.isFinite(cores) ? Math.floor(cores) : MIN_AGGREGATE_TEST_WORKERS,
         ),
       );
-      const aggregate = plan.root + plan.bridges + plan.workspace * plan.workspaceConcurrency;
+      const aggregate = 1 + plan.root + plan.bridges + plan.workspace * plan.workspaceConcurrency;
 
       // Exactly the budget, everywhere: `root` absorbs the integer-division
       // remainder, so the plan neither oversubscribes nor leaves workers idle.
@@ -297,9 +297,9 @@ describe("scripts/test-all.ts", () => {
 
   test("the root suite receives bounded additional large-host capacity", () => {
     const large = planWorkers(20);
-    expect(large.root).toBe(4);
+    expect(large.root).toBe(3);
     expect(large.workspaceConcurrency).toBe(2);
-    expect(large.root + large.bridges + large.workspace * large.workspaceConcurrency).toBe(
+    expect(1 + large.root + large.bridges + large.workspace * large.workspaceConcurrency).toBe(
       MAX_AGGREGATE_TEST_WORKERS,
     );
     // Beyond the cap the plan is constant: more cores must not multiply peak heap.

@@ -601,8 +601,8 @@ export const MAX_AGGREGATE_TEST_WORKERS = 8;
  */
 export const MIN_BRIDGE_WORKERS = 2;
 
-/** root(1) + bridges(2) + one worker for one workspace package task. */
-export const MIN_AGGREGATE_TEST_WORKERS = 1 + MIN_BRIDGE_WORKERS + 1;
+/** root(1) + bridges(2) + workspace(1) + protocol(1). */
+export const MIN_AGGREGATE_TEST_WORKERS = 1 + MIN_BRIDGE_WORKERS + 1 + 1;
 
 /**
  * The env var carrying the planned per-package worker count into the Turbo
@@ -633,9 +633,9 @@ export function planWorkers(cores: number): WorkerPlan {
   const workspaceConcurrency = budget >= 8 ? 2 : 1;
   const workspace = 1;
   // Root absorbs the remaining capacity. Capping the aggregate at eight leaves
-  // four root workers on large hosts: higher caps repeatedly starved
+  // three root workers plus a protocol slot on large hosts: higher caps repeatedly starved
   // subprocess fixtures and produced SIGTERM/SIGSEGV UI-worker crashes.
-  const root = Math.max(1, budget - bridges - workspace * workspaceConcurrency);
+  const root = Math.max(1, budget - 1 - bridges - workspace * workspaceConcurrency);
   return { workspace, workspaceConcurrency, root, bridges };
 }
 
@@ -646,7 +646,7 @@ export function buildConcurrentGroups(
 ): TestGroup[] {
   const workers = planWorkers(cores);
   // Groups may queue on tiny hosts, but no individual child may exceed the
-  // capacity it reserves. The legacy plan's four-worker floor is not a grant.
+  // capacity it reserves. The plan's minimum worker floor is not a grant.
   const capacity = Math.max(1, Math.floor(cores) || 1);
   workers.root = Math.min(capacity, workers.root);
   workers.bridges = Math.min(capacity, workers.bridges);

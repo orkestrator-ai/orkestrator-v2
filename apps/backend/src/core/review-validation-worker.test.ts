@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, chmod } from "node:fs/promises
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
   newReviewValidationRun,
@@ -629,7 +629,7 @@ admission.close(); process.exitCode = result.status ?? 1;
     owner: scheduler.owner(root),
     workers: 1,
     memoryMiB: 1,
-    resources: ["resource:" + createHash("sha256").update("shared-database").digest("hex")],
+    resources: scheduler.resources(scheduler.owner(root), ["shared-database"]),
   });
   try {
     await control(root, run);
@@ -672,6 +672,209 @@ test("a failed second artifact open becomes a metadata-only incomplete result", 
   expect(evidence[0]).toMatchObject({ status: "incomplete", stdoutPath: null, stderrPath: null });
 });
 
+test("repository profiles avoid redundant suites and preserve dependent checks and plan identity", async () => {
+  const { root, run } = await fixture([
+    command("changed", "touch .orkestrator/changed-ran"),
+    command("full", "touch .orkestrator/full-ran"),
+    command("all", "touch .orkestrator/all-ran"),
+    command("after", "touch .orkestrator/after-ran", { dependsOn: ["changed", "full"] }),
+  ]);
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: {
+        [run.plan.commands[1]!.command]: { covers: [run.plan.commands[0]!.command] },
+        [run.plan.commands[2]!.command]: {
+          covers: run.plan.commands.slice(0, 2).map((cmd) => cmd.command),
+        },
+      },
+    }),
+  );
+  const done = await completed(root, run);
+  expect(done.plan).toEqual(run.plan);
+  expect(done.results.map((result) => result.status)).toEqual([
+    "skipped",
+    "skipped",
+    "passed",
+    "passed",
+  ]);
+  expect(done.results[0]!.limitation).toContain("Covered by all");
+  expect(existsSync(path.join(root, ".orkestrator/changed-ran"))).toBe(false);
+  expect(existsSync(path.join(root, ".orkestrator/full-ran"))).toBe(false);
+  expect(existsSync(path.join(root, ".orkestrator/all-ran"))).toBe(true);
+  expect(existsSync(path.join(root, ".orkestrator/after-ran"))).toBe(true);
+});
+
+test("coverage does not remove prerequisites or turn a failed covering suite into success", async () => {
+  const { root, run } = await fixture([
+    command("setup", "touch .orkestrator/setup-ran"),
+    command("full", "exit 1", { dependsOn: ["setup"] }),
+    command("changed", "touch .orkestrator/changed-ran"),
+    command("after", "touch .orkestrator/after-ran", { dependsOn: ["changed"] }),
+  ]);
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: {
+        "exit 1": { covers: [run.plan.commands[0]!.command, run.plan.commands[2]!.command] },
+      },
+    }),
+  );
+  const done = await completed(root, run);
+  expect(done.results.map((result) => result.status)).toEqual([
+    "passed",
+    "failed",
+    "incomplete",
+    "skipped",
+  ]);
+  expect(existsSync(path.join(root, ".orkestrator/setup-ran"))).toBe(true);
+  expect(existsSync(path.join(root, ".orkestrator/changed-ran"))).toBe(false);
+});
+
+test("precise repository resource profiles admit lightweight checks with spare host capacity", async () => {
+  const { root, run } = await fixture([
+    command("small", "printf small", { resources: ["host:*"], weight: 2 }),
+  ]);
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { "printf small": { resources: [], workers: 1, memoryMiB: 64 } },
+    }),
+  );
+  const scheduler = createHostTestScheduler({
+    directory: path.join(root, ".orkestrator", "scheduler"),
+    workers: 2,
+    memoryMiB: 4096,
+  });
+  const blocker = scheduler.enqueue({ owner: "b".repeat(64), workers: 1, memoryMiB: 64 });
+  try {
+    const done = await completed(root, run);
+    expect(done.results[0]!.status).toBe("passed");
+    expect(done.plan).toEqual(run.plan);
+  } finally {
+    scheduler.release(blocker);
+    scheduler.close();
+  }
+});
+
+test("coverage aliases cannot introduce dependency cycles or bypass required setup", async () => {
+  const { root, run } = await fixture([
+    command("b", "printf b"),
+    command("d", "printf d"),
+    command("a", "printf a", { dependsOn: ["d"] }),
+    command("c", "printf c", { dependsOn: ["b"] }),
+    command("setup", "printf setup"),
+    command("narrow", "printf narrow", { dependsOn: ["setup"] }),
+    command("wide", "printf wide"),
+  ]);
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: {
+        "printf a": { covers: ["printf b"] },
+        "printf c": { covers: ["printf d"] },
+        "printf wide": { covers: ["printf narrow"] },
+      },
+    }),
+  );
+  const done = await completed(root, run);
+  expect(done.results.map((result) => result.status)).toEqual([
+    "skipped",
+    "passed",
+    "passed",
+    "passed",
+    "passed",
+    "passed",
+    "passed",
+  ]);
+});
+
+test("cooperative parallel groups do not multiply queue or execution deadlines", async () => {
+  const { root, run } = await cooperativeFixture(
+    [command("parallel", "bun parallel.ts", { weight: 2, timeoutMs: 1000 })],
+    {
+      "parallel.ts": `import { createTestAdmission } from __MODULE__;
+const admission = createTestAdmission(import.meta.dir, process.env, console.log);
+const jobs = ["a", "b"].map(name => admission.run({ name, command: "unused", args: [], workers: 1 }, async () => { await Bun.sleep(650); return { status: 0 }; }));
+await Bun.write(".orkestrator/enqueued", "ready");
+const results = await Promise.all(jobs);
+admission.close(); process.exitCode = results.some(result => result.status !== 0) ? 1 : 0;
+`,
+    },
+  );
+  const scheduler = createHostTestScheduler({
+    directory: path.join(root, ".orkestrator", "scheduler"),
+    workers: 2,
+    memoryMiB: 4096,
+  });
+  const blocker = scheduler.enqueue({ owner: "b".repeat(64), workers: 2, memoryMiB: 1 });
+  try {
+    await control(root, run, "start", { ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS: "1000" });
+    const deadline = Date.now() + 5000;
+    while (!existsSync(path.join(root, ".orkestrator/enqueued")) && Date.now() < deadline)
+      await Bun.sleep(20);
+    expect(existsSync(path.join(root, ".orkestrator/enqueued"))).toBe(true);
+    await Bun.sleep(650);
+    const waiting = await control(root, run, "status");
+    expect(waiting.results[0]!.status).toBe("queued");
+    expect(waiting.results[0]!.queueReason).toContain("worker slots");
+    scheduler.release(blocker);
+    const done = await completed(root, run);
+    expect(done.results[0]!.status).toBe("passed");
+    expect(done.results[0]!.durationMs).toBeLessThan(1000);
+    expect(done.results[0]!.queuedMs).toBeLessThan(1000);
+    expect(done.results[0]!.queueReason).toBeUndefined();
+  } finally {
+    scheduler.release(blocker);
+    scheduler.close();
+  }
+}, 15000);
+
+test("legacy cooperative channels are timed by observed state, not summed group totals", async () => {
+  const { root, run } = await cooperativeFixture(
+    [command("legacy", "bun legacy.ts", { timeoutMs: 1000 })],
+    {
+      "legacy.ts": `const publish = state => require("node:fs").writeFileSync(process.env.ORKESTRATOR_VALIDATION_SCHEDULER_STATE, JSON.stringify({ version: 1, state, heartbeat: Date.now(), executionMs: 9999999, queuedMs: 9999999 }));
+publish("running"); await Bun.sleep(250); publish("completed");`,
+    },
+  );
+  const done = await completed(root, run);
+  expect(done.results[0]!.status).toBe("passed");
+  expect(done.results[0]!.durationMs).toBeLessThan(1000);
+  expect(done.results[0]!.queuedMs).toBeLessThan(1000);
+});
+
+test("a cooperative command returning to the queue frees its local weight", async () => {
+  const { root, run } = await cooperativeFixture(
+    [
+      command("cooperative", "bun pause.ts", { weight: 2, timeoutMs: 10000 }),
+      command("gate", "sleep 0.4"),
+      command("independent", "touch .orkestrator/independent-ran", { dependsOn: ["gate"] }),
+    ],
+    {
+      "pause.ts": `const fs = require("node:fs");
+let state = "running";
+const publish = () => fs.writeFileSync(process.env.ORKESTRATOR_VALIDATION_SCHEDULER_STATE, JSON.stringify({ version: 1, state, heartbeat: Date.now(), executionMs: 0, queuedMs: 0 }));
+publish(); const heartbeat = setInterval(publish, 100);
+await Bun.sleep(700); state = "queued"; publish();
+const deadline = Date.now() + 4000;
+while (!fs.existsSync(".orkestrator/independent-ran") && Date.now() < deadline) await Bun.sleep(20);
+clearInterval(heartbeat); state = "completed"; publish();
+process.exitCode = fs.existsSync(".orkestrator/independent-ran") ? 0 : 1;`,
+    },
+  );
+  const done = await completed(root, run);
+  expect(done.results.map((result) => result.status)).toEqual(["passed", "passed", "passed"]);
+});
+
 test("a cooperative command queued on the host does not hold the local runner slot", async () => {
   const { root, run } = await cooperativeFixture(
     [
@@ -699,7 +902,7 @@ admission.close(); process.exitCode = result.status ?? 1;
     owner: scheduler.owner(root),
     workers: 1,
     memoryMiB: 1,
-    resources: ["resource:" + createHash("sha256").update("shared-database").digest("hex")],
+    resources: scheduler.resources(scheduler.owner(root), ["shared-database"]),
   });
   try {
     await control(root, run, "start", {

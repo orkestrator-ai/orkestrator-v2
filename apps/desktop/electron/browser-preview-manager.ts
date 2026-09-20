@@ -10,6 +10,7 @@ import type {
   WebContentsView,
   WebContentsViewConstructorOptions,
 } from "electron";
+import { randomUUID } from "node:crypto";
 import type {
   BrowserPreviewAnnotationStatus,
   BrowserPreviewAttachInput,
@@ -21,8 +22,8 @@ import type {
 import { createContextMenuTemplate, type MenuLike } from "./context-menu.js";
 import {
   BROWSER_PREVIEW_ANNOTATION_CANCEL_SCRIPT,
-  BROWSER_PREVIEW_ANNOTATION_START_SCRIPT,
   BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT,
+  browserPreviewAnnotationStartScript,
 } from "./browser-preview-annotation-script.js";
 
 type WebContentsViewConstructor = new (
@@ -36,6 +37,7 @@ interface ManagedPreview {
   loadGeneration: number;
   loading: boolean;
   error: string | null;
+  annotationSessionId?: string;
 }
 
 export interface BrowserPreviewManagerOptions {
@@ -54,6 +56,7 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
 const CLIPBOARD_USER_ACTIVATION_WINDOW_MS = 5_000;
 const MAX_ANNOTATION_SCREENSHOT_DIMENSION = 2_000;
+const MAX_ANNOTATION_SCREENSHOT_BYTES = 8 * 1024 * 1024;
 const CLIPBOARD_USER_ACTIVATION_INPUTS = new Set<InputEvent["type"]>([
   "mouseDown",
   "pointerDown",
@@ -212,8 +215,10 @@ function isElementDetails(value: unknown): value is BrowserPreviewElementDetails
 
 function parseAnnotationRuntimeStatus(
   value: unknown,
+  expectedSessionId: string | undefined,
 ):
   | { status: "inactive" | "active" | "cancelled" }
+  | { status: "error"; message: string }
   | { status: "submitted"; comment: string; element: BrowserPreviewElementDetails } {
   if (typeof value !== "string" || value.length > 65_536) return { status: "inactive" };
   let parsed: unknown;
@@ -222,9 +227,24 @@ function parseAnnotationRuntimeStatus(
   } catch {
     return { status: "inactive" };
   }
-  if (!isRecord(parsed) || typeof parsed.status !== "string") return { status: "inactive" };
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.status !== "string" ||
+    typeof parsed.sessionId !== "string" ||
+    parsed.sessionId !== expectedSessionId
+  ) {
+    return { status: "inactive" };
+  }
   if (parsed.status === "active" || parsed.status === "cancelled" || parsed.status === "inactive") {
     return { status: parsed.status };
+  }
+  if (
+    parsed.status === "error" &&
+    typeof parsed.message === "string" &&
+    parsed.message.trim().length > 0 &&
+    parsed.message.length <= 500
+  ) {
+    return { status: "error", message: parsed.message };
   }
   if (
     parsed.status === "submitted" &&
@@ -238,18 +258,40 @@ function parseAnnotationRuntimeStatus(
   return { status: "inactive" };
 }
 
+function pngDataUrlByteLength(dataUrl: string): number {
+  const prefix = "data:image/png;base64,";
+  if (!dataUrl.startsWith(prefix)) throw new Error("The browser frame did not return a PNG image");
+  const base64 = dataUrl.slice(prefix.length);
+  if (!base64 || base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+    throw new Error("The browser frame returned an invalid PNG image");
+  }
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return (base64.length / 4) * 3 - padding;
+}
+
 function annotationScreenshotDataUrl(image: NativeImage): string {
-  const size = image.getSize();
-  const longestSide = Math.max(size.width, size.height);
-  if (longestSide <= MAX_ANNOTATION_SCREENSHOT_DIMENSION) return image.toDataURL();
-  const scale = MAX_ANNOTATION_SCREENSHOT_DIMENSION / longestSide;
-  return image
-    .resize({
-      width: Math.max(1, Math.round(size.width * scale)),
-      height: Math.max(1, Math.round(size.height * scale)),
-      quality: "best",
-    })
-    .toDataURL();
+  const originalSize = image.getSize();
+  const longestSide = Math.max(originalSize.width, originalSize.height);
+  const initialScale = Math.min(1, MAX_ANNOTATION_SCREENSHOT_DIMENSION / longestSide);
+  let width = Math.max(1, Math.round(originalSize.width * initialScale));
+  let height = Math.max(1, Math.round(originalSize.height * initialScale));
+  let candidate = initialScale < 1 ? image.resize({ width, height, quality: "best" }) : image;
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const dataUrl = candidate.toDataURL();
+    const byteLength = pngDataUrlByteLength(dataUrl);
+    if (byteLength <= MAX_ANNOTATION_SCREENSHOT_BYTES) return dataUrl;
+    if (width === 1 && height === 1) break;
+    const byteScale = Math.sqrt(MAX_ANNOTATION_SCREENSHOT_BYTES / byteLength) * 0.92;
+    const scale = Math.min(0.85, Math.max(0.1, byteScale));
+    const nextWidth = Math.max(1, Math.floor(width * scale));
+    const nextHeight = Math.max(1, Math.floor(height * scale));
+    width = nextWidth === width && width > 1 ? width - 1 : nextWidth;
+    height = nextHeight === height && height > 1 ? height - 1 : nextHeight;
+    candidate = image.resize({ width, height, quality: "best" });
+  }
+
+  throw new Error("The browser screenshot is too large to save. Try a smaller preview window.");
 }
 
 function validateBounds(bounds: BrowserPreviewBounds, zoomFactor: number): Rectangle {
@@ -388,7 +430,17 @@ export class BrowserPreviewManager {
 
   async startAnnotation(tabId: string): Promise<BrowserPreviewAnnotationStatus> {
     const preview = this.get(tabId);
-    await preview.view.webContents.executeJavaScript(BROWSER_PREVIEW_ANNOTATION_START_SCRIPT, true);
+    const sessionId = randomUUID();
+    preview.annotationSessionId = sessionId;
+    try {
+      await preview.view.webContents.executeJavaScript(
+        browserPreviewAnnotationStartScript(sessionId),
+        true,
+      );
+    } catch (error) {
+      delete preview.annotationSessionId;
+      throw error;
+    }
     return { status: "active" };
   }
 
@@ -398,21 +450,31 @@ export class BrowserPreviewManager {
       BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT,
       true,
     );
-    const status = parseAnnotationRuntimeStatus(encoded);
-    if (status.status !== "submitted") return status;
+    const status = parseAnnotationRuntimeStatus(encoded, preview.annotationSessionId);
+    if (status.status === "active") return status;
+    if (status.status !== "submitted") {
+      delete preview.annotationSessionId;
+      await preview.view.webContents
+        .executeJavaScript(BROWSER_PREVIEW_ANNOTATION_CANCEL_SCRIPT, true)
+        .catch(() => undefined);
+      return status;
+    }
 
     const screenshot = await preview.view.webContents.capturePage();
+    const screenshotDataUrl = annotationScreenshotDataUrl(screenshot);
     await preview.view.webContents
       .executeJavaScript(BROWSER_PREVIEW_ANNOTATION_CANCEL_SCRIPT, true)
       .catch(() => undefined);
+    delete preview.annotationSessionId;
     return {
       ...status,
-      screenshotDataUrl: annotationScreenshotDataUrl(screenshot),
+      screenshotDataUrl,
     };
   }
 
   async cancelAnnotation(tabId: string): Promise<void> {
     const preview = this.get(tabId);
+    delete preview.annotationSessionId;
     await preview.view.webContents
       .executeJavaScript(BROWSER_PREVIEW_ANNOTATION_CANCEL_SCRIPT, true)
       .catch(() => undefined);

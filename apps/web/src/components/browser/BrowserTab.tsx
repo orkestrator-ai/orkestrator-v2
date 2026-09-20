@@ -143,7 +143,6 @@ export function BrowserTab({
       0,
     );
   });
-  const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
   const nativeBrowserPreview = hasNativeBrowserPreview();
   const browserPreviewSupported = (() => {
     try {
@@ -179,6 +178,20 @@ export function BrowserTab({
   const [hasBlockingOverlay, setHasBlockingOverlay] = useState(false);
   const [annotationMode, setAnnotationMode] = useState(false);
   const [annotationSaving, setAnnotationSaving] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const stopAnnotationForPageChange = useCallback(() => {
+    if (!annotationMode) return;
+    setAnnotationMode(false);
+    void cancelBrowserPreviewAnnotation(tabId).catch(() => undefined);
+  }, [annotationMode, tabId]);
 
   const applyNativeSurfaceState = useCallback(
     (state: BrowserPreviewState | null) => {
@@ -226,6 +239,7 @@ export function BrowserTab({
     const refreshChanged = refreshRequestId !== previousRefreshRequestId.current;
     previousRefreshRequestId.current = refreshRequestId;
     if (refreshChanged && refreshRequestId > 0 && currentUrl) {
+      stopAnnotationForPageChange();
       setIsLoading(true);
       if (nativeBrowserPreview && nativeAttachedRef.current) {
         void reloadBrowserPreview(tabId)
@@ -238,7 +252,14 @@ export function BrowserTab({
         setLoadRevision((revision) => revision + 1);
       }
     }
-  }, [applyNativeState, currentUrl, nativeBrowserPreview, refreshRequestId, tabId]);
+  }, [
+    applyNativeState,
+    currentUrl,
+    nativeBrowserPreview,
+    refreshRequestId,
+    stopAnnotationForPageChange,
+    tabId,
+  ]);
 
   useEffect(() => {
     if (!nativeBrowserPreview || !browserPreviewSupported) return;
@@ -368,6 +389,7 @@ export function BrowserTab({
         return;
       }
 
+      stopAnnotationForPageChange();
       setError(null);
       setAddress(next.displayUrl);
       setCurrentUrl(next.displayUrl);
@@ -411,7 +433,14 @@ export function BrowserTab({
           });
       }
     },
-    [applyNativeState, environmentId, nativeBrowserPreview, tabId, updateTabBrowserUrl],
+    [
+      applyNativeState,
+      environmentId,
+      nativeBrowserPreview,
+      stopAnnotationForPageChange,
+      tabId,
+      updateTabBrowserUrl,
+    ],
   );
 
   const handleSubmit = useCallback(
@@ -425,6 +454,7 @@ export function BrowserTab({
   const moveThroughHistory = useCallback(
     (offset: -1 | 1) => {
       if (nativeBrowserPreview) {
+        stopAnnotationForPageChange();
         // Chromium owns this preview's history. The tracked array only records
         // address-bar navigations, so an in-preview link click already made the
         // two diverge; forcing a tracked address back onto the surface would
@@ -453,6 +483,7 @@ export function BrowserTab({
       environmentId,
       nativeBrowserPreview,
       navigate,
+      stopAnnotationForPageChange,
       tabId,
       updateTabBrowserUrl,
     ],
@@ -460,6 +491,7 @@ export function BrowserTab({
 
   const reload = useCallback(() => {
     if (!currentUrl) return;
+    stopAnnotationForPageChange();
     setIsLoading(true);
     if (nativeBrowserPreview && nativeAttachedRef.current) {
       void reloadBrowserPreview(tabId)
@@ -471,7 +503,7 @@ export function BrowserTab({
       return;
     }
     setLoadRevision((revision) => revision + 1);
-  }, [applyNativeState, currentUrl, nativeBrowserPreview, tabId]);
+  }, [applyNativeState, currentUrl, nativeBrowserPreview, stopAnnotationForPageChange, tabId]);
 
   const addSubmittedAnnotation = useCallback(
     async (submission: Extract<BrowserPreviewAnnotationStatus, { status: "submitted" }>) => {
@@ -482,18 +514,23 @@ export function BrowserTab({
       if (openNativeTabs.length === 0) {
         throw new Error("Open a native agent session before adding a browser annotation");
       }
-      if (!environment) throw new Error("The environment is not available");
+      const currentEnvironment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+      if (!currentEnvironment) throw new Error("The environment is not available");
 
       const annotationId = crypto.randomUUID();
       const filename = `browser-annotation-${Date.now()}-${annotationId.slice(0, 8)}.png`;
       const relativePath = `.orkestrator/annotations/${filename}`;
       const base64Data = pngBase64FromDataUrl(submission.screenshotDataUrl);
       let screenshotPath: string;
-      if (environment.containerId) {
-        await writeContainerFile(environment.containerId, relativePath, base64Data);
+      if (currentEnvironment.containerId) {
+        await writeContainerFile(currentEnvironment.containerId, relativePath, base64Data);
         screenshotPath = `/workspace/${relativePath}`;
-      } else if (environment.worktreePath) {
-        screenshotPath = await writeLocalFile(environment.worktreePath, relativePath, base64Data);
+      } else if (currentEnvironment.worktreePath) {
+        screenshotPath = await writeLocalFile(
+          currentEnvironment.worktreePath,
+          relativePath,
+          base64Data,
+        );
       } else {
         throw new Error("The environment has no workspace for the browser screenshot");
       }
@@ -537,7 +574,7 @@ export function BrowserTab({
           : undefined,
       );
     },
-    [environment, environmentId],
+    [environmentId],
   );
 
   const toggleAnnotationMode = useCallback(() => {
@@ -571,10 +608,21 @@ export function BrowserTab({
       polling = true;
       try {
         const status = await getBrowserPreviewAnnotationStatus(tabId);
-        if (disposed) return;
+        if (!mountedRef.current) return;
         if (status.status === "active") return;
         setAnnotationMode(false);
-        if (status.status !== "submitted") return;
+        if (status.status === "cancelled") return;
+        if (status.status === "inactive") {
+          toast.error("Annotation mode stopped", {
+            description: "The preview changed or reloaded. Start annotation mode and try again.",
+          });
+          return;
+        }
+        if (status.status === "error") {
+          toast.error("Could not capture browser annotation", { description: status.message });
+          return;
+        }
+        if (!("screenshotDataUrl" in status)) return;
         setAnnotationSaving(true);
         try {
           await addSubmittedAnnotation(status);
@@ -583,7 +631,7 @@ export function BrowserTab({
             description: errorMessage(annotationError),
           });
         } finally {
-          if (!disposed) setAnnotationSaving(false);
+          if (mountedRef.current) setAnnotationSaving(false);
         }
       } catch (annotationError) {
         if (!disposed) {

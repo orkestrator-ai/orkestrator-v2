@@ -6,7 +6,7 @@
  * through executeJavaScript and captures the preview only after submission, so
  * the screenshot contains the selected-element highlight.
  */
-function installBrowserPreviewAnnotationRuntime(): void {
+function installBrowserPreviewAnnotationRuntime(sessionId: string): void {
   const runtimeKey = "__orkestratorBrowserAnnotationRuntime__";
   const rootAttribute = "data-orkestrator-annotation-ui";
   const runtimeWindow = window as unknown as Window & Record<string, unknown>;
@@ -134,20 +134,22 @@ function installBrowserPreviewAnnotationRuntime(): void {
     const computed = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
     const attributes: Record<string, string> = {};
-    for (const attribute of Array.from(element.attributes).slice(0, 100)) {
-      attributes[attribute.name.slice(0, 200)] = attribute.value.slice(0, 1000);
+    for (const attribute of Array.from(element.attributes).slice(0, 16)) {
+      attributes[attribute.name.slice(0, 100)] = attribute.value.slice(0, 300);
     }
     const hierarchy: Array<Record<string, unknown>> = [];
     let ancestor: Element | null = element;
-    while (ancestor && hierarchy.length < 32) {
+    while (ancestor && hierarchy.length < 8) {
       hierarchy.unshift({
-        tagName: ancestor.tagName.toLowerCase(),
-        selector: selectorFor(ancestor),
-        id: ancestor.id || null,
-        classNames: Array.from(ancestor.classList).slice(0, 30),
-        role: ancestor.getAttribute("role"),
-        ariaLabel: ancestor.getAttribute("aria-label"),
-        testId: ancestor.getAttribute("data-testid"),
+        tagName: ancestor.tagName.toLowerCase().slice(0, 100),
+        selector: selectorFor(ancestor).slice(0, 400),
+        id: clampText(ancestor.id, 200) || null,
+        classNames: Array.from(ancestor.classList)
+          .slice(0, 4)
+          .map((className) => className.slice(0, 60)),
+        role: clampText(ancestor.getAttribute("role"), 200) || null,
+        ariaLabel: clampText(ancestor.getAttribute("aria-label"), 200) || null,
+        testId: clampText(ancestor.getAttribute("data-testid"), 200) || null,
       });
       ancestor = ancestor.parentElement;
     }
@@ -181,26 +183,30 @@ function installBrowserPreviewAnnotationRuntime(): void {
       "justify-content",
     ];
     const styles: Record<string, string> = {};
-    for (const property of styleProperties) styles[property] = computed.getPropertyValue(property);
+    for (const property of styleProperties) {
+      styles[property] = computed.getPropertyValue(property).slice(0, 200);
+    }
     return {
-      pageUrl: location.href.slice(0, 4000),
-      pageTitle: document.title.slice(0, 1000),
+      pageUrl: location.href.slice(0, 2000),
+      pageTitle: document.title.slice(0, 500),
       viewport: {
         width: window.innerWidth,
         height: window.innerHeight,
         devicePixelRatio: window.devicePixelRatio,
       },
-      tagName: element.tagName.toLowerCase(),
-      selector: selectorFor(element),
-      cssPath: cssPathFor(element),
-      xpath: xpathFor(element),
-      id: element.id || null,
-      classNames: Array.from(element.classList).slice(0, 50),
-      role: element.getAttribute("role"),
-      ariaLabel: element.getAttribute("aria-label"),
-      testId: element.getAttribute("data-testid"),
-      text: clampText(element.textContent, 4000),
-      outerHtml: element.outerHTML.slice(0, 12000),
+      tagName: element.tagName.toLowerCase().slice(0, 100),
+      selector: selectorFor(element).slice(0, 1000),
+      cssPath: cssPathFor(element).slice(0, 4000),
+      xpath: xpathFor(element).slice(0, 4000),
+      id: clampText(element.id, 500) || null,
+      classNames: Array.from(element.classList)
+        .slice(0, 20)
+        .map((className) => className.slice(0, 100)),
+      role: clampText(element.getAttribute("role"), 500) || null,
+      ariaLabel: clampText(element.getAttribute("aria-label"), 500) || null,
+      testId: clampText(element.getAttribute("data-testid"), 500) || null,
+      text: clampText(element.textContent, 2000),
+      outerHtml: element.outerHTML.slice(0, 6000),
       attributes,
       rect: {
         x: rect.x,
@@ -226,12 +232,48 @@ function installBrowserPreviewAnnotationRuntime(): void {
       width: `${Math.max(0, rect.width)}px`,
       height: `${Math.max(0, rect.height)}px`,
     });
-    const computed = getComputedStyle(element);
     const tag = element.tagName.toLowerCase();
-    tooltip.innerHTML = [
-      `<div style="display:flex;justify-content:space-between;gap:18px"><strong style="font-weight:700">${tag.replaceAll("<", "&lt;")}</strong><span style="color:#dbeafe">${Math.round(rect.width)}×${Math.round(rect.height)}</span></div>`,
-      `<div style="display:grid;grid-template-columns:48px minmax(0,1fr);gap:3px 10px;margin-top:5px;color:#a9b7d0"><span>color</span><span style="color:#f8fbff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${computed.color}</span><span>font</span><span style="color:#f8fbff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${computed.fontSize} ${computed.fontFamily}</span></div>`,
-    ].join("");
+    const computed = getComputedStyle(element);
+    tooltip.replaceChildren();
+    const summary = document.createElement("div");
+    Object.assign(summary.style, {
+      display: "flex",
+      justifyContent: "space-between",
+      gap: "18px",
+    });
+    const strong = document.createElement("strong");
+    strong.style.fontWeight = "700";
+    strong.textContent = tag;
+    const dimensions = document.createElement("span");
+    dimensions.style.color = "#dbeafe";
+    dimensions.textContent = `${Math.round(rect.width)}×${Math.round(rect.height)}`;
+    summary.append(strong, dimensions);
+    const details = document.createElement("div");
+    Object.assign(details.style, {
+      display: "grid",
+      gridTemplateColumns: "48px minmax(0,1fr)",
+      gap: "3px 10px",
+      marginTop: "5px",
+      color: "#a9b7d0",
+    });
+    const tooltipRows: Array<[string, string]> = [
+      ["color", computed.color],
+      ["font", `${computed.fontSize} ${computed.fontFamily}`],
+    ];
+    for (const [label, value] of tooltipRows) {
+      const labelNode = document.createElement("span");
+      labelNode.textContent = label;
+      const valueNode = document.createElement("span");
+      Object.assign(valueNode.style, {
+        color: "#f8fbff",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      });
+      valueNode.textContent = value;
+      details.append(labelNode, valueNode);
+    }
+    tooltip.append(summary, details);
     tooltip.style.display = selected ? "none" : "block";
     const tooltipWidth = 300;
     const left = Math.min(Math.max(8, rect.left), Math.max(8, innerWidth - tooltipWidth - 8));
@@ -273,9 +315,7 @@ function installBrowserPreviewAnnotationRuntime(): void {
   };
   const cancel = (): void => {
     status = "cancelled";
-    highlight.style.display = "none";
-    tooltip.style.display = "none";
-    panel.style.display = "none";
+    removeInspector();
   };
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape") return;
@@ -328,7 +368,7 @@ function installBrowserPreviewAnnotationRuntime(): void {
   window.addEventListener("scroll", onViewportChange, true);
   window.addEventListener("resize", onViewportChange);
 
-  const destroy = (): void => {
+  function removeInspector(): void {
     document.removeEventListener("pointermove", onPointerMove, true);
     document.removeEventListener("click", onClick, true);
     document.removeEventListener("keydown", onKeyDown, true);
@@ -337,16 +377,21 @@ function installBrowserPreviewAnnotationRuntime(): void {
     highlight.remove();
     tooltip.remove();
     panel.remove();
+  }
+  const destroy = (): void => {
+    removeInspector();
     if (runtimeWindow[runtimeKey] === runtime) delete runtimeWindow[runtimeKey];
   };
   const runtime = {
-    getStatus: () => (submitted ? { status, ...submitted } : { status }),
+    getStatus: () => (submitted ? { status, sessionId, ...submitted } : { status, sessionId }),
     destroy,
   };
   runtimeWindow[runtimeKey] = runtime;
 }
 
-export const BROWSER_PREVIEW_ANNOTATION_START_SCRIPT = `(${installBrowserPreviewAnnotationRuntime.toString()})();`;
+export function browserPreviewAnnotationStartScript(sessionId: string): string {
+  return `(${installBrowserPreviewAnnotationRuntime.toString()})(${JSON.stringify(sessionId)});`;
+}
 
 export const BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT = `(() => {
   try {
@@ -355,7 +400,13 @@ export const BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT = `(() => {
       ? runtime.getStatus()
       : { status: "inactive" };
     const encoded = JSON.stringify(value);
-    return encoded.length <= 65536 ? encoded : JSON.stringify({ status: "cancelled" });
+    return encoded.length <= 65536
+      ? encoded
+      : JSON.stringify({
+          status: "error",
+          sessionId: typeof value?.sessionId === "string" ? value.sessionId : "",
+          message: "The selected element contains too much page data. Try a smaller element.",
+        });
   } catch {
     return JSON.stringify({ status: "inactive" });
   }

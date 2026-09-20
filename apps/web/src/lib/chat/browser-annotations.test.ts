@@ -3,6 +3,11 @@ import type { BrowserPreviewElementDetails } from "@orkestrator/protocol/browser
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
+  MAX_TRANSCRIPT_ANNOTATIONS,
+  MAX_TRANSCRIPT_ANNOTATION_TEXT_LENGTH,
+} from "./transcript-annotations";
+import { MAX_PROMPT_ATTACHMENTS } from "./workspace-attachments";
+import {
   addBrowserAnnotationToOpenNativeSessions,
   formatBrowserElementAnnotation,
 } from "./browser-annotations";
@@ -105,6 +110,37 @@ describe("browser annotations", () => {
     expect(text).toContain("/workspace/.orkestrator/annotations/save.png");
   });
 
+  test("budgets large details while retaining selectors, viewport, and a truncation marker", () => {
+    const text = formatBrowserElementAnnotation(
+      {
+        ...element,
+        pageUrl: `http://localhost:3000/${"p".repeat(4_000)}`,
+        selector: "s".repeat(2_000),
+        cssPath: "c".repeat(8_000),
+        xpath: "x".repeat(8_000),
+        attributes: Object.fromEntries(
+          Array.from({ length: 100 }, (_, index) => [`data-${index}`, "a".repeat(1_000)]),
+        ),
+        styles: Object.fromEntries(
+          Array.from({ length: 100 }, (_, index) => [`style-${index}`, "v".repeat(1_000)]),
+        ),
+        text: "t".repeat(4_000),
+        outerHtml: `<div>${"markup".repeat(2_000)}</div>`,
+      },
+      "/workspace/save.png",
+    );
+
+    expect(text.length).toBeLessThanOrEqual(MAX_TRANSCRIPT_ANNOTATION_TEXT_LENGTH);
+    expect(text).toContain("Best selector:");
+    expect(text).toContain("CSS path:");
+    expect(text).toContain("XPath:");
+    expect(text).toContain("Viewport: 1280×720 at 2x device pixel ratio");
+    expect(text).toContain("[Additional browser element details omitted");
+    expect(
+      text.endsWith("[Additional browser element details omitted to fit the annotation limit.]"),
+    ).toBe(true);
+  });
+
   test("adds one shared annotation and screenshot to every open native session", () => {
     const annotation = {
       id: "browser-reference",
@@ -134,5 +170,63 @@ describe("browser annotations", () => {
         attachments: [screenshot],
       });
     }
+  });
+
+  test("reports full annotation and screenshot composers independently", () => {
+    const fullAnnotations = Array.from({ length: MAX_TRANSCRIPT_ANNOTATIONS }, (_, index) => ({
+      id: `annotation-${index}`,
+      text: `reference-${index}`,
+      comment: "",
+    }));
+    const fullAttachments = Array.from({ length: MAX_PROMPT_ATTACHMENTS }, (_, index) => ({
+      id: `attachment-${index}`,
+      type: "image" as const,
+      path: `/workspace/${index}.png`,
+      name: `${index}.png`,
+    }));
+    useNativeComposeStore.getState().updateDraft("env-env-1:agent-1", {
+      annotations: fullAnnotations,
+    });
+    useNativeComposeStore.getState().updateDraft("env-env-1:agent-2", {
+      attachments: fullAttachments,
+    });
+
+    expect(
+      addBrowserAnnotationToOpenNativeSessions({
+        environmentId: "env-1",
+        annotation: {
+          id: "new-reference",
+          source: "browser",
+          text: "Browser element annotation",
+          comment: "Fix it",
+        },
+        screenshot: {
+          id: "new-screenshot",
+          annotationId: "new-reference",
+          type: "image",
+          path: "/workspace/new.png",
+          name: "new.png",
+        },
+      }),
+    ).toEqual({ sessionCount: 1, annotationSkippedCount: 1, screenshotSkippedCount: 1 });
+  });
+
+  test("reports when every native session has a full annotation composer", () => {
+    const fullAnnotations = Array.from({ length: MAX_TRANSCRIPT_ANNOTATIONS }, (_, index) => ({
+      id: `annotation-${index}`,
+      text: `reference-${index}`,
+      comment: "",
+    }));
+    for (const sessionKey of ["env-env-1:agent-1", "env-env-1:agent-2"]) {
+      useNativeComposeStore.getState().updateDraft(sessionKey, { annotations: fullAnnotations });
+    }
+
+    expect(
+      addBrowserAnnotationToOpenNativeSessions({
+        environmentId: "env-1",
+        annotation: { id: "new", text: "reference", comment: "" },
+        screenshot: { id: "shot", type: "image", path: "/workspace/new.png", name: "new.png" },
+      }),
+    ).toEqual({ sessionCount: 0, annotationSkippedCount: 2, screenshotSkippedCount: 0 });
   });
 });

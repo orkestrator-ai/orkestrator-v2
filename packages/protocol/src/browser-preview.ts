@@ -77,6 +77,7 @@ export interface BrowserPreviewElementDetails {
 
 export type BrowserPreviewAnnotationStatus =
   | { status: "inactive" | "active" | "cancelled" }
+  | { status: "error"; message: string }
   | {
       status: "submitted";
       comment: string;

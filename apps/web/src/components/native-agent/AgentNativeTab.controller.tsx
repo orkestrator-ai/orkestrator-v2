@@ -1074,10 +1074,22 @@ export function SharedNativeAgentController({
         draft.attachments,
         adapter.capabilities.attachments,
       );
-      const submittedAttachments =
-        selectedModel?.supportsImageInput === false
-          ? providerSupportedAttachments.filter((attachment) => attachment.type !== "image")
-          : providerSupportedAttachments;
+      const providerSupportedIds = new Set(
+        providerSupportedAttachments.map((attachment) => attachment.id),
+      );
+      const unsupportedAttachments = draft.attachments.filter(
+        (attachment) =>
+          !providerSupportedIds.has(attachment.id) ||
+          (attachment.type === "image" && selectedModel?.supportsImageInput === false),
+      );
+      if (unsupportedAttachments.length > 0) {
+        const names = unsupportedAttachments.map((attachment) => attachment.name).join(", ");
+        setSendError(
+          `${unsupportedAttachments.length === 1 ? "This attachment is" : "These attachments are"} not supported by the selected agent and model: ${names}. Remove ${unsupportedAttachments.length === 1 ? "it" : "them"} or choose a compatible model before sending.`,
+        );
+        return false;
+      }
+      const submittedAttachments = providerSupportedAttachments;
       const submittedBrowserAnnotationIds = draft.annotations
         .filter((annotation) => annotation.source === "browser")
         .map((annotation) => annotation.id);

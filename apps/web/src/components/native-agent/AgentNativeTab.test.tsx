@@ -6623,6 +6623,48 @@ describe("AgentNativeTab", () => {
       );
     });
 
+    test("blocks sending a visible image that the selected model cannot read", async () => {
+      seedProjection({
+        composer: {
+          models: [
+            {
+              platform: "codex",
+              id: "text-only-model",
+              label: "Text Only",
+              supportsImageInput: false,
+              reasoning: [],
+            },
+          ],
+          selectedModelId: "text-only-model",
+        },
+      });
+      const tabId = "tab-unsupported-image-send";
+      const sessionKey = createSessionKey("env-1", tabId);
+      const image = {
+        id: "visible-image",
+        type: "image" as const,
+        path: "/workspace/screenshot.png",
+        previewUrl: "blob:preview",
+        name: "screenshot.png",
+      };
+      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      await screen.findByTestId("shared-native-compose-bar");
+      act(() => {
+        useNativeComposeStore.getState().updateDraft(sessionKey, {
+          text: "Describe this image",
+          attachments: [image],
+        });
+      });
+
+      fireEvent.click(await screen.findByTitle("Send"));
+
+      expect(
+        await screen.findByText(/This attachment is not supported.*screenshot\.png/),
+      ).toBeTruthy();
+      expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments).toEqual([image]);
+    });
+
     test("consumes a submitted browser annotation from the other native drafts", async () => {
       seedProjection();
       const tabId = "tab-browser-annotation-send";

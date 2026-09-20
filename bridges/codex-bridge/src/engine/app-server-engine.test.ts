@@ -267,7 +267,7 @@ describe("thread lifecycle", () => {
     });
     const config: EngineTurnConfig = {
       ...BUILD,
-      agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "tab-secret" },
+      agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "tab-secret", design: true },
     };
     await h.engine.start();
     const started = await h.engine.startThread({ config });
@@ -286,6 +286,12 @@ describe("thread lifecycle", () => {
       expect(
         h.child().requests.find((request) => request.method === method)?.params.config,
       ).toEqual({
+        "mcp_servers.orkestrator-design": {
+          url: "http://127.0.0.1:4567/design-mcp",
+          http_headers: { Authorization: "Bearer tab-secret" },
+          required: false,
+          startup_timeout_sec: 3,
+        },
         "mcp_servers.orkestrator": {
           url: "http://127.0.0.1:4567/mcp",
           http_headers: { Authorization: "Bearer tab-secret" },

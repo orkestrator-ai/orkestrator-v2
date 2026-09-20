@@ -145,6 +145,13 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     return { ...common, type };
   }
 
+  if (type === "design-canvas") {
+    if (!isRecord(value.designCanvasData)) return null;
+    const canvasId = nonEmptyString(value.designCanvasData.canvasId);
+    if (!canvasId || !/^[0-9a-f-]{36}$/i.test(canvasId)) return null;
+    return { id, type: "design-canvas", designCanvasData: { canvasId } };
+  }
+
   if (type === "browser") {
     if (!isRecord(value.browserData)) return null;
     const url = optionalString(value.browserData.url) ?? "";

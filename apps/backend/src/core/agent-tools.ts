@@ -1,3 +1,5 @@
+import { createDesignMcp } from "./design-tools.js";
+import type { DesignService } from "./design-service.js";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { toNodeHandler } from "@modelcontextprotocol/node";
@@ -35,6 +37,7 @@ export const ORKESTRATOR_AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
 export const ORKESTRATOR_AGENT_MCP_SERVER_NAME = "orkestrator";
 
 export type AgentToolConnection = {
+  design?: boolean;
   url: string;
   token: string;
   /** Signed one-attempt argument used with the persistent OpenCode broker. */
@@ -486,12 +489,14 @@ export class AgentToolsServer {
   private readonly credentialsByEnvironment = new Map<string, StoredCredential>();
   private readonly scopesByDigest = new Map<string, AgentToolScope>();
   private lifecycle: Promise<void> = Promise.resolve();
+  private designRequests = 0;
   private readonly mailRateWindows = new Map<string, number[]>();
 
   constructor(
     private readonly storage: StorageService,
     private readonly bindAddress = "0.0.0.0",
     private readonly workflowResults?: WorkflowResultService,
+    private readonly design?: DesignService,
   ) {}
 
   async start(): Promise<void> {
@@ -578,6 +583,7 @@ export class AgentToolsServer {
     return {
       url: `http://${hostname}:${this.port}${AGENT_MCP_PATH}`,
       token: credential.token,
+      ...(this.design ? { design: true } : {}),
     };
   }
 
@@ -675,7 +681,7 @@ export class AgentToolsServer {
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://agent-tools.invalid");
-    if (url.pathname !== AGENT_MCP_PATH) {
+    if (url.pathname !== AGENT_MCP_PATH && !(url.pathname === "/design-mcp" && this.design)) {
       jsonResponse(response, 404, { error: "Not found" });
       return;
     }
@@ -699,39 +705,65 @@ export class AgentToolsServer {
       return;
     }
 
-    let body: unknown;
-    try {
-      body = await readJsonBody(request);
-    } catch (error) {
-      if (error instanceof RequestBodyTooLargeError) {
-        jsonResponse(response, 413, { error: error.message });
+    if (url.pathname === "/design-mcp") {
+      const environment = await this.storage.getEnvironment(scope.environmentId);
+      if (
+        scope.workflowResultKey ||
+        scope.workflowResultBroker ||
+        !environment ||
+        environment.projectId !== scope.projectId
+      ) {
+        jsonResponse(response, 403, { error: "Design tools require an environment credential" });
         return;
       }
-      if (error instanceof InvalidJsonBodyError) {
-        jsonResponse(response, 400, { error: error.message });
-        return;
-      }
-      throw error;
     }
 
-    // The v2 handler selects the protocol era per request. Modern clients use
-    // MCP 2026-07-28's per-request envelope, while OpenCode/Claude releases
-    // that still speak the 2025 protocol use the handler's stateless legacy
-    // fallback. Both paths create an isolated tool server for this request.
-    const handler = createMcpHandler(
-      () =>
-        createAgentToolServer(
-          this.storage,
-          scope,
-          (kind) => this.consumeMailRateLimit(scope, kind),
-          this.workflowResults,
-        ),
-      { legacy: "stateless" },
-    );
+    const isDesign = url.pathname === "/design-mcp";
+    if (isDesign && this.designRequests >= 16) {
+      request.resume();
+      jsonResponse(response, 429, { error: "Design request capacity reached" });
+      return;
+    }
+    if (isDesign) this.designRequests++;
     try {
-      await toNodeHandler(handler)(request, response, body);
+      let body: unknown;
+      try {
+        body = await readJsonBody(request);
+      } catch (error) {
+        if (error instanceof RequestBodyTooLargeError) {
+          jsonResponse(response, 413, { error: error.message });
+          return;
+        }
+        if (error instanceof InvalidJsonBodyError) {
+          jsonResponse(response, 400, { error: error.message });
+          return;
+        }
+        throw error;
+      }
+
+      // The v2 handler selects the protocol era per request. Modern clients use
+      // MCP 2026-07-28's per-request envelope, while OpenCode/Claude releases
+      // that still speak the 2025 protocol use the handler's stateless legacy
+      // fallback. Both paths create an isolated tool server for this request.
+      const handler = createMcpHandler(
+        () =>
+          url.pathname === "/design-mcp" && this.design
+            ? createDesignMcp(this.design, scope.environmentId)
+            : createAgentToolServer(
+                this.storage,
+                scope,
+                (kind) => this.consumeMailRateLimit(scope, kind),
+                this.workflowResults,
+              ),
+        { legacy: "stateless" },
+      );
+      try {
+        await toNodeHandler(handler)(request, response, body);
+      } finally {
+        await handler.close().catch(() => undefined);
+      }
     } finally {
-      await handler.close().catch(() => undefined);
+      if (isDesign) this.designRequests--;
     }
   }
 }

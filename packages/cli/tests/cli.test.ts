@@ -209,7 +209,11 @@ describe("orkestrator CLI package", () => {
     // Anything else scripts/build.ts leaves external must be added deliberately:
     // an undeclared one crashes the published package, and a declared-but-inlined
     // one is dead weight every `bunx orkestrator` user downloads.
-    expect([...required].sort()).toEqual(["@anthropic-ai/claude-agent-sdk", "sharp"]);
+    expect([...required].sort()).toEqual([
+      "@anthropic-ai/claude-agent-sdk",
+      "playwright-core",
+      "sharp",
+    ]);
 
     const manifest = await readManifest("packages/cli/package.json");
     expect(Object.keys(manifest.dependencies ?? {}).sort()).toEqual([...required].sort());

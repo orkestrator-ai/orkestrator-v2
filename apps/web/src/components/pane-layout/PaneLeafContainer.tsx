@@ -18,6 +18,9 @@ import {
   type LazyLoadErrorDetails,
 } from "@/components/LazyLoadBoundary";
 
+const LazyDesignCanvasTab = lazy(async () => ({
+  default: (await import("@/components/design/DesignCanvasTab")).DesignCanvasTab,
+}));
 const LazyFileViewerTab = lazy(async () => ({
   default: (await import("@/components/terminal/FileViewerTab")).FileViewerTab,
 }));
@@ -261,6 +264,22 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isDiff={tab.fileData.isDiff}
                   gitStatus={tab.fileData.gitStatus}
                   baseBranch={tab.fileData.isDiff ? comparisonRef : tab.fileData.baseBranch}
+                />
+              </LazyLoadBoundary>
+            );
+          }
+
+          if (tab.type === "design-canvas" && tab.designCanvasData) {
+            return (
+              <LazyLoadBoundary
+                key={tab.id}
+                loadingFallback={renderTabFallback(isTabActive && isActive)}
+                renderError={renderTabError(isTabActive && isActive)}
+              >
+                <LazyDesignCanvasTab
+                  canvasId={tab.designCanvasData.canvasId}
+                  environmentId={environmentId}
+                  isActive={isTabActive && isActive}
                 />
               </LazyLoadBoundary>
             );

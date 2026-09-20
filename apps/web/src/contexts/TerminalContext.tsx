@@ -16,6 +16,7 @@ export type CreatableTabType =
   | TerminalTabType
   | "agent-native"
   | "browser"
+  | "design-canvas"
   | "looped-review"
   | "multi-review";
 export type AgentLaunchModeOverride = "cli" | "native" | "tmux";
@@ -24,6 +25,7 @@ export type AgentLaunchModeOverride = "cli" | "native" | "tmux";
 export type TabType =
   | TerminalTabType
   | "browser"
+  | "design-canvas"
   | "file"
   | "agent-native"
   | "claude-tmux"
@@ -36,6 +38,7 @@ export const MAX_TABS = MAX_TABS_PER_ENVIRONMENT;
 
 // Options for creating a tab
 export interface CreateTabOptions {
+  canvasId?: string;
   /** Caller-owned ID used to bind durable backend work to the tab before it mounts. */
   tabId?: string;
   /** Focus an existing caller-owned tab instead of treating its id as a collision. */

@@ -291,7 +291,7 @@ export interface EngineTurnConfig {
    */
   permissionProfile?: string;
   /** In-memory only: never persisted or logged with the bridge session record. */
-  agentMcp?: { url: string; token: string };
+  agentMcp?: { url: string; token: string; design?: boolean };
   /**
    * Backend-selected tool on an attempt-scoped result MCP connection. Its
    * presence permits that narrow server to bypass Codex's MCP approval gate.

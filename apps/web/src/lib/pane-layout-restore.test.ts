@@ -33,6 +33,29 @@ const context = {
 };
 
 describe("reconcilePersistedLayout", () => {
+  test("design tabs restore only a canvas reference", () => {
+    const canvasId = "f17234d5-7dd0-4ee9-9ee9-d733001f35b8";
+    const layout = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "design",
+        tabs: [
+          {
+            id: "design",
+            type: "design-canvas",
+            designCanvasData: { canvasId, html: "must not enter layout" },
+          },
+        ],
+      }),
+      context,
+    );
+    expect(layout?.root).toMatchObject({
+      tabs: [{ id: "design", type: "design-canvas", designCanvasData: { canvasId } }],
+    });
+    expect(JSON.stringify(layout)).not.toContain("must not enter layout");
+  });
+
   test("rejects primitive and other non-object persisted roots", () => {
     for (const root of [null, undefined, true, 0, "leaf", []]) {
       expect(reconcilePersistedLayout(saved(root), context), String(root)).toBeNull();

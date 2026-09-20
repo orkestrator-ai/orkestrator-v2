@@ -54,7 +54,7 @@ export const AGENT_MCP_SERVER_NAME = "orkestrator";
 const AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
 const AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
 
-export type AgentMcpConnection = { url: string; token: string };
+export type AgentMcpConnection = { url: string; token: string; design?: boolean };
 
 export function getOrkestratorAgentMcpServerFromConnection(
   connection: AgentMcpConnection | undefined,
@@ -300,13 +300,25 @@ export async function getMcpRuntimeConfig(
   // Backend-provided credentials are authoritative for this reserved name.
   // A project-local config must not be able to redirect the trusted ticket
   // tools (or capture their bearer token) by claiming the same server name.
-  if (agentServer) servers[AGENT_MCP_SERVER_NAME] = agentServer;
+  if (agentServer) {
+    servers[AGENT_MCP_SERVER_NAME] = agentServer;
+    if (connection?.design)
+      servers["orkestrator-design"] = {
+        ...agentServer,
+        url: new URL("/design-mcp", agentServer.url).toString(),
+      };
+  }
 
   // Names come from the merged config, not from `servers`: a server whose
   // config shape we can't translate is still an MCP server as far as tool-name
   // parsing is concerned, and dropping it would misattribute its tools.
   return {
     servers,
-    names: new Set([...Object.keys(configs), ...(agentServer ? [AGENT_MCP_SERVER_NAME] : [])]),
+    names: new Set([
+      ...Object.keys(configs),
+      ...(agentServer
+        ? [AGENT_MCP_SERVER_NAME, ...(connection?.design ? ["orkestrator-design"] : [])]
+        : []),
+    ]),
   };
 }

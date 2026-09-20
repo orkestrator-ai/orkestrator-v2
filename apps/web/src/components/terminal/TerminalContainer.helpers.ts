@@ -135,6 +135,7 @@ export const STARTUP_AGENT_TAB_TYPES: Record<TabType, boolean> = {
   "looped-review": false,
   "multi-review": false,
   browser: false,
+  "design-canvas": false,
   file: false,
   plain: false,
   root: false,

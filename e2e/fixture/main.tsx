@@ -1,3 +1,4 @@
+import { DesignCanvasFixture } from "./DesignCanvasFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { StrictMode, createRef, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -1336,6 +1337,7 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/design-canvas") return <DesignCanvasFixture />;
   if (window.location.pathname === "/browser") return <BrowserFixture />;
   if (window.location.pathname === "/build-pipeline-header") {
     return <BuildPipelineHeaderFixture />;

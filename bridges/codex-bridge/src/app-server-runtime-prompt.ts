@@ -148,7 +148,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       attachments: PromptAttachmentInput[];
       outputSchema?: JsonSchema;
       readOnly?: boolean;
-      agentMcp?: { url: string; token: string };
+      agentMcp?: { url: string; token: string; design?: boolean };
       workflowResultTool?: string;
     },
   ): Promise<
@@ -200,7 +200,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       attachments: PromptAttachmentInput[];
       outputSchema?: JsonSchema;
       readOnly?: boolean;
-      agentMcp?: { url: string; token: string };
+      agentMcp?: { url: string; token: string; design?: boolean };
       workflowResultTool?: string;
     },
   ): Promise<

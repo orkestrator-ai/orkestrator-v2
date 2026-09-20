@@ -1,0 +1,16 @@
+.design-workspace {
+  container-type: inline-size;
+}
+
+@container (max-width: 600px) {
+  .design-hierarchy[data-inspecting="true"] {
+    display: none;
+  }
+
+  .design-inspector {
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: 200px;
+    z-index: 30;
+  }
+}

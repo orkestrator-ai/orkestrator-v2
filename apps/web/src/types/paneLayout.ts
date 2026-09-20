@@ -142,6 +142,7 @@ export interface TabInfo {
   multiReviewTabData?: MultiReviewTabData;
   /** Data for browser tabs */
   browserData?: BrowserTabData;
+  designCanvasData?: { canvasId: string };
   /** Initial prompt to send to agent (only for claude/opencode tabs) */
   initialPrompt?: string;
   /** Initial commands to execute (only for plain terminal tabs) */

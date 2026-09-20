@@ -1,3 +1,4 @@
+import { DesignService } from "./design-service.js";
 import {
   closeLocalServerAdmission,
   createCommandRegistry,
@@ -135,8 +136,9 @@ export class OrkestratorBackend {
     this.workflowResultRollout = new WorkflowResultRollout(
       async () => (await storage.loadConfig()).global.workflowResultTools,
     );
+    const design = new DesignService(options.dataDir, options.emit);
     this.agentTools =
-      options.agentTools ?? new AgentToolsServer(storage, "0.0.0.0", this.workflowResults);
+      options.agentTools ?? new AgentToolsServer(storage, "0.0.0.0", this.workflowResults, design);
     const resolveAgentToolConnection = this.agentTools.workflowResultConnection
       ? (
           environmentId: string,
@@ -172,6 +174,7 @@ export class OrkestratorBackend {
     });
     const context = {
       storage,
+      design,
       toolchainBinDir: options.toolchainBinDir,
       appRoot: options.appRoot,
       resourceRoot: options.resourceRoot,
@@ -931,6 +934,7 @@ export class OrkestratorBackend {
       } finally {
         await this.controlMcp.stop();
         await this.agentTools.stop();
+        await this.context.design?.close();
       }
     })();
     this.shutdownPromise = attempt;

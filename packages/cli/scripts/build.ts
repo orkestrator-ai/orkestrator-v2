@@ -22,7 +22,7 @@ const builds = await Promise.all([
     outdir: outputRoot,
     target: "bun",
     format: "esm",
-    external: ["sharp"],
+    external: ["sharp", "playwright-core"],
   }),
   Bun.build({
     entrypoints: [path.join(repositoryRoot, "bridges/claude-bridge/src/index.ts")],

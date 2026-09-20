@@ -22,6 +22,7 @@ Refreshed 2026-09-17 against the current tree.
 | --- | --- | --- |
 | [agent-engines.md](architecture/agent-engines.md) | Living | Six-engine architecture. Coordinator tiers match `coordinator-providers.ts`. |
 | [coordinator.md](architecture/coordinator.md) | Living | Current Coordinator: ownership, tiers, async delegation, MCP actions. Remaining work is `todo/coordinator-to-implement.md`. |
+| [design-canvas.md](architecture/design-canvas.md) | Living | HTML/CSS canvas, revisions, design MCP and .orkdes files. |
 | [control-mcp.md](architecture/control-mcp.md) | Living | Control MCP operator guide. |
 | [remote-gateway.md](architecture/remote-gateway.md) | Living | Standalone backend, Tailscale Serve, flags, troubleshooting. |
 | [review-preparation.md](architecture/review-preparation.md) | Living | Multi-review pipeline; queue wait is 30 minutes. |

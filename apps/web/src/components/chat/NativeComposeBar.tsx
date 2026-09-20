@@ -120,7 +120,7 @@ export function NativeComposeBar({
                         onClick={onClearAnnotations}
                         disabled={disabled || isSending}
                         className="-mr-1 ml-0.5 rounded-full p-0.5 text-blue-200/70 transition-colors hover:bg-blue-400/15 hover:text-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        aria-label="Remove all transcript annotations"
+                        aria-label="Remove all annotations"
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -143,7 +143,9 @@ export function NativeComposeBar({
                         <div className="min-w-0 space-y-1.5">
                           <div>
                             <p className="text-xs font-medium text-muted-foreground">
-                              Selected text
+                              {annotation.source === "browser"
+                                ? "Browser element"
+                                : "Selected text"}
                             </p>
                             <p className="mt-0.5 max-h-28 overflow-y-auto whitespace-pre-wrap break-words text-foreground">
                               {annotation.text}

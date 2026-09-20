@@ -12,7 +12,13 @@ import {
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import type { BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import type {
+  BrowserPreviewAnnotationStatus,
+  BrowserPreviewState,
+} from "@orkestrator/protocol/browser-preview";
+import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { BrowserTab } from "./BrowserTab";
 
 const happyDOM = (
@@ -34,7 +40,7 @@ let consoleErrorSpy: ReturnType<typeof spyOn> | undefined;
 let nextAnimationFrameId = 0;
 const pendingAnimationFrames = new Set<number>();
 
-function setBrowserTab(url = "") {
+function setBrowserTab(url = "", includeNativeAgent = false) {
   usePaneLayoutStore.setState({
     activeEnvironmentId: "env-1",
     environments: new Map([
@@ -44,7 +50,18 @@ function setBrowserTab(url = "") {
           root: {
             kind: "leaf",
             id: "pane-1",
-            tabs: [{ id: "browser-1", type: "browser", browserData: { url } }],
+            tabs: [
+              { id: "browser-1", type: "browser", browserData: { url } },
+              ...(includeNativeAgent
+                ? [
+                    {
+                      id: "agent-1",
+                      type: "agent-native" as const,
+                      nativeAgentData: { environmentId: "env-1", platform: "codex" as const },
+                    },
+                  ]
+                : []),
+            ],
             activeTabId: "browser-1",
           },
           activePaneId: "pane-1",
@@ -91,10 +108,18 @@ function installNativePreview(overrides: Record<string, unknown> = {}) {
     goForward: mock(async () => previewState()),
     reload: mock(async () => previewState()),
     openDevTools: mock(async () => previewState()),
+    startAnnotation: mock(async () => ({ status: "active" as const })),
+    getAnnotationStatus: mock(async () => ({ status: "active" as const })),
+    cancelAnnotation: mock(async () => undefined),
     destroy: mock(async () => {}),
     ...overrides,
   };
   window.orkestrator = {
+    invoke: mock(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "write_container_file") return args?.filePath;
+      if (command === "write_local_file") return `/workspace/${String(args?.filePath ?? "")}`;
+      return undefined;
+    }),
     listen: (event: string, callback: (payload: unknown) => void) => {
       if (event === "browser-preview-state") {
         stateListener = callback as (state: BrowserPreviewState) => void;
@@ -170,6 +195,21 @@ describe("BrowserTab", () => {
     consoleErrorSpy = spyOn(console, "error").mockImplementation(() => undefined);
     delete window.orkestratorGateway;
     setBrowserTab();
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Browser test",
+          order: 0,
+          setupPhase: "ready",
+          containerId: "container-1",
+        } as never,
+      ],
+    });
+    useNativeComposeStore.setState({ drafts: new Map() });
+    mockToastError.mockClear();
+    mockToastSuccess.mockClear();
   });
 
   test("starts with backend-specific guidance and no iframe", () => {
@@ -576,6 +616,238 @@ describe("BrowserTab", () => {
     await waitFor(() => expect(devToolsButton.hasAttribute("disabled")).toBe(false));
     fireEvent.click(devToolsButton);
     await waitFor(() => expect(openDevTools).toHaveBeenCalledWith("browser-1"));
+  });
+
+  test("starts and stops annotation mode for a preview with an open native session", async () => {
+    setBrowserTab("http://localhost:3000/", true);
+    const native = installNativePreview();
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+
+    const annotate = screen.getByRole("button", { name: "Annotate preview" });
+    await waitFor(() => expect(annotate.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(annotate);
+
+    await waitFor(() =>
+      expect(native.browserPreview.startAnnotation).toHaveBeenCalledWith("browser-1"),
+    );
+    const stop = await screen.findByRole("button", { name: "Stop annotating preview" });
+    expect(stop.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(stop);
+    await waitFor(() =>
+      expect(native.browserPreview.cancelAnnotation).toHaveBeenCalledWith("browser-1"),
+    );
+  });
+
+  test("explicitly cancels annotation mode before reloading the preview", async () => {
+    setBrowserTab("http://localhost:3000/", true);
+    const native = installNativePreview();
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+    const annotate = screen.getByRole("button", { name: "Annotate preview" });
+    await waitFor(() => expect(annotate.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(annotate);
+    await screen.findByRole("button", { name: "Stop annotating preview" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Reload preview" }));
+
+    await waitFor(() =>
+      expect(native.browserPreview.cancelAnnotation).toHaveBeenCalledWith("browser-1"),
+    );
+    expect(native.browserPreview.reload).toHaveBeenCalledWith("browser-1");
+    expect(screen.getByRole("button", { name: "Annotate preview" })).toBeTruthy();
+  });
+
+  test("persists a submitted annotation, clears saving, and permits a second annotation", async () => {
+    setBrowserTab("http://localhost:3000/", true);
+    let status: BrowserPreviewAnnotationStatus = { status: "active" };
+    const native = installNativePreview({
+      getAnnotationStatus: mock(async () => status),
+    });
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+
+    const annotate = screen.getByRole("button", { name: "Annotate preview" });
+    await waitFor(() => expect(annotate.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(annotate);
+    await screen.findByRole("button", { name: "Stop annotating preview" });
+    status = {
+      status: "submitted",
+      comment: "Make this clearer",
+      screenshotDataUrl: "data:image/png;base64,c2NyZWVuc2hvdA==",
+      element: {
+        pageUrl: "http://localhost:3000/",
+        pageTitle: "Dashboard",
+        viewport: { width: 800, height: 600, devicePixelRatio: 2 },
+        tagName: "button",
+        selector: "button#save",
+        cssPath: "html > body > button#save",
+        xpath: "/html/body/button",
+        id: "save",
+        classNames: ["primary"],
+        role: null,
+        ariaLabel: "Save",
+        testId: "save-button",
+        text: "Save",
+        outerHtml: '<button id="save">Save</button>',
+        attributes: { id: "save" },
+        rect: {
+          x: 20,
+          y: 30,
+          width: 100,
+          height: 40,
+          top: 30,
+          right: 120,
+          bottom: 70,
+          left: 20,
+        },
+        styles: { color: "white" },
+        hierarchy: [],
+      },
+    };
+
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledTimes(1));
+    const readyAgain = await screen.findByRole("button", { name: "Annotate preview" });
+    await waitFor(() => expect(readyAgain.hasAttribute("disabled")).toBe(false));
+    expect(useNativeComposeStore.getState().drafts.values().next().value).toMatchObject({
+      annotations: [{ source: "browser", comment: "Make this clearer" }],
+      attachments: [{ type: "image" }],
+    });
+
+    status = { status: "active" };
+    fireEvent.click(readyAgain);
+    await waitFor(() => expect(native.browserPreview.startAnnotation).toHaveBeenCalledTimes(2));
+  });
+
+  test("finishes an in-flight submission after the environment object is refreshed", async () => {
+    setBrowserTab("http://localhost:3000/", true);
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Unavailable browser test",
+          order: 0,
+          setupPhase: "ready",
+        } as never,
+      ],
+    });
+    const pending = deferred<BrowserPreviewAnnotationStatus>();
+    const native = installNativePreview({ getAnnotationStatus: mock(() => pending.promise) });
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+    const annotate = screen.getByRole("button", { name: "Annotate preview" });
+    await waitFor(() => expect(annotate.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(annotate);
+    await waitFor(() => expect(native.browserPreview.getAnnotationStatus).toHaveBeenCalled());
+
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Refreshed browser test",
+          order: 0,
+          setupPhase: "ready",
+          containerId: "container-refreshed",
+        } as never,
+      ],
+    });
+    pending.resolve({
+      status: "submitted",
+      comment: "Persist this",
+      screenshotDataUrl: "data:image/png;base64,c2NyZWVuc2hvdA==",
+      element: {
+        pageUrl: "http://localhost:3000/",
+        pageTitle: "Page",
+        viewport: { width: 800, height: 600, devicePixelRatio: 1 },
+        tagName: "main",
+        selector: "main",
+        cssPath: "html > body > main",
+        xpath: "/html/body/main",
+        id: null,
+        classNames: [],
+        role: null,
+        ariaLabel: null,
+        testId: null,
+        text: "Page",
+        outerHtml: "<main>Page</main>",
+        attributes: {},
+        rect: { x: 0, y: 0, width: 800, height: 600, top: 0, right: 800, bottom: 600, left: 0 },
+        styles: {},
+        hierarchy: [],
+      },
+    });
+
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledTimes(1));
+    expect(useNativeComposeStore.getState().drafts.values().next().value).toMatchObject({
+      annotations: [{ comment: "Persist this" }],
+    });
+  });
+
+  test("resets cancelled annotation mode and explains an inactive runtime", async () => {
+    setBrowserTab("http://localhost:3000/", true);
+    let status: BrowserPreviewAnnotationStatus = { status: "cancelled" };
+    const native = installNativePreview({ getAnnotationStatus: mock(async () => status) });
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+    const annotate = screen.getByRole("button", { name: "Annotate preview" });
+    await waitFor(() => expect(annotate.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(annotate);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Annotate preview" })).toBeTruthy(),
+    );
+    expect(mockToastError).not.toHaveBeenCalled();
+
+    status = { status: "inactive" };
+    fireEvent.click(screen.getByRole("button", { name: "Annotate preview" }));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Annotation mode stopped",
+        expect.objectContaining({ description: expect.stringContaining("changed or reloaded") }),
+      ),
+    );
+    expect(native.browserPreview.startAnnotation).toHaveBeenCalledTimes(2);
+
+    mockToastError.mockClear();
+    status = { status: "error", message: "Try a smaller element." };
+    fireEvent.click(screen.getByRole("button", { name: "Annotate preview" }));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Could not capture browser annotation", {
+        description: "Try a smaller element.",
+      }),
+    );
+    expect(native.browserPreview.startAnnotation).toHaveBeenCalledTimes(3);
   });
 
   test("hides an attached native preview when the client becomes unsupported", async () => {

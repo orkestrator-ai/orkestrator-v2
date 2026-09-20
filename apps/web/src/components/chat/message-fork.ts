@@ -159,6 +159,7 @@ function referencesToForkAnnotations(
       id: `fork-reference-${index + 1}`,
       text: normalizeTranscriptAnnotationText(reference.selectedText),
       comment: normalizeTranscriptAnnotationComment(reference.userComment ?? ""),
+      ...(reference.source === "browser" ? { source: "browser" as const } : {}),
     }))
     .filter((annotation) => annotation.text.length > 0);
 }

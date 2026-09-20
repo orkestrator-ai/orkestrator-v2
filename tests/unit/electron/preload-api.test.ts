@@ -279,6 +279,18 @@ describe("preload API factory", () => {
       channel: "orkestrator:browser-preview:open-devtools",
       args: ["browser-1"],
     });
+    await expect(api.browserPreview.startAnnotation("browser-1")).resolves.toEqual({
+      channel: "orkestrator:browser-preview:annotation-start",
+      args: ["browser-1"],
+    });
+    await expect(api.browserPreview.getAnnotationStatus("browser-1")).resolves.toEqual({
+      channel: "orkestrator:browser-preview:annotation-status",
+      args: ["browser-1"],
+    });
+    await expect(api.browserPreview.cancelAnnotation("browser-1")).resolves.toEqual({
+      channel: "orkestrator:browser-preview:annotation-cancel",
+      args: ["browser-1"],
+    });
     await expect(api.browserPreview.destroy("browser-1")).resolves.toEqual({
       channel: "orkestrator:browser-preview:destroy",
       args: ["browser-1"],

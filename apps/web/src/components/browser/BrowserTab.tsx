@@ -5,15 +5,18 @@ import {
   Code2,
   Globe2,
   Loader2,
+  MessageSquarePlus,
   RefreshCw,
   Server,
   ShieldCheck,
   Smartphone,
 } from "lucide-react";
 import type {
+  BrowserPreviewAnnotationStatus,
   BrowserPreviewBounds,
   BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { isWkWebViewClient } from "@/lib/client-platform";
 import { isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
@@ -22,6 +25,8 @@ import { resolveBrowserAddress } from "@/lib/browser-address";
 import { boundBrowserHistory } from "@/lib/browser-history";
 import {
   attachBrowserPreview,
+  cancelBrowserPreviewAnnotation,
+  getBrowserPreviewAnnotationStatus,
   goBackBrowserPreview,
   goForwardBrowserPreview,
   hasNativeBrowserPreview,
@@ -29,8 +34,15 @@ import {
   openBrowserPreviewDevTools,
   reloadBrowserPreview,
   setBrowserPreviewVisible,
+  startBrowserPreviewAnnotation,
 } from "@/lib/native/browser-preview";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import {
+  addBrowserAnnotationToOpenNativeSessions,
+  formatBrowserElementAnnotation,
+} from "@/lib/chat/browser-annotations";
+import { writeContainerFile, writeLocalFile } from "@/lib/backend";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { BrowserTabData } from "@/types/paneLayout";
 
 interface BrowserTabProps {
@@ -100,6 +112,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function pngBase64FromDataUrl(dataUrl: string): string {
+  const prefix = "data:image/png;base64,";
+  if (!dataUrl.startsWith(prefix)) throw new Error("The browser frame did not return a PNG image");
+  const base64 = dataUrl.slice(prefix.length);
+  if (!base64) throw new Error("The browser frame screenshot was empty");
+  return base64;
+}
+
 export function BrowserTab({
   tabId,
   environmentId,
@@ -115,6 +135,14 @@ export function BrowserTab({
   const owningPaneId = usePaneLayoutStore(
     (state) => state.findPaneWithTab(tabId, environmentId)?.id,
   );
+  const nativeSessionCount = usePaneLayoutStore((state) => {
+    const environment = state.environments.get(environmentId);
+    if (!environment) return 0;
+    return getAllLeaves(environment.root).reduce(
+      (count, leaf) => count + leaf.tabs.filter((tab) => tab.type === "agent-native").length,
+      0,
+    );
+  });
   const nativeBrowserPreview = hasNativeBrowserPreview();
   const browserPreviewSupported = (() => {
     try {
@@ -148,6 +176,22 @@ export function BrowserTab({
   const nativeAttachedRef = useRef(false);
   const [nativeState, setNativeState] = useState<BrowserPreviewState | null>(null);
   const [hasBlockingOverlay, setHasBlockingOverlay] = useState(false);
+  const [annotationMode, setAnnotationMode] = useState(false);
+  const [annotationSaving, setAnnotationSaving] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const stopAnnotationForPageChange = useCallback(() => {
+    if (!annotationMode) return;
+    setAnnotationMode(false);
+    void cancelBrowserPreviewAnnotation(tabId).catch(() => undefined);
+  }, [annotationMode, tabId]);
 
   const applyNativeSurfaceState = useCallback(
     (state: BrowserPreviewState | null) => {
@@ -195,6 +239,7 @@ export function BrowserTab({
     const refreshChanged = refreshRequestId !== previousRefreshRequestId.current;
     previousRefreshRequestId.current = refreshRequestId;
     if (refreshChanged && refreshRequestId > 0 && currentUrl) {
+      stopAnnotationForPageChange();
       setIsLoading(true);
       if (nativeBrowserPreview && nativeAttachedRef.current) {
         void reloadBrowserPreview(tabId)
@@ -207,7 +252,14 @@ export function BrowserTab({
         setLoadRevision((revision) => revision + 1);
       }
     }
-  }, [applyNativeState, currentUrl, nativeBrowserPreview, refreshRequestId, tabId]);
+  }, [
+    applyNativeState,
+    currentUrl,
+    nativeBrowserPreview,
+    refreshRequestId,
+    stopAnnotationForPageChange,
+    tabId,
+  ]);
 
   useEffect(() => {
     if (!nativeBrowserPreview || !browserPreviewSupported) return;
@@ -337,6 +389,7 @@ export function BrowserTab({
         return;
       }
 
+      stopAnnotationForPageChange();
       setError(null);
       setAddress(next.displayUrl);
       setCurrentUrl(next.displayUrl);
@@ -380,7 +433,14 @@ export function BrowserTab({
           });
       }
     },
-    [applyNativeState, environmentId, nativeBrowserPreview, tabId, updateTabBrowserUrl],
+    [
+      applyNativeState,
+      environmentId,
+      nativeBrowserPreview,
+      stopAnnotationForPageChange,
+      tabId,
+      updateTabBrowserUrl,
+    ],
   );
 
   const handleSubmit = useCallback(
@@ -394,6 +454,7 @@ export function BrowserTab({
   const moveThroughHistory = useCallback(
     (offset: -1 | 1) => {
       if (nativeBrowserPreview) {
+        stopAnnotationForPageChange();
         // Chromium owns this preview's history. The tracked array only records
         // address-bar navigations, so an in-preview link click already made the
         // two diverge; forcing a tracked address back onto the surface would
@@ -422,6 +483,7 @@ export function BrowserTab({
       environmentId,
       nativeBrowserPreview,
       navigate,
+      stopAnnotationForPageChange,
       tabId,
       updateTabBrowserUrl,
     ],
@@ -429,6 +491,7 @@ export function BrowserTab({
 
   const reload = useCallback(() => {
     if (!currentUrl) return;
+    stopAnnotationForPageChange();
     setIsLoading(true);
     if (nativeBrowserPreview && nativeAttachedRef.current) {
       void reloadBrowserPreview(tabId)
@@ -440,7 +503,167 @@ export function BrowserTab({
       return;
     }
     setLoadRevision((revision) => revision + 1);
-  }, [applyNativeState, currentUrl, nativeBrowserPreview, tabId]);
+  }, [applyNativeState, currentUrl, nativeBrowserPreview, stopAnnotationForPageChange, tabId]);
+
+  const addSubmittedAnnotation = useCallback(
+    async (submission: Extract<BrowserPreviewAnnotationStatus, { status: "submitted" }>) => {
+      const openNativeTabs = usePaneLayoutStore
+        .getState()
+        .getAllTabs(environmentId)
+        .filter((tab) => tab.type === "agent-native");
+      if (openNativeTabs.length === 0) {
+        throw new Error("Open a native agent session before adding a browser annotation");
+      }
+      const currentEnvironment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+      if (!currentEnvironment) throw new Error("The environment is not available");
+
+      const annotationId = crypto.randomUUID();
+      const filename = `browser-annotation-${Date.now()}-${annotationId.slice(0, 8)}.png`;
+      const relativePath = `.orkestrator/annotations/${filename}`;
+      const base64Data = pngBase64FromDataUrl(submission.screenshotDataUrl);
+      let screenshotPath: string;
+      if (currentEnvironment.containerId) {
+        await writeContainerFile(currentEnvironment.containerId, relativePath, base64Data);
+        screenshotPath = `/workspace/${relativePath}`;
+      } else if (currentEnvironment.worktreePath) {
+        screenshotPath = await writeLocalFile(
+          currentEnvironment.worktreePath,
+          relativePath,
+          base64Data,
+        );
+      } else {
+        throw new Error("The environment has no workspace for the browser screenshot");
+      }
+
+      const result = addBrowserAnnotationToOpenNativeSessions({
+        environmentId,
+        annotation: {
+          id: annotationId,
+          source: "browser",
+          screenshotPath,
+          text: formatBrowserElementAnnotation(submission.element, screenshotPath),
+          comment: submission.comment,
+        },
+        screenshot: {
+          id: crypto.randomUUID(),
+          annotationId,
+          type: "image",
+          path: screenshotPath,
+          previewUrl: submission.screenshotDataUrl,
+          name: filename,
+        },
+      });
+      if (result.sessionCount === 0) {
+        throw new Error("Every open native session has reached its 20-annotation limit");
+      }
+      toast.success(
+        `Annotation added to ${result.sessionCount} native session${result.sessionCount === 1 ? "" : "s"}`,
+        result.annotationSkippedCount > 0 || result.screenshotSkippedCount > 0
+          ? {
+              description: [
+                result.annotationSkippedCount > 0
+                  ? `${result.annotationSkippedCount} full annotation composer${result.annotationSkippedCount === 1 ? " was" : "s were"} skipped.`
+                  : null,
+                result.screenshotSkippedCount > 0
+                  ? `${result.screenshotSkippedCount} full attachment composer${result.screenshotSkippedCount === 1 ? " received" : "s received"} the screenshot path without an image attachment.`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" "),
+            }
+          : undefined,
+      );
+    },
+    [environmentId],
+  );
+
+  const toggleAnnotationMode = useCallback(() => {
+    if (annotationSaving) return;
+    if (annotationMode) {
+      setAnnotationMode(false);
+      void cancelBrowserPreviewAnnotation(tabId).catch((annotationError) => {
+        toast.error("Could not stop annotation mode", {
+          description: errorMessage(annotationError),
+        });
+      });
+      return;
+    }
+    setAnnotationSaving(true);
+    void startBrowserPreviewAnnotation(tabId)
+      .then(() => setAnnotationMode(true))
+      .catch((annotationError) => {
+        toast.error("Could not start annotation mode", {
+          description: errorMessage(annotationError),
+        });
+      })
+      .finally(() => setAnnotationSaving(false));
+  }, [annotationMode, annotationSaving, tabId]);
+
+  useEffect(() => {
+    if (!annotationMode) return;
+    let disposed = false;
+    let polling = false;
+    const poll = async () => {
+      if (polling || disposed) return;
+      polling = true;
+      try {
+        const status = await getBrowserPreviewAnnotationStatus(tabId);
+        if (!mountedRef.current) return;
+        if (status.status === "active") return;
+        setAnnotationMode(false);
+        if (status.status === "cancelled") return;
+        if (status.status === "inactive") {
+          toast.error("Annotation mode stopped", {
+            description: "The preview changed or reloaded. Start annotation mode and try again.",
+          });
+          return;
+        }
+        if (status.status === "error") {
+          toast.error("Could not capture browser annotation", { description: status.message });
+          return;
+        }
+        if (!("screenshotDataUrl" in status)) return;
+        setAnnotationSaving(true);
+        try {
+          await addSubmittedAnnotation(status);
+        } catch (annotationError) {
+          toast.error("Could not add browser annotation", {
+            description: errorMessage(annotationError),
+          });
+        } finally {
+          if (mountedRef.current) setAnnotationSaving(false);
+        }
+      } catch (annotationError) {
+        if (!disposed) {
+          setAnnotationMode(false);
+          toast.error("Annotation mode stopped", { description: errorMessage(annotationError) });
+        }
+        void cancelBrowserPreviewAnnotation(tabId).catch(() => undefined);
+      } finally {
+        polling = false;
+      }
+    };
+    const timer = window.setInterval(() => void poll(), 150);
+    void poll();
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [addSubmittedAnnotation, annotationMode, tabId]);
+
+  useEffect(() => {
+    if (isActive || !annotationMode) return;
+    setAnnotationMode(false);
+    void cancelBrowserPreviewAnnotation(tabId).catch(() => undefined);
+  }, [annotationMode, isActive, tabId]);
+
+  useEffect(
+    () => () => {
+      if (!nativeBrowserPreview) return;
+      void cancelBrowserPreviewAnnotation(tabId).catch(() => undefined);
+    },
+    [nativeBrowserPreview, tabId],
+  );
 
   useEffect(() => {
     if (!nativeBrowserPreview) return;
@@ -621,6 +844,43 @@ export function BrowserTab({
             Go
           </Button>
         </form>
+        {nativeBrowserPreview && (
+          <Button
+            type="button"
+            variant={annotationMode ? "secondary" : "ghost"}
+            size="sm"
+            className={cn(
+              "h-8 shrink-0 gap-1.5 px-2.5",
+              annotationMode &&
+                "border border-blue-400/40 bg-blue-500/15 text-blue-200 hover:bg-blue-500/20 hover:text-blue-100",
+            )}
+            aria-label={annotationMode ? "Stop annotating preview" : "Annotate preview"}
+            aria-pressed={annotationMode}
+            title={
+              nativeSessionCount === 0
+                ? "Open a native agent session to add annotations"
+                : annotationMode
+                  ? "Stop annotating preview"
+                  : "Annotate preview"
+            }
+            disabled={
+              !resolved ||
+              !nativeAttachedRef.current ||
+              nativeSessionCount === 0 ||
+              annotationSaving
+            }
+            onClick={toggleAnnotationMode}
+          >
+            {annotationSaving ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <MessageSquarePlus className="h-4 w-4" />
+            )}
+            <span className="hidden @lg/browser:inline">
+              {annotationMode ? "Annotating" : "Annotate"}
+            </span>
+          </Button>
+        )}
         {nativeBrowserPreview && (
           <Button
             type="button"

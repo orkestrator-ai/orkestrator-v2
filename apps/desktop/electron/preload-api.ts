@@ -1,5 +1,6 @@
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import type {
+  BrowserPreviewAnnotationStatus,
   BrowserPreviewAttachInput,
   BrowserPreviewBounds,
   BrowserPreviewState,
@@ -191,6 +192,15 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       },
       openDevTools(tabId: string): Promise<BrowserPreviewState> {
         return ipcRenderer.invoke("orkestrator:browser-preview:open-devtools", tabId);
+      },
+      startAnnotation(tabId: string): Promise<BrowserPreviewAnnotationStatus> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:annotation-start", tabId);
+      },
+      getAnnotationStatus(tabId: string): Promise<BrowserPreviewAnnotationStatus> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:annotation-status", tabId);
+      },
+      cancelAnnotation(tabId: string): Promise<void> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:annotation-cancel", tabId);
       },
       destroy(tabId: string): Promise<void> {
         return ipcRenderer.invoke("orkestrator:browser-preview:destroy", tabId);

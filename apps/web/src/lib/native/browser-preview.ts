@@ -1,4 +1,5 @@
 import type {
+  BrowserPreviewAnnotationStatus,
   BrowserPreviewAttachInput,
   BrowserPreviewBounds,
   BrowserPreviewState,
@@ -62,6 +63,31 @@ export function openBrowserPreviewDevTools(tabId: string): Promise<BrowserPrevie
   const nativeApi = api();
   if (!nativeApi) return Promise.reject(new Error("Native browser previews are unavailable"));
   return nativeApi.openDevTools(tabId);
+}
+
+export function startBrowserPreviewAnnotation(
+  tabId: string,
+): Promise<BrowserPreviewAnnotationStatus> {
+  const nativeApi = api();
+  if (!nativeApi?.startAnnotation) {
+    return Promise.reject(new Error("Browser preview annotations are unavailable"));
+  }
+  return nativeApi.startAnnotation(tabId);
+}
+
+export function getBrowserPreviewAnnotationStatus(
+  tabId: string,
+): Promise<BrowserPreviewAnnotationStatus> {
+  const nativeApi = api();
+  if (!nativeApi?.getAnnotationStatus) {
+    return Promise.reject(new Error("Browser preview annotations are unavailable"));
+  }
+  return nativeApi.getAnnotationStatus(tabId);
+}
+
+export function cancelBrowserPreviewAnnotation(tabId: string): Promise<void> {
+  const nativeApi = api();
+  return nativeApi?.cancelAnnotation ? nativeApi.cancelAnnotation(tabId) : Promise.resolve();
 }
 
 export function destroyBrowserPreview(tabId: string): Promise<void> {

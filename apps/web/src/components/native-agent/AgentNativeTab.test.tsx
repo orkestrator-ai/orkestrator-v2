@@ -6623,6 +6623,96 @@ describe("AgentNativeTab", () => {
       );
     });
 
+    test("blocks sending a visible image that the selected model cannot read", async () => {
+      seedProjection({
+        composer: {
+          models: [
+            {
+              platform: "codex",
+              id: "text-only-model",
+              label: "Text Only",
+              supportsImageInput: false,
+              reasoning: [],
+            },
+          ],
+          selectedModelId: "text-only-model",
+        },
+      });
+      const tabId = "tab-unsupported-image-send";
+      const sessionKey = createSessionKey("env-1", tabId);
+      const image = {
+        id: "visible-image",
+        type: "image" as const,
+        path: "/workspace/screenshot.png",
+        previewUrl: "blob:preview",
+        name: "screenshot.png",
+      };
+      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      await screen.findByTestId("shared-native-compose-bar");
+      act(() => {
+        useNativeComposeStore.getState().updateDraft(sessionKey, {
+          text: "Describe this image",
+          attachments: [image],
+        });
+      });
+
+      fireEvent.click(await screen.findByTitle("Send"));
+
+      expect(
+        await screen.findByText(/This attachment is not supported.*screenshot\.png/),
+      ).toBeTruthy();
+      expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments).toEqual([image]);
+    });
+
+    test("consumes a submitted browser annotation from the other native drafts", async () => {
+      seedProjection();
+      const tabId = "tab-browser-annotation-send";
+      const sessionKey = createSessionKey("env-1", tabId);
+      const otherSessionKey = createSessionKey("env-1", "other-native-tab");
+      const shared = {
+        id: "browser-annotation-1",
+        source: "browser" as const,
+        text: "Browser element annotation\nCSS path: html > body > button",
+        comment: "Make this clearer",
+        screenshotPath: "/workspace/.orkestrator/annotations/button.png",
+      };
+      const screenshot = {
+        id: "browser-screenshot-1",
+        annotationId: shared.id,
+        type: "image" as const,
+        path: shared.screenshotPath,
+        name: "button.png",
+      };
+      useNativeComposeStore.getState().updateDraft(otherSessionKey, {
+        text: "Keep my other draft",
+        annotations: [
+          shared,
+          { id: "transcript-1", text: "Earlier answer", comment: "Keep this too" },
+        ],
+        attachments: [screenshot],
+      });
+      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      await screen.findByTestId("shared-native-compose-bar");
+      act(() => {
+        useNativeComposeStore.getState().updateDraft(sessionKey, {
+          annotations: [shared],
+          attachments: [screenshot],
+        });
+      });
+
+      fireEvent.click(await screen.findByTitle("Send"));
+
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(useNativeComposeStore.getState().drafts.get(otherSessionKey)).toMatchObject({
+          text: "Keep my other draft",
+          annotations: [{ id: "transcript-1", text: "Earlier answer", comment: "Keep this too" }],
+          attachments: [],
+        }),
+      );
+    });
+
     test("explains the annotation cap when another selection is added", async () => {
       seedProjection();
       const tabId = "tab-annotation-cap";

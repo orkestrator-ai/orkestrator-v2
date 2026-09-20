@@ -32,3 +32,56 @@ export interface BrowserPreviewOpenLinkEvent {
   tabId: string;
   url: string;
 }
+
+export interface BrowserPreviewElementRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export interface BrowserPreviewElementAncestor {
+  tagName: string;
+  selector: string;
+  id: string | null;
+  classNames: string[];
+  role: string | null;
+  ariaLabel: string | null;
+  testId: string | null;
+}
+
+export interface BrowserPreviewElementDetails {
+  pageUrl: string;
+  pageTitle: string;
+  viewport: { width: number; height: number; devicePixelRatio: number };
+  tagName: string;
+  selector: string;
+  cssPath: string;
+  xpath: string;
+  id: string | null;
+  classNames: string[];
+  role: string | null;
+  ariaLabel: string | null;
+  testId: string | null;
+  text: string;
+  outerHtml: string;
+  attributes: Record<string, string>;
+  rect: BrowserPreviewElementRect;
+  styles: Record<string, string>;
+  hierarchy: BrowserPreviewElementAncestor[];
+}
+
+export type BrowserPreviewAnnotationStatus =
+  | { status: "inactive" | "active" | "cancelled" }
+  | { status: "error"; message: string }
+  | {
+      status: "submitted";
+      comment: string;
+      element: BrowserPreviewElementDetails;
+      /** PNG data URL captured from the browser frame while the element highlight is visible. */
+      screenshotDataUrl: string;
+    };

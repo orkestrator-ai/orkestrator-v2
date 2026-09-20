@@ -4,6 +4,7 @@ import type { AgentConversationMode } from "@orkestrator/protocol/native-agent";
 import type { FileMention } from "@/types";
 import type { WorkspaceAttachment } from "@/components/chat/NativeAttachmentMenu";
 import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
+import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 
 export interface NativeComposeDraft {
   text: string;
@@ -53,6 +54,7 @@ interface NativeComposeState {
   drafts: Map<string, NativeComposeDraft>;
   updateDraft: (sessionKey: string, update: Partial<NativeComposeDraft>) => void;
   clearDraft: (sessionKey: string) => void;
+  consumeBrowserAnnotations: (environmentId: string, annotationIds: readonly string[]) => void;
 }
 
 interface NativeComposePersistenceState {
@@ -249,6 +251,31 @@ export const useNativeComposeStore = create<NativeComposeState>()((set) => ({
       const drafts = new Map(state.drafts);
       drafts.delete(sessionKey);
       return { drafts };
+    }),
+  consumeBrowserAnnotations: (environmentId, annotationIds) =>
+    set((state) => {
+      if (annotationIds.length === 0) return state;
+      const ids = new Set(annotationIds);
+      let changed = false;
+      const drafts = new Map(state.drafts);
+      for (const [sessionKey, draft] of Array.from(drafts)) {
+        if (getEnvironmentIdFromSessionKey(sessionKey) !== environmentId) continue;
+        const annotations = draft.annotations.filter(
+          (annotation) => annotation.source !== "browser" || !ids.has(annotation.id),
+        );
+        const attachments = draft.attachments.filter(
+          (attachment) => !attachment.annotationId || !ids.has(attachment.annotationId),
+        );
+        if (
+          annotations.length === draft.annotations.length &&
+          attachments.length === draft.attachments.length
+        ) {
+          continue;
+        }
+        changed = true;
+        drafts.set(sessionKey, { ...draft, annotations, attachments });
+      }
+      return changed ? { drafts } : state;
     }),
 }));
 

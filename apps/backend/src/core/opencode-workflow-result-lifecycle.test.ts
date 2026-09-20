@@ -4,6 +4,8 @@ import {
   readProviderStatus,
   ProviderDispatchPreparationError,
   AmbiguousPromptDispatchError,
+  PromptRejectedError,
+  ProviderUnavailableError,
 } from "./agent-provider-contract.js";
 import {
   deferred,
@@ -11,7 +13,10 @@ import {
   openCodeProvider,
   waitUntil,
 } from "./agent-provider-test-support.js";
-import { openCodeWorkflowResultToolId } from "./opencode-provider-helpers.js";
+import {
+  openCodeWorkflowResultDenyPermissionRules,
+  openCodeWorkflowResultToolId,
+} from "./opencode-provider-helpers.js";
 
 const sessionId = "owned-session";
 const tool = openCodeWorkflowResultToolId("submit_validation_plan");
@@ -28,6 +33,11 @@ const options = {
 async function action(fake: ReturnType<typeof openCodeFake>, name = tool) {
   const result = await fake.client.session.get({ sessionID: sessionId });
   return result.data?.permission?.findLast((rule) => rule.permission === name)?.action;
+}
+
+async function sessionState(fake: ReturnType<typeof openCodeFake>) {
+  const result = await fake.client.session.get({ sessionID: sessionId });
+  return result.data;
 }
 
 function complete(fake: ReturnType<typeof openCodeFake>, index = fake.promptCalls.length - 1) {
@@ -225,6 +235,74 @@ describe("OpenCode workflow permission lifecycle", () => {
     }
   });
 
+  test("a definite prompt rejection retires the owned grant", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    fake.setPromptResponse({ error: { message: "invalid prompt" }, response: { status: 400 } });
+    try {
+      await expect(provider.send(sessionId, "Prepare", options)).rejects.toBeInstanceOf(
+        PromptRejectedError,
+      );
+      expect(await action(fake)).toBe("deny");
+      expect((await sessionState(fake))?.metadata?.["orkestrator.workflowResultTurn"]).toEqual({
+        version: 1,
+        requestId: options.requestId,
+        settled: true,
+      });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("an explicitly retryable prompt response retains the owned grant", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    fake.setPromptResponse({ error: { message: "overloaded" }, response: { status: 503 } });
+    try {
+      await expect(provider.send(sessionId, "Prepare", options)).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
+      expect(await action(fake)).toBe("allow");
+      expect((await sessionState(fake))?.metadata?.["orkestrator.workflowResultTurn"]).toEqual({
+        version: 1,
+        requestId: options.requestId,
+        settled: false,
+      });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test.each([
+    ["message-level unknown", { finish: "unknown" }, []],
+    ["step-finish only", {}, [{ type: "step-finish", reason: "stop" }]],
+  ])("settles a terminal transcript with %s", async (_label, completion, parts) => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await provider.send(sessionId, "Prepare", options);
+      fake.setMessagesResponse({
+        data: [
+          {
+            info: {
+              role: "assistant",
+              parentID: fake.promptCalls[0]!.messageID,
+              time: { completed: 1 },
+              ...completion,
+            },
+            parts,
+          },
+        ],
+      });
+      await expect(
+        readProviderStatus(provider, sessionId, options.requestId),
+      ).resolves.toMatchObject({ status: "idle", turnSettled: true });
+      expect(await action(fake)).toBe("deny");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("read-only workflow masks expose only this request's tools and ordinary turns deny all", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);
@@ -242,6 +320,40 @@ describe("OpenCode workflow permission lifecycle", () => {
     }
   });
 
+  test("ordinary turns do not append duplicate workflow deny rules", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      for (let index = 0; index < 12; index += 1) {
+        await provider.send(sessionId, `Ordinary ${index}`, {
+          requestId: `ordinary-${index}`,
+        });
+      }
+      expect(fake.updateCalls.filter((update) => Array.isArray(update.permission))).toHaveLength(1);
+      const permission = (await sessionState(fake))?.permission;
+      expect(permission).toBeArray();
+      expect(permission).toHaveLength(openCodeWorkflowResultDenyPermissionRules().length);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("settlement rejects a successful response whose deny rules were not persisted", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await provider.send(sessionId, "Prepare", options);
+      complete(fake);
+      fake.client.session.update = async () => ({ data: {} }) as never;
+      await expect(provider.settleTurn?.(sessionId, options.requestId)).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
+      expect(await action(fake)).toBe("allow");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("an explicit abort settles the owned grant", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);
@@ -250,6 +362,26 @@ describe("OpenCode workflow permission lifecycle", () => {
       await provider.abort(sessionId);
       expect(await action(fake)).toBe("deny");
     } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("abort reaches OpenCode while prompt dispatch still holds the session lock", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    const gate = deferred();
+    fake.setPromptGate(gate.promise);
+    try {
+      const sending = provider.send(sessionId, "Prepare", options);
+      await waitUntil(() => fake.promptCalls.length === 1);
+      const aborting = provider.abort(sessionId);
+      await waitUntil(() => fake.abortCalls.length === 1);
+      expect(fake.abortCalls).toHaveLength(1);
+      gate.resolve();
+      await Promise.all([sending, aborting]);
+      expect(await action(fake)).toBe("deny");
+    } finally {
+      gate.resolve();
       await provider.dispose?.();
     }
   });

@@ -18,6 +18,7 @@ import {
   openCodeWorkflowResultDenyPermissionRules,
   openCodeWorkflowResultPermissionRules,
 } from "./opencode-provider-helpers.js";
+import { openCodeMessageFinishReason } from "./opencode-turn-recovery.js";
 
 const TURN_METADATA_KEY = "orkestrator.workflowResultTurn";
 
@@ -110,30 +111,30 @@ export class OpenCodeWorkflowResultBroker {
   /** Called under the dispatch lock immediately before writing the prompt. */
   async begin(sessionId: string, requestId: string, selectedTool?: string): Promise<void> {
     try {
-      const permission = selectedTool
+      const session = await this.read(sessionId);
+      const expectedPermission = selectedTool
         ? openCodeWorkflowResultPermissionRules(selectedTool)
         : openCodeWorkflowResultDenyPermissionRules();
+      const permission = hasEffectivePermissionRules(session.permission, expectedPermission)
+        ? undefined
+        : expectedPermission;
       const response = await this.client.session.update(
         {
           sessionID: sessionId,
           directory: this.directory,
-          metadata: { [TURN_METADATA_KEY]: { version: 1, requestId, settled: false } },
-          permission,
+          metadata: this.metadata(session, requestId, false),
+          ...(permission ? { permission } : {}),
         },
         this.requestOptions(),
       );
       assertSdkResponse(response, "OpenCode workflow-result permission update");
-      const session = await this.read(sessionId);
-      const rules = session.permission;
-      if (!Array.isArray(rules) || this.owner(session)?.requestId !== requestId) {
+      const persisted = await this.read(sessionId);
+      if (
+        this.owner(persisted)?.requestId !== requestId ||
+        this.owner(persisted)?.settled !== false ||
+        !hasEffectivePermissionRules(persisted.permission, expectedPermission)
+      ) {
         throw new Error("Workflow-result permission update was not persisted");
-      }
-      for (const expected of permission) {
-        const wanted = permission.findLast((rule) => rule.permission === expected.permission)!;
-        const actual = rules.findLast((rule) => asRecord(rule)?.permission === expected.permission);
-        if (asRecord(actual)?.action !== wanted.action || asRecord(actual)?.pattern !== "*") {
-          throw new Error("Workflow-result permission readback did not match");
-        }
       }
     } catch (error) {
       throw new ProviderDispatchPreparationError(
@@ -153,16 +154,34 @@ export class OpenCodeWorkflowResultBroker {
     const owner = this.owner(session);
     if (owner?.requestId !== requestId || owner.settled === true) return;
     await restoreReviewer();
+    // Reviewer restoration appends its base rules. Read again so the workflow
+    // denies are evaluated against that new tail and unrelated metadata written
+    // by another lifecycle remains intact.
+    const current = await this.read(sessionId);
+    const currentOwner = this.owner(current);
+    if (currentOwner?.requestId !== requestId || currentOwner.settled === true) return;
+    const expectedPermission = openCodeWorkflowResultDenyPermissionRules();
+    const permission = hasEffectivePermissionRules(current.permission, expectedPermission)
+      ? undefined
+      : expectedPermission;
     const response = await this.client.session.update(
       {
         sessionID: sessionId,
         directory: this.directory,
-        permission: openCodeWorkflowResultDenyPermissionRules(),
-        metadata: { [TURN_METADATA_KEY]: { version: 1, requestId, settled: true } },
+        ...(permission ? { permission } : {}),
+        metadata: this.metadata(current, requestId, true),
       },
       this.requestOptions(),
     );
     assertSdkResponse(response, "OpenCode workflow-result permission settlement");
+    const persisted = await this.read(sessionId);
+    if (
+      this.owner(persisted)?.requestId !== requestId ||
+      this.owner(persisted)?.settled !== true ||
+      !hasEffectivePermissionRules(persisted.permission, expectedPermission)
+    ) {
+      throw new Error("Workflow-result permission settlement was not persisted");
+    }
   }
 
   async requestId(sessionId: string): Promise<string | undefined> {
@@ -192,16 +211,18 @@ export class OpenCodeWorkflowResultBroker {
           this.requestOptions(),
         );
         assertSdkResponse(response, "OpenCode completion transcript read");
-        const latest = boundedOpenCodeMessageHistory(response.data)
-          .map((message) => asRecord(asRecord(message)?.info))
-          .findLast((info) => info?.role === "user" || info?.role === "assistant");
-        const parent = latest?.role === "assistant" ? latest.parentID : undefined;
+        const latest = boundedOpenCodeMessageHistory(response.data).findLast((message) => {
+          const role = asRecord(asRecord(message)?.info)?.role;
+          return role === "user" || role === "assistant";
+        });
+        const info = asRecord(asRecord(latest)?.info);
+        const parent = info?.role === "assistant" ? info.parentID : undefined;
+        const finish = openCodeMessageFinishReason(latest);
         if (
           typeof parent !== "string" ||
           !parent.endsWith(openCodeRequestMarker(requestId)) ||
-          typeof asRecord(latest?.time)?.completed !== "number" ||
-          (!latest?.error &&
-            (!latest?.finish || latest.finish === "tool-calls" || latest.finish === "unknown"))
+          typeof asRecord(info?.time)?.completed !== "number" ||
+          (!info?.error && (!finish || finish === "tool-calls"))
         )
           return false;
         await this.settle(sessionId, requestId, restoreReviewer);
@@ -220,13 +241,16 @@ export class OpenCodeWorkflowResultBroker {
     restoreReviewer: () => Promise<unknown>,
   ): Promise<void> {
     try {
+      // Interrupt transport immediately. Cleanup is serialized afterwards so
+      // it cannot race a newer dispatch, but the user-visible stop never waits
+      // behind a slow prompt request or permission readback.
+      const response = await this.client.session.abort(
+        { sessionID: sessionId, directory: this.directory },
+        this.requestOptions(),
+      );
+      assertSdkResponse(response, "OpenCode abort");
+      endTurn();
       await this.runExclusive(sessionId, async () => {
-        const response = await this.client.session.abort(
-          { sessionID: sessionId, directory: this.directory },
-          this.requestOptions(),
-        );
-        assertSdkResponse(response, "OpenCode abort");
-        endTurn();
         const requestId = await this.requestId(sessionId);
         if (requestId) await this.settle(sessionId, requestId, restoreReviewer);
       });
@@ -240,6 +264,13 @@ export class OpenCodeWorkflowResultBroker {
     return owner?.version === 1 ? owner : null;
   }
 
+  private metadata(session: Record<string, unknown>, requestId: string, settled: boolean) {
+    return {
+      ...asRecord(session.metadata),
+      [TURN_METADATA_KEY]: { version: 1, requestId, settled },
+    };
+  }
+
   private async read(sessionId: string): Promise<Record<string, unknown>> {
     const response = await this.client.session.get(
       { sessionID: sessionId, directory: this.directory },
@@ -250,6 +281,37 @@ export class OpenCodeWorkflowResultBroker {
     if (!session) throw new Error("OpenCode returned no session permission state");
     return session;
   }
+}
+
+function hasEffectivePermissionRules(current: unknown, expected: readonly unknown[]): boolean {
+  if (!Array.isArray(current)) return false;
+  const wanted = new Map<string, Record<string, unknown>>();
+  for (const rule of expected) {
+    const record = asRecord(rule);
+    if (typeof record?.permission === "string") wanted.set(record.permission, record);
+  }
+  for (const [permission, expectedRule] of wanted) {
+    const actual = current.findLast((rule) => {
+      const record = asRecord(rule);
+      return (
+        typeof record?.permission === "string" &&
+        permissionPatternMatches(record.permission, permission)
+      );
+    });
+    const record = asRecord(actual);
+    if (record?.action !== expectedRule.action || record?.pattern !== expectedRule.pattern) {
+      return false;
+    }
+  }
+  return wanted.size > 0;
+}
+
+function permissionPatternMatches(candidate: string, permission: string): boolean {
+  const source = candidate
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replaceAll("*", ".*")
+    .replaceAll("?", ".");
+  return new RegExp(`^${source}$`, "s").test(permission);
 }
 
 function connected(value: unknown): boolean {

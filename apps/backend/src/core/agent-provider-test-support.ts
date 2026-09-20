@@ -479,10 +479,9 @@ export function openCodeFake(): OpenCodeFake {
             data: {
               ...currentData,
               ...parameters,
-              metadata: {
-                ...(currentData.metadata as object),
-                ...(parameters.metadata as object),
-              },
+              // OpenCode replaces a supplied metadata object. Production code
+              // must preserve unrelated durable markers explicitly.
+              ...(parameters.metadata === undefined ? {} : { metadata: parameters.metadata }),
               ...(permission === undefined ? {} : { permission }),
               id: sessionId,
             },

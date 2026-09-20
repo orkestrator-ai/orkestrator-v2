@@ -625,6 +625,19 @@ export class FeaturePlanningService {
         "The Codex planning session no longer exists; retry creates a replacement",
       );
     }
+    const settlement =
+      activity === "idle" && record.resultTransport === "tool-v1" && record.requestId
+        ? await this.providerOperation(record.environmentId, provider, () =>
+            readProviderStatus(provider, record.providerSessionId!, record.requestId),
+          )
+        : undefined;
+    if (settlement?.status === "missing") {
+      throw new DefiniteFeaturePlanningError(
+        "provider",
+        "dispatching",
+        "The Codex planning session no longer exists; retry creates a replacement",
+      );
+    }
     const baseline = new Set(record.baselineAssistantIds ?? []);
     const messages = await this.providerOperation(record.environmentId, provider, () =>
       this.messages(provider, record.providerSessionId!),
@@ -671,7 +684,12 @@ export class FeaturePlanningService {
             record.requestId ? undefined : record.startedAt,
           );
 
-    if (reply && activity === "idle" && (record.resultTransport !== "tool-v1" || toolAccepted)) {
+    if (
+      reply &&
+      activity === "idle" &&
+      settlement?.turnSettled !== false &&
+      (record.resultTransport !== "tool-v1" || toolAccepted)
+    ) {
       this.idleSince.delete(record.featureId);
       await this.update(record, (_plan, current) => {
         current.rawResponse = boundRawResponse(reply.content);
@@ -680,12 +698,23 @@ export class FeaturePlanningService {
       });
       return;
     }
-    if (!reply && activity === "idle" && toolAccepted) {
+    if (!reply && activity === "idle" && toolAccepted && settlement?.turnSettled !== false) {
       this.idleSince.delete(record.featureId);
       await this.update(record, (_plan, current) => {
         current.rawResponse = "Planning result submitted.";
         current.phase = "persisting";
       });
+      return;
+    }
+    if (activity === "idle" && settlement?.turnSettled === false) {
+      const dispatchedAt = record.dispatchedAt ?? record.updatedAt ?? record.startedAt;
+      if (Date.now() - Date.parse(dispatchedAt) > this.replyDeadlineMs()) {
+        throw new DefiniteFeaturePlanningError(
+          "provider",
+          "dispatching",
+          "Codex did not finish this planning turn in time",
+        );
+      }
       return;
     }
     if (activity === "idle" && !reply) {

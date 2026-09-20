@@ -741,8 +741,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       const messageID = this.messageIds.resolve(scope, history, options.requestId);
       const workflowTool = options.workflowResultTool;
       const reviewEnabled = await this.reviewPermissions.enableForTurn(sessionId, options);
-      // Grant only inside the shared dispatch lock, after all other preparation.
-      // Always write: another provider may have owned the preceding turn.
+      // Grant inside the lock; another provider may have owned the preceding turn.
       await this.workflowResults.begin(sessionId, options.requestId, workflowTool);
       const dispatchStartedAt = this.now();
       this.streamState.beginTurn(sessionId, dispatchStartedAt);
@@ -792,9 +791,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       } catch (error) {
         // The request may have reached OpenCode before the response was lost.
         // The reservation keeps the same ID until transcript reconciliation.
-        // Drop the dispatch clock: if the turn did start, its busy event or the
-        // transcript supplies the time, but an abandoned stamp must not be
-        // inherited by a later turn.
+        // Drop the dispatch clock so a later turn cannot inherit an abandoned stamp.
         this.streamState.rejectTurn(sessionId, dispatchStartedAt);
         throw new AmbiguousPromptDispatchError("OpenCode prompt dispatch outcome is unknown", {
           cause: error,
@@ -812,6 +809,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
             `OpenCode prompt dispatch is temporarily unavailable (HTTP ${status})`,
           );
         }
+        await this.workflowResults.settle(sessionId, options.requestId, () =>
+          this.reviewPermissions.restoreIfNeeded(sessionId),
+        );
         throw new PromptRejectedError("OpenCode rejected the prompt");
       }
       this.messageIds.markAccepted(scope, options.requestId);

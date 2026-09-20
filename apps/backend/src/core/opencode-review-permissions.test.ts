@@ -242,6 +242,9 @@ describe("OpenCode reviewer shell permissions", () => {
       });
       expect(fake.updateCalls).toHaveLength(4);
       expect(actionFor(fake.updateCalls[2]!, "bash", "git diff HEAD")).toBe("allow");
+      fake.setSessionGetResponse("consolidation-session", {
+        data: { id: "consolidation-session", directory: "/workspace" },
+      });
       await restored.send("consolidation-session", "Combine the reports", {
         requestId: "consolidation-request",
         mode: "build",
@@ -396,6 +399,11 @@ describe("OpenCode reviewer shell permissions", () => {
         agentMcp,
         workflowResultTool: "submit_review_report",
       });
+      expect(
+        (await fake.client.session.get({ sessionID: sessionId })).data?.metadata?.[
+          "orkestrator.reviewSession"
+        ],
+      ).toEqual({ version: 1, policy: effectiveOpenCodePolicy(policy) });
     } finally {
       await first.dispose?.();
     }
@@ -412,6 +420,11 @@ describe("OpenCode reviewer shell permissions", () => {
       await expect(restoredProvider.status("review-session")).resolves.toBe("idle");
       completeTurn(fake);
       await restoredProvider.settleTurn?.("review-session", reviewOptions.requestId);
+      expect(
+        (await fake.client.session.get({ sessionID: "review-session" })).data?.metadata?.[
+          "orkestrator.reviewSession"
+        ],
+      ).toEqual({ version: 1, policy: effectiveOpenCodePolicy(policy) });
       const baseRestore = fake.updateCalls.at(-2)!;
       const workflowRestore = fake.updateCalls.at(-1)!;
       expect(baseRestore.permission).toEqual(

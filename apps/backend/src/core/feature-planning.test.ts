@@ -62,6 +62,8 @@ class FakeProvider implements BuildPipelineProvider {
   statusState: ProviderStatus = "idle";
   transcript: BridgeMessage[] = [];
   aborted: string[] = [];
+  settleCalls: Array<{ sessionId: string; requestId: string }> = [];
+  settleResult = true;
   disposeCount = 0;
   sendBehaviour: "ok" | "ambiguous" | "reject" = "ok";
   statusError: Error | null = null;
@@ -132,6 +134,11 @@ class FakeProvider implements BuildPipelineProvider {
   async structured<T>(): Promise<null> {
     void 0 as unknown as T;
     return null;
+  }
+
+  async settleTurn(sessionId: string, requestId: string): Promise<boolean> {
+    this.settleCalls.push({ sessionId, requestId });
+    return this.settleResult;
   }
 
   async abort(sessionId: string): Promise<void> {
@@ -344,6 +351,9 @@ describe("FeaturePlanningService", () => {
       await context.service.advanceNow(context.featureId);
 
       const settled = await context.storage.getFeaturePlan(context.featureId);
+      expect(context.provider.settleCalls).toEqual([
+        { sessionId: "session-existing", requestId: record.requestId! },
+      ]);
       expect(settled?.planning).toBeUndefined();
       expect(settled?.status).toBe("confirming");
       expect(settled?.title).toBe("Bulk export");
@@ -439,7 +449,42 @@ describe("FeaturePlanningService", () => {
       context.provider.activityState = "idle";
       await context.service.advanceNow(context.featureId);
       await context.service.advanceNow(context.featureId);
+      expect(context.provider.settleCalls).toEqual([
+        { sessionId: "session-existing", requestId: record.requestId! },
+      ]);
       expect((await context.storage.getFeaturePlan(context.featureId))?.title).toBe("Bulk export");
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("does not consume a tool result until request-scoped provider settlement succeeds", async () => {
+    const context = await harness({ toolMode: true });
+    try {
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+      const record = (await context.record())!;
+      await context.workflowResults!.submit(
+        { environmentId: "env-1", projectId: "project-1" },
+        record.requestId!,
+        { phase: "confirming", title: "Bulk export", summary: "Export every report as CSV" },
+      );
+      context.provider.settleResult = false;
+      context.provider.reply("The export plan is ready for confirmation.");
+
+      await context.service.advanceNow(context.featureId);
+      expect((await context.record())?.phase).toBe("running");
+      expect(await context.workflowResults!.structured(record.requestId!)).toMatchObject({
+        ok: true,
+      });
+
+      context.provider.settleResult = true;
+      await context.service.advanceNow(context.featureId);
+      await context.service.advanceNow(context.featureId);
+      expect((await context.storage.getFeaturePlan(context.featureId))?.planning).toBeUndefined();
+      expect(context.provider.settleCalls).toEqual([
+        { sessionId: "session-existing", requestId: record.requestId! },
+        { sessionId: "session-existing", requestId: record.requestId! },
+      ]);
     } finally {
       await context.dispose();
     }

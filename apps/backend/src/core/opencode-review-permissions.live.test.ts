@@ -162,12 +162,24 @@ liveTest(
       };
       const owner = makeProvider(),
         observer = makeProvider();
-      const sessionId = await owner.createSession("validation", "Isolated workflow lifecycle");
+      const policy = effectiveOpenCodePolicy(
+        resolveNativeAgentExecutionPolicy(
+          { environmentType: "local", networkAccessMode: "full" },
+          "looped-review",
+        ),
+      );
+      const sessionId = await owner.createSession("validation", "Isolated workflow lifecycle", {
+        reviewerSession: true,
+        policy,
+      });
       const options = {
         requestId: resultKey,
         workflowResultTool: "submit_validation_plan",
         agentMcp,
         model: "fixture/fixture",
+        mode: "plan" as const,
+        readOnly: true,
+        reviewShellPolicy: policy,
       };
       await owner.prepareDispatch(sessionId, options);
       // Observe precisely between the permission grant and the real HTTP prompt.
@@ -176,6 +188,10 @@ liveTest(
       client.session.promptAsync = (async (...args: Parameters<typeof promptAsync>) => {
         expect((await readProviderStatus(observer, sessionId)).status).toBe("idle");
         const snapshot = await client.session.get({ sessionID: sessionId });
+        expect(snapshot.data?.metadata?.["orkestrator.reviewSession"]).toEqual({
+          version: 1,
+          policy,
+        });
         expect(
           snapshot.data?.permission?.findLast((rule) => rule.permission === selected)?.action,
         ).toBe("allow");
@@ -207,6 +223,10 @@ liveTest(
       expect(await results.projection(resultKey)).toBe("received");
       expect(await results.structured(resultKey)).toMatchObject({ ok: true, value: plan });
       const settled = await client.session.get({ sessionID: sessionId });
+      expect(settled.data?.metadata?.["orkestrator.reviewSession"]).toEqual({
+        version: 1,
+        policy,
+      });
       expect(
         settled.data?.permission?.findLast((rule) => rule.permission === selected)?.action,
       ).toBe("deny");

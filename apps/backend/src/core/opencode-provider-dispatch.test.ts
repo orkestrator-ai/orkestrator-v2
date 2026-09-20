@@ -210,6 +210,7 @@ describe("OpenCode provider dispatch", () => {
 
   test("shares one MCP registration across concurrent sends and re-registers after a token rotation", async () => {
     const fake = openCodeFake();
+    fake.setSessionGetResponse("other-session", { data: { id: "other-session" } });
     const gate = deferred();
     let inFlight = 0;
     let maxInFlight = 0;
@@ -700,6 +701,7 @@ describe("OpenCode provider dispatch", () => {
     const sendingFake = openCodeFake();
     const probingFake = openCodeFake();
     const gate = deferred();
+    sendingFake.setSessionGetResponse("shared-session", { data: { id: "shared-session" } });
     sendingFake.setPromptGate(gate.promise);
     probingFake.setMessagesResponse({
       data: [
@@ -847,6 +849,7 @@ describe("OpenCode provider dispatch", () => {
     const provider = openCodeProvider(fake);
     try {
       const sessionId = "ses_fcd9281c1001abcdefghijklmn";
+      fake.setSessionGetResponse(sessionId, { data: { id: sessionId } });
       await provider.send(sessionId, "First", {
         requestId: "zz",
       });
@@ -894,6 +897,8 @@ describe("OpenCode provider dispatch", () => {
     const firstFake = openCodeFake();
     const secondFake = openCodeFake();
     const gate = deferred();
+    firstFake.setSessionGetResponse("shared-session", { data: { id: "shared-session" } });
+    secondFake.setSessionGetResponse("shared-session", { data: { id: "shared-session" } });
     firstFake.setPromptGate(gate.promise);
     const firstProvider = openCodeProvider(firstFake, 1, coordinator);
     const secondProvider = openCodeProvider(secondFake, 1, coordinator);

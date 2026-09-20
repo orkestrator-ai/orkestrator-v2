@@ -56,6 +56,22 @@ async function createReviewerSession(
   });
 }
 
+function completeTurn(fake: OpenCodeFake) {
+  fake.setMessagesResponse({
+    data: [
+      {
+        info: {
+          role: "assistant",
+          parentID: fake.promptCalls.at(-1)!.messageID,
+          time: { completed: 1 },
+          finish: "stop",
+        },
+        parts: [],
+      },
+    ],
+  });
+}
+
 describe("OpenCode reviewer shell permissions", () => {
   test("forwards the selected model and non-default reasoning to session.create", async () => {
     const fake = openCodeFake();
@@ -89,7 +105,7 @@ describe("OpenCode reviewer shell permissions", () => {
     try {
       const sessionId = await createReviewerSession(fake, provider);
       await provider.send(sessionId, "Inspect the packaged Git diff", reviewOptions);
-      expect(fake.updateCalls).toHaveLength(1);
+      expect(fake.updateCalls).toHaveLength(2);
       const update = fake.updateCalls[0]!;
       expect(update).toMatchObject({ sessionID: "review-session", directory: "/workspace" });
       for (const tool of ["read", "grep"]) {
@@ -156,7 +172,7 @@ describe("OpenCode reviewer shell permissions", () => {
         policy: resolveNativeAgentExecutionPolicy(environment, "coordinator"),
       });
       await provider.send(sessionId, "Inspect evidence", reviewOptions);
-      expect(fake.updateCalls).toHaveLength(0);
+      expect(fake.updateCalls).toHaveLength(1);
       expect(fake.promptCalls[0]!.tools).toMatchObject({ bash: false, shell: false });
     } finally {
       await provider.dispose?.();
@@ -177,7 +193,7 @@ describe("OpenCode reviewer shell permissions", () => {
     const restored = openCodeProvider(fake);
     try {
       await restored.send("coordinator-session", "Inspect evidence", reviewOptions);
-      expect(fake.updateCalls).toHaveLength(0);
+      expect(fake.updateCalls).toHaveLength(1);
       expect(fake.promptCalls[0]!.tools).toMatchObject({ bash: false, shell: false });
     } finally {
       await restored.dispose?.();
@@ -224,14 +240,17 @@ describe("OpenCode reviewer shell permissions", () => {
         ...reviewOptions,
         requestId: "review-continuation",
       });
-      expect(fake.updateCalls).toHaveLength(2);
-      expect(actionFor(fake.updateCalls[1]!, "bash", "git diff HEAD")).toBe("allow");
+      expect(fake.updateCalls).toHaveLength(4);
+      expect(actionFor(fake.updateCalls[2]!, "bash", "git diff HEAD")).toBe("allow");
+      fake.setSessionGetResponse("consolidation-session", {
+        data: { id: "consolidation-session", directory: "/workspace" },
+      });
       await restored.send("consolidation-session", "Combine the reports", {
         requestId: "consolidation-request",
         mode: "build",
         readOnly: true,
       });
-      expect(fake.updateCalls).toHaveLength(2);
+      expect(fake.updateCalls).toHaveLength(5);
       expect(fake.promptCalls.at(-1)!.tools).toMatchObject({
         bash: false,
         shell: false,
@@ -252,19 +271,22 @@ describe("OpenCode reviewer shell permissions", () => {
       fake.setStatusResponse({ data: { [sessionId]: { type: "idle" } } });
 
       await expect(provider.status(sessionId)).resolves.toBe("idle");
-      expect(fake.updateCalls).toHaveLength(3);
-      const restored = fake.updateCalls[1]!;
+      expect(fake.updateCalls).toHaveLength(2);
+      completeTurn(fake);
+      await provider.settleTurn?.(sessionId, reviewOptions.requestId);
+      expect(fake.updateCalls).toHaveLength(4);
+      const restored = fake.updateCalls[2]!;
       expect(actionFor(restored, "bash", "git commit -am later")).toBe("allow");
       expect(actionFor(restored, "edit")).toBe("allow");
       expect(
-        actionFor(fake.updateCalls[2]!, "orkestrator_workflow_result_submit_review_report"),
+        actionFor(fake.updateCalls[3]!, "orkestrator_workflow_result_submit_review_report"),
       ).toBe("deny");
 
       await provider.send(sessionId, "Continue in build mode", {
         requestId: "later-build-turn",
         mode: "build",
       });
-      expect(fake.updateCalls).toHaveLength(3);
+      expect(fake.updateCalls).toHaveLength(5);
       expect(fake.promptCalls.at(-1)!.tools).toBeUndefined();
     } finally {
       await provider.dispose?.();
@@ -291,11 +313,13 @@ describe("OpenCode reviewer shell permissions", () => {
     fake.setStatusResponse({ data: { "review-session": { type: "idle" } } });
     try {
       await expect(restoredProvider.status("review-session")).resolves.toBe("idle");
-      expect(fake.updateCalls).toHaveLength(3);
-      expect(actionFor(fake.updateCalls[1]!, "edit")).toBe("allow");
-      expect(actionFor(fake.updateCalls[1]!, "bash", "git commit -am later")).toBe("allow");
+      completeTurn(fake);
+      await restoredProvider.settleTurn?.("review-session", reviewOptions.requestId);
+      expect(fake.updateCalls).toHaveLength(4);
+      expect(actionFor(fake.updateCalls[2]!, "edit")).toBe("allow");
+      expect(actionFor(fake.updateCalls[2]!, "bash", "git commit -am later")).toBe("allow");
       expect(
-        actionFor(fake.updateCalls[2]!, "orkestrator_workflow_result_submit_review_report"),
+        actionFor(fake.updateCalls[3]!, "orkestrator_workflow_result_submit_review_report"),
       ).toBe("deny");
     } finally {
       await restoredProvider.dispose?.();
@@ -375,6 +399,11 @@ describe("OpenCode reviewer shell permissions", () => {
         agentMcp,
         workflowResultTool: "submit_review_report",
       });
+      expect(
+        (await fake.client.session.get({ sessionID: sessionId })).data?.metadata?.[
+          "orkestrator.reviewSession"
+        ],
+      ).toEqual({ version: 1, policy: effectiveOpenCodePolicy(policy) });
     } finally {
       await first.dispose?.();
     }
@@ -389,6 +418,13 @@ describe("OpenCode reviewer shell permissions", () => {
     fake.setStatusResponse({ data: { "review-session": { type: "idle" } } });
     try {
       await expect(restoredProvider.status("review-session")).resolves.toBe("idle");
+      completeTurn(fake);
+      await restoredProvider.settleTurn?.("review-session", reviewOptions.requestId);
+      expect(
+        (await fake.client.session.get({ sessionID: "review-session" })).data?.metadata?.[
+          "orkestrator.reviewSession"
+        ],
+      ).toEqual({ version: 1, policy: effectiveOpenCodePolicy(policy) });
       const baseRestore = fake.updateCalls.at(-2)!;
       const workflowRestore = fake.updateCalls.at(-1)!;
       expect(baseRestore.permission).toEqual(

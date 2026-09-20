@@ -124,6 +124,7 @@ class FakeProvider implements BuildPipelineProvider {
   readonly creates: Array<ProviderCreateSessionOptions | undefined> = [];
   readonly pending = new Map<string, AgentInteractionRequest[]>();
   statusValue: ProviderStatus = "idle";
+  settleTurn?: (sessionId: string, requestId: string) => Promise<boolean>;
   statusRejectCount = 0;
   /**
    * Terminal turn detail, reported the way the HTTP bridge reports one: as a
@@ -643,6 +644,19 @@ describe("LoopedReviewService", () => {
             limitations: ["No validation configured."],
           },
         );
+        // A result can precede the agent's final response. Its backend owner
+        // must stay alive to retire permissions before consuming the result.
+        const settle = mock(async () => false);
+        provider.settleTurn = settle;
+        await service.advanceNow(started.id);
+        expect((await snapshot(storage, started.id)).phase).toBe(dispatched.phase);
+        expect(settle).toHaveBeenCalledWith(
+          dispatched.sessions.find((session) => session.id === dispatched.activeSessionId)!
+            .providerSessionId,
+          requestId,
+        );
+        expect(provider.disposeCount).toBe(0);
+        provider.settleTurn = async () => true;
         await service.advanceNow(started.id);
 
         expect((await snapshot(storage, started.id)).phase).toBe("discovering");

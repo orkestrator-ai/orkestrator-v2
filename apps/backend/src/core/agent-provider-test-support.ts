@@ -381,11 +381,14 @@ export function openCodeFake(): OpenCodeFake {
 
   const client = {
     mcp: {
+      async status() {
+        return { data: { orkestrator_workflow_result: { status: "connected" } } };
+      },
       async add(parameters: Record<string, unknown>) {
         mcpAddCalls.push(parameters);
         if (mcpAddHandler) return mcpAddHandler(parameters);
         if (mcpAddError) throw mcpAddError;
-        return { data: true };
+        return { data: { orkestrator_workflow_result: { status: "connected" } } };
       },
     },
     event: {
@@ -476,6 +479,9 @@ export function openCodeFake(): OpenCodeFake {
             data: {
               ...currentData,
               ...parameters,
+              // OpenCode replaces a supplied metadata object. Production code
+              // must preserve unrelated durable markers explicitly.
+              ...(parameters.metadata === undefined ? {} : { metadata: parameters.metadata }),
               ...(permission === undefined ? {} : { permission }),
               id: sessionId,
             },

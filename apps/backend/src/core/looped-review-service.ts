@@ -863,6 +863,9 @@ export class LoopedReviewService {
       return;
     }
     let result: StructuredOutputResult<unknown> | null;
+    // OpenCode permission settlement is request-scoped and belongs to this
+    // workflow, including the successful tool-result path below.
+    const turnSettled = await provider.settleTurn?.(session.providerSessionId, dispatch.requestId);
     try {
       if (dispatch.resultTransport === "tool-v1") {
         dispatch.resultSubmission = await this.options.workflowResults?.projection(
@@ -881,6 +884,9 @@ export class LoopedReviewService {
     }
     await this.assertFence(workflow.id, lease.token);
     if (result) {
+      // A submission can arrive before the agent's final response. Keep the
+      // backend owner alive until it has safely retired this turn's grant.
+      if (turnSettled === false) return;
       await this.applyResult(workflow, session, dispatch, result, lease.token);
       if (dispatch.resultTransport === "tool-v1") {
         await this.consumePendingResults(workflow, lease.token);
@@ -896,6 +902,7 @@ export class LoopedReviewService {
     const { status, error: statusDetail } = await readProviderStatus(
       provider,
       session.providerSessionId,
+      dispatch.requestId,
     );
     await this.assertFence(workflow.id, lease.token);
     if (status === "blocked") {
@@ -911,7 +918,7 @@ export class LoopedReviewService {
       );
     }
     if (status === "missing") throw new MissingProviderSessionError();
-    if (status === "idle") {
+    if (status === "idle" && turnSettled !== false) {
       const wait =
         workflow.structuredWait?.dispatchId === dispatch.id
           ? workflow.structuredWait

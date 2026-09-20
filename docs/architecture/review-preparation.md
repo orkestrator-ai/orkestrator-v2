@@ -33,6 +33,30 @@ host the worker. Project commands still need their own declared tools installed.
 
 ## Execution and parallelism
 
+### OpenCode submission-tool ownership
+
+OpenCode's workflow-result MCP connection is warmed up before dispatch, but
+temporary permissions are granted only immediately before the prompt. The
+broker verifies a `connected` MCP status (HTTP success alone is insufficient),
+persists the owning request in session metadata, and reads the permission grant
+back before dispatching. Each turn exposes only its selected submission tool
+and the validation/status helpers; ordinary turns deny the workflow tools.
+
+Status readers, including a review tab inspecting a session through a separate
+provider, never restore permissions. Backend workflow owners settle by request
+ID under the same per-session lock as dispatch. Cleanup requires a terminal
+assistant response belonging to that request, not an idle status alone: an
+accepted asynchronous prompt may not have appeared yet. A stale cleanup cannot
+revoke a newer turn, and provider recreation recovers ownership from metadata.
+Explicit abort also retires the owned grant. No renderer or live event is
+required for completion or cleanup.
+
+The opt-in OpenCode compatibility suite exercises the real server against a
+local mock model and authenticated result store, including an idle observer
+between grant and prompt, successful submission, and provider recreation.
+
+### Validation commands
+
 Commands with satisfied prerequisites can overlap. The initial concurrency
 budget is two: weight-one commands can run together, while internally parallel
 or memory-heavy commands use weight two. Overlapping resource names serialize;

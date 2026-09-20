@@ -71,6 +71,12 @@ describe("OpenCode provider dispatch", () => {
       const other = openCodeWorkflowResultToolId("submit_fix_result");
       const validate = openCodeWorkflowResultToolId("validate_workflow_result");
       const status = openCodeWorkflowResultToolId("get_workflow_result_status");
+      expect(fake.updateCalls).toHaveLength(0);
+      await provider.send("owned-session", "prompt", {
+        requestId: "request-1",
+        agentMcp,
+        workflowResultTool: "submit_review_report",
+      });
       expect(fake.updateCalls[0]?.permission).toEqual(
         openCodeWorkflowResultPermissionRules("submit_review_report"),
       );
@@ -79,11 +85,6 @@ describe("OpenCode provider dispatch", () => {
       expect(actionFor(fake.updateCalls[0]!, validate)).toBe("allow");
       expect(actionFor(fake.updateCalls[0]!, status)).toBe("allow");
 
-      await provider.send("owned-session", "prompt", {
-        requestId: "request-1",
-        agentMcp,
-        workflowResultTool: "submit_review_report",
-      });
       expect(fake.mcpAddCalls).toHaveLength(1);
       expect(fake.promptCalls[0]?.tools).toBeUndefined();
       await expect(provider.status("owned-session")).resolves.toBe("idle");
@@ -209,6 +210,7 @@ describe("OpenCode provider dispatch", () => {
 
   test("shares one MCP registration across concurrent sends and re-registers after a token rotation", async () => {
     const fake = openCodeFake();
+    fake.setSessionGetResponse("other-session", { data: { id: "other-session" } });
     const gate = deferred();
     let inFlight = 0;
     let maxInFlight = 0;
@@ -217,7 +219,7 @@ describe("OpenCode provider dispatch", () => {
       maxInFlight = Math.max(maxInFlight, inFlight);
       await gate.promise;
       inFlight -= 1;
-      return { data: true, parameters };
+      return { data: { orkestrator_workflow_result: { status: "connected" } }, parameters };
     });
     const provider = openCodeProvider(fake);
     const agentMcp = {
@@ -286,7 +288,7 @@ describe("OpenCode provider dispatch", () => {
     }
   });
 
-  test("idle restore after provider recreation repairs a persisted allow without re-enabling", async () => {
+  test("request settlement after provider recreation repairs a persisted allow", async () => {
     const fake = openCodeFake();
     const agentMcp = {
       url: "http://127.0.0.1:43123/mcp",
@@ -306,12 +308,28 @@ describe("OpenCode provider dispatch", () => {
     const restored = openCodeProvider(fake);
     try {
       await expect(restored.status("owned-session")).resolves.toBe("idle");
+      expect(fake.updateCalls).toHaveLength(1);
+      fake.setMessagesResponse({
+        data: [
+          {
+            info: {
+              role: "assistant",
+              parentID: fake.promptCalls[0]!.messageID,
+              time: { completed: 1 },
+              finish: "stop",
+            },
+            parts: [],
+          },
+        ],
+      });
+      await restored.settleTurn?.("owned-session", "request-1");
       const afterRestore = (
         ((await fake.client.session.get({ sessionID: "owned-session" })).data as {
           permission?: unknown[];
         }) ?? {}
       ).permission;
       await expect(restored.status("owned-session")).resolves.toBe("idle");
+      await restored.settleTurn?.("owned-session", "request-1");
       const deny = openCodeWorkflowResultDenyPermissionRules();
       const idleRestores = fake.updateCalls.filter(
         (update) =>
@@ -683,6 +701,7 @@ describe("OpenCode provider dispatch", () => {
     const sendingFake = openCodeFake();
     const probingFake = openCodeFake();
     const gate = deferred();
+    sendingFake.setSessionGetResponse("shared-session", { data: { id: "shared-session" } });
     sendingFake.setPromptGate(gate.promise);
     probingFake.setMessagesResponse({
       data: [
@@ -830,6 +849,7 @@ describe("OpenCode provider dispatch", () => {
     const provider = openCodeProvider(fake);
     try {
       const sessionId = "ses_fcd9281c1001abcdefghijklmn";
+      fake.setSessionGetResponse(sessionId, { data: { id: sessionId } });
       await provider.send(sessionId, "First", {
         requestId: "zz",
       });
@@ -877,6 +897,8 @@ describe("OpenCode provider dispatch", () => {
     const firstFake = openCodeFake();
     const secondFake = openCodeFake();
     const gate = deferred();
+    firstFake.setSessionGetResponse("shared-session", { data: { id: "shared-session" } });
+    secondFake.setSessionGetResponse("shared-session", { data: { id: "shared-session" } });
     firstFake.setPromptGate(gate.promise);
     const firstProvider = openCodeProvider(firstFake, 1, coordinator);
     const secondProvider = openCodeProvider(secondFake, 1, coordinator);

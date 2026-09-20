@@ -213,7 +213,7 @@ describe("OpenCode provider runtime", () => {
         { sessionID: "owned-session" },
         { sessionID: "owned-session" },
       ]);
-      expect(fake.abortCalls).toEqual([{ sessionID: "owned-session" }]);
+      expect(fake.abortCalls).toEqual([{ sessionID: "owned-session", directory: "/workspace" }]);
       expect(fake.deleteCalls).toEqual([{ sessionID: "owned-session" }]);
     } finally {
       await provider.dispose?.();
@@ -1648,9 +1648,8 @@ describe("OpenCode provider runtime", () => {
         Array.from({ length: 5 }, () => ({ directory: "/workspace" })),
       );
       expect(fake.sessionListCallCount).toBe(0);
-      // The owned idle session is reconciled once for a stale workflow-result
-      // allow; the missing session still uses its ordinary existence probe.
-      expect(fake.sessionGetCallCount).toBe(2);
+      // Only the missing session needs an existence probe; idle is read-only.
+      expect(fake.sessionGetCallCount).toBe(1);
 
       fake.setPromptResponse({ error: { message: "rejected" } });
       await expect(

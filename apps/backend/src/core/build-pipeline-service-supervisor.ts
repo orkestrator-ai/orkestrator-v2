@@ -433,10 +433,11 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     // otherwise a stale `reconnectAttempt` outlives the harness it accused —
     // and the `error` branch, which is the only one that fails the stage with
     // the provider's own explanation rather than an anonymous read fault.
-    const { status, error: statusDetail } = await readProviderStatus(
-      provider,
-      session.sdkSessionId,
-    );
+    const {
+      status,
+      error: statusDetail,
+      turnSettled,
+    } = await readProviderStatus(provider, session.sdkSessionId, session.structuredRequestId);
     // Only the harness that was recorded as unreachable can clear its own
     // reconnect attempt. A stage transition resolves the *next* step's provider
     // before it records that step's session, so a failure there belongs to a
@@ -486,6 +487,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       await this.dispatchPending(pipeline, provider);
       return;
     }
+    if (status === "idle" && turnSettled === false) return;
     if (status === "running") {
       const transcriptChanged = await this.refreshTranscript(session, provider);
       const statusChanged = session.status !== "running";

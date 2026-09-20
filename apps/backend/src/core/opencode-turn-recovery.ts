@@ -103,7 +103,7 @@ function turnExecutionSettings(
  * the reason that ended the message. Falls back to the message-level `finish`
  * field, which newer OpenCode versions also persist.
  */
-function finishReason(entry: unknown): string | undefined {
+export function openCodeMessageFinishReason(entry: unknown): string | undefined {
   let reason: string | undefined;
   for (const part of messageParts(entry)) {
     if (
@@ -167,7 +167,7 @@ export function inspectOpenCodeIncompleteTurn(
   if (
     typeof info.id !== "string" ||
     (info.error !== undefined && info.error !== null) ||
-    finishReason(latestAssistant) !== "unknown" ||
+    openCodeMessageFinishReason(latestAssistant) !== "unknown" ||
     textContent(latestAssistant).trim().length > 0
   ) {
     return null;

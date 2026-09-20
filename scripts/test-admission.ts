@@ -9,6 +9,7 @@ export function createTestAdmission(
   root: string,
   env: NodeJS.ProcessEnv,
   log: (line: string) => void,
+  clock: () => number = () => performance.now(),
 ) {
   if (env.ORKESTRATOR_TEST_PARENT_RESERVATION) {
     throw new Error(
@@ -23,7 +24,9 @@ export function createTestAdmission(
     !Array.isArray(resources) ||
     resources.length > 32 ||
     resources.some(
-      (resource) => typeof resource !== "string" || !/^(\*|resource:[a-f0-9]{64})$/.test(resource),
+      (resource) =>
+        typeof resource !== "string" ||
+        !/^(\*|resource:[a-f0-9]{64}|workspace:[a-f0-9]{64}:(?:[a-f0-9]{64}|\*))$/.test(resource),
     )
   )
     throw new Error("Invalid validation resource declarations");
@@ -37,7 +40,7 @@ export function createTestAdmission(
   });
   const capacity = scheduler.capacity();
   const owner = scheduler.owner(root);
-  type AdmissionJob = { state: "queued" | "running"; enqueuedAt: number; startedAt: number };
+  type AdmissionJob = { state: "queued" | "running"; queueReason?: string };
   const jobs = new Map<string, AdmissionJob>();
   const channel = env.ORKESTRATOR_VALIDATION_SCHEDULER_STATE;
   const queueTimeout = Math.max(
@@ -47,42 +50,44 @@ export function createTestAdmission(
   let cancelled = false,
     incomplete = false,
     sequence = 0;
-  // Finalized wait/execution totals. A live job's contribution is added at
-  // publish time, so only intervals with an actual queued or running ticket are
-  // counted; runner setup, idle gaps, and finalization are excluded.
+  // Integrate wall time once, before every state transition. Parallel groups
+  // do not multiply either deadline. Running takes precedence over queued;
+  // individual tickets separately enforce their own queue wait deadline.
   let executionMs = 0,
-    queuedMs = 0;
-  let lastState = "queued";
+    queuedMs = 0,
+    clockAt = clock();
+  const advanceClock = () => {
+    const now = clock();
+    const elapsed = Math.max(0, now - clockAt);
+    if (Array.from(jobs.values()).some((job) => job.state === "running")) executionMs += elapsed;
+    else if (jobs.size) queuedMs += elapsed;
+    clockAt = now;
+  };
   const settle = (id: string) => {
-    const job = jobs.get(id);
-    if (!job) return;
-    if (job.state === "running") executionMs += Date.now() - job.startedAt;
-    else queuedMs += Date.now() - job.enqueuedAt;
+    advanceClock();
     jobs.delete(id);
   };
   function publish(done = false) {
+    advanceClock();
     const now = Date.now();
-    let execution = executionMs,
-      queued = queuedMs,
-      running = false;
-    for (const job of jobs.values()) {
-      if (job.state === "running") {
-        execution += now - job.startedAt;
-        running = true;
-      } else queued += now - job.enqueuedAt;
-    }
-    lastState = done ? (incomplete ? "incomplete" : "completed") : running ? "running" : "queued";
+    const running = Array.from(jobs.values()).some((job) => job.state === "running");
+    const state = done ? (incomplete ? "incomplete" : "completed") : running ? "running" : "queued";
+    const queueReason = done
+      ? undefined
+      : Array.from(jobs.values()).find((job) => job.queueReason)?.queueReason;
     if (!channel) return;
     const temp = channel + "." + process.pid + "." + ++sequence;
     writeFileSync(
       temp,
       JSON.stringify({
         version: 1,
+        timing: "wall",
         pid: process.pid,
-        state: lastState,
+        state,
+        queueReason,
         heartbeat: now,
-        executionMs: execution,
-        queuedMs: queued,
+        executionMs: Math.floor(executionMs),
+        queuedMs: Math.floor(queuedMs),
       }),
       { mode: 0o600, flag: "wx" },
     );
@@ -123,11 +128,21 @@ export function createTestAdmission(
                 ...resources,
               ],
         });
-        jobs.set(id, { state: "queued", enqueuedAt: Date.now(), startedAt: 0 });
+        advanceClock();
+        jobs.set(id, { state: "queued" });
         log(`QUEUED ${group.name}: waiting for host capacity`);
         publish();
         const queuedAt = Date.now();
-        while (scheduler.poll(id).state !== "running") {
+        let lastReason: string | undefined;
+        while (true) {
+          const status = scheduler.poll(id);
+          const job = jobs.get(id)!;
+          job.queueReason = status.queueReason;
+          if (status.state === "running") break;
+          if (status.queueReason !== lastReason) {
+            lastReason = status.queueReason;
+            log(`QUEUED ${group.name}: ${lastReason}`);
+          }
           if (cancelled) throw new Error("Validation was cancelled while queued");
           if (Date.now() - queuedAt >= queueTimeout)
             throw new Error("Host capacity wait expired; tests did not run");
@@ -160,9 +175,9 @@ export function createTestAdmission(
         }
         const job = jobs.get(id);
         if (job) {
-          queuedMs += Date.now() - job.enqueuedAt;
+          advanceClock();
           job.state = "running";
-          job.startedAt = Date.now();
+          delete job.queueReason;
         }
         publish();
         log(

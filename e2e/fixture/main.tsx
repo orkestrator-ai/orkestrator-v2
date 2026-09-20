@@ -982,6 +982,8 @@ const reviewValidationOutputRun: ReviewValidationRun = {
     validationResult("cargo", longValidationCommand, 8_000, 2_000),
     validationResult("typecheck", "mise run typecheck", 4_100, 4_000, {
       status: "queued",
+      queueReason:
+        "Waiting for exclusive resource held by worktree abcdef012345 (PID 1234); 2/8 slots and 2048/85196 MiB reserved; needs 3 slots and 3072 MiB.",
       exitCode: null,
     }),
     validationResult("lint", "mise run lintfix", 1_000),
@@ -993,22 +995,44 @@ const reviewValidationOutputRun: ReviewValidationRun = {
 };
 
 function ReviewValidationOutputFixture() {
+  const [visible, setVisible] = useState(true);
+  const [run, setRun] = useState(reviewValidationOutputRun);
   return (
     <main className="min-h-screen bg-background p-4 text-foreground">
-      <ReviewValidationStatus
-        environmentId="env-1"
-        run={reviewValidationOutputRun}
-        loadOutput={async () => ({
-          resultId: "test",
-          status: "passed",
-          stdout: {
-            contentBase64: btoa("ok\n"),
-            totalBytes: 3,
-            startOffset: 0,
-          },
-          stderr: null,
-        })}
-      />
+      <button type="button" onClick={() => setVisible((value) => !value)}>
+        {visible ? "Hide validation" : "Show validation"}
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          setRun((value) => ({
+            ...value,
+            results: value.results.map((result) =>
+              result.status === "queued"
+                ? { ...result, status: "passed", exitCode: 0, queueReason: undefined }
+                : result,
+            ),
+          }))
+        }
+      >
+        Complete background validation
+      </button>
+      {visible && (
+        <ReviewValidationStatus
+          environmentId="env-1"
+          run={run}
+          loadOutput={async () => ({
+            resultId: "test",
+            status: "passed",
+            stdout: {
+              contentBase64: btoa("ok\n"),
+              totalBytes: 3,
+              startOffset: 0,
+            },
+            stderr: null,
+          })}
+        />
+      )}
     </main>
   );
 }

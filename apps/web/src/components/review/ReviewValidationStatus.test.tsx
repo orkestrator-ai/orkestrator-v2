@@ -75,6 +75,7 @@ describe("ReviewValidationStatus", () => {
       status: "queued",
       durationMs: 300,
       queuedMs: 12000,
+      queueReason: "Waiting for worker slots; 6/8 slots reserved; needs 4 slots.",
       executionUpdatedAt: run.startedAt,
     });
     const view = render(<ReviewValidationStatus environmentId="env-1" run={run} />);
@@ -83,6 +84,7 @@ describe("ReviewValidationStatus", () => {
       name: "View terminal output for bun run check",
     });
     expect(queuedRow.textContent).toContain("waiting for capacity");
+    expect(queuedRow.textContent).toContain("6/8 slots reserved");
     expect(queuedRow.querySelector("[data-slot='validation-elapsed']")?.textContent).toBe("0.3s");
     expect(queuedRow.querySelector("[data-slot='validation-queued']")?.textContent).toBe("12.0s");
     expect(queuedRow.textContent).toContain("queued");
@@ -99,6 +101,7 @@ describe("ReviewValidationStatus", () => {
       name: "View terminal output for bun run check",
     });
     expect(incompleteRow.textContent).toContain("incomplete");
+    expect(incompleteRow.textContent).not.toContain("6/8 slots reserved");
     expect(incompleteRow.querySelector("[data-slot='validation-elapsed']")?.textContent).toBe(
       "0.3s",
     );

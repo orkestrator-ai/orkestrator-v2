@@ -693,6 +693,7 @@ test("review validation queues across worktrees and runs while its environment i
         return run.results[0]!.status;
       })
       .toBe("queued");
+    expect(run.results[0]!.queueReason).toContain("slots");
     await page.mouse.move(1100, 20);
     await page.getByText(other!.name, { exact: true }).first().click();
     await expect
@@ -709,6 +710,7 @@ test("review validation queues across worktrees and runs while its environment i
       .toBe("completed");
     expect(run.results.map((result) => result.status)).toEqual(["passed", "passed"]);
     expect(run.results[0]!.queuedMs).toBeGreaterThan(0);
+    expect(run.results[0]!.queueReason).toBeUndefined();
     const completed = run;
     await page.reload();
     await page.getByRole("button", { name: `Expand project ${fixture.name}` }).click();

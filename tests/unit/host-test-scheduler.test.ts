@@ -1,29 +1,293 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 import {
   createHostTestScheduler,
   HOST_TEST_SCHEDULER_SOURCE,
+  testSchedulingPolicy,
 } from "../../packages/protocol/src/host-test-scheduler";
 import { createTestAdmission } from "../../scripts/test-admission";
 import { createTestTimingsDirectory, runAllTests } from "../../scripts/test-all";
 
 const cleanups: Array<() => void> = [];
-function fixture() {
+function fixture(options = { workers: 2, memoryMiB: 128 }) {
   const directory = mkdtempSync(path.join(tmpdir(), "test-admission-fixture-"));
-  const scheduler = createHostTestScheduler({ directory, workers: 2, memoryMiB: 128 });
+  const scheduler = createHostTestScheduler({ directory, ...options });
   cleanups.push(() => {
     scheduler.close();
     rmSync(directory, { recursive: true, force: true });
   });
-  const request = { owner: "a".repeat(64), workers: scheduler.capacity().workers, memoryMiB: 128 };
+  const request = {
+    owner: "a".repeat(64),
+    workers: scheduler.capacity().workers,
+    memoryMiB: options.memoryMiB,
+  };
   return { directory, scheduler, request };
 }
 afterEach(() => {
   for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+});
+
+test("host tuning can exceed the suite cap but leaves hardware headroom", () => {
+  const { scheduler } = fixture({ workers: 64, memoryMiB: 128 });
+  expect(scheduler.capacity().workers).toBe(Math.max(1, Math.min(64, availableParallelism() - 2)));
+});
+
+test("workspace wildcards isolate worktrees and host resources still exclude them", () => {
+  const { scheduler } = fixture();
+  const a = "a".repeat(64),
+    b = "b".repeat(64);
+  const request = { owner: a, workers: 1, memoryMiB: 1 };
+  const first = scheduler.enqueue({
+    ...request,
+    resources: scheduler.resources(a, ["workspace:*"]),
+  });
+  const other = scheduler.enqueue({
+    ...request,
+    owner: b,
+    resources: scheduler.resources(b, ["workspace:dist"]),
+  });
+  expect(scheduler.poll(other).state).toBe("running");
+  scheduler.release(other);
+  const same = scheduler.enqueue({
+    ...request,
+    resources: scheduler.resources(a, ["workspace:dist"]),
+  });
+  expect(scheduler.poll(same).queueReason).toContain("exclusive resource");
+  scheduler.release(same);
+  scheduler.release(first);
+  const host = scheduler.enqueue({
+    ...request,
+    resources: scheduler.resources(a, ["host:tcp:1422"]),
+  });
+  const blocked = scheduler.enqueue({
+    ...request,
+    owner: b,
+    resources: scheduler.resources(b, ["host:tcp:1422"]),
+  });
+  expect(scheduler.poll(blocked).state).toBe("queued");
+  scheduler.release(host);
+  expect(scheduler.poll(blocked).state).toBe("running");
+  scheduler.release(blocked);
+});
+
+test("interleaved cohort siblings use spare slots with a finite bypass budget", () => {
+  const { scheduler } = fixture();
+  const request = {
+    owner: "a".repeat(64),
+    workers: 1,
+    memoryMiB: 1,
+    resources: ["*"],
+    cohort: "a".repeat(36),
+  };
+  const first = scheduler.enqueue(request);
+  const outside = scheduler.enqueue({ owner: "b".repeat(64), workers: 1, memoryMiB: 1 });
+  for (let i = 0; i < 32; i++) {
+    const sibling = scheduler.enqueue(request);
+    expect(scheduler.poll(sibling).state).toBe("running");
+    expect(scheduler.poll(outside).state).toBe("queued");
+    scheduler.release(sibling);
+  }
+  const overflow = scheduler.enqueue(request);
+  expect(scheduler.poll(overflow).state).toBe("queued");
+  scheduler.release(first);
+  expect(scheduler.poll(outside).state).toBe("running");
+  scheduler.release(outside);
+  expect(scheduler.poll(overflow).state).toBe("running");
+  scheduler.release(overflow);
+});
+
+test("a different worktree cannot share a cohort's resource exemption", () => {
+  const { scheduler } = fixture();
+  const request = {
+    owner: "a".repeat(64),
+    workers: 1,
+    memoryMiB: 1,
+    cohort: "a".repeat(36),
+    resources: ["*"],
+  };
+  const first = scheduler.enqueue(request);
+  const outside = scheduler.enqueue({ ...request, owner: "b".repeat(64) });
+  expect(scheduler.poll(outside).state).toBe("queued");
+  scheduler.release(first);
+  scheduler.release(outside);
+});
+
+test("parallel group clocks measure wall time and exclude startup and idle gaps", async () => {
+  const { scheduler, directory } = fixture({ workers: 2, memoryMiB: 4096 });
+  const blocker = scheduler.enqueue({ owner: "b".repeat(64), workers: 2, memoryMiB: 1 });
+  const channel = path.join(directory, "wall-clock.json");
+  let now = 100;
+  const admission = createTestAdmission(
+    directory,
+    { ORKESTRATOR_TEST_SCHEDULER_DIR: directory, ORKESTRATOR_VALIDATION_SCHEDULER_STATE: channel },
+    () => {},
+    () => now,
+  );
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  let started = 0;
+  now = 200; // setup is not charged
+  const jobs = ["a", "b"].map((name) =>
+    admission.run({ name, command: "unused", args: [], workers: 1 }, async () => {
+      started++;
+      await gate;
+      return { status: 0 };
+    }),
+  );
+  try {
+    now = 500;
+    scheduler.release(blocker);
+    const deadline = Date.now() + 3000;
+    while (started < 2 && Date.now() < deadline) await Bun.sleep(10);
+    expect(started).toBe(2);
+    now = 800;
+    finish();
+    await Promise.all(jobs);
+    now = 1200; // finalization is not charged
+    admission.close();
+    expect(JSON.parse(readFileSync(channel, "utf8"))).toMatchObject({
+      version: 1,
+      timing: "wall",
+      state: "completed",
+      queuedMs: 300,
+      executionMs: 300,
+    });
+  } finally {
+    scheduler.release(blocker);
+    finish();
+    admission.cancel();
+    await Promise.all(jobs);
+  }
+});
+
+test("repository scheduling profiles are bounded and use exact command declarations", () => {
+  expect(
+    testSchedulingPolicy({
+      version: 1,
+      cooperativeCommands: ["full"],
+      commandProfiles: {
+        full: { resources: ["*"], covers: ["changed"] },
+        lint: { workers: 1, memoryMiB: 128 },
+      },
+    }).profiles.lint?.workers,
+  ).toBe(1);
+  const accepted = testSchedulingPolicy({ version: 1, cooperativeCommands: [] });
+  // Profiles are keyed by an attacker-irrelevant but prototype-sensitive string;
+  // a null prototype keeps `profiles["constructor"]` a miss rather than a hit.
+  expect(Object.getPrototypeOf(accepted.profiles)).toBeNull();
+  expect(accepted.profiles["toString"]).toBeUndefined();
+  const overflow = (count: number) => Array.from({ length: count }, (_, index) => `c${index}`);
+  for (const invalid of [
+    null,
+    "config",
+    [],
+    { version: 2, cooperativeCommands: [] },
+    { version: 1 },
+    { version: 1, cooperativeCommands: "full" },
+    { version: 1, cooperativeCommands: [""] },
+    { version: 1, cooperativeCommands: ["x".repeat(1025)] },
+    { version: 1, cooperativeCommands: overflow(33) },
+    { version: 1, cooperativeCommands: [], commandProfiles: [] },
+    { version: 1, cooperativeCommands: [], commandProfiles: null },
+    {
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: Object.fromEntries(overflow(33).map((key) => [key, {}])),
+    },
+    { version: 1, cooperativeCommands: [], commandProfiles: { ["x".repeat(1025)]: {} } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { "": {} } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: null } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: [] } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { workers: 0 } } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { workers: 65 } } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { workers: 1.5 } } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { memoryMiB: 0 } } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { memoryMiB: 1048577 } } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { resources: [42] } } },
+    { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { covers: [42] } } },
+    {
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { invalid: { covers: overflow(33) } },
+    },
+  ])
+    expect(() => testSchedulingPolicy(invalid)).toThrow();
+});
+
+test("a queue created before the bypass column migrates and keeps admitting", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "test-admission-legacy-"));
+  cleanups.push(() => rmSync(directory, { recursive: true, force: true }));
+  const databasePath = path.join(directory, "queue.sqlite");
+  // The scheduler directory is versioned `v1` and is deliberately shared with
+  // worktrees running older builds, so an older row shape must still migrate.
+  const legacy = new Database(databasePath, { create: true });
+  legacy.exec(`CREATE TABLE jobs (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
+    owner TEXT NOT NULL, pid INTEGER NOT NULL, child INTEGER,
+    workers INTEGER NOT NULL, memory INTEGER NOT NULL, resources TEXT NOT NULL,
+    state TEXT NOT NULL, queued INTEGER NOT NULL, admitted INTEGER
+  ); CREATE TABLE owners (id TEXT PRIMARY KEY, served INTEGER NOT NULL);
+  CREATE TABLE budget (id INTEGER PRIMARY KEY CHECK(id=1), workers INTEGER, memory INTEGER);`);
+  legacy
+    .query(
+      "INSERT INTO jobs (id,owner,pid,workers,memory,resources,state,queued) VALUES (?,?,?,?,?,?,'running',?)",
+    )
+    .run("legacy", "a".repeat(64), process.pid, 1, 1, "[]", Date.now());
+  legacy.exec("INSERT INTO owners VALUES ('" + "a".repeat(64) + "', 0)");
+  legacy.exec("INSERT INTO budget VALUES (1, 2, 128)");
+  legacy.close();
+  const scheduler = createHostTestScheduler({ directory, workers: 2, memoryMiB: 128 });
+  cleanups.push(() => scheduler.close());
+  // The retained legacy reservation keeps the budget frozen at its own values.
+  expect(scheduler.capacity()).toEqual({ workers: 2, memoryMiB: 128 });
+  const id = scheduler.enqueue({ owner: "b".repeat(64), workers: 1, memoryMiB: 1 });
+  expect(scheduler.poll(id).state).toBe("running");
+  // Read-write, not readonly: SQLite in WAL mode needs to initialise its shared
+  // index, which a readonly handle cannot do.
+  const reader = new Database(databasePath);
+  expect(reader.query("SELECT bypasses FROM jobs WHERE id='legacy'").get()).toEqual({
+    bypasses: 0,
+  });
+  reader.close();
+  scheduler.release(id);
+});
+
+test("memory pressure and a heavy fair-turn waiter cannot be bypassed by unrelated small jobs", () => {
+  const { scheduler } = fixture();
+  const first = scheduler.enqueue({ owner: "a".repeat(64), workers: 1, memoryMiB: 100 });
+  const heavy = scheduler.enqueue({ owner: "b".repeat(64), workers: 1, memoryMiB: 100 });
+  const small = scheduler.enqueue({ owner: "c".repeat(64), workers: 1, memoryMiB: 1 });
+  expect(scheduler.poll(heavy).queueReason).toContain("estimated memory budget");
+  expect(scheduler.poll(small).queueReason).toContain("fair turn");
+  scheduler.release(first);
+  expect(scheduler.poll(heavy).state).toBe("running");
+  expect(scheduler.poll(small).state).toBe("running");
+  scheduler.release(heavy);
+  scheduler.release(small);
+});
+
+test("workspace exclusion also covers commands without named resources; legacy locks stay global", () => {
+  const { scheduler } = fixture();
+  const owner = "a".repeat(64);
+  const request = { owner, workers: 1, memoryMiB: 1 };
+  const first = scheduler.enqueue({
+    ...request,
+    resources: scheduler.resources(owner, ["workspace:*"]),
+  });
+  const empty = scheduler.enqueue(request);
+  expect(scheduler.poll(empty).state).toBe("queued");
+  scheduler.release(first);
+  scheduler.release(empty);
+  expect(scheduler.resources(owner, ["*"])).toEqual(["*"]);
+  expect(scheduler.resources(owner, ["database"])).toEqual(
+    scheduler.resources("b".repeat(64), ["host:database"]),
+  );
 });
 
 test("the scheduler factory remains self-contained after production bundling", async () => {

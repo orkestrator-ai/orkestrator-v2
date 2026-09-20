@@ -6,7 +6,7 @@ export interface ReviewValidationPlan {
     command: string;
     cwd: string;
     dependsOn: string[];
-    /** Commands with overlapping resources never run together; "*" is exclusive. */
+    /** workspace: scopes local resources; host: scopes cross-worktree resources. Legacy unprefixed resources remain host-scoped. */
     resources: string[];
     /** Internally parallel or memory-heavy commands reserve the whole runner. */
     weight: 1 | 2;
@@ -20,6 +20,8 @@ export interface ReviewValidationResult {
   command: string;
   status: "pending" | "queued" | "running" | "passed" | "failed" | "skipped" | "incomplete";
   queuedMs?: number;
+  /** Bounded scheduler explanation, persisted for inactive views. */
+  queueReason?: string;
   /** Authoritative execution clock, excluding pauses for host capacity. */
   executionUpdatedAt?: string;
   exitCode: number | null;
@@ -178,6 +180,7 @@ export function isReviewValidationRun(value: unknown): value is ReviewValidation
       uint(r.stderrBytes) &&
       uint(r.durationMs) &&
       (r.queuedMs === undefined || uint(r.queuedMs)) &&
+      (r.queueReason === undefined || text(r.queueReason, 1024)) &&
       (r.executionUpdatedAt === undefined || date(r.executionUpdatedAt)) &&
       (r.limitation === null || text(r.limitation)) &&
       (r.startedAt === undefined || date(r.startedAt)) &&

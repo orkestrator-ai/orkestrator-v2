@@ -43,11 +43,11 @@ export function createHostTestScheduler(
   // The owner pid never changes for this factory, so its birth token is read
   // once instead of spawning `ps` on every enqueue.
   const selfBorn = birth(process.pid);
-  const hardwareWorkers = Math.max(1, Math.min(8, os.availableParallelism() - 2));
+  const hardwareWorkers = Math.max(1, Math.min(64, os.availableParallelism() - 2));
   const hardwareMemory = Math.max(512, Math.floor((os.totalmem() / 1048576) * 0.65));
   const workers = positive(
     options.workers ?? process.env.ORKESTRATOR_TEST_HOST_WORKERS,
-    hardwareWorkers,
+    Math.min(8, hardwareWorkers),
     hardwareWorkers,
   );
   const memoryMiB = positive(
@@ -92,6 +92,7 @@ export function createHostTestScheduler(
     child: number | null;
     childBorn: string | null;
     cohort: string | null;
+    bypasses: number;
     workers: number;
     memory: number;
     resources: string;
@@ -117,6 +118,8 @@ export function createHostTestScheduler(
       .map((column) => column.name);
     if (!columns.includes("childBorn")) db.exec("ALTER TABLE jobs ADD COLUMN childBorn TEXT");
     if (!columns.includes("cohort")) db.exec("ALTER TABLE jobs ADD COLUMN cohort TEXT");
+    if (!columns.includes("bypasses"))
+      db.exec("ALTER TABLE jobs ADD COLUMN bypasses INTEGER NOT NULL DEFAULT 0");
     if (!columns.includes("pidBorn")) db.exec("ALTER TABLE jobs ADD COLUMN pidBorn TEXT");
   });
   const reap = () => {
@@ -170,10 +173,23 @@ export function createHostTestScheduler(
         "SELECT workers, memory FROM budget WHERE id=1",
       )
       .get()!;
-  const conflict = (a: string, b: string) => {
+  const conflict = (a: string, b: string, aOwner: string, bOwner: string) => {
     const left = JSON.parse(a) as string[],
       right = JSON.parse(b) as string[];
-    return left.includes("*") || right.includes("*") || left.some((value) => right.includes(value));
+    return (
+      left.includes("*") ||
+      right.includes("*") ||
+      left.includes(`workspace:${bOwner}:*`) ||
+      right.includes(`workspace:${aOwner}:*`) ||
+      left.some((value) =>
+        right.some(
+          (other) =>
+            value === other ||
+            (value.endsWith(":*") && other.startsWith(value.slice(0, -1))) ||
+            (other.endsWith(":*") && value.startsWith(other.slice(0, -1))),
+        ),
+      )
+    );
   };
   const admit = () => {
     reap();
@@ -193,17 +209,38 @@ export function createHostTestScheduler(
       pending.sort(
         (a, b) => served.get(a.owner)! - served.get(b.owner)! || a.sequence - b.sequence,
       );
-      const next = pending[0]!,
-        budget = limits();
-      if (
-        running.reduce((sum, job) => sum + job.workers, 0) + next.workers > budget.workers ||
-        running.reduce((sum, job) => sum + job.memory, 0) + next.memory > budget.memory ||
-        running.some(
-          (job) =>
-            (!next.cohort || job.cohort !== next.cohort) && conflict(job.resources, next.resources),
-        )
-      )
-        return;
+      let next = pending[0]!;
+      const budget = limits();
+      const conflicts = (candidate: Job, job: Job) =>
+        (!candidate.cohort || job.cohort !== candidate.cohort || job.owner !== candidate.owner) &&
+        conflict(job.resources, candidate.resources, job.owner, candidate.owner);
+      const fits = (candidate: Job) =>
+        running.reduce((sum, job) => sum + job.workers, 0) + candidate.workers <= budget.workers &&
+        running.reduce((sum, job) => sum + job.memory, 0) + candidate.memory <= budget.memory &&
+        !running.some((job) => conflicts(candidate, job));
+      if (!fits(next)) {
+        // Only let the already-running lock holder finish its finite cohort.
+        // Unrelated small jobs still cannot jump a large waiting request. A
+        // persisted bound prevents an open-ended cohort from starving outsiders.
+        const blockers = running.filter((job) => conflicts(next, job));
+        const sibling =
+          next.bypasses < 32 && blockers.length > 0
+            ? pending.find(
+                (candidate) =>
+                  candidate.cohort &&
+                  blockers.some(
+                    (job) => job.cohort === candidate.cohort && job.owner === candidate.owner,
+                  ) &&
+                  !pending.some(
+                    (job) => job.owner === candidate.owner && job.sequence < candidate.sequence,
+                  ) &&
+                  fits(candidate),
+              )
+            : undefined;
+        if (!sibling) return;
+        db.query("UPDATE jobs SET bypasses=bypasses+1 WHERE id=?").run(next.id);
+        next = sibling;
+      }
       db.query("UPDATE jobs SET state='running', admitted=? WHERE id=?").run(Date.now(), next.id);
       const turn = Math.max(0, ...served.values()) + 1;
       db.query("UPDATE owners SET served=? WHERE id=?").run(turn, next.owner);
@@ -214,6 +251,24 @@ export function createHostTestScheduler(
     capacity: () => ({ workers: limits().workers, memoryMiB: limits().memory }),
     owner: (workspace: string) =>
       createHash("sha256").update(fs.realpathSync(workspace)).digest("hex"),
+    resources(owner: string, labels: string[]) {
+      return labels.map((label) => {
+        // Preserve the meaning of already-discovered legacy plans. New plans
+        // and repository profiles explicitly opt into workspace scope.
+        if (label === "*" || label === "host:*") return "*";
+        if (!label.startsWith("workspace:")) {
+          const host = label.startsWith("host:") ? label.slice(5) : label;
+          return "resource:" + createHash("sha256").update(host).digest("hex");
+        }
+        const local = label.slice(10);
+        return (
+          "workspace:" +
+          owner +
+          ":" +
+          (local === "*" ? "*" : createHash("sha256").update(local).digest("hex"))
+        );
+      });
+    },
     enqueue(request: {
       owner: string;
       workers: number;
@@ -237,7 +292,7 @@ export function createHostTestScheduler(
           request.memoryMiB > budget.memory ||
           (request.resources ?? []).length > 64 ||
           (request.cohort !== undefined && !/^[a-f0-9-]{36}$/.test(request.cohort)) ||
-          (request.resources ?? []).some((r) => !/^(\*|[a-zA-Z0-9:_-]{1,160})$/.test(r))
+          (request.resources ?? []).some((r) => !/^(\*|[a-zA-Z0-9:_-]{1,158}(?::\*)?)$/.test(r))
         )
           throw new Error("Validation resource request exceeds the host budget");
         // New worktrees join the current virtual round, not round zero; an
@@ -268,9 +323,29 @@ export function createHostTestScheduler(
         const job = jobs().find((job) => job.id === id && job.pid === process.pid);
         if (!job)
           throw new Error("Validation reservation is unavailable; execution will not be repeated");
+        const running = jobs().filter((candidate) => candidate.state !== "queued");
+        const budget = limits();
+        const usedWorkers = running.reduce((sum, candidate) => sum + candidate.workers, 0);
+        const usedMemory = running.reduce((sum, candidate) => sum + candidate.memory, 0);
+        const blocker = running.find(
+          (candidate) =>
+            (!job.cohort || candidate.cohort !== job.cohort || candidate.owner !== job.owner) &&
+            conflict(candidate.resources, job.resources, candidate.owner, job.owner),
+        );
+        const reason = blocker
+          ? `exclusive resource held by worktree ${blocker.owner.slice(0, 12)} (PID ${blocker.pid})`
+          : usedWorkers + job.workers > budget.workers
+            ? "worker slots"
+            : usedMemory + job.memory > budget.memory
+              ? "estimated memory budget"
+              : "an earlier request's fair turn";
         return {
           state: job.state as "queued" | "running",
           queuedMs: (job.admitted ?? Date.now()) - job.queued,
+          queueReason:
+            job.state === "queued"
+              ? `Waiting for ${reason}; ${usedWorkers}/${budget.workers} slots and ${usedMemory}/${budget.memory} MiB reserved; needs ${job.workers} slots and ${job.memory} MiB.`
+              : undefined,
         };
       });
     },
@@ -296,3 +371,55 @@ export function createHostTestScheduler(
 }
 
 export const HOST_TEST_SCHEDULER_SOURCE = `(options) => (${createHostTestScheduler.toString()})(options, require)`;
+
+/** Exact, repository-owned declarations; never infer coverage from command names. */
+export function testSchedulingPolicy(config: unknown) {
+  type Profile = { resources?: string[]; workers?: number; memoryMiB?: number; covers?: string[] };
+  const profiles: Record<string, Profile> = Object.create(null);
+  if (!config || typeof config !== "object" || Array.isArray(config))
+    throw new Error("Invalid test scheduling configuration");
+  const value = config as Record<string, unknown>;
+  const strings = (input: unknown): input is string[] =>
+    Array.isArray(input) &&
+    input.length <= 32 &&
+    input.every((item) => typeof item === "string" && item.length > 0 && item.length <= 1024);
+  if (value.version !== 1 || !strings(value.cooperativeCommands))
+    throw new Error("Invalid cooperative test commands");
+  if (value.commandProfiles !== undefined) {
+    if (
+      !value.commandProfiles ||
+      typeof value.commandProfiles !== "object" ||
+      Array.isArray(value.commandProfiles) ||
+      Object.keys(value.commandProfiles).length > 32
+    )
+      throw new Error("Invalid test command profiles");
+    for (const [command, entry] of Object.entries(value.commandProfiles)) {
+      if (
+        !command ||
+        command.length > 1024 ||
+        !entry ||
+        typeof entry !== "object" ||
+        Array.isArray(entry)
+      )
+        throw new Error("Invalid test command profile");
+      const profile = entry as Profile;
+      if (
+        (profile.resources !== undefined && !strings(profile.resources)) ||
+        (profile.covers !== undefined && !strings(profile.covers)) ||
+        (profile.workers !== undefined &&
+          (!Number.isSafeInteger(profile.workers) ||
+            profile.workers < 1 ||
+            profile.workers > 64)) ||
+        (profile.memoryMiB !== undefined &&
+          (!Number.isSafeInteger(profile.memoryMiB) ||
+            profile.memoryMiB < 1 ||
+            profile.memoryMiB > 1048576))
+      )
+        throw new Error("Invalid test command resource requirements");
+      profiles[command] = profile;
+    }
+  }
+  return { cooperativeCommands: value.cooperativeCommands, profiles };
+}
+
+export const TEST_SCHEDULING_POLICY_SOURCE = testSchedulingPolicy.toString();

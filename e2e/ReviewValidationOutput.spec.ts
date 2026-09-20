@@ -218,3 +218,23 @@ test("the widest queued status and long commands fit the mobile validation grid"
   expect(Math.min(...containment.commandWidths)).toBeGreaterThan(0);
   expect(Math.max(...containment.overflowWidths)).toBeLessThanOrEqual(1);
 });
+
+test("queue diagnostics rehydrate after an inactive view and clear on completion", async ({
+  page,
+}) => {
+  await page.goto("/review-validation-output");
+  const row = page.getByRole("button", { name: "View terminal output for mise run typecheck" });
+  await expect(row.locator("[data-slot='validation-queue-reason']")).toContainText("2/8 slots");
+  await page.getByRole("button", { name: "Hide validation", exact: true }).click();
+  await expect(row).toHaveCount(0);
+  await page.getByRole("button", { name: "Show validation", exact: true }).click();
+  await expect(row.locator("[data-slot='validation-queue-reason']")).toContainText(
+    "exclusive resource",
+  );
+  await page.getByRole("button", { name: "Hide validation", exact: true }).click();
+  await page.getByRole("button", { name: "Complete background validation" }).click();
+  await page.getByRole("button", { name: "Show validation", exact: true }).click();
+  await expect(row.locator("[data-slot='validation-status']")).toHaveText("passed");
+  await expect(row.locator("[data-slot='validation-queue-reason']")).toHaveCount(0);
+  await expect(row.locator("[data-slot='validation-queued']")).toHaveText("4.0s");
+});

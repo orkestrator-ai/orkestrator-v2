@@ -328,6 +328,14 @@ export function ReviewValidationStatus({
                   {queuedMs > 0 ? formatSeconds(queuedMs) : ""}
                 </span>
                 <SquareTerminal className="size-3.5 opacity-60" aria-hidden="true" />
+                {result.queueReason && ["queued", "running"].includes(result.status) && (
+                  <span
+                    data-slot="validation-queue-reason"
+                    className="col-span-full mt-1 break-words text-muted-foreground"
+                  >
+                    {result.queueReason}
+                  </span>
+                )}
                 {result.limitation && (
                   <span
                     data-slot="validation-limitation"

@@ -16,7 +16,7 @@ const result = await Bun.build({
   // package external preserves its own module location, so it resolves the
   // matching vendored binary instead of whichever version happens to be in
   // Bun's global install cache.
-  external: ["sharp"],
+  external: ["sharp", "playwright-core"],
 });
 if (!result.success) {
   for (const log of result.logs) console.error(log);
@@ -46,3 +46,8 @@ await copyResolvedPackage(
 for (const artifact of result.outputs) {
   console.log(`${path.relative(packageRoot, artifact.path)} ${artifact.size} bytes`);
 }
+
+await copyResolvedPackage(
+  path.join(packageRoot, "node_modules/playwright-core"),
+  path.join(output, "node_modules/playwright-core"),
+);

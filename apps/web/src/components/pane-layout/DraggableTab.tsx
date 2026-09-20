@@ -1,7 +1,14 @@
 import { useCallback, useRef } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { FileCode, Globe2, Terminal as TerminalIcon, Hammer, Repeat2 } from "lucide-react";
+import {
+  FileCode,
+  Globe2,
+  Paintbrush,
+  Terminal as TerminalIcon,
+  Hammer,
+  Repeat2,
+} from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
@@ -261,6 +268,7 @@ export function DraggableTab({
         ? "Multi Review ✓"
         : `Multi Review ${tabNumber}`;
     }
+    if (tab.type === "design-canvas") return `Design ${tabNumber}`;
     if (tab.type === "browser") return `Browser ${tabNumber}`;
     if (tab.type === "root") return `ROOT ${tabNumber}`;
     return `Tab ${tabNumber}`;
@@ -271,6 +279,8 @@ export function DraggableTab({
     if (tab.type === "file") {
       return <FileCode className="h-3 w-3 shrink-0" />;
     }
+    if (tab.type === "design-canvas")
+      return <Paintbrush className="h-3 w-3 shrink-0 text-violet-400" />;
     if (tab.type === "browser") {
       return <Globe2 className="h-3 w-3 shrink-0 text-sky-400" />;
     }

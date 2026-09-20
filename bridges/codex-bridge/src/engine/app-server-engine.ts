@@ -1053,6 +1053,16 @@ export class AppServerEngine implements CodexEngine {
               // this name, and configured bearer tokens take precedence over
               // Authorization headers. Dotted leaf overrides would therefore
               // keep authenticating as the broader environment capability.
+              ...(config.agentMcp.design
+                ? {
+                    "mcp_servers.orkestrator-design": {
+                      url: new URL("/design-mcp", config.agentMcp.url).toString(),
+                      http_headers: { Authorization: `Bearer ${config.agentMcp.token}` },
+                      required: false,
+                      startup_timeout_sec: 3,
+                    },
+                  }
+                : {}),
               "mcp_servers.orkestrator": {
                 url: config.agentMcp.url,
                 http_headers: { Authorization: `Bearer ${config.agentMcp.token}` },

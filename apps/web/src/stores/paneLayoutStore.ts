@@ -201,6 +201,8 @@ interface PaneLayoutState {
 
   // Tab management
   addTab: (paneId: string, tab: TabInfo, environmentId?: string) => void;
+  canAddTabInSplit: (paneId: string, environmentId: string) => boolean;
+  addTabInSplit: (paneId: string, tab: TabInfo, environmentId: string) => boolean;
   removeTab: (paneId: string, tabId: string, environmentId?: string) => void;
   setActiveTab: (paneId: string, tabId: string, environmentId?: string) => void;
   moveTab: (
@@ -752,6 +754,51 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, { ...envState, root: newRoot });
     set({ environments: newEnvs });
+  },
+
+  canAddTabInSplit: (paneId, environmentId) => {
+    const state = get();
+    const environment = state.environments.get(environmentId);
+    return Boolean(
+      environment &&
+      state.hydration.get(environmentId) === "done" &&
+      findLeaf(environment.root, paneId) &&
+      getDepth(environment.root) < MAX_SPLIT_DEPTH,
+    );
+  },
+
+  addTabInSplit: (paneId, tab, environmentId) => {
+    const state = get();
+    const environment = state.environments.get(environmentId);
+    if (!environment || state.hydration.get(environmentId) !== "done") return false;
+    const leaf = findLeaf(environment.root, paneId);
+    const depth = getDepth(environment.root);
+    if (!leaf || depth >= MAX_SPLIT_DEPTH || findPaneWithTab(environment.root, tab.id))
+      return false;
+    const newPane: PaneLeaf = {
+      kind: "leaf",
+      id: generateId("pane"),
+      tabs: [tab],
+      activeTabId: tab.id,
+    };
+    const split: PaneSplit = {
+      kind: "split",
+      id: generateId("split"),
+      direction: "horizontal",
+      children: [leaf, newPane],
+      sizes: [35, 65],
+      depth: depth + 1,
+    };
+    // Publish creation and placement together: otherwise the persistence merge
+    // can observe the new tab in its temporary pane and undo the split.
+    const environments = new Map(state.environments);
+    environments.set(environmentId, {
+      ...environment,
+      root: replaceNode(environment.root, paneId, split),
+      activePaneId: newPane.id,
+    });
+    set({ environments });
+    return true;
   },
 
   removeTab: (paneId, tabId, environmentId) => {

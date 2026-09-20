@@ -23,7 +23,8 @@ describe("monorepo orchestration scripts", () => {
       build?: { extraResources?: Array<{ from?: string; to?: string }> };
     };
     expect(source).toContain('entrypoints: [path.join(packageRoot, "src/main.ts")]');
-    expect(source).toContain('external: ["sharp"]');
+    expect(source).toContain('external: ["sharp", "playwright-core"]');
+    expect(source).toContain('path.join(output, "node_modules/playwright-core")');
     expect(source).toContain('["sharp", "detect-libc", "semver"]');
     expect(source).toContain('path.join(output, "node_modules/@img")');
     expect(source).toContain("if (!result.success)");

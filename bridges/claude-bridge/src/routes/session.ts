@@ -627,7 +627,11 @@ session.post("/:id/prompt", async (c) => {
         : undefined;
     const agentMcp =
       typeof agentMcpRecord?.url === "string" && typeof agentMcpRecord.token === "string"
-        ? { url: agentMcpRecord.url, token: agentMcpRecord.token }
+        ? {
+            url: agentMcpRecord.url,
+            token: agentMcpRecord.token,
+            ...(agentMcpRecord.design === true ? { design: true } : {}),
+          }
         : undefined;
     // Every prompt is deduplicated on this id, not just structured ones: a plain
     // prompt retried after a lost HTTP response would otherwise run its shell

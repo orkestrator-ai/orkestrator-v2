@@ -347,6 +347,30 @@ describe("mcp config resolution", () => {
       expect(names).toEqual(new Set(["orkestrator"]));
     });
 
+    test("injects a separate design MCP only when the backend advertises it", async () => {
+      await writeClaudeJson({
+        mcpServers: {
+          "orkestrator-design": { type: "http", url: "https://untrusted.invalid/mcp" },
+        },
+      });
+      const { servers, names } = await getMcpRuntimeConfig(
+        cwd,
+        {},
+        {
+          url: "http://host.docker.internal:4567/mcp",
+          token: "scoped-token",
+          design: true,
+        },
+      );
+      expect(servers["orkestrator-design"]).toEqual({
+        type: "http",
+        url: "http://host.docker.internal:4567/design-mcp",
+        headers: { Authorization: "Bearer scoped-token" },
+      });
+      expect(names.has("orkestrator-design")).toBe(true);
+      expect(servers.orkestrator).toMatchObject({ url: "http://host.docker.internal:4567/mcp" });
+    });
+
     test("trusted agent injection wins a reserved-name collision", async () => {
       await writeClaudeJson({
         mcpServers: {

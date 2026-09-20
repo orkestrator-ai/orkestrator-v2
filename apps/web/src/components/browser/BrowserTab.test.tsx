@@ -823,14 +823,19 @@ describe("BrowserTab", () => {
     );
     const annotate = screen.getByRole("button", { name: "Annotate preview" });
     await waitFor(() => expect(annotate.hasAttribute("disabled")).toBe(false));
-    fireEvent.click(annotate);
+    await act(async () => {
+      fireEvent.click(annotate);
+    });
+    expect(native.browserPreview.getAnnotationStatus).toHaveBeenCalledTimes(1);
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Annotate preview" })).toBeTruthy(),
     );
     expect(mockToastError).not.toHaveBeenCalled();
 
     status = { status: "inactive" };
-    fireEvent.click(screen.getByRole("button", { name: "Annotate preview" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Annotate preview" }));
+    });
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith(
         "Annotation mode stopped",
@@ -841,7 +846,9 @@ describe("BrowserTab", () => {
 
     mockToastError.mockClear();
     status = { status: "error", message: "Try a smaller element." };
-    fireEvent.click(screen.getByRole("button", { name: "Annotate preview" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Annotate preview" }));
+    });
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith("Could not capture browser annotation", {
         description: "Try a smaller element.",

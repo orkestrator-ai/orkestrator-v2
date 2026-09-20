@@ -584,7 +584,8 @@ export class GatewayProxy extends GatewayHandlers {
           // its own "close" event, and a throwing destroy must not leave the
           // proxy promise dangling.
           finish();
-          activeProxyResponse?.socket.destroy(disconnectError);
+          // Bun clears the socket when the upstream response has already closed.
+          activeProxyResponse?.socket?.destroy(disconnectError);
           activeProxyResponse?.destroy(disconnectError);
           proxyRequest.socket?.destroy(disconnectError);
           proxyRequest.destroy(disconnectError);

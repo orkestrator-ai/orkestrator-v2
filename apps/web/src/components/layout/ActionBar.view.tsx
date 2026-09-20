@@ -1,3 +1,4 @@
+import { DesignLaunchButton } from "@/components/design/DesignLaunchButton";
 import {
   cloneElement,
   createContext,
@@ -791,6 +792,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                       {isGrid && <span className="truncate text-xs">Root terminal</span>}
                     </Button>
                   </ToolbarTooltipTrigger>
+
+                  <DesignLaunchButton
+                    environmentId={selectedEnvironment?.id}
+                    disabled={!canCreateTab}
+                    tabCount={tabCount}
+                    createTab={createTab}
+                  />
 
                   <ToolbarTooltipTrigger
                     tooltip={

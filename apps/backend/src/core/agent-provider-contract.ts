@@ -231,7 +231,7 @@ export interface ProviderCreateSessionOptions {
   effort?: string;
   fastMode?: boolean;
   /** Tab-scoped Orkestrator MCP credential for bridges with per-session config. */
-  agentMcp?: { url: string; token: string };
+  agentMcp?: { url: string; token: string; design?: boolean };
   interaction?: ProviderSessionRegistration;
   /** Immutable backend-owned execution policy for this provider session. */
   policy?: NativeAgentExecutionPolicy;
@@ -265,6 +265,7 @@ export interface ProviderSendOptions {
   allowProviderCommands?: boolean;
   /** Scoped Orkestrator MCP connection for providers with a qualified delivery path. */
   agentMcp?: {
+    design?: boolean;
     url: string;
     token: string;
     /** Signed one-attempt argument for providers using a persistent MCP broker. */

@@ -1822,7 +1822,11 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
             !url.username &&
             !url.password
           ) {
-            agentMcp = { url: url.toString(), token: candidate.token };
+            agentMcp = {
+              url: url.toString(),
+              token: candidate.token,
+              ...(candidate.design === true ? { design: true } : {}),
+            };
           }
         } catch {
           // Ignore malformed injected configuration; process-level MCP remains available.

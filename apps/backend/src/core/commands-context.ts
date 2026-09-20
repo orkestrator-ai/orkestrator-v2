@@ -21,6 +21,7 @@ import type { ProjectGitService } from "./project-git-service.js";
 export type BackendEmit = (event: string, payload: unknown) => void;
 
 export type CommandContext = {
+  design?: import("./design-service.js").DesignService;
   storage: StorageService;
   emit: BackendEmit;
   appRoot: string;

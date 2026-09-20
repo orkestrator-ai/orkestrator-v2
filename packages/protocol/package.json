@@ -65,7 +65,9 @@
     "./tmux-observation": "./src/tmux-observation.ts",
     "./transcript-part-ids": "./src/transcript-part-ids.ts",
     "./transcript-window": "./src/transcript-window.ts",
-    "./web-client": "./src/web-client.ts"
+    "./web-client": "./src/web-client.ts",
+    "./design-canvas": "./src/design-canvas.ts",
+    "./design-runtime": "./src/design-runtime.ts"
   },
   "scripts": {
     "build": "bunx tsc --noEmit -p tsconfig.json",

@@ -1267,6 +1267,20 @@ export function TerminalContainer({
         return false;
       }
 
+      if (type === "design-canvas") {
+        if (
+          !options?.canvasId ||
+          usePaneLayoutStore.getState().hydration.get(environmentId) !== "done"
+        )
+          return false;
+        const newTab: TabInfo = {
+          id: createUniqueTabId("design"),
+          type: "design-canvas",
+          designCanvasData: { canvasId: options.canvasId },
+        };
+        return usePaneLayoutStore.getState().addTabInSplit(activePaneId, newTab, environmentId);
+      }
+
       if (type === "browser") {
         return createBrowserTab(options?.initialUrl, activePaneId, options?.displayTitle);
       }

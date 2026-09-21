@@ -17,6 +17,7 @@ import {
   isMultiReviewWorkflow,
   isStartMultiReviewInput,
   type MultiReviewFixSession,
+  type MultiReviewPausablePhase,
   type MultiReviewPhase,
   type MultiReviewModelSelection,
   type MultiReviewReviewerTranscript,
@@ -155,8 +156,24 @@ function reviewSessionKey(workflowId: string): string {
   return `multi-review:${workflowId}:review-preparation`;
 }
 
-function reviewModel(workflow: MultiReviewWorkflow): MultiReviewModelSelection {
+function preparationModel(workflow: MultiReviewWorkflow): MultiReviewModelSelection {
   return workflow.reviewModel ?? workflow.fixModel;
+}
+
+function consolidationModel(workflow: MultiReviewWorkflow): MultiReviewModelSelection {
+  return workflow.consolidationModel ?? preparationModel(workflow);
+}
+
+function sameModelSelection(
+  left: MultiReviewModelSelection,
+  right: MultiReviewModelSelection,
+): boolean {
+  return (
+    left.agent === right.agent &&
+    left.model === right.model &&
+    left.reasoningEffort === right.reasoningEffort &&
+    left.fastMode === right.fastMode
+  );
 }
 
 function stepModelLabel(kind: MultiReviewStepKind): "preparation" | "consolidation" | "fix" {
@@ -174,11 +191,14 @@ function stepResultLabel(
 }
 
 function reviewSession(workflow: MultiReviewWorkflow): MultiReviewFixSession | undefined {
-  return workflow.reviewSession ?? (workflow.reviewModel ? undefined : workflow.fixSession);
+  return (
+    workflow.reviewSession ??
+    (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession)
+  );
 }
 
 function clearReviewSession(workflow: MultiReviewWorkflow): void {
-  if (workflow.reviewModel) {
+  if (workflow.reviewModel || workflow.consolidationModel) {
     delete workflow.reviewSession;
     workflow.reviewSessionKey = rotatedSessionKey(reviewSessionKey(workflow.id));
   } else {
@@ -334,13 +354,33 @@ function isSupervisedPhase(phase: MultiReviewPhase): boolean {
   );
 }
 
+function stepForPausablePhase(phase: MultiReviewPhase): MultiReviewStepKind | null {
+  if (phase === "preparing") return "prepare";
+  if (phase === "consolidating") return "consolidate";
+  if (phase === "fixing") return "fix";
+  return null;
+}
+
 function hasWorkflowActivity(workflow: MultiReviewWorkflow): boolean {
   return (
     isSupervisedPhase(workflow.phase) ||
+    workflow.validationRun?.status === "planned" ||
+    workflow.validationRun?.status === "running" ||
     workflow.addressPromptPending === true ||
     workflow.reviewers.some((reviewer) => reviewer.status === "running") ||
     workflow.reviewSession?.status === "running" ||
     workflow.fixSession?.status === "running"
+  );
+}
+
+function needsPausedStopReconciliation(workflow: MultiReviewWorkflow): boolean {
+  if (workflow.phase !== "paused" || !workflow.pausedStep) return false;
+  const session = workflow.pausedStep === "fix" ? workflow.fixSession : reviewSession(workflow);
+  return (
+    (workflow.pausedStep === "prepare" &&
+      (workflow.validationRun?.status === "planned" ||
+        workflow.validationRun?.status === "running")) ||
+    session?.status === "running"
   );
 }
 
@@ -807,7 +847,7 @@ export class MultiReviewService {
         const staleReviewSession = reviewSession(workflow);
         await this.abandonSession(
           workflow,
-          reviewModel(workflow),
+          staleReviewSession ?? preparationModel(workflow),
           staleReviewSession?.providerSessionId,
         );
         if (staleReviewSession) this.progress.forget(staleReviewSession.providerSessionId);
@@ -844,7 +884,7 @@ export class MultiReviewService {
       ) {
         await this.abandonSession(
           workflow,
-          reviewModel(workflow),
+          reviewSession(workflow) ?? preparationModel(workflow),
           reviewSession(workflow)?.providerSessionId,
         );
         if (workflow.validationRun) {
@@ -912,7 +952,7 @@ export class MultiReviewService {
         } else {
           await this.abandonSession(
             workflow,
-            reviewModel(workflow),
+            reviewSession(workflow) ?? consolidationModel(workflow),
             reviewSession(workflow)?.providerSessionId,
           );
           workflow.phase = "consolidating";
@@ -1067,7 +1107,7 @@ export class MultiReviewService {
         const activeReviewSession = reviewSession(workflow);
         await this.abandonSession(
           workflow,
-          activeReviewSession ?? reviewModel(workflow),
+          activeReviewSession ?? consolidationModel(workflow),
           activeReviewSession?.providerSessionId,
         );
         if (activeReviewSession) this.progress.forget(activeReviewSession.providerSessionId);
@@ -1110,7 +1150,11 @@ export class MultiReviewService {
   }
 
   /** Restart a preparation, consolidation, or fix tile and every dependent step. */
-  async restartStep(workflowId: string, kind: MultiReviewStepKind): Promise<MultiReviewWorkflow> {
+  async restartStep(
+    workflowId: string,
+    kind: MultiReviewStepKind,
+    model?: MultiReviewModelSelection,
+  ): Promise<MultiReviewWorkflow> {
     return this.withLock(workflowId, async () => {
       const controlled = await this.loadControlled(workflowId);
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
@@ -1162,9 +1206,29 @@ export class MultiReviewService {
             ? await this.captureReviewWorktreeSnapshot(workflow.environmentId)
             : undefined;
 
+        // Resolve provider-owned settings before abandoning any session. A
+        // rejected model override must leave the current run untouched.
+        let restartedModel: MultiReviewModelSelection | undefined;
+        if (model) {
+          const environment = await this.storage.getEnvironment(workflow.environmentId);
+          if (!environment) throw new Error("Review environment no longer exists");
+          const config = await this.storage.loadConfig();
+          const repository = config.repositories[workflow.projectId] ?? {};
+          restartedModel = await this.configuredSelection(
+            model,
+            environment,
+            config,
+            repository,
+            this.catalogReaderFor(workflow.environmentId),
+          );
+        }
+
         const shouldReplayFix = kind !== "fix" && fixStepHasStarted(workflow);
         const preserveSharedFixSession =
-          kind === "fix" && !workflow.reviewModel && workflow.fixLaunch?.kind !== "custom";
+          kind === "fix" &&
+          restartedModel === undefined &&
+          !workflow.reviewModel &&
+          workflow.fixLaunch?.kind !== "custom";
         await this.supersedeRestartedResults(
           workflow,
           kind === "prepare" ? workflow.reviewers : [],
@@ -1175,7 +1239,8 @@ export class MultiReviewService {
         if (abandonActiveReviewSession) {
           await this.abandonSession(
             workflow,
-            activeReviewSession ?? reviewModel(workflow),
+            activeReviewSession ??
+              (kind === "prepare" ? preparationModel(workflow) : consolidationModel(workflow)),
             activeReviewSession?.providerSessionId,
           );
           if (activeReviewSession) this.progress.forget(activeReviewSession.providerSessionId);
@@ -1224,11 +1289,24 @@ export class MultiReviewService {
             workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
           }
           delete workflow.stepRuntimes?.fix;
+          if (restartedModel) {
+            workflow.fixModel = restartedModel;
+            if (workflow.fixLaunch?.kind === "custom") {
+              workflow.fixLaunch = { ...workflow.fixLaunch, model: restartedModel };
+            }
+          }
           queueRestartedFix(workflow);
         }
 
+        if (kind === "prepare" && restartedModel) {
+          workflow.reviewModel = restartedModel;
+          delete workflow.consolidationModel;
+        } else if (kind === "consolidate" && restartedModel) {
+          workflow.consolidationModel = restartedModel;
+        }
+
         if (kind !== "fix") {
-          if (workflow.reviewModel) {
+          if (workflow.reviewModel || workflow.consolidationModel) {
             delete workflow.fixSession;
             workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
           }
@@ -1239,6 +1317,8 @@ export class MultiReviewService {
         }
         delete workflow.fixResult;
         delete workflow.activeRequest;
+        delete workflow.pausedFromPhase;
+        delete workflow.pausedStep;
         if (kind !== "fix") {
           delete workflow.addressPromptPending;
           delete workflow.addressPromptAttempts;
@@ -1257,6 +1337,79 @@ export class MultiReviewService {
         if (!handedToSupervisor && !isSupervisedPhase(phaseAtClaim)) {
           await this.release(workflow, token);
         }
+      }
+    });
+  }
+
+  /** Stop one active backend-owned step without discarding its provider conversation. */
+  async pauseStep(workflowId: string, kind: MultiReviewStepKind): Promise<MultiReviewWorkflow> {
+    return this.withLock(workflowId, async () => {
+      const controlled = await this.loadControlled(workflowId);
+      if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
+      const { workflow, token } = controlled;
+      try {
+        const activeStep =
+          workflow.phase === "paused" ? workflow.pausedStep : stepForPausablePhase(workflow.phase);
+        if (activeStep !== kind) {
+          throw new Error(`The ${stepModelLabel(kind)} step is not running`);
+        }
+        if (workflow.phase !== "paused") {
+          workflow.pausedFromPhase = workflow.phase as MultiReviewPausablePhase;
+          workflow.pausedStep = kind;
+          workflow.phase = "paused";
+        }
+        const errors = await this.stopStepForPause(workflow, token, kind);
+        if (errors.length > 0) {
+          workflow.error =
+            `Multi Review paused, but stopping the active work could not be confirmed: ${errors.join("; ")}`.slice(
+              0,
+              4_096,
+            );
+        } else {
+          delete workflow.error;
+        }
+        return await this.save(workflow, token);
+      } finally {
+        await this.release(workflow, token);
+      }
+    });
+  }
+
+  /** Resume a paused step by dispatching a fresh request in its retained session. */
+  async resumeStep(workflowId: string, kind: MultiReviewStepKind): Promise<MultiReviewWorkflow> {
+    return this.withLock(workflowId, async () => {
+      const controlled = await this.loadControlled(workflowId);
+      if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
+      const { workflow, token } = controlled;
+      let handedToSupervisor = false;
+      try {
+        if (
+          workflow.phase !== "paused" ||
+          workflow.pausedStep !== kind ||
+          !workflow.pausedFromPhase
+        ) {
+          throw new Error(`The ${stepModelLabel(kind)} step is not paused`);
+        }
+        const errors = await this.stopStepForPause(workflow, token, kind);
+        if (errors.length > 0) {
+          workflow.error =
+            `Multi Review remains paused because active work could not be stopped: ${errors.join("; ")}`.slice(
+              0,
+              4_096,
+            );
+          const saved = await this.save(workflow, token);
+          return saved;
+        }
+        workflow.phase = workflow.pausedFromPhase;
+        delete workflow.pausedFromPhase;
+        delete workflow.pausedStep;
+        delete workflow.error;
+        const saved = await this.save(workflow, token);
+        handedToSupervisor = true;
+        void this.advanceNow(workflowId);
+        return saved;
+      } finally {
+        if (!handedToSupervisor) await this.release(workflow, token);
       }
     });
   }
@@ -1332,6 +1485,8 @@ export class MultiReviewService {
       }
       workflow.phase = "cancelling";
       workflow.cancellingSince = nowIso();
+      delete workflow.pausedFromPhase;
+      delete workflow.pausedStep;
       delete workflow.error;
       const saved = await this.save(workflow, token);
       void this.advanceNow(workflowId);
@@ -1380,7 +1535,7 @@ export class MultiReviewService {
           ...(workflow.reviewSession?.providerSessionId
             ? [
                 {
-                  selection: reviewModel(workflow),
+                  selection: workflow.reviewSession,
                   sessionId: workflow.reviewSession.providerSessionId,
                 },
               ]
@@ -1491,6 +1646,7 @@ export class MultiReviewService {
         if (!isMultiReviewWorkflow(record.snapshot)) return [];
         const workflow = record.snapshot;
         return isSupervisedPhase(workflow.phase) ||
+          needsPausedStopReconciliation(workflow) ||
           needsInteractiveFixObservation(workflow) ||
           (workflow.pendingResultConsumptions?.length ?? 0) > 0 ||
           (workflow.addressPromptPending === true && this.options.dispatchAddressPrompt)
@@ -1667,9 +1823,11 @@ export class MultiReviewService {
       existing.snapshot.addressPromptPending === true &&
       this.options.dispatchAddressPrompt !== undefined;
     const observingInteractiveFix = needsInteractiveFixObservation(existing.snapshot);
+    const reconcilingPausedStop = needsPausedStopReconciliation(existing.snapshot);
     if (
       !pendingAddress &&
       !observingInteractiveFix &&
+      !reconcilingPausedStop &&
       !isSupervisedPhase(existingPhase) &&
       !existing.snapshot.pendingResultConsumptions?.length
     )
@@ -1682,7 +1840,9 @@ export class MultiReviewService {
       await this.consumePendingResults(workflow, token);
       return;
     }
-    if (
+    if (needsPausedStopReconciliation(workflow)) {
+      await this.advancePausedStop(workflow, token);
+    } else if (
       workflow.phase === "interactive" &&
       workflow.addressPromptPending === true &&
       this.options.dispatchAddressPrompt
@@ -1701,6 +1861,21 @@ export class MultiReviewService {
     ) {
       await this.advanceFixModel(workflow, token);
     }
+  }
+
+  /** Retry a pause whose validation process or provider session did not confirm its stop. */
+  private async advancePausedStop(workflow: MultiReviewWorkflow, token: string): Promise<void> {
+    const errors = await this.stopStepForPause(workflow, token, workflow.pausedStep!);
+    if (errors.length > 0) {
+      workflow.error =
+        `Multi Review remains paused because active work could not be stopped: ${errors.join("; ")}`.slice(
+          0,
+          4_096,
+        );
+    } else {
+      delete workflow.error;
+    }
+    await this.save(workflow, token);
   }
 
   /** Complete an interactive handoff without relying on a mounted review tab. */
@@ -2025,7 +2200,7 @@ export class MultiReviewService {
         workflow,
         token,
         workflow.reviewSession.providerSessionId,
-        reviewModel(workflow),
+        workflow.reviewSession,
       );
       if (!result.settled) waiting.push(`review preparation model: ${result.error}`);
     }
@@ -2123,6 +2298,74 @@ export class MultiReviewService {
       if (error instanceof ControllerFenceError) throw error;
       return { settled: false, error: errorMessage(error) };
     }
+  }
+
+  /** Finish the destructive half of pause; safe to repeat before resume. */
+  private async stopStepForPause(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    kind: MultiReviewStepKind,
+  ): Promise<string[]> {
+    const errors: string[] = [];
+    if (
+      kind === "prepare" &&
+      workflow.validationRun &&
+      (workflow.validationRun.status === "planned" || workflow.validationRun.status === "running")
+    ) {
+      try {
+        const cancelled = await this.invoke<ReviewValidationRun>("cancel_review_validation", {
+          environmentId: workflow.environmentId,
+          run: workflow.validationRun,
+        });
+        await this.assertFence(workflow.id, token);
+        if (cancelled.status === "planned" || cancelled.status === "running") {
+          workflow.validationRun = cancelled;
+          errors.push(`validation: provider still reports ${cancelled.status}`);
+        } else {
+          delete workflow.validationRun;
+        }
+      } catch (error) {
+        if (error instanceof ControllerFenceError) throw error;
+        errors.push(`validation: ${errorMessage(error)}`);
+      }
+    }
+
+    const session = kind === "fix" ? workflow.fixSession : reviewSession(workflow);
+    const selection =
+      session ??
+      (kind === "fix"
+        ? workflow.fixModel
+        : kind === "prepare"
+          ? preparationModel(workflow)
+          : consolidationModel(workflow));
+    if (session?.status === "running") {
+      const stopped = await this.abortSession(
+        workflow,
+        token,
+        session.providerSessionId,
+        selection,
+      );
+      if (!stopped.settled) {
+        errors.push(`${stepModelLabel(kind)} session: ${stopped.error}`);
+      } else {
+        session.status = "idle";
+        session.completedAt = nowIso();
+        delete session.idleResultPolls;
+        delete session.usageFinalizationPolls;
+        delete session.observedRunning;
+        delete session.progressAt;
+        delete session.progressDigest;
+        delete session.stalledSince;
+        this.progress.forget(session.providerSessionId);
+      }
+    }
+
+    if (errors.length === 0) {
+      await this.supersedeRestartedResults(workflow, []);
+      delete workflow.activeRequest;
+      settleStepRuntime(workflow, kind);
+    }
+    return errors;
   }
 
   /**
@@ -2344,11 +2587,7 @@ export class MultiReviewService {
       return;
     }
     if (elapsedMs >= this.stallAbandonMs()) {
-      await this.abandonSession(
-        workflow,
-        workflow.phase === "fixing" ? workflow.fixModel : reviewModel(workflow),
-        session.providerSessionId,
-      );
+      await this.abandonSession(workflow, session, session.providerSessionId);
       this.progress.forget(session.providerSessionId);
       throw new Error(
         `The ${stepModelLabel(kind)} session produced no activity for ${stalledMinutes(elapsedMs)} minutes`,
@@ -2495,11 +2734,24 @@ export class MultiReviewService {
     }
     const preparing = workflow.phase === "preparing";
     const coordinating = preparing || workflow.phase === "consolidating";
-    const separateReviewSession = coordinating && workflow.reviewModel !== undefined;
-    const selection = coordinating ? reviewModel(workflow) : workflow.fixModel;
+    const separateReviewSession =
+      coordinating &&
+      (workflow.reviewModel !== undefined || workflow.consolidationModel !== undefined);
+    const selection = preparing
+      ? preparationModel(workflow)
+      : workflow.phase === "consolidating"
+        ? consolidationModel(workflow)
+        : workflow.fixModel;
     const provider = await this.provider(workflow, selection);
     await this.assertFence(workflow.id, token);
     let session = coordinating ? reviewSession(workflow) : workflow.fixSession;
+    if (session && coordinating && !sameModelSelection(session, selection)) {
+      await this.abandonSession(workflow, session, session.providerSessionId);
+      this.progress.forget(session.providerSessionId);
+      clearReviewSession(workflow);
+      session = undefined;
+      await this.save(workflow, token);
+    }
     if (!session) {
       const sessionKey = separateReviewSession
         ? (workflow.reviewSessionKey ?? reviewSessionKey(workflow.id))
@@ -2570,7 +2822,7 @@ export class MultiReviewService {
     if (runtimeBackfilled) await this.save(workflow, token);
     if (!workflow.activeRequest) {
       const requestId = randomUUID();
-      const kind = preparing ? "prepare" : "consolidate";
+      const kind = preparing ? "prepare" : workflow.phase === "fixing" ? "fix" : "consolidate";
       await this.workflowRollout.refresh();
       workflow.activeRequest = {
         kind,
@@ -3072,6 +3324,8 @@ export class MultiReviewService {
     }
     const failedDuringReview = workflow.phase === "reviewing";
     workflow.phase = "failed";
+    delete workflow.pausedFromPhase;
+    delete workflow.pausedStep;
     workflow.error = errorMessage(error).slice(0, 4_096);
     delete workflow.validationStopRequested;
     if (error instanceof ReviewSnapshotChangedError) {
@@ -3117,14 +3371,10 @@ export class MultiReviewService {
     }
     if (workflow.fixSession) this.progress.forget(workflow.fixSession.providerSessionId);
     if (workflow.reviewSession) this.progress.forget(workflow.reviewSession.providerSessionId);
-    const keys = new Set([
-      ...workflow.reviewers.map((reviewer) => this.providerKey(workflow, reviewer)),
-      this.providerKey(workflow, reviewModel(workflow)),
-      this.providerKey(workflow, workflow.fixModel),
-    ]);
-    await Promise.allSettled(
-      [...keys].map((key) => this.releaseProviderUserByKey(workflow.id, key)),
-    );
+    const keys = Array.from(this.providerUsers, ([key, users]) =>
+      users.has(workflow.id) ? key : undefined,
+    ).filter((key): key is string => key !== undefined);
+    await Promise.allSettled(keys.map((key) => this.releaseProviderUserByKey(workflow.id, key)));
   }
 
   /** Drop only the short controller claim while preserving observation resources. */

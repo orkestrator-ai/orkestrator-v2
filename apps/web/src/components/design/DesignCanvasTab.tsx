@@ -34,6 +34,8 @@ export function DesignCanvasTab({
   const [selection, setSelection] = useState<DesignSelection | null>(null);
   const [layers, setLayers] = useState<Record<string, DesignLayer[]>>({});
   const [showLayers, setShowLayers] = useState(true);
+  const [layersWidth, setLayersWidth] = useState(160);
+  const layersResize = useRef<{ x: number; width: number } | null>(null);
   const [zoom, setZoom] = useState(0.65);
   const [pan, setPan] = useState({ x: 45, y: 65 });
   const panStart = useRef<{ x: number; y: number; origin: typeof pan } | null>(null);
@@ -213,7 +215,7 @@ export function DesignCanvasTab({
       className="design-workspace absolute inset-0 flex min-h-0 flex-col bg-background"
       aria-label="Design canvas"
     >
-      <header className="flex flex-wrap items-center gap-1 border-b px-2 py-2">
+      <header className="flex flex-wrap items-center gap-1 border-b border-divider px-2 py-2">
         <Button
           variant="ghost"
           size="icon"
@@ -291,7 +293,10 @@ export function DesignCanvasTab({
         </Button>
       </header>
       {error && (
-        <div role="alert" className="flex items-center gap-2 border-b p-2 text-xs text-destructive">
+        <div
+          role="alert"
+          className="flex items-center gap-2 border-b border-divider p-2 text-xs text-destructive"
+        >
           <span className="flex-1">{error}</span>
           <button
             onClick={() => {
@@ -310,36 +315,99 @@ export function DesignCanvasTab({
       )}
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         {showLayers && (
-          <nav
-            aria-label="Design hierarchy"
-            className="design-hierarchy w-40 shrink-0 overflow-auto border-r p-2 text-xs"
+          <div
+            className="design-hierarchy relative flex shrink-0"
+            style={{ width: layersWidth, maxWidth: "45%" }}
             data-inspecting={Boolean(selection)}
           >
-            <h3 className="mb-3 text-muted-foreground">Layers</h3>
-            {canvas?.frames.map((frame) => (
-              <div key={frame.id} className="mb-4">
-                <button
-                  className="mb-1 w-full truncate text-left font-medium"
-                  onClick={() => {
-                    setPan({ x: 40 - frame.x * zoom, y: 65 - frame.y * zoom });
-                    setSelection(null);
-                  }}
-                >
-                  {frame.name}
-                </button>
-                {(layers[frame.id] ?? []).map((layer) => (
+            <nav aria-label="Design hierarchy" className="min-w-0 flex-1 overflow-auto p-2 text-xs">
+              <h3 className="mb-3 text-muted-foreground">Layers</h3>
+              {canvas?.frames.map((frame) => (
+                <div key={frame.id} className="mb-4">
                   <button
-                    key={layer.selector}
-                    className={`block w-full truncate py-1 text-left hover:bg-muted ${selection?.frameId === frame.id && selection.element.selector === layer.selector ? "bg-muted" : ""}`}
-                    style={{ paddingLeft: Math.min(layer.depth, 8) * 10 }}
-                    onClick={() => selectLayer(frame, layer.selector)}
+                    className="mb-1 w-full truncate text-left font-medium"
+                    onClick={() => {
+                      setPan({ x: 40 - frame.x * zoom, y: 65 - frame.y * zoom });
+                      setSelection(null);
+                    }}
                   >
-                    {layer.label}
+                    {frame.name}
                   </button>
-                ))}
-              </div>
-            ))}
-          </nav>
+                  {(layers[frame.id] ?? []).map((layer) => (
+                    <button
+                      key={layer.selector}
+                      className={`block w-full truncate py-1 text-left hover:bg-muted ${selection?.frameId === frame.id && selection.element.selector === layer.selector ? "bg-muted" : ""}`}
+                      style={{ paddingLeft: Math.min(layer.depth, 8) * 10 }}
+                      onClick={() => selectLayer(frame, layer.selector)}
+                    >
+                      {layer.label}
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </nav>
+            <div
+              role="separator"
+              aria-label="Resize design hierarchy"
+              aria-orientation="vertical"
+              aria-valuemin={120}
+              aria-valuemax={400}
+              aria-valuenow={layersWidth}
+              tabIndex={0}
+              className="relative z-30 w-px shrink-0 cursor-col-resize touch-none bg-divider after:absolute after:inset-y-0 after:-left-1 after:w-2 hover:bg-primary/50 focus-visible:bg-primary/50 focus-visible:outline-none"
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                event.preventDefault();
+                event.currentTarget.focus();
+                event.currentTarget.setPointerCapture(event.pointerId);
+                layersResize.current = {
+                  x: event.clientX,
+                  width: event.currentTarget.parentElement!.getBoundingClientRect().width,
+                };
+              }}
+              onPointerMove={(event) => {
+                const start = layersResize.current;
+                if (!start) return;
+                const available = event.currentTarget.parentElement!.parentElement!.clientWidth;
+                setLayersWidth(
+                  Math.max(
+                    120,
+                    Math.min(400, available * 0.45, start.width + event.clientX - start.x),
+                  ),
+                );
+              }}
+              onPointerUp={(event) => {
+                layersResize.current = null;
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }}
+              onLostPointerCapture={() => {
+                layersResize.current = null;
+              }}
+              onPointerCancel={() => {
+                layersResize.current = null;
+              }}
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const pane = event.currentTarget.parentElement!;
+                const maximum = Math.max(
+                  120,
+                  Math.min(400, pane.parentElement!.clientWidth * 0.45),
+                );
+                const width = pane.getBoundingClientRect().width;
+                setLayersWidth(
+                  event.key === "Home"
+                    ? 120
+                    : event.key === "End"
+                      ? maximum
+                      : Math.max(
+                          120,
+                          Math.min(maximum, width + (event.key === "ArrowRight" ? 10 : -10)),
+                        ),
+                );
+              }}
+            />
+          </div>
         )}
         <main
           ref={viewport}
@@ -443,7 +511,7 @@ export function DesignCanvasTab({
           />
         )}
       </div>
-      <footer className="flex gap-3 border-t px-3 py-1 text-[10px] text-muted-foreground">
+      <footer className="flex gap-3 border-t border-divider px-3 py-1 text-[10px] text-muted-foreground">
         <span>Drag background to pan · Scroll to pan · Ctrl + scroll to zoom</span>
         <span className="ml-auto">{canvas ? `Revision ${canvas.revision}` : "Connecting"}</span>
       </footer>

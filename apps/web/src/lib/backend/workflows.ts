@@ -261,6 +261,13 @@ export async function stopMultiReviewReviewer(
   });
 }
 
+/** Stop validation commands and continue Multi Review with the evidence collected so far. */
+export async function stopMultiReviewValidation(
+  workflowId: string,
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("stop_multi_review_validation", { workflowId });
+}
+
 export async function restartMultiReviewReviewer(
   workflowId: string,
   reviewerId: string,

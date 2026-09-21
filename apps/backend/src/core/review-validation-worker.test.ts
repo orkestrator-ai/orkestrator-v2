@@ -379,16 +379,55 @@ test("HEAD change after discovery still fails validation", async () => {
 });
 
 test("cancellation terminates children and a cancelled launch cannot start commands", async () => {
-  const { root, run } = await fixture([command("slow", "sleep 10; touch .orkestrator/unexpected")]);
+  const { root, run } = await fixture([
+    command("slow", "sleep 10; touch .orkestrator/unexpected", { weight: 2 }),
+    command("never-after-slow", "touch .orkestrator/unexpected-after-slow"),
+  ]);
   await control(root, run);
+  const runningDeadline = Date.now() + 3_000;
+  let running = await control(root, run, "status");
+  while (running.results[0]!.status !== "running" && Date.now() < runningDeadline) {
+    await Bun.sleep(20);
+    running = await control(root, run, "status");
+  }
+  expect(running.results[0]!.status).toBe("running");
   const cancelled = await control(root, run, "cancel");
   expect(cancelled.status).toBe("cancelled");
+  expect(cancelled.results[1]).toMatchObject({
+    status: "incomplete",
+    exitCode: null,
+    limitation: "Validation was cancelled before this command started",
+  });
+  expect(
+    parseReviewPreparationValidation(
+      validationPreparation(cancelled, { allowCancelled: true }).validation,
+      cancelled.id,
+    )[1]!.status,
+  ).toBe("incomplete");
   expect((await control(root, run)).status).toBe("cancelled");
+  expect(existsSync(path.join(root, ".orkestrator", "review-artifacts", ".validation-lock"))).toBe(
+    false,
+  );
   // The child was killed mid-flight, so it never reached its trailing command.
   expect(existsSync(path.join(root, ".orkestrator", "unexpected"))).toBe(false);
+  expect(existsSync(path.join(root, ".orkestrator", "unexpected-after-slow"))).toBe(false);
   const early = await fixture([command("never", "touch .orkestrator/unexpected")]);
   await control(early.root, early.run, "cancel");
-  expect((await completed(early.root, early.run)).status).toBe("cancelled");
+  const earlyDone = await completed(early.root, early.run);
+  expect(earlyDone.status).toBe("cancelled");
+  expect(earlyDone.results[0]).toMatchObject({
+    status: "incomplete",
+    exitCode: null,
+    stdoutPath: null,
+    stderrPath: null,
+    limitation: "Validation was cancelled before this command started",
+  });
+  expect(
+    parseReviewPreparationValidation(
+      validationPreparation(earlyDone, { allowCancelled: true }).validation,
+      earlyDone.id,
+    )[0],
+  ).toMatchObject({ status: "incomplete", exitCode: null });
   // A cancelled launch must not start the command that was never dispatched.
   expect(existsSync(path.join(early.root, ".orkestrator", "unexpected"))).toBe(false);
 });

@@ -6,7 +6,7 @@ import {
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Copy, Loader2, RefreshCw, SquareTerminal } from "lucide-react";
+import { Copy, Loader2, RefreshCw, Square, SquareTerminal } from "lucide-react";
 import { toast } from "sonner";
 import { getReviewValidationOutput } from "@/lib/backend";
 import { stripAnsi } from "@/lib/terminal-utils";
@@ -248,12 +248,17 @@ export function ReviewValidationStatus({
   run,
   now = Date.now(),
   loadOutput = getReviewValidationOutput,
+  onStop,
+  stopping = false,
 }: {
   environmentId: string;
   run: ReviewValidationRun;
   /** Parent-owned live clock, so every running row advances on the same tick. */
   now?: number;
   loadOutput?: typeof getReviewValidationOutput;
+  /** Optional owner action that stops active commands while retaining partial evidence. */
+  onStop?: () => void;
+  stopping?: boolean;
 }) {
   const validationElapsedMs = reviewValidationElapsedMs(run, now);
   const notes = run.plan.limitations;
@@ -267,15 +272,32 @@ export function ReviewValidationStatus({
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="font-semibold">Validation</h3>
-        <span className="text-muted-foreground">
-          {run.status === "planned" ||
-          (run.status === "running" &&
-            (run.queueReason ||
-              (run.results.some((result) => result.status === "queued") &&
-                !run.results.some((result) => result.status === "running"))))
-            ? "Queued"
-            : run.status}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-muted-foreground">
+            {stopping
+              ? "Stopping"
+              : run.status === "planned" ||
+                  (run.status === "running" &&
+                    (run.queueReason ||
+                      (run.results.some((result) => result.status === "queued") &&
+                        !run.results.some((result) => result.status === "running"))))
+                ? "Queued"
+                : run.status}
+          </span>
+          {onStop && (run.status === "planned" || run.status === "running") && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-[11px]"
+              disabled={stopping}
+              onClick={onStop}
+            >
+              {stopping ? <Loader2 className="animate-spin" /> : <Square />}
+              {stopping ? "Stopping tests…" : "Stop tests and continue"}
+            </Button>
+          )}
+        </div>
       </div>
       <p className="mb-2 text-muted-foreground">
         {run.discoveryDurationMs !== undefined &&

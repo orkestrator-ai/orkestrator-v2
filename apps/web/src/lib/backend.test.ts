@@ -1830,6 +1830,7 @@ describe("backend native agent and looped review wrappers", () => {
       [backendWrappers.addressMultiReview, "address_multi_review"],
       [backendWrappers.retryMultiReview, "retry_multi_review"],
       [backendWrappers.cancelMultiReview, "cancel_multi_review"],
+      [backendWrappers.stopMultiReviewValidation, "stop_multi_review_validation"],
     ] as const) {
       await expect(method("multi-1")).resolves.toBe(workflow);
       expect(invokeMock).toHaveBeenLastCalledWith(command, { workflowId: "multi-1" });

@@ -211,8 +211,10 @@ export interface MultiReviewWorkflow {
   targetBranch: string;
   reviewInstruction?: string;
   reviewers: MultiReviewReviewer[];
-  /** One model used for both immutable-package preparation and report consolidation. */
+  /** Model used for immutable-package preparation. */
   reviewModel?: MultiReviewModelSelection;
+  /** Consolidation-only override; absent means use the preparation model. */
+  consolidationModel?: MultiReviewModelSelection;
   /** Durable key for the preparation/consolidation provider session. */
   reviewSessionKey?: string;
   reviewSession?: MultiReviewSession;
@@ -671,6 +673,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "autoFix",
       "reviewers",
       "reviewModel",
+      "consolidationModel",
       "reviewSessionKey",
       "reviewSession",
       "fixModel",
@@ -718,6 +721,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     value.reviewers.length < MULTI_REVIEW_MIN_REVIEWERS ||
     value.reviewers.length > MULTI_REVIEW_MAX_REVIEWERS ||
     (value.reviewModel !== undefined && !isMultiReviewModelSelection(value.reviewModel)) ||
+    (value.consolidationModel !== undefined &&
+      !isMultiReviewModelSelection(value.consolidationModel)) ||
     (value.reviewSessionKey !== undefined && !nonBlank(value.reviewSessionKey)) ||
     (value.reviewSession !== undefined && !isFixSession(value.reviewSession)) ||
     !record(value.fixModel) ||

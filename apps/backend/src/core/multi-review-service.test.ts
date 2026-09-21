@@ -30,6 +30,7 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { NativeAgentContextUsage } from "@orkestrator/protocol/native-agent";
+import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import type {
   BuildPipelineProvider,
   ProviderCreateSessionOptions,
@@ -738,6 +739,12 @@ test("MultiReviewService settles the interactive Fix card in the background with
           },
         },
       });
+      await waitUntil(
+        async () =>
+          (await storage.getEnvironment("env-interactive-fix-settlement"))?.agentActivitySources?.[
+            "multi-review"
+          ]?.state === "idle",
+      );
       expect(await storage.getEnvironment("env-interactive-fix-settlement")).toMatchObject({
         agentActivitySources: { "multi-review": { state: "idle" } },
       });
@@ -5238,17 +5245,322 @@ test("MultiReviewService remains paused until provider stop is confirmed", async
   );
 });
 
+test("MultiReviewService keeps failed validation cancellation supervised until retry succeeds", async () => {
+  const provider = new Provider(false);
+  let cancellationAttempts = 0;
+  await withService(
+    "env-pause-validation-reconcile",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.activeRequest?.kind === "prepare";
+      });
+      await mutateStoredWorkflow(storage, started.id, (workflow) => {
+        delete workflow.activeRequest;
+        const session = workflow.reviewSession ?? workflow.fixSession;
+        if (session) {
+          session.status = "idle";
+          session.completedAt = new Date().toISOString();
+        }
+        workflow.validationRun = newReviewValidationRun("pause-validation", {
+          headRef: REVIEW_HEAD,
+          commands: [
+            {
+              id: "check",
+              command: "mise run check",
+              cwd: ".",
+              dependsOn: [],
+              resources: ["*"],
+              weight: 1,
+              timeoutMs: 60_000,
+            },
+          ],
+          limitations: [],
+        });
+        workflow.validationRun.status = "running";
+        workflow.validationRun.results[0]!.status = "running";
+      });
+
+      const paused = await service.pauseStep(started.id, "prepare");
+      expect(paused).toMatchObject({
+        phase: "paused",
+        pausedFromPhase: "preparing",
+        pausedStep: "prepare",
+        validationRun: { status: "running" },
+      });
+      expect(paused.error).toContain("validation: validation cancellation unavailable");
+      expect(await storage.getEnvironment(started.environmentId)).toMatchObject({
+        agentActivitySources: { "multi-review": { state: "working" } },
+      });
+
+      await service.advanceNow(started.id);
+      const reconciled = (await snapshot(started.id))!;
+      expect(reconciled.phase).toBe("paused");
+      expect(reconciled.validationRun).toBeUndefined();
+      expect(reconciled.error).toBeUndefined();
+      expect(cancellationAttempts).toBe(2);
+      expect(await storage.getEnvironment(started.environmentId)).toMatchObject({
+        agentActivitySources: { "multi-review": { state: "idle" } },
+      });
+    },
+    {
+      packageFlow: true,
+      invoke: async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+        if (command === "cancel_review_validation") {
+          cancellationAttempts += 1;
+          if (cancellationAttempts === 1) throw new Error("validation cancellation unavailable");
+          return {
+            ...(args?.run as object),
+            status: "cancelled",
+            completedAt: new Date().toISOString(),
+          } as T;
+        }
+        return stableReviewInvoker<T>(command, args);
+      },
+    },
+  );
+});
+
+test("MultiReviewService propagates a fence loss after validation cancellation", async () => {
+  const provider = new Provider(false);
+  let invalidateFence = false;
+  await withService(
+    "env-pause-validation-fence",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.activeRequest?.kind === "prepare";
+      });
+      await mutateStoredWorkflow(storage, started.id, (workflow) => {
+        delete workflow.activeRequest;
+        const session = workflow.reviewSession ?? workflow.fixSession;
+        if (session) session.status = "idle";
+        workflow.validationRun = newReviewValidationRun("pause-validation-fence", {
+          headRef: REVIEW_HEAD,
+          commands: [
+            {
+              id: "check",
+              command: "mise run check",
+              cwd: ".",
+              dependsOn: [],
+              resources: ["*"],
+              weight: 1,
+              timeoutMs: 60_000,
+            },
+          ],
+          limitations: [],
+        });
+      });
+      const validate = storage.validateMultiReviewController.bind(storage);
+      storage.validateMultiReviewController = (async (...args: Parameters<typeof validate>) =>
+        invalidateFence
+          ? false
+          : validate(...args)) as typeof storage.validateMultiReviewController;
+      try {
+        await expect(service.pauseStep(started.id, "prepare")).rejects.toThrow(
+          "Multi review controller lease was lost",
+        );
+      } finally {
+        storage.validateMultiReviewController = validate;
+      }
+      expect((await snapshot(started.id))?.phase).toBe("preparing");
+    },
+    {
+      packageFlow: true,
+      invoke: async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+        if (command === "cancel_review_validation") {
+          invalidateFence = true;
+          return args?.run as T;
+        }
+        return stableReviewInvoker<T>(command, args);
+      },
+    },
+  );
+});
+
+test("MultiReviewService pauses and resumes consolidation in its retained session", async () => {
+  const provider = new Provider();
+  const send = provider.send.bind(provider);
+  provider.send = async (sessionId, prompt, options) => {
+    await send(sessionId, prompt, options);
+    if (prompt.includes("<multi-review-reports-json>")) {
+      provider.statusOverrides.set(sessionId, "running");
+    }
+  };
+  await withService("env-pause-consolidation", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      const current = await snapshot(started.id);
+      return (
+        current?.activeRequest?.kind === "consolidate" && current.activeRequest.state === "sent"
+      );
+    });
+    const running = (await snapshot(started.id))!;
+    const requestId = running.activeRequest!.requestId;
+    const providerSessionId = (running.reviewSession ?? running.fixSession)!.providerSessionId;
+
+    provider.statusOverrides.set(providerSessionId, "idle");
+    const paused = await service.pauseStep(started.id, "consolidate");
+    expect(paused).toMatchObject({
+      phase: "paused",
+      pausedFromPhase: "consolidating",
+      pausedStep: "consolidate",
+    });
+    expect(paused.validationRun).toBeUndefined();
+    expect(paused.activeRequest).toBeUndefined();
+    expect((paused.reviewSession ?? paused.fixSession)?.status).toBe("idle");
+
+    provider.statusOverrides.set(providerSessionId, "running");
+    const resumed = await service.resumeStep(started.id, "consolidate");
+    expect(resumed.phase).toBe("consolidating");
+    await waitUntil(async () => {
+      const current = await snapshot(started.id);
+      return (
+        current?.activeRequest?.kind === "consolidate" &&
+        current.activeRequest.state === "sent" &&
+        current.activeRequest.requestId !== requestId
+      );
+    });
+    expect((await snapshot(started.id))?.fixSession?.providerSessionId).toBe(providerSessionId);
+  });
+});
+
+test("MultiReviewService rejects pause and resume controls for the wrong step", async () => {
+  const provider = new Provider(false);
+  await withService(
+    "env-pause-wrong-step",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.activeRequest?.kind === "prepare";
+      });
+
+      await expect(service.pauseStep(started.id, "consolidate")).rejects.toThrow(
+        "The consolidation step is not running",
+      );
+      const paused = await service.pauseStep(started.id, "prepare");
+      expect(paused.phase).toBe("paused");
+      await expect(service.resumeStep(started.id, "consolidate")).rejects.toThrow(
+        "The consolidation step is not paused",
+      );
+    },
+    { packageFlow: true },
+  );
+});
+
+test("MultiReviewService clears paused markers when paused reconciliation fails", async () => {
+  const provider = new Provider(false);
+  await withService(
+    "env-paused-failure-normalization",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.activeRequest?.kind === "prepare";
+      });
+      provider.statusValue = "idle";
+      await service.pauseStep(started.id, "prepare");
+      await mutateStoredWorkflow(storage, started.id, (workflow) => {
+        const session = workflow.reviewSession ?? workflow.fixSession;
+        if (session) session.status = "running";
+      });
+
+      const originalSave = storage.saveMultiReviewWorkflow.bind(storage);
+      let rejectNextSave = true;
+      storage.saveMultiReviewWorkflow = (async (...args: Parameters<typeof originalSave>) => {
+        if (rejectNextSave) {
+          rejectNextSave = false;
+          throw new Error("paused reconciliation save failed");
+        }
+        return originalSave(...args);
+      }) as typeof storage.saveMultiReviewWorkflow;
+      try {
+        await service.advanceNow(started.id);
+      } finally {
+        storage.saveMultiReviewWorkflow = originalSave;
+      }
+
+      const failed = (await snapshot(started.id))!;
+      expect(failed.phase).toBe("failed");
+      expect(failed.pausedFromPhase).toBeUndefined();
+      expect(failed.pausedStep).toBeUndefined();
+      expect(failed.error).toContain("paused reconciliation save failed");
+      expect(isMultiReviewWorkflow(failed)).toBe(true);
+      await expect(service.pauseStep(started.id, "prepare")).rejects.toThrow(
+        "The preparation step is not running",
+      );
+    },
+    { packageFlow: true },
+  );
+});
+
+test("MultiReviewService rejects pausing the interactive Fix step", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-pause-interactive-fix",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+
+      await expect(service.pauseStep(started.id, "fix")).rejects.toThrow(
+        "The fix step is not running",
+      );
+    },
+    {
+      serviceOptions: {
+        dispatchAddressPrompt: async (workflow) => ({
+          tabId: workflow.addressTabId!,
+          fixSession: {
+            ...workflow.fixModel,
+            sessionKey: workflow.addressSessionKey!,
+            providerSessionId: "interactive-fix-not-pausable",
+            requestIds: [workflow.addressRequestId!],
+            status: "running",
+            startedAt: new Date().toISOString(),
+          },
+        }),
+      },
+    },
+  );
+});
+
 test("MultiReviewService restarts consolidation without rerunning completed reviewers", async () => {
   const provider = new Provider();
-  await withService("env-restart-consolidation", provider, async ({ service, start, snapshot }) => {
-    const started = await start();
+  await withService("env-restart-consolidation", provider, async ({ service, snapshot }) => {
+    const preparationModel = {
+      agent: "claude" as const,
+      model: "sonnet",
+      reasoningEffort: "medium",
+    };
+    const started = await service.start({
+      environmentId: "env-restart-consolidation",
+      projectId: "project-1",
+      targetBranch: "main",
+      reviewers: [{ agent: "claude", model: "opus" }],
+      reviewModel: preparationModel,
+      fixModel: { agent: "claude", model: "opus" },
+    });
     await waitUntil(async () => {
       await service.advanceNow(started.id);
       return (await snapshot(started.id))?.phase === "ready";
     });
     const ready = (await snapshot(started.id))!;
     const reviewerSessionId = ready.reviewers[0]!.providerSessionId!;
-    const consolidationSessionId = ready.fixSession!.providerSessionId;
+    const consolidationSessionId = ready.reviewSession!.providerSessionId;
 
     const restarted = await service.restartStep(started.id, "consolidate", {
       agent: "codex",
@@ -5256,7 +5568,8 @@ test("MultiReviewService restarts consolidation without rerunning completed revi
       reasoningEffort: "high",
     });
     expect(restarted.phase).toBe("consolidating");
-    expect(restarted.reviewModel).toEqual({
+    expect(restarted.reviewModel).toEqual(preparationModel);
+    expect(restarted.consolidationModel).toEqual({
       agent: "codex",
       model: "gpt-5.4",
       reasoningEffort: "high",
@@ -5275,6 +5588,94 @@ test("MultiReviewService restarts consolidation without rerunning completed revi
     expect(rerun.reviewers[0]?.providerSessionId).toBe(reviewerSessionId);
     expect(rerun.reviewSession?.providerSessionId).not.toBe(consolidationSessionId);
     expect(rerun.consolidatedReport).toBeDefined();
+
+    const preparationRestart = await service.restartStep(started.id, "prepare");
+    expect(preparationRestart.reviewModel).toEqual(preparationModel);
+    expect(preparationRestart.consolidationModel).toEqual({
+      agent: "codex",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+    });
+    await service.advanceNow(started.id);
+    expect((await snapshot(started.id))?.reviewSession).toMatchObject(preparationModel);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    expect((await snapshot(started.id))?.reviewSession).toMatchObject({
+      agent: "codex",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+    });
+  });
+});
+
+test("MultiReviewService releases old provider ownership after a cross-agent restart", async () => {
+  const claudeProvider = new Provider();
+  const codexProvider = new Provider();
+  await withService(
+    "env-restart-provider-cleanup",
+    claudeProvider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const claudeDisposalsBeforeRestart = claudeProvider.disposeCalls;
+
+      await service.restartStep(started.id, "consolidate", {
+        agent: "codex",
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+      });
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+
+      expect(claudeProvider.disposeCalls).toBeGreaterThan(claudeDisposalsBeforeRestart);
+      expect(codexProvider.disposeCalls).toBeGreaterThan(0);
+    },
+    {
+      createProvider: async (_workflow, selection) =>
+        selection.agent === "codex" ? codexProvider : claudeProvider,
+    },
+  );
+});
+
+test("MultiReviewService keeps per-step selections on ordinary restarts", async () => {
+  const provider = new Provider();
+  await withService("env-restart-existing-selections", provider, async ({ service, snapshot }) => {
+    const reviewModel = {
+      agent: "claude" as const,
+      model: "sonnet",
+      reasoningEffort: "medium",
+    };
+    const started = await service.start({
+      environmentId: "env-restart-existing-selections",
+      projectId: "project-1",
+      targetBranch: "main",
+      reviewers: [{ agent: "claude", model: "opus" }],
+      reviewModel,
+      fixModel: { agent: "claude", model: "opus" },
+    });
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    const consolidation = await service.restartStep(started.id, "consolidate");
+    expect(consolidation.reviewModel).toEqual(reviewModel);
+    expect(consolidation.consolidationModel).toBeUndefined();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+
+    const preparation = await service.restartStep(started.id, "prepare");
+    expect(preparation.reviewModel).toEqual(reviewModel);
+    expect(preparation.consolidationModel).toBeUndefined();
   });
 });
 
@@ -5518,6 +5919,40 @@ test("MultiReviewService leaves sessions and results intact when prepare snapsho
         return stableReviewInvoker<T>(command, args);
       },
     },
+  );
+});
+
+test("MultiReviewService leaves preparation intact when restart model configuration fails", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-restart-configuration-failure",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const before = structuredClone((await snapshot(started.id))!);
+      const abortsBefore = [...provider.aborted];
+      const getEnvironment = storage.getEnvironment.bind(storage);
+      storage.getEnvironment = (async () => null) as typeof storage.getEnvironment;
+      try {
+        await expect(
+          service.restartStep(started.id, "prepare", {
+            agent: "codex",
+            model: "gpt-5.4",
+            reasoningEffort: "high",
+          }),
+        ).rejects.toThrow("Review environment no longer exists");
+      } finally {
+        storage.getEnvironment = getEnvironment;
+      }
+
+      expect(await snapshot(started.id)).toEqual(before);
+      expect(provider.aborted).toEqual(abortsBefore);
+    },
+    { packageFlow: true },
   );
 });
 

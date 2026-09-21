@@ -150,6 +150,15 @@ describe("multi review protocol", () => {
       backendRevision: 2,
     };
     expect(isMultiReviewWorkflow(workflow)).toBe(true);
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        consolidationModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+      }),
+    ).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, consolidationModel: { agent: "unknown" } })).toBe(
+      false,
+    );
     expect(isMultiReviewWorkflow({ ...workflow, autoFix: true })).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, autoFix: false })).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, autoFix: "true" })).toBe(false);

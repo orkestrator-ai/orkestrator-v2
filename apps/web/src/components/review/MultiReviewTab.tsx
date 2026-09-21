@@ -153,8 +153,10 @@ export function multiReviewReviewSessionTabOptions(
   workflow: MultiReviewWorkflow,
 ): CreateTabOptions | null {
   const session =
-    workflow.reviewSession ?? (workflow.reviewModel ? undefined : workflow.fixSession);
-  const selection = workflow.reviewModel ?? workflow.fixModel;
+    workflow.reviewSession ??
+    (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession);
+  const selection =
+    session ?? workflow.consolidationModel ?? workflow.reviewModel ?? workflow.fixModel;
   if (!session?.providerSessionId) return null;
   return {
     tabId: `multi-review-review:${workflow.id}`,
@@ -247,6 +249,9 @@ export function consolidationStep(workflow: MultiReviewWorkflow): MultiReviewSte
   if (workflow.phase === "paused" && workflow.pausedStep === "consolidate") {
     return step("Paused", "paused");
   }
+  if (workflow.phase === "paused" && workflow.pausedStep === "prepare") {
+    return step("Waiting for review package", "not-started");
+  }
   if (workflow.phase === "reviewing") return step("Waiting for reviews", "not-started");
   if (workflow.phase === "preparing") return step("Waiting for review package", "not-started");
   const cancelled = cancellationStep(workflow.phase);
@@ -267,6 +272,12 @@ export function fixStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
   if (workflow.phase === "fixing") return step("Addressing findings", "running");
   if (workflow.phase === "paused" && workflow.pausedStep === "fix") {
     return step("Paused", "paused");
+  }
+  if (workflow.phase === "paused" && workflow.pausedStep === "prepare") {
+    return step("Waiting for review package", "not-started");
+  }
+  if (workflow.phase === "paused" && workflow.pausedStep === "consolidate") {
+    return step("Waiting for consolidation", "not-started");
   }
   if (workflow.phase === "interactive") {
     if (workflow.addressPromptPending === true) return step("Starting fix session", "running");
@@ -437,7 +448,8 @@ export function multiReviewStepRuntimeSummary(
     return workflow.fixSession ? fixSessionRuntimeSummary(workflow.fixSession, now) : null;
   }
   const session =
-    workflow.reviewSession ?? (workflow.reviewModel ? undefined : workflow.fixSession);
+    workflow.reviewSession ??
+    (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession);
   return session ? fixSessionRuntimeSummary(session, now) : null;
 }
 
@@ -538,6 +550,7 @@ function MultiReviewStepSection({
   onRestartIn,
   canPause,
   canResume,
+  showPauseAction = true,
   lifecyclePending,
   onPause,
   onResume,
@@ -560,6 +573,7 @@ function MultiReviewStepSection({
   onRestartIn: () => void;
   canPause: boolean;
   canResume: boolean;
+  showPauseAction?: boolean;
   lifecyclePending: boolean;
   onPause: () => void;
   onResume: () => void;
@@ -699,7 +713,7 @@ function MultiReviewStepSection({
             {lifecyclePending ? <Loader2 className="animate-spin" /> : <Play />}
             Resume
           </ContextMenuItem>
-        ) : (
+        ) : showPauseAction ? (
           <ContextMenuItem
             disabled={!canPause || lifecyclePending || restarting}
             onSelect={onPause}
@@ -707,7 +721,7 @@ function MultiReviewStepSection({
             {lifecyclePending ? <Loader2 className="animate-spin" /> : <Pause />}
             Pause
           </ContextMenuItem>
-        )}
+        ) : null}
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -1054,8 +1068,10 @@ function MultiReviewOverviewTab({
     workflow.phase === "cancelling";
   const reviewSessionStalled =
     (workflow.phase === "preparing" || workflow.phase === "consolidating") &&
-    (workflow.reviewSession ?? (workflow.reviewModel ? undefined : workflow.fixSession))
-      ?.stalledSince !== undefined;
+    (
+      workflow.reviewSession ??
+      (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession)
+    )?.stalledSince !== undefined;
   const fixSessionStalled =
     workflow.phase === "fixing" && workflow.fixSession?.stalledSince !== undefined;
   const packageStatus = reviewPackageGenerationStep(workflow);
@@ -1064,9 +1080,12 @@ function MultiReviewOverviewTab({
   const stepRuntime = (step: MultiReviewStepKey, status: MultiReviewStepStatus): string | null =>
     multiReviewStepRuntimeSummary(workflow, step, status.state === "running", reviewPanelNow);
   const reviewSelection = workflow.reviewModel ?? workflow.fixModel;
+  const consolidationSelection = workflow.consolidationModel ?? reviewSelection;
   const hasReviewSession = Boolean(
-    (workflow.reviewSession ?? (workflow.reviewModel ? undefined : workflow.fixSession))
-      ?.providerSessionId,
+    (
+      workflow.reviewSession ??
+      (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession)
+    )?.providerSessionId,
   );
   const hasFixSession = Boolean(workflow.fixSession?.providerSessionId);
   const canOpenReviewStep = (status: MultiReviewStepStatus): boolean =>
@@ -1372,7 +1391,7 @@ function MultiReviewOverviewTab({
             name="Consolidation"
             status={consolidationStatus}
             stalled={workflow.phase === "consolidating" && reviewSessionStalled}
-            model={reviewSelection}
+            model={consolidationSelection}
             runtime={stepRuntime("consolidation", consolidationStatus)}
             runtimeLabel="Consolidation runtime"
             openLabel="Open consolidation session"
@@ -1438,6 +1457,7 @@ function MultiReviewOverviewTab({
             lifecyclePending={stepLifecycleAction !== null}
             onPause={() => void runStepLifecycle("fix", "pause", commands.pauseStep)}
             onResume={() => void runStepLifecycle("fix", "resume", commands.resumeStep)}
+            showPauseAction={false}
           />
 
           {workflow.consolidatedReport && (
@@ -1570,7 +1590,13 @@ function MultiReviewOverviewTab({
           }}
           kind={restartDialogStep}
           catalog={modelCatalog}
-          defaultSelection={restartDialogStep === "fix" ? workflow.fixModel : reviewSelection}
+          defaultSelection={
+            restartDialogStep === "fix"
+              ? workflow.fixModel
+              : restartDialogStep === "consolidate"
+                ? consolidationSelection
+                : reviewSelection
+          }
           error={restartDialogError}
           busy={restartingStep === restartDialogStep}
           onSubmit={(selection) => void restartStep(restartDialogStep, selection)}

@@ -153,6 +153,47 @@ function reviewingWorkflow(): MultiReviewWorkflow {
   };
 }
 
+function validatingWorkflow(): MultiReviewWorkflow {
+  const workflow = reviewingWorkflow();
+  workflow.phase = "preparing";
+  workflow.validationRun = {
+    id: "validation-1",
+    status: "running",
+    startedAt: "2026-09-08T20:00:04.000Z",
+    plan: {
+      headRef: "a".repeat(40),
+      commands: [
+        {
+          id: "test",
+          command: "mise run test",
+          cwd: ".",
+          dependsOn: [],
+          resources: ["workspace:test"],
+          weight: 2,
+          timeoutMs: 1_200_000,
+        },
+      ],
+      limitations: [],
+    },
+    results: [
+      {
+        id: "test",
+        command: "mise run test",
+        status: "running",
+        exitCode: null,
+        stdoutPath: ".orkestrator/test.stdout",
+        stderrPath: ".orkestrator/test.stderr",
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        startedAt: "2026-09-08T20:00:05.000Z",
+        durationMs: 0,
+        limitation: null,
+      },
+    ],
+  };
+  return workflow;
+}
+
 function TabRegistrar({
   createTab,
 }: {
@@ -602,6 +643,42 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       window.setInterval = originalSetInterval;
       window.clearInterval = originalClearInterval;
     }
+  });
+
+  test("stops validation while keeping Multi Review on course for the reviewer step", async () => {
+    const workflow = validatingWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const stopping = {
+      ...workflow,
+      validationStopRequested: true,
+      backendRevision: workflow.backendRevision + 1,
+    };
+    const stopValidation = mock(async () => stopping);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+        commands={{
+          address: mock(async () => workflow),
+          retry: mock(async () => workflow),
+          cancel: mock(async () => workflow),
+          stopValidation,
+          stopReviewer: mock(async () => workflow),
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop tests and continue" }));
+    await waitFor(() => expect(stopValidation).toHaveBeenCalledWith(workflow.id));
+    expect(useMultiReviewStore.getState().workflows.get(workflow.id)).toMatchObject({
+      validationStopRequested: true,
+    });
+    expect(screen.getByText("Stopping")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Stopping tests…" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   test("keeps a running validation clock live while the workflow is cancelling", () => {

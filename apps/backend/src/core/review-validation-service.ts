@@ -243,26 +243,37 @@ export async function controlReviewValidation(
   };
 }
 
-export function validationPreparation(run: ReviewValidationRun): ReviewPreparationResult {
-  if (run.status !== "completed")
+export function validationPreparation(
+  run: ReviewValidationRun,
+  options: { allowCancelled?: boolean } = {},
+): ReviewPreparationResult {
+  const stoppedEarly = run.status === "cancelled" && options.allowCancelled === true;
+  if (run.status !== "completed" && !stoppedEarly)
     throw new Error(run.error ?? "Review validation has not completed");
   return {
     validation: run.results.map((r) => {
+      const status =
+        stoppedEarly && ["pending", "queued", "running"].includes(r.status)
+          ? "incomplete"
+          : r.status;
       if (
-        r.status !== "passed" &&
-        r.status !== "failed" &&
-        r.status !== "skipped" &&
-        r.status !== "incomplete"
+        status !== "passed" &&
+        status !== "failed" &&
+        status !== "skipped" &&
+        status !== "incomplete"
       )
         throw new Error("Validation command is unsettled");
       return {
         command: `cd ${quoteShell(run.plan.commands.find((cmd) => cmd.id === r.id)!.cwd)} && ${r.command}`,
-        status: r.status,
+        status,
         exitCode: r.exitCode,
         stdoutPath: r.stdoutPath,
         stderrPath: r.stderrPath,
         durationMs: r.durationMs,
-        limitation: r.limitation,
+        limitation:
+          status === "incomplete" && r.limitation === null
+            ? "Validation was stopped before this command completed"
+            : r.limitation,
         stdoutSha256: r.stdoutSha256,
         stderrSha256: r.stderrSha256,
       };
@@ -273,6 +284,9 @@ export function validationPreparation(run: ReviewValidationRun): ReviewPreparati
     })),
     limitations: [
       ...run.plan.limitations,
+      ...(stoppedEarly
+        ? ["Validation was stopped before every command completed; partial results were preserved."]
+        : []),
       ...(run.environmentChangesOmitted
         ? [
             `Environment change list was truncated; ${run.environmentChangesOmitted} additional paths were omitted`,

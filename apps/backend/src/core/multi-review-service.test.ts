@@ -36,6 +36,10 @@ import type {
   ProviderSendOptions,
   ProviderStatus,
 } from "./build-pipeline-provider.js";
+import type {
+  ReviewValidationPlan,
+  ReviewValidationRun,
+} from "@orkestrator/protocol/review-workflow";
 import {
   AmbiguousPromptDispatchError,
   ProviderSessionFailedError,
@@ -167,6 +171,7 @@ class Provider implements BuildPipelineProvider {
   schemaFailureReports = 0;
   invalidFixResults = 0;
   fixStructuredFailure: StructuredOutputFailureCode | null = null;
+  preparationResult: unknown = TEST_REVIEW_PREPARATION;
   messagesValue: unknown[] = [];
   messagesError: Error | null = null;
   reviewerReport: StructuredReviewReport = cleanReport;
@@ -275,7 +280,7 @@ class Provider implements BuildPipelineProvider {
       sent.options.schema === REVIEW_PREPARATION_RESULT_JSON_SCHEMA ||
       sent.options.schema === REVIEW_VALIDATION_PLAN_SCHEMA
     )
-      return { ok: true, provider: "claude", requestId, value: TEST_REVIEW_PREPARATION as T };
+      return { ok: true, provider: "claude", requestId, value: this.preparationResult as T };
     if (sent.options.schema === REVIEW_FIX_RESULT_JSON_SCHEMA) {
       if (this.fixStructuredFailure) {
         const code = this.fixStructuredFailure;
@@ -737,6 +742,13 @@ test("MultiReviewService settles the interactive Fix card in the background with
             completedAt: expect.any(String),
           },
         },
+      });
+      // The workflow snapshot is committed before its derived environment
+      // projection. Observe both authoritative stores settling instead of
+      // racing the second write after the session itself becomes idle.
+      await waitUntil(async () => {
+        const environment = await storage.getEnvironment("env-interactive-fix-settlement");
+        return environment?.agentActivitySources?.["multi-review"]?.state === "idle";
       });
       expect(await storage.getEnvironment("env-interactive-fix-settlement")).toMatchObject({
         agentActivitySources: { "multi-review": { state: "idle" } },
@@ -6236,6 +6248,115 @@ test("Multi Review prepares and consolidates with its review model before openin
       invoke: async (command, args) => {
         commands.push({ command, args });
         return stableReviewInvoker(command, args);
+      },
+    },
+  );
+});
+
+test("MultiReviewService stops validation and advances with partial evidence", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  const plan: ReviewValidationPlan = {
+    headRef: REVIEW_HEAD,
+    commands: [
+      {
+        id: "check",
+        command: "mise run check",
+        cwd: ".",
+        dependsOn: [],
+        resources: ["workspace:check"],
+        weight: 1,
+        timeoutMs: 60_000,
+      },
+      {
+        id: "test",
+        command: "mise run test",
+        cwd: ".",
+        dependsOn: [],
+        resources: ["workspace:test"],
+        weight: 2,
+        timeoutMs: 120_000,
+      },
+    ],
+    limitations: [],
+  };
+  provider.preparationResult = plan;
+  const commands: string[] = [];
+  let packagedPreparation: unknown;
+  const runningRun = (run: ReviewValidationRun): ReviewValidationRun => ({
+    ...run,
+    status: "running",
+    results: run.results.map((result, index) =>
+      index === 0
+        ? {
+            ...result,
+            status: "passed",
+            exitCode: 0,
+            durationMs: 1_000,
+          }
+        : {
+            ...result,
+            status: "running",
+            startedAt: new Date().toISOString(),
+            durationMs: 500,
+          },
+    ),
+  });
+
+  await withService(
+    "env-stop-validation",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => Boolean((await snapshot(started.id))?.activeRequest));
+      provider.statusValue = "idle";
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.validationRun?.status).toBe("running");
+
+      const requested = await service.stopValidation(started.id);
+      expect(requested).toMatchObject({
+        phase: "preparing",
+        validationStopRequested: true,
+      });
+
+      await waitUntil(async () => (await snapshot(started.id))?.phase === "reviewing");
+      const reviewing = (await snapshot(started.id))!;
+      expect(reviewing.validationRun?.status).toBe("cancelled");
+      expect(reviewing.validationStopRequested).toBeUndefined();
+      expect(commands).toContain("cancel_review_validation");
+      expect(packagedPreparation).toMatchObject({
+        validation: [
+          { command: "cd '.' && mise run check", status: "passed" },
+          { command: "cd '.' && mise run test", status: "incomplete" },
+        ],
+        limitations: [
+          "Validation was stopped before every command completed; partial results were preserved.",
+        ],
+      });
+    },
+    {
+      packageFlow: true,
+      invoke: async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+        commands.push(command);
+        if (command === "start_review_validation") {
+          return runningRun(args!.run as ReviewValidationRun) as T;
+        }
+        if (command === "status_review_validation") {
+          return args!.run as T;
+        }
+        if (command === "cancel_review_validation") {
+          const run = args!.run as ReviewValidationRun;
+          return {
+            ...run,
+            status: "cancelled",
+            completedAt: new Date().toISOString(),
+          } as T;
+        }
+        if (command === "generate_looped_review_package") {
+          packagedPreparation = args!.preparation;
+        }
+        return stableReviewInvoker<T>(command, args);
       },
     },
   );

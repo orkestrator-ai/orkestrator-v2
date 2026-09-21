@@ -824,6 +824,7 @@ export class MultiReviewService {
         workflow.phase = "preparing";
         delete workflow.reviewPackage;
         delete workflow.validationRun;
+        delete workflow.validationStopRequested;
         delete workflow.stepRuntimes;
         delete workflow.reviewSnapshotStale;
         clearReviewSession(workflow);
@@ -853,6 +854,7 @@ export class MultiReviewService {
           });
           delete workflow.validationRun;
         }
+        delete workflow.validationStopRequested;
         workflow.phase = "preparing";
         delete workflow.stepRuntimes;
         clearReviewSession(workflow);
@@ -988,6 +990,33 @@ export class MultiReviewService {
           await this.release(workflow, token);
         }
       }
+    });
+  }
+
+  /** Stop the environment-owned validation process and continue with its partial evidence. */
+  async stopValidation(workflowId: string): Promise<MultiReviewWorkflow> {
+    return this.withLock(workflowId, async () => {
+      const controlled = await this.loadControlled(workflowId);
+      if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
+      const { workflow, token } = controlled;
+      if (
+        workflow.phase !== "preparing" ||
+        !workflow.validationRun ||
+        (workflow.validationRun.status !== "planned" && workflow.validationRun.status !== "running")
+      ) {
+        throw new Error("Validation can only be stopped while tests are running");
+      }
+      if (workflow.validationStopRequested === true) {
+        void this.advanceNow(workflowId);
+        return workflow;
+      }
+      // Persist intent before touching the worker. If the backend restarts after
+      // cancellation, the supervisor still knows that a cancelled run should be
+      // packaged as partial evidence rather than failed or restarted.
+      workflow.validationStopRequested = true;
+      const saved = await this.save(workflow, token);
+      void this.advanceNow(workflowId);
+      return saved;
     });
   }
 
@@ -1170,6 +1199,7 @@ export class MultiReviewService {
           workflow.phase = "preparing";
           delete workflow.reviewPackage;
           delete workflow.validationRun;
+          delete workflow.validationStopRequested;
           delete workflow.stepRuntimes;
           delete workflow.reviewSnapshotStale;
           clearReviewSession(workflow);
@@ -2405,7 +2435,11 @@ export class MultiReviewService {
     let run = workflow.validationRun!;
     if (run.status === "planned" || run.status === "running") {
       run = await this.invoke<ReviewValidationRun>(
-        run.status === "planned" ? "start_review_validation" : "status_review_validation",
+        workflow.validationStopRequested === true
+          ? "cancel_review_validation"
+          : run.status === "planned"
+            ? "start_review_validation"
+            : "status_review_validation",
         {
           environmentId: workflow.environmentId,
           run,
@@ -2416,7 +2450,9 @@ export class MultiReviewService {
       await this.save(workflow, token);
       if (run.status === "planned" || run.status === "running") return;
     }
-    const preparation = validationPreparation(run);
+    const preparation = validationPreparation(run, {
+      allowCancelled: workflow.validationStopRequested === true,
+    });
     const sealingStarted = Date.now();
     const generated = await this.invoke<unknown>("generate_looped_review_package", {
       environmentId: workflow.environmentId,
@@ -2435,6 +2471,7 @@ export class MultiReviewService {
       targetBranch: workflow.targetBranch,
     });
     workflow.phase = "reviewing";
+    delete workflow.validationStopRequested;
     settleStepRuntime(workflow, "prepare");
     delete workflow.activeRequest;
     delete workflow.reviewSnapshotStale;

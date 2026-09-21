@@ -32,6 +32,7 @@ const designAction = mock(
   },
 );
 const getCanvas = mock(async () => canvas);
+const getCanvasState = mock(async () => ({ canvas, history }));
 const getChanges = mock(
   async (_environmentId: string, _canvasId: string, generation: string | undefined) => ({
     generation: "generation-1",
@@ -40,9 +41,7 @@ const getChanges = mock(
     events: [],
   }),
 );
-const getHistory = mock(async () => history);
-
-mock.module("./design-client", () => ({ designAction, getCanvas, getChanges, getHistory }));
+mock.module("./design-client", () => ({ designAction, getCanvas, getCanvasState, getChanges }));
 
 const { DesignCanvasTab } = await import("./DesignCanvasTab");
 const originalOrkestrator = window.orkestrator;
@@ -68,8 +67,8 @@ describe("DesignCanvasTab history", () => {
     };
     designAction.mockClear();
     getCanvas.mockClear();
+    getCanvasState.mockClear();
     getChanges.mockClear();
-    getHistory.mockClear();
     window.orkestrator = {
       listen: mock(() => () => {}),
     } as unknown as Window["orkestrator"];
@@ -87,7 +86,9 @@ describe("DesignCanvasTab history", () => {
   });
 
   test("places undo and redo beside save and follows authoritative availability", async () => {
-    render(<DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive />);
+    render(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
 
     const undo = await screen.findByRole("button", { name: "Undo design change" });
     const redo = screen.getByRole("button", { name: "Redo design change" });
@@ -115,7 +116,9 @@ describe("DesignCanvasTab history", () => {
   });
 
   test("supports undo and redo shortcuts without stealing editable-field history", async () => {
-    render(<DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive />);
+    render(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
     const undo = await screen.findByRole("button", { name: "Undo design change" });
     await waitFor(() => expect(undo.hasAttribute("disabled")).toBe(false));
 
@@ -158,5 +161,61 @@ describe("DesignCanvasTab history", () => {
     fireEvent.keyDown(input, { key: "z", ctrlKey: true });
     expect(designAction).toHaveBeenCalledTimes(calls);
     input.remove();
+  });
+
+  test("leaves global shortcuts to the focused pane", async () => {
+    render(
+      <DesignCanvasTab
+        canvasId={canvasId}
+        environmentId="env-1"
+        isActive
+        ownsGlobalShortcuts={false}
+      />,
+    );
+    const undo = await screen.findByRole("button", { name: "Undo design change" });
+    await waitFor(() => expect(undo.hasAttribute("disabled")).toBe(false));
+
+    const event = new KeyboardEvent("keydown", {
+      key: "z",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(designAction).not.toHaveBeenCalled();
+  });
+
+  test("only the focused pane handles a shared shortcut", async () => {
+    render(
+      <>
+        <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />
+        <DesignCanvasTab
+          canvasId={canvasId}
+          environmentId="env-1"
+          isActive
+          ownsGlobalShortcuts={false}
+        />
+      </>,
+    );
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole("button", { name: "Undo design change" })
+          .every((button) => !button.hasAttribute("disabled")),
+      ).toBe(true),
+    );
+
+    const event = new KeyboardEvent("keydown", {
+      key: "z",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    await waitFor(() => expect(designAction).toHaveBeenCalledTimes(1));
   });
 });

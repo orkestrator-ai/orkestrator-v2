@@ -13,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { invoke } from "@/lib/native/backend";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
-import { designAction, getCanvas, getChanges, getHistory } from "./design-client";
+import { designAction, getCanvas, getCanvasState, getChanges } from "./design-client";
 import { DesignFrameView, type DesignSelection } from "./DesignFrameView";
 import { DesignInspector } from "./DesignInspector";
 import { DesignFrameBridge } from "./frame-bridge";
@@ -38,10 +38,12 @@ export function DesignCanvasTab({
   canvasId,
   environmentId,
   isActive,
+  ownsGlobalShortcuts,
 }: {
   canvasId: string;
   environmentId: string;
   isActive: boolean;
+  ownsGlobalShortcuts: boolean;
 }) {
   const [canvas, setCanvas] = useState<DesignCanvas | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -125,9 +127,10 @@ export function DesignCanvasTab({
           const changes = await getChanges(environmentId, canvasId, generation, after);
           if (disposed) return;
           if (changes.reset || changes.revision !== after) {
-            const snapshot = await getCanvas(environmentId, canvasId);
-            if (disposed) return;
-            const nextHistory = await getHistory(environmentId, canvasId);
+            const { canvas: snapshot, history: nextHistory } = await getCanvasState(
+              environmentId,
+              canvasId,
+            );
             if (disposed) return;
             if (!canvasRef.current || canvasRef.current.revision <= snapshot.revision)
               canvasRef.current = snapshot;
@@ -135,8 +138,7 @@ export function DesignCanvasTab({
               current && current.revision > snapshot.revision ? current : snapshot,
             );
             after = snapshot.revision;
-            if (nextHistory.revision === snapshot.revision) setHistory(nextHistory);
-            else again = true;
+            setHistory(nextHistory);
           }
           generation = changes.generation;
         } while (again && !disposed);
@@ -206,7 +208,7 @@ export function DesignCanvasTab({
     [mutate],
   );
   useEffect(() => {
-    if (!isActive) return;
+    if (!ownsGlobalShortcuts) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (
         event.defaultPrevented ||
@@ -224,7 +226,7 @@ export function DesignCanvasTab({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [busy, history.canRedo, history.canUndo, isActive, restoreHistory]);
+  }, [busy, history.canRedo, history.canUndo, ownsGlobalShortcuts, restoreHistory]);
   const selectLayer = (frame: DesignFrame, selector: string) => {
     const bridge = bridges.current.get(frame.id);
     if (!bridge || bridge.renderedRevision !== frame.revision) return;

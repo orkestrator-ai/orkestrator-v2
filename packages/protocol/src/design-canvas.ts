@@ -5,6 +5,7 @@ export const DESIGN_MAX_HTML_BYTES = 256 * 1024;
 export const DESIGN_MAX_DOCUMENT_BYTES = 4 * 1024 * 1024;
 export const DESIGN_MAX_FRAMES = 64;
 export const DESIGN_HISTORY_LIMIT = 10;
+export const DESIGN_HISTORY_MAX_BYTES = 16 * 1024 * 1024;
 export interface DesignFrame {
   id: string;
   name: string;
@@ -41,6 +42,10 @@ export interface DesignHistoryStatus {
   redoCount: number;
   canUndo: boolean;
   canRedo: boolean;
+}
+export interface DesignCanvasState {
+  canvas: DesignCanvas;
+  history: DesignHistoryStatus;
 }
 export interface DesignElement {
   selector: string;

@@ -6,10 +6,12 @@ import {
   DESIGN_CONFLICT,
   DESIGN_EVENT,
   DESIGN_HISTORY_LIMIT,
+  DESIGN_HISTORY_MAX_BYTES,
   DESIGN_MAX_DOCUMENT_BYTES,
   DESIGN_MAX_FRAMES,
   DESIGN_MAX_HTML_BYTES,
   type DesignCanvas,
+  type DesignCanvasState,
   type DesignChange,
   type DesignChanges,
   type DesignFrame,
@@ -65,17 +67,40 @@ type DesignHistoryEntry =
   | {
       kind: "update-frame";
       frameId: string;
-      before: DesignFrame;
-      after: DesignFrame;
+      before: DesignFramePatch;
+      after: DesignFramePatch;
     };
 
 interface DesignHistory {
   undo: DesignHistoryEntry[];
   redo: DesignHistoryEntry[];
+  bytes: number;
+  lastUsed: number;
 }
+
+type DesignFramePatch = Partial<
+  Pick<DesignFrame, "name" | "x" | "y" | "width" | "height" | "html">
+>;
+
+const FRAME_MUTABLE_FIELDS = ["name", "x", "y", "width", "height", "html"] as const;
 
 function copyFrame(frame: DesignFrame): DesignFrame {
   return { ...frame };
+}
+
+function frameDelta(before: DesignFrame, after: DesignFrame) {
+  const previous: DesignFramePatch = {};
+  const next: DesignFramePatch = {};
+  for (const field of FRAME_MUTABLE_FIELDS) {
+    if (before[field] === after[field]) continue;
+    Object.assign(previous, { [field]: before[field] });
+    Object.assign(next, { [field]: after[field] });
+  }
+  return { before: previous, after: next };
+}
+
+function historyEntryBytes(entry: DesignHistoryEntry): number {
+  return Buffer.byteLength(JSON.stringify(entry));
 }
 
 export class DesignService {
@@ -86,6 +111,8 @@ export class DesignService {
   private readonly events: DesignChange[] = [];
   private readonly metadata = new Map<string, { environmentId: string; revision: number }>();
   private readonly histories = new Map<string, DesignHistory>();
+  private historyBytes = 0;
+  private historyClock = 0;
   private initialized = false;
   private initialization: Promise<void> | undefined;
   constructor(
@@ -205,50 +232,103 @@ export class DesignService {
         await handle.close();
       }
       await rename(temp, target);
+      // Publish the in-memory state synchronously with the durable rename. No
+      // reader can observe the new revision before its history and metadata.
+      beforePublish?.();
+      const event: DesignChange = {
+        canvasId: canvas.id,
+        revision: canvas.revision,
+        ...(frameId ? { frameId } : {}),
+      };
+      this.events.push(event);
+      this.metadata.set(canvas.id, {
+        environmentId: canvas.environmentId,
+        revision: canvas.revision,
+      });
+      if (this.events.length > 256) this.events.shift();
+      // Content-free bounded hints; clients read snapshots and detect gaps.
+      this.emit(DESIGN_EVENT, { ...event, generation: this.generation });
     } finally {
       await unlink(temp).catch(() => undefined);
     }
-    beforePublish?.();
-    const event: DesignChange = {
-      canvasId: canvas.id,
-      revision: canvas.revision,
-      ...(frameId ? { frameId } : {}),
-    };
-    this.events.push(event);
-    this.metadata.set(canvas.id, {
-      environmentId: canvas.environmentId,
-      revision: canvas.revision,
-    });
-    if (this.events.length > 256) this.events.shift();
-    // Content-free bounded hints; clients read snapshots and detect gaps.
-    this.emit(DESIGN_EVENT, { ...event, generation: this.generation });
   }
   private history(canvasId: string): DesignHistory {
     let history = this.histories.get(canvasId);
     if (!history) {
-      history = { undo: [], redo: [] };
+      history = { undo: [], redo: [], bytes: 0, lastUsed: ++this.historyClock };
       this.histories.set(canvasId, history);
     }
     return history;
+  }
+  private refreshHistory(canvasId: string, history: DesignHistory): void {
+    this.historyBytes -= history.bytes;
+    history.bytes = [...history.undo, ...history.redo].reduce(
+      (total, entry) => total + historyEntryBytes(entry),
+      0,
+    );
+    history.lastUsed = ++this.historyClock;
+    this.historyBytes += history.bytes;
+    this.enforceHistoryBudget(canvasId);
+  }
+  private dropHistory(canvasId: string): void {
+    const history = this.histories.get(canvasId);
+    if (!history) return;
+    this.historyBytes -= history.bytes;
+    this.histories.delete(canvasId);
+  }
+  private enforceHistoryBudget(protectedCanvasId: string): void {
+    while (this.historyBytes > DESIGN_HISTORY_MAX_BYTES) {
+      let oldest: [string, DesignHistory] | undefined;
+      for (const candidate of this.histories) {
+        if (candidate[0] === protectedCanvasId) continue;
+        if (!oldest || candidate[1].lastUsed < oldest[1].lastUsed) oldest = candidate;
+      }
+      if (oldest) {
+        this.dropHistory(oldest[0]);
+        continue;
+      }
+      const history = this.histories.get(protectedCanvasId);
+      if (!history) break;
+      const removed = history.undo.shift() ?? history.redo.shift();
+      if (!removed) break;
+      history.bytes -= historyEntryBytes(removed);
+      this.historyBytes -= historyEntryBytes(removed);
+    }
   }
   private record(canvasId: string, entry: DesignHistoryEntry): void {
     const history = this.history(canvasId);
     history.undo.push(entry);
     if (history.undo.length > DESIGN_HISTORY_LIMIT) history.undo.shift();
     history.redo = [];
+    this.refreshHistory(canvasId, history);
   }
-  private status(canvas: DesignCanvas): DesignHistoryStatus {
-    const history = this.history(canvas.id);
+  private status(canvasId: string, revision: number): DesignHistoryStatus {
+    const history = this.histories.get(canvasId);
+    const undoCount = history?.undo.length ?? 0;
+    const redoCount = history?.redo.length ?? 0;
     return {
-      revision: canvas.revision,
-      undoCount: history.undo.length,
-      redoCount: history.redo.length,
-      canUndo: history.undo.length > 0,
-      canRedo: history.redo.length > 0,
+      revision,
+      undoCount,
+      redoCount,
+      canUndo: undoCount > 0,
+      canRedo: redoCount > 0,
     };
   }
   async historyStatus(canvasId: string, environmentId: string): Promise<DesignHistoryStatus> {
-    return this.status(await this.get(canvasId, environmentId));
+    return this.exclusive(async () => {
+      await this.initialize();
+      const id = designId.parse(canvasId);
+      const metadata = this.metadata.get(id);
+      if (!metadata || metadata.environmentId !== environmentId)
+        throw new Error("Canvas not found in this environment");
+      return this.status(id, metadata.revision);
+    });
+  }
+  async getCanvasState(canvasId: string, environmentId: string): Promise<DesignCanvasState> {
+    return this.exclusive(async () => {
+      const canvas = await this.get(canvasId, environmentId);
+      return { canvas, history: this.status(canvas.id, canvas.revision) };
+    });
   }
   async create(
     environmentId: string,
@@ -280,7 +360,7 @@ export class DesignService {
       const canvas = await this.get(canvasId, environmentId);
       await unlink(this.file(canvas.id));
       this.metadata.delete(canvas.id);
-      this.histories.delete(canvas.id);
+      this.dropHistory(canvas.id);
       for (let index = this.events.length - 1; index >= 0; index--) {
         if (this.events[index]?.canvasId === canvas.id) this.events.splice(index, 1);
       }
@@ -297,7 +377,7 @@ export class DesignService {
           if (error.code !== "ENOENT") throw error;
         });
         this.metadata.delete(id);
-        this.histories.delete(id);
+        this.dropHistory(id);
       }
       for (let index = this.events.length - 1; index >= 0; index--) {
         if (ids.includes(this.events[index]!.canvasId)) this.events.splice(index, 1);
@@ -374,12 +454,12 @@ export class DesignService {
       });
       canvas.frames[canvas.frames.indexOf(frame)] = next;
       canvas.revision++;
+      const delta = frameDelta(frame, next);
       await this.commit(canvas, frame.id, () =>
         this.record(canvas.id, {
           kind: "update-frame",
           frameId: frame.id,
-          before: copyFrame(frame),
-          after: copyFrame(next),
+          ...delta,
         }),
       );
       return { frame: next, canvasRevision: canvas.revision };
@@ -418,6 +498,8 @@ export class DesignService {
         } else {
           if (canvas.frames.some((frame) => frame.id === frameId))
             throw new Error("Design history is out of sync");
+          if (canvas.frames.length >= DESIGN_MAX_FRAMES)
+            throw new Error(`Frame limit reached (${DESIGN_MAX_FRAMES})`);
           const restored = copyFrame(entry.after);
           restored.revision++;
           canvas.frames.splice(Math.min(entry.index, canvas.frames.length), 0, restored);
@@ -429,14 +511,14 @@ export class DesignService {
         if (index < 0) throw new Error("Design history is out of sync");
         const current = canvas.frames[index]!;
         const target = direction === "undo" ? entry.before : entry.after;
-        const restored = copyFrame(target);
-        restored.revision =
-          Math.max(current.revision, entry.before.revision, entry.after.revision) + 1;
+        const restored = frameSchema.parse({
+          ...current,
+          ...target,
+          id: current.id,
+          revision: current.revision + 1,
+        });
         canvas.frames[index] = restored;
-        restoredEntry =
-          direction === "undo"
-            ? { ...entry, before: copyFrame(restored) }
-            : { ...entry, after: copyFrame(restored) };
+        restoredEntry = entry;
       }
 
       canvas.revision++;
@@ -444,8 +526,9 @@ export class DesignService {
       await this.commit(canvas, frameId, () => {
         source.pop();
         destination.push(restoredEntry);
+        this.refreshHistory(canvas.id, history);
       });
-      return { canvasRevision: canvas.revision, history: this.status(canvas) };
+      return { canvasRevision: canvas.revision, history: this.status(canvas.id, canvas.revision) };
     });
   }
   async changes(

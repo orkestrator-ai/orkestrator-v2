@@ -44,6 +44,12 @@ export function designActions(service: DesignService, environmentId: string) {
         "Read the authoritative canvas and its current revisions. Read again on revision conflict; never blindly retry edits.",
       run: (a: { canvasId: string }) => service.get(a.canvasId, environmentId),
     },
+    get_canvas_state: {
+      schema: z.object(canvasInput),
+      description:
+        "Read one atomic snapshot of the authoritative canvas and its undo/redo availability.",
+      run: (a: { canvasId: string }) => service.getCanvasState(a.canvasId, environmentId),
+    },
     history_status: {
       schema: z.object(canvasInput),
       description: "Read the current undo and redo availability for a canvas.",

@@ -1,7 +1,7 @@
 import type {
   DesignCanvas,
+  DesignCanvasState,
   DesignChanges,
-  DesignHistoryStatus,
 } from "@orkestrator/protocol/design-canvas";
 import { invoke } from "@/lib/native/backend";
 
@@ -15,8 +15,8 @@ export function designAction<T>(
 export function getCanvas(environmentId: string, canvasId: string) {
   return designAction<DesignCanvas>(environmentId, "get_canvas", { canvasId });
 }
-export function getHistory(environmentId: string, canvasId: string) {
-  return designAction<DesignHistoryStatus>(environmentId, "history_status", { canvasId });
+export function getCanvasState(environmentId: string, canvasId: string) {
+  return designAction<DesignCanvasState>(environmentId, "get_canvas_state", { canvasId });
 }
 export function getChanges(
   environmentId: string,

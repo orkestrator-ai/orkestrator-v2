@@ -52,7 +52,7 @@ async function flushAutoSave() {
 
 describe("GlobalSettings defaults section", () => {
   beforeEach(() => {
-    autoSaveClock = installControlledTimeout(400);
+    autoSaveClock = installControlledTimeout(400, { label: "GlobalSettings auto-save debounce" });
     cleanup();
     mockUpdateGlobalConfig.mockClear();
     mockGetLogDirectory.mockClear();

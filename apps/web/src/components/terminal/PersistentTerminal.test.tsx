@@ -4913,7 +4913,7 @@ describe("PersistentTerminal", () => {
         : undefined,
     );
 
-    const clock = installControlledTimeout(300);
+    const clock = installControlledTimeout(300, { label: "PersistentTerminal bootstrap flush" });
     try {
       const view = render(
         <PersistentTerminal

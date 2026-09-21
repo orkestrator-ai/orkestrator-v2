@@ -6,7 +6,8 @@ Prepared: 2026-09-21.
 Source review: [Streamlining the test suite](../../streamlining-tests.md).
 Source snapshot: `88c2f9ccfaa68045573b658dd4f172bc5ff7c51b`.
 
-This directory intentionally uses the requested spelling, `streamlning-tests`.
+This directory was originally created as `streamlning-tests`; it was renamed to
+match the spelling of the sibling overview document.
 The plan now records the implementation completed on 2026-09-21. No production
 application code was changed; the changes are confined to tests, test helpers,
 package scripts, Turbo configuration and test documentation.

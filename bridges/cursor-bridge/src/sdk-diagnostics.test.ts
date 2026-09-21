@@ -129,6 +129,10 @@ describe("Cursor SDK boundary diagnostics", () => {
   test("dispatch reaches the real patched detector and correlates it with the bridge run", async () => {
     const previous = process.env.ORKESTRATOR_BRIDGE_DEBUG;
     const lines: string[] = [];
+    // Production deliberately observes transports through WeakRef. This test
+    // asserts their live counters, so retain its synthetic detector until the
+    // final snapshot instead of making the assertion depend on aggregate GC.
+    let retainedDetector: object | undefined;
     const log = spyOn(console, "info").mockImplementation((line) => {
       lines.push(String(line));
     });
@@ -147,6 +151,7 @@ describe("Cursor SDK boundary diagnostics", () => {
               disposed: true,
               activityHistory: [],
             });
+            retainedDetector = detector;
             detector.startTimer();
             detector.trackActivity("inbound_message", "execServerMessage:readArgs");
             detector.onServerSentHeartbeat();
@@ -164,6 +169,7 @@ describe("Cursor SDK boundary diagnostics", () => {
       await (
         await dispatchPrompt(state, agent, { prompt: "private", images: [] })
       ).completion;
+      expect(retainedDetector).toBeDefined();
       const records = lines.map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)));
       const sdkRecord = records.findLast((r) => r.event === "sdk-snapshot");
       const bridgeRecord = records.findLast((r) => r.event === "closed");

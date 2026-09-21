@@ -1,4 +1,5 @@
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
+import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { StrictMode, createRef, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -1403,6 +1404,7 @@ function fixtureForPath() {
     return <WorkspaceBarHeightFixture />;
   }
   if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;
+  if (window.location.pathname === "/streaming-transcript") return <StreamingTranscriptFixture />;
   return <CreateEnvironmentFixture />;
 }
 

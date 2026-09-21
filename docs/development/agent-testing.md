@@ -20,10 +20,60 @@ timeouts, cache behavior, or failure artifacts.
   smoke path do not require a Docker image.
 - The first TypeScript compilation and Vite startup normally take under a minute.
 
-## Start or reuse a profile
+## One-shot browser validation
+
+For review plans and automated validation, use these exact commands from the
+repository root:
+
+```bash
+mise run test:agent:browser:isolated
+# For design-only changes, run the design-canvas spec instead of the full suite:
+mise run test:agent:design:isolated
+```
+
+Each task creates a unique disposable profile, starts `dev:test` concurrently,
+polls `dev:status --json` until all runtime processes are ready, runs Playwright,
+and stops/resets the profile in `finally`. Startup is bounded to two minutes,
+the browser suite to fifteen minutes, and each cleanup command to 45 seconds.
+An IPC-owned supervisor also cleans up when the caller is cancelled or killed.
+Test failures and cleanup failures return a nonzero exit status. Artifacts stay
+under `output/agent-testing/<unique-profile>/browser/`; profile state is removed.
+
+These tasks provision Codex without agent credentials and run ordinary local
+browser coverage. Live review and Docker tests remain opt-in and require the
+manual profile workflow below. Ambient live-review/Docker opt-ins are disabled
+inside these one-shot tasks.
+
+Both commands and their workspace-exclusive resources are registered in
+`.orkestrator-test-scheduler.json`. Discovery must select them **verbatim** as
+separate commands. The full browser task covers the targeted design task; do
+not schedule both. They are ordinary profiled commands, so the review worker
+owns their capacity reservation. Do not wrap them in extra profile lifecycle
+shell commands or call another aggregate scheduler around them.
+
+The fixture backend uses a private two-slot scheduler inside its disposable
+profile. Browser queue tests intentionally fill this simulated host; they must
+not enqueue against the real host capacity already reserved by the outer review
+task. Its fixed two-slot budget stays within the outer reservation, and reset
+removes its queue along with the profile.
+
+## Start or reuse a profile manually
+
+`dev:test` is a **foreground supervisor**. After printing `ready`, it stays
+attached until Vite or Electron exits. It does not return at readiness. Never
+use `mise run dev:test ...; mise run test:agent:browser` (or `&&`): the browser
+command cannot run while the profile is alive. Use the one-shot tasks above
+for automation.
+
+For interactive development, keep the starter running in its own terminal:
 
 ```bash
 mise run dev:test --profile codex-qa --fixture
+```
+
+Run status, login, tests, and stop/reset commands from a **second terminal**:
+
+```bash
 mise run dev:status --profile codex-qa --json
 ```
 

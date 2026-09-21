@@ -24,6 +24,8 @@ export interface ReviewValidationResult {
   queueReason?: string;
   /** Authoritative execution clock, excluding pauses for host capacity. */
   executionUpdatedAt?: string;
+  /** Last stdout/stderr receipt, persisted even while the review UI is inactive. */
+  lastOutputAt?: string;
   exitCode: number | null;
   stdoutPath: string | null;
   stderrPath: string | null;
@@ -182,6 +184,7 @@ export function isReviewValidationRun(value: unknown): value is ReviewValidation
       (r.queuedMs === undefined || uint(r.queuedMs)) &&
       (r.queueReason === undefined || text(r.queueReason, 1024)) &&
       (r.executionUpdatedAt === undefined || date(r.executionUpdatedAt)) &&
+      (r.lastOutputAt === undefined || date(r.lastOutputAt)) &&
       (r.limitation === null || text(r.limitation)) &&
       (r.startedAt === undefined || date(r.startedAt)) &&
       (r.stdoutSha256 === undefined || digest(r.stdoutSha256)) &&

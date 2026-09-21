@@ -163,6 +163,8 @@ describe("multi review protocol", () => {
     expect(isMultiReviewWorkflow({ ...workflow, autoFix: false })).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, autoFix: "true" })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, autoFix: null })).toBe(false);
+    expect(isMultiReviewWorkflow({ ...workflow, validationStopRequested: true })).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, validationStopRequested: "yes" })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, fixSessionKey: "next-fix-session" })).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, fixSessionKey: "" })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, phase: "interactive" })).toBe(true);

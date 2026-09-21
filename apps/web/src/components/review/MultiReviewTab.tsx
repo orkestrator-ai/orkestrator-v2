@@ -54,6 +54,7 @@ interface MultiReviewCommands {
   ) => Promise<MultiReviewWorkflow>;
   retry: (workflowId: string) => Promise<MultiReviewWorkflow>;
   cancel: (workflowId: string) => Promise<MultiReviewWorkflow>;
+  stopValidation?: (workflowId: string) => Promise<MultiReviewWorkflow>;
   stopReviewer: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
   restartReviewer?: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
   restartStep?: (
@@ -72,6 +73,7 @@ const defaultCommands: MultiReviewCommands = {
     backend.startMultiReviewCustomFix({ workflowId, fixModel, instruction }),
   retry: backend.retryMultiReview,
   cancel: backend.cancelMultiReview,
+  stopValidation: backend.stopMultiReviewValidation,
   stopReviewer: backend.stopMultiReviewReviewer,
   restartReviewer: backend.restartMultiReviewReviewer,
   restartStep: backend.restartMultiReviewStep,
@@ -742,6 +744,7 @@ function MultiReviewOverviewTab({
   const [openAfterDelivery, setOpenAfterDelivery] = useState(false);
   const [pending, setPending] = useState(false);
   const [stoppingReviewerId, setStoppingReviewerId] = useState<string | null>(null);
+  const [stoppingValidation, setStoppingValidation] = useState(false);
   const [reviewerAction, setReviewerAction] = useState<{
     reviewerId: string;
     kind: "restart" | "unstick";
@@ -903,6 +906,19 @@ function MultiReviewOverviewTab({
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setStoppingReviewerId(null);
+    }
+  };
+
+  const stopValidation = async () => {
+    if (stoppingValidation || pending || !workflow || !commands.stopValidation) return;
+    setStoppingValidation(true);
+    setError(null);
+    try {
+      replaceWorkflow(await commands.stopValidation(workflow.id));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setStoppingValidation(false);
     }
   };
 
@@ -1198,6 +1214,21 @@ function MultiReviewOverviewTab({
               environmentId={data.environmentId}
               run={workflow.validationRun}
               now={reviewPanelNow}
+              onStop={
+                commands.stopValidation &&
+                workflow.phase === "preparing" &&
+                (workflow.validationRun.status === "planned" ||
+                  workflow.validationRun.status === "running")
+                  ? () => void stopValidation()
+                  : undefined
+              }
+              stopping={
+                stoppingValidation ||
+                (workflow.phase === "preparing" &&
+                  (workflow.validationRun.status === "planned" ||
+                    workflow.validationRun.status === "running") &&
+                  workflow.validationStopRequested === true)
+              }
             />
           )}
           <section className="rounded-xl border border-border/60 bg-card/35 p-4">

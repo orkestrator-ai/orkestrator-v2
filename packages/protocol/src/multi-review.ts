@@ -227,6 +227,8 @@ export interface MultiReviewWorkflow {
   reviewWorktreeSnapshot?: MultiReviewWorktreeSnapshot;
   /** Backend projection of the environment-owned validation job. */
   validationRun?: ReviewValidationRun;
+  /** User asked the supervisor to stop validation and package the partial evidence. */
+  validationStopRequested?: boolean;
   /** Immutable evidence shared by all reviewers; absent on legacy workflows. */
   reviewPackage?: ReviewPackageReference;
   /** Set when the live worktree changed during review, or immutable package evidence went stale. */
@@ -686,6 +688,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "reviewWorktreeSnapshot",
       "reviewPackage",
       "validationRun",
+      "validationStopRequested",
       "reviewSnapshotStale",
       "consolidatedReport",
       "fixResult",
@@ -738,6 +741,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     (value.reviewWorktreeSnapshot !== undefined &&
       !isReviewWorktreeSnapshotRecord(value.reviewWorktreeSnapshot)) ||
     (value.validationRun !== undefined && !isReviewValidationRun(value.validationRun)) ||
+    (value.validationStopRequested !== undefined &&
+      typeof value.validationStopRequested !== "boolean") ||
     (value.reviewPackage !== undefined &&
       (!isReviewPackageReference(value.reviewPackage) ||
         value.reviewPackage.targetBranch !== value.targetBranch)) ||

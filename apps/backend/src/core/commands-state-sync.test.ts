@@ -4644,6 +4644,10 @@ describe("multi review commands", () => {
       ...workflow("stopReviewer"),
       id,
     }));
+    const stopValidation = mock(async (id: string) => ({
+      ...workflow("stopValidation"),
+      id,
+    }));
     const restartReviewer = mock(async (id: string, _reviewerId: string) => ({
       ...workflow("restartReviewer"),
       id,
@@ -4671,6 +4675,7 @@ describe("multi review commands", () => {
       retry,
       recoverFixSession,
       cancel,
+      stopValidation,
       stopReviewer,
       restartReviewer,
       restartStep,
@@ -4703,6 +4708,7 @@ describe("multi review commands", () => {
             },
           ],
           ["cancel_multi_review", { workflowId: "multi-1" }],
+          ["stop_multi_review_validation", { workflowId: "multi-1" }],
           ["stop_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
           ["restart_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
           [
@@ -4736,6 +4742,7 @@ describe("multi review commands", () => {
           replacementProviderSessionId: "provider-replacement",
         });
         expect(cancel).toHaveBeenCalledWith("multi-1");
+        expect(stopValidation).toHaveBeenCalledWith("multi-1");
         expect(stopReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
         expect(restartReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
         expect(restartStep).toHaveBeenCalledWith("multi-1", "consolidate", {

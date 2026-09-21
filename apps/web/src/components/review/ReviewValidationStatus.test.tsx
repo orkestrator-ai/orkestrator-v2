@@ -69,6 +69,40 @@ function runningValidation(): ReviewValidationRun {
 }
 
 describe("ReviewValidationStatus", () => {
+  test("renders the stop control and disables it while stopping", () => {
+    const run = runningValidation();
+    const onStop = mock(() => undefined);
+    const view = render(<ReviewValidationStatus environmentId="env-1" run={run} onStop={onStop} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop tests and continue" }));
+    expect(onStop).toHaveBeenCalledTimes(1);
+
+    view.rerender(
+      <ReviewValidationStatus environmentId="env-1" run={run} onStop={onStop} stopping />,
+    );
+    expect(screen.getByText("Stopping")).toBeTruthy();
+    const stopping = screen.getByRole("button", { name: "Stopping tests…" });
+    expect((stopping as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(stopping);
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not render the stop control for a settled run", () => {
+    const run = runningValidation();
+    run.status = "cancelled";
+    run.completedAt = "2026-09-08T20:00:10.000Z";
+    render(
+      <ReviewValidationStatus
+        environmentId="env-1"
+        run={run}
+        onStop={mock(() => undefined)}
+        stopping
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Stopping tests…" }) === null).toBe(true);
+  });
+
   test("rehydrates a queued result and later incomplete evidence after an inactive view", () => {
     const run = runningValidation();
     Object.assign(run.results[0]!, {

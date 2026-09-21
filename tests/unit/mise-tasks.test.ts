@@ -75,6 +75,8 @@ const ROOT_COMMAND_SURFACE = [
   "test:logged",
   "test:browser",
   "test:agent:browser",
+  "test:agent:browser:isolated",
+  "test:agent:design:isolated",
   "test:agent:docker",
   "test:agent:electron",
   "test:ios",
@@ -273,4 +275,23 @@ describe("mise task surface", () => {
     // definition is well-formed, so the lint workflow has to keep asking it.
     expect(read(".github/workflows/lint.yml")).toContain("mise tasks validate");
   });
+});
+
+test("one-shot browser tasks own setup/cleanup and reserve their workspace without double admission", () => {
+  const tasks = miseTasks();
+  const policy = JSON.parse(read(".orkestrator-test-scheduler.json"));
+  const full = "mise run test:agent:browser:isolated";
+  const design = "mise run test:agent:design:isolated";
+  expect(tasks["test:agent:browser:isolated"]!.run).toBe(
+    "bun apps/desktop/scripts/test-agent-browser-isolated.ts",
+  );
+  expect(tasks["test:agent:design:isolated"]!.run).toBe(
+    "bun apps/desktop/scripts/test-agent-browser-isolated.ts --design",
+  );
+  for (const command of [full, design]) {
+    expect(policy.commandProfiles[command].resources).toEqual(["workspace:*"]);
+    expect(policy.commandProfiles[command].noProgressTimeoutMs).toBe(300_000);
+    expect(policy.cooperativeCommands).not.toContain(command);
+  }
+  expect(policy.commandProfiles[full].covers).toContain(design);
 });

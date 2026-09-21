@@ -6,7 +6,7 @@ description = "Start the Electron development application"
 run = "bunx turbo --cwd . run dev --filter=@orkestrator/desktop"
 
 [tasks."dev:test"]
-description = "Start an isolated development test profile"
+description = "Start an isolated development test profile (foreground supervisor; stays attached)"
 raw_args = true
 run = "bun apps/desktop/scripts/dev-test.ts"
 
@@ -204,8 +204,16 @@ description = "Run the component browser suite"
 run = "bunx tsc --noEmit -p e2e/tsconfig.json && bunx playwright test --config e2e/playwright.config.ts"
 
 [tasks."test:agent:browser"]
-description = "Run agent tests in a browser"
+description = "Run browser agent tests against an already-running profile (use test:agent:browser:isolated for one-shot validation)"
 run = "bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts"
+
+[tasks."test:agent:browser:isolated"]
+description = "Start a disposable profile, run all browser agent tests, then stop/reset it"
+run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts"
+
+[tasks."test:agent:design:isolated"]
+description = "One-shot real-stack design-canvas validation with disposable profile cleanup"
+run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts --design"
 
 [tasks."test:agent:docker"]
 description = "Run the Docker agent browser fixture"

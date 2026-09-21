@@ -1051,6 +1051,16 @@ test failure. A browser pass cannot compensate for a broken static or unit check
 
 #### 2. Start or reuse an isolated real stack
 
+For automated review validation, use `mise run test:agent:browser:isolated`, or
+`mise run test:agent:design:isolated` for design-only changes. These repository-owned
+one-shot tasks start a disposable profile, wait for readiness, run the relevant
+browser suite, and always stop/reset it. Select their exact commands and resources
+from `.orkestrator-test-scheduler.json`; do not construct lifecycle shell wrappers.
+The full task covers the design task, so select only the required one.
+
+The manual workflow below is for interactive exploration. `dev:test` stays
+attached after `ready`: never sequence it before Playwright using `;` or `&&`.
+
 Start the profile in a long-lived terminal/tool session. The command remains
 alive to supervise Vite, Electron, the backend, bridges, and their process trees.
 

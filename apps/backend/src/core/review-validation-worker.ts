@@ -39,6 +39,7 @@ const QUEUE_TIMEOUT_MS = Math.max(1000, Math.min(7200000, Number(process.env.ORK
 // gets a generous window; only its last successful read is treated as stale.
 const COOPERATIVE_STARTUP_MS = Math.max(1000, Math.min(600000, Number(process.env.ORKESTRATOR_COOPERATIVE_STARTUP_MS) || 60000));
 const COOPERATIVE_STALE_MS = Math.max(1000, Math.min(600000, Number(process.env.ORKESTRATOR_COOPERATIVE_STALE_MS) || 10000));
+const NO_PROGRESS_MS = Math.max(1000, Math.min(7200000, Number(process.env.ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS) || 300000));
 const MAX_STREAM_BYTES = 32 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 256 * 1024 * 1024;
 let totalBytes = 0;
@@ -254,9 +255,20 @@ async function execute(cmd, index) {
       }
     };
     const timeout = cooperative ? setInterval(updateClock, 100) : setTimeout(() => stopJob("Validation command timed out"), cmd.timeoutMs);
+    // A foreground server can be alive forever without advancing validation.
+    // Start only after admission; queue time is never a no-output failure.
+    let lastOutputAt = performance.now();
+    const noProgress = cooperative ? undefined : setInterval(() => {
+      if (performance.now() - lastOutputAt >= NO_PROGRESS_MS)
+        stopJob("Validation command produced no output for " + NO_PROGRESS_MS + "ms; command may be stuck in a foreground service; validation is incomplete");
+    }, Math.min(1000, NO_PROGRESS_MS / 4));
     child.on("error", () => stopJob("Validation command could not start"));
     [child.stdout, child.stderr].forEach((source, i) => source.on("data", chunk => {
       if (failure) return;
+      if (chunk.length > 0) {
+        lastOutputAt = performance.now();
+        result.lastOutputAt = new Date().toISOString();
+      }
       const stream = streams[i];
       const remaining = Math.max(0, Math.min(MAX_STREAM_BYTES - stream.bytes, MAX_TOTAL_BYTES - totalBytes));
       const bytes = chunk.subarray(0, remaining);
@@ -272,6 +284,7 @@ async function execute(cmd, index) {
     }));
     child.on("close", code => {
       clearTimeout(timeout);
+      if (noProgress) clearInterval(noProgress);
       updateClock();
       // Clean up descendants even if their parent exited without waiting for them.
       killTree(child, "SIGKILL");

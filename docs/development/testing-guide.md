@@ -19,7 +19,8 @@ with [agent-testing.md](agent-testing.md).
 | Test everything, including iOS | `mise run test:all` | Release-sensitive or iOS validation on a Mac with Xcode |
 | Check format, lint, and types | `mise run test:logged -- --name check -- mise run check` | Static validation; this does not run tests |
 | Run browser component tests | `mise run test:logged -- --name browser -- mise run test:browser` | Playwright component/browser coverage |
-| Run isolated-stack agent tests | `mise run test:logged -- --name agent-browser -- mise run test:agent:browser` | Real browser against an agent-test profile |
+| Run isolated-stack agent tests | `mise run test:agent:browser:isolated` | Creates a disposable profile, runs browser tests, and cleans up |
+| Run design-only real-stack tests | `mise run test:agent:design:isolated` | Same lifecycle, only `design-canvas.spec.ts` |
 | Run Electron agent tests | `mise run test:logged -- --name agent-electron -- mise run test:agent:electron` | Main process, preload, IPC, clipboard, and shutdown |
 | Run Docker agent tests | `mise run test:logged -- --name agent-docker -- mise run test:agent:docker` | Opt-in container ownership and fixture coverage |
 
@@ -140,10 +141,12 @@ mise run test:logged -- --name web-typecheck -- \
   bun run --cwd apps/web typecheck
 
 mise run test:logged -- --name agent-browser -- \
-  mise run test:agent:browser
+  mise run test:agent:browser:isolated
 ```
 
 Run checks separately so each exit status and artifact belongs to one command.
+The logged wrapper above is for manual evidence capture. Review discovery uses
+the registered one-shot command verbatim, without the logging wrapper.
 Do not add `tee`: it duplicates potentially large or sensitive output while the
 runner is already retaining a bounded copy.
 
@@ -279,6 +282,20 @@ capacity automatically. A Docker container is a separate scheduler namespace;
 this is not a distributed scheduler or a physical-host container quota manager.
 
 ### Multi Review validation
+
+Non-cooperative review commands also have a five-minute no-output watchdog,
+in addition to the plan's absolute timeout. `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS`
+overrides it (bounded from one second to two hours). The clock starts after
+capacity admission and resets on stdout or stderr bytes; queue waits do not
+consume it. A stall produces incomplete evidence, terminates the process group,
+and records the reason. `lastOutputAt` is persisted in each command result for
+status/reconnect readers without retaining output content in status metadata.
+Cooperative commands continue to use their scheduler heartbeat and execution
+clock instead of the no-output watchdog.
+
+For service-backed browser checks, select the exact one-shot tasks documented
+above. `dev:test` stays attached after readiness and is never a sequential setup
+step before Playwright. Do not invent foreground lifecycle shell wrappers.
 
 The environment-owned worker persists queued/running command states and separate
 queue/execution durations alongside its heartbeat. Switching environments,

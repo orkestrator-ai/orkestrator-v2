@@ -2,6 +2,17 @@
   "version": 1,
   "cooperativeCommands": ["mise run test", "mise run test:all", "mise run test:changed"],
   "commandProfiles": {
+    "mise run test:agent:browser:isolated": {
+      "resources": ["workspace:*"],
+      "workers": 2,
+      "memoryMiB": 3072,
+      "covers": ["mise run test:agent:design:isolated"]
+    },
+    "mise run test:agent:design:isolated": {
+      "resources": ["workspace:*"],
+      "workers": 2,
+      "memoryMiB": 3072
+    },
     "mise run test:changed": {
       "resources": ["workspace:*"]
     },

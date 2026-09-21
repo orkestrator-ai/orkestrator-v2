@@ -6,12 +6,14 @@
       "resources": ["workspace:*"],
       "workers": 2,
       "memoryMiB": 3072,
+      "noProgressTimeoutMs": 300000,
       "covers": ["mise run test:agent:design:isolated"]
     },
     "mise run test:agent:design:isolated": {
       "resources": ["workspace:*"],
       "workers": 2,
-      "memoryMiB": 3072
+      "memoryMiB": 3072,
+      "noProgressTimeoutMs": 300000
     },
     "mise run test:changed": {
       "resources": ["workspace:*"]

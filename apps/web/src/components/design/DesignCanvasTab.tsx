@@ -35,11 +35,13 @@ export function DesignCanvasTab({
   const [layers, setLayers] = useState<Record<string, DesignLayer[]>>({});
   const [showLayers, setShowLayers] = useState(true);
   const [layersWidth, setLayersWidth] = useState(160);
+  const [layersMaxWidth, setLayersMaxWidth] = useState(400);
   const layersResize = useRef<{ x: number; width: number } | null>(null);
   const [zoom, setZoom] = useState(0.65);
   const [pan, setPan] = useState({ x: 45, y: 65 });
   const panStart = useRef<{ x: number; y: number; origin: typeof pan } | null>(null);
   const viewport = useRef<HTMLElement>(null);
+  const canvasBody = useRef<HTMLDivElement>(null);
   const bridges = useRef(new Map<string, DesignFrameBridge>());
   const sync = useRef<(() => Promise<void>) | null>(null);
   const canvasRef = useRef<DesignCanvas | null>(null);
@@ -58,6 +60,19 @@ export function DesignCanvasTab({
     (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)),
     [],
   );
+  useEffect(() => {
+    const target = canvasBody.current;
+    if (!isActive || !target) return;
+    const updateMaximum = () => {
+      const maximum = Math.max(120, Math.min(400, Math.floor(target.clientWidth * 0.45)));
+      setLayersMaxWidth(maximum);
+      setLayersWidth((width) => Math.min(width, maximum));
+    };
+    updateMaximum();
+    const observer = new ResizeObserver(updateMaximum);
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [isActive]);
   useEffect(() => {
     const target = viewport.current;
     if (!isActive || !target) return;
@@ -313,11 +328,11 @@ export function DesignCanvasTab({
           {notice}
         </p>
       )}
-      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+      <div ref={canvasBody} className="relative flex min-h-0 flex-1 overflow-hidden">
         {showLayers && (
           <div
             className="design-hierarchy relative flex shrink-0"
-            style={{ width: layersWidth, maxWidth: "45%" }}
+            style={{ width: layersWidth, maxWidth: layersMaxWidth }}
             data-inspecting={Boolean(selection)}
           >
             <nav aria-label="Design hierarchy" className="min-w-0 flex-1 overflow-auto p-2 text-xs">
@@ -351,7 +366,7 @@ export function DesignCanvasTab({
               aria-label="Resize design hierarchy"
               aria-orientation="vertical"
               aria-valuemin={120}
-              aria-valuemax={400}
+              aria-valuemax={layersMaxWidth}
               aria-valuenow={layersWidth}
               tabIndex={0}
               className="relative z-30 w-px shrink-0 cursor-col-resize touch-none bg-divider after:absolute after:inset-y-0 after:-left-1 after:w-2 hover:bg-primary/50 focus-visible:bg-primary/50 focus-visible:outline-none"
@@ -368,12 +383,8 @@ export function DesignCanvasTab({
               onPointerMove={(event) => {
                 const start = layersResize.current;
                 if (!start) return;
-                const available = event.currentTarget.parentElement!.parentElement!.clientWidth;
                 setLayersWidth(
-                  Math.max(
-                    120,
-                    Math.min(400, available * 0.45, start.width + event.clientX - start.x),
-                  ),
+                  Math.max(120, Math.min(layersMaxWidth, start.width + event.clientX - start.x)),
                 );
               }}
               onPointerUp={(event) => {
@@ -389,20 +400,15 @@ export function DesignCanvasTab({
               onKeyDown={(event) => {
                 if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
                 event.preventDefault();
-                const pane = event.currentTarget.parentElement!;
-                const maximum = Math.max(
-                  120,
-                  Math.min(400, pane.parentElement!.clientWidth * 0.45),
-                );
-                const width = pane.getBoundingClientRect().width;
+                const width = event.currentTarget.parentElement!.getBoundingClientRect().width;
                 setLayersWidth(
                   event.key === "Home"
                     ? 120
                     : event.key === "End"
-                      ? maximum
+                      ? layersMaxWidth
                       : Math.max(
                           120,
-                          Math.min(maximum, width + (event.key === "ArrowRight" ? 10 : -10)),
+                          Math.min(layersMaxWidth, width + (event.key === "ArrowRight" ? 10 : -10)),
                         ),
                 );
               }}

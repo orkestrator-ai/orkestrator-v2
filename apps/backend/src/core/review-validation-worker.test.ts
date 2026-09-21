@@ -409,6 +409,14 @@ test("a ready foreground service is stopped by the no-output watchdog before its
   const { root, run } = await fixture([
     command("stuck", "printf ready; sleep 60", { timeoutMs: 60000 }),
   ]);
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { [run.plan.commands[0]!.command]: { noProgressTimeoutMs: 5000 } },
+    }),
+  );
   await control(root, run, "start", { ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS: "1000" });
   const result = await completed(root, run);
   expect(result.results[0]!.status).toBe("incomplete");
@@ -424,11 +432,27 @@ test("stdout and stderr progress reset the ordinary command watchdog", async () 
   const { root, run } = await fixture([
     command("progress", "for i in 1 2 3 4 5 6; do printf progress >&2; sleep 0.3; done"),
   ]);
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { [run.plan.commands[0]!.command]: { noProgressTimeoutMs: 5000 } },
+    }),
+  );
   await control(root, run, "start", { ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS: "1000" });
   const result = await completed(root, run);
   expect(result.results[0]!.status).toBe("passed");
   expect(result.results[0]!.stderrBytes).toBe(48);
   expect(result.results[0]!.lastOutputAt).toBeDefined();
+});
+
+test("a healthy quiet command runs until its declared timeout without an opted-in watchdog", async () => {
+  const { root, run } = await fixture([command("quiet", "sleep 1.2", { timeoutMs: 5000 })]);
+  await control(root, run, "start", { ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS: "1000" });
+  const result = await completed(root, run);
+  expect(result.results[0]).toMatchObject({ status: "passed", exitCode: 0, limitation: null });
+  expect(result.results[0]!.durationMs).toBeGreaterThanOrEqual(1000);
 });
 
 test("artifact verification rejects a same-size log replacement", async () => {

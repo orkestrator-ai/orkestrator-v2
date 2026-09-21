@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,24 +20,28 @@ export interface DesignStyleProperty {
 
 // The browser resolves named colors and modern CSS color spaces to the native
 // picker's sRGB value. The original CSS stays untouched until the user edits it.
-function pickerColor(value: string): { hex: string; alpha: number } | null {
-  if (
-    !CSS.supports("color", value) ||
-    /^(currentcolor|inherit|initial|unset|revert)/i.test(value) ||
-    value.includes("var(")
-  )
+export function pickerColor(value: string): { hex: string; alpha: number } | null {
+  try {
+    if (
+      !CSS.supports("color", value) ||
+      /^(currentcolor|inherit|initial|unset|revert)/i.test(value) ||
+      value.includes("var(")
+    )
+      return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return null;
+    context.fillStyle = value;
+    context.fillRect(0, 0, 1, 1);
+    const pixels = context.getImageData(0, 0, 1, 1).data;
+    return {
+      hex: `#${Array.from(pixels.subarray(0, 3), (channel) => channel.toString(16).padStart(2, "0")).join("")}`,
+      alpha: pixels[3]! / 255,
+    };
+  } catch {
     return null;
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = 1;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) return null;
-  context.fillStyle = value;
-  context.fillRect(0, 0, 1, 1);
-  const pixels = context.getImageData(0, 0, 1, 1).data;
-  return {
-    hex: `#${Array.from(pixels.subarray(0, 3), (channel) => channel.toString(16).padStart(2, "0")).join("")}`,
-    alpha: pixels[3]! / 255,
-  };
+  }
 }
 
 const inputClass = "h-7 px-2 text-xs md:text-xs";
@@ -48,13 +52,18 @@ export function DesignStyleField({
   property,
   value,
   onChange,
+  scopeKey,
 }: {
   property: DesignStyleProperty;
   value: string;
   onChange: (value: string) => void;
+  scopeKey?: string;
 }) {
   const id = useId();
-  const [custom, setCustom] = useState(false);
+  const scope = scopeKey ?? property.name;
+  const [customScope, setCustomScope] = useState<string | null>(null);
+  const custom = customScope === scope;
+  useEffect(() => setCustomScope(null), [scope]);
   const color = useMemo(
     () => (property.color ? pickerColor(value) : null),
     [property.color, value],
@@ -104,7 +113,7 @@ export function DesignStyleField({
           <Select
             value={value || stylesheetValue}
             onValueChange={(next) => {
-              if (next === customValue) setCustom(true);
+              if (next === customValue) setCustomScope(scope);
               else onChange(next === stylesheetValue ? "" : next);
             }}
           >
@@ -147,7 +156,7 @@ export function DesignStyleField({
                 size="icon"
                 className="size-7"
                 aria-label={`Choose ${property.name} preset`}
-                onClick={() => setCustom(false)}
+                onClick={() => setCustomScope(null)}
               >
                 <ChevronDown className="size-3" />
               </Button>

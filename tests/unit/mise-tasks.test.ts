@@ -290,6 +290,7 @@ test("one-shot browser tasks own setup/cleanup and reserve their workspace witho
   );
   for (const command of [full, design]) {
     expect(policy.commandProfiles[command].resources).toEqual(["workspace:*"]);
+    expect(policy.commandProfiles[command].noProgressTimeoutMs).toBe(300_000);
     expect(policy.cooperativeCommands).not.toContain(command);
   }
   expect(policy.commandProfiles[full].covers).toContain(design);

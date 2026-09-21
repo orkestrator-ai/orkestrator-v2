@@ -92,6 +92,7 @@ export function DesignInspector({
                       <DesignStyleField
                         key={property.name}
                         property={property}
+                        scopeKey={`${selection.frameId}:${selection.element.selector}`}
                         value={draft[property.name] ?? styles[property.name]!}
                         onChange={(value) => update(property.name, value)}
                       />
@@ -110,6 +111,7 @@ export function DesignInspector({
                     <DesignStyleField
                       key={name}
                       property={{ name, label: name, wide: true }}
+                      scopeKey={`${selection.frameId}:${selection.element.selector}`}
                       value={draft[name] ?? styles[name]!}
                       onChange={(value) => update(name, value)}
                     />

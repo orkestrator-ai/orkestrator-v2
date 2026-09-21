@@ -173,10 +173,17 @@ test("repository scheduling profiles are bounded and use exact command declarati
       cooperativeCommands: ["full"],
       commandProfiles: {
         full: { resources: ["*"], covers: ["changed"] },
-        lint: { workers: 1, memoryMiB: 128 },
+        lint: { workers: 1, memoryMiB: 128, noProgressTimeoutMs: 300_000 },
       },
     }).profiles.lint?.workers,
   ).toBe(1);
+  expect(
+    testSchedulingPolicy({
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { lint: { noProgressTimeoutMs: 300_000 } },
+    }).profiles.lint?.noProgressTimeoutMs,
+  ).toBe(300_000);
   const accepted = testSchedulingPolicy({ version: 1, cooperativeCommands: [] });
   // Profiles are keyed by an attacker-irrelevant but prototype-sensitive string;
   // a null prototype keeps `profiles["constructor"]` a miss rather than a hit.
@@ -209,6 +216,21 @@ test("repository scheduling profiles are bounded and use exact command declarati
     { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { workers: 1.5 } } },
     { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { memoryMiB: 0 } } },
     { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { memoryMiB: 1048577 } } },
+    {
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { invalid: { noProgressTimeoutMs: 999 } },
+    },
+    {
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { invalid: { noProgressTimeoutMs: 7_200_001 } },
+    },
+    {
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { invalid: { noProgressTimeoutMs: 1_000.5 } },
+    },
     { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { resources: [42] } } },
     { version: 1, cooperativeCommands: [], commandProfiles: { invalid: { covers: [42] } } },
     {

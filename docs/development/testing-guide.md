@@ -283,15 +283,18 @@ this is not a distributed scheduler or a physical-host container quota manager.
 
 ### Multi Review validation
 
-Non-cooperative review commands also have a five-minute no-output watchdog,
-in addition to the plan's absolute timeout. `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS`
-overrides it (bounded from one second to two hours). The clock starts after
-capacity admission and resets on stdout or stderr bytes; queue waits do not
-consume it. A stall produces incomplete evidence, terminates the process group,
-and records the reason. `lastOutputAt` is persisted in each command result for
-status/reconnect readers without retaining output content in status metadata.
-Cooperative commands continue to use their scheduler heartbeat and execution
-clock instead of the no-output watchdog.
+Non-cooperative review commands use their declared absolute timeout by default;
+silence alone is not evidence that a compiler, build, or integration stage is
+stuck. An exact repository `commandProfiles` entry may opt a lifecycle command
+into a `noProgressTimeoutMs` watchdog (bounded from one second to two hours).
+`ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS` overrides that value only for commands
+that already opted in; it does not add a watchdog to arbitrary discovered
+commands. The clock starts after capacity admission and resets on stdout or
+stderr bytes, so queue waits do not consume it. A declared stall produces
+incomplete evidence, terminates the process group, and records the reason.
+`lastOutputAt` is persisted in each command result for status/reconnect readers
+without retaining output content in status metadata. Cooperative commands
+continue to use their scheduler heartbeat and execution clock instead.
 
 For service-backed browser checks, select the exact one-shot tasks documented
 above. `dev:test` stays attached after readiness and is never a sequential setup

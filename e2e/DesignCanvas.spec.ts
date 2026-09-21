@@ -54,11 +54,25 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
     await expect.poll(async () => (await hierarchy.boundingBox())!.width).toBe(beforeResize - 30);
     await divider.press("ArrowRight");
     await expect.poll(async () => (await hierarchy.boundingBox())!.width).toBe(beforeResize - 20);
+    const initialViewport = page.viewportSize()!;
+    const resizedForMaximum = Number(await divider.getAttribute("aria-valuemax")) === 400;
+    if (resizedForMaximum)
+      await page.setViewportSize({ width: 700, height: initialViewport.height });
+    await expect
+      .poll(async () => Number(await divider.getAttribute("aria-valuemax")))
+      .toBeLessThan(400);
+    const reachableMaximum = await divider.getAttribute("aria-valuemax");
     await divider.press("End");
-    expect((await hierarchy.boundingBox())!.width).toBeLessThanOrEqual(400);
-    expect(
-      (await page.getByRole("main", { name: "Canvas viewport" }).boundingBox())!.width,
-    ).toBeGreaterThan(200);
+    await expect
+      .poll(async () => await divider.getAttribute("aria-valuenow"))
+      .toBe(reachableMaximum);
+    if (resizedForMaximum) await page.setViewportSize(initialViewport);
+    await expect
+      .poll(
+        async () =>
+          (await page.getByRole("main", { name: "Canvas viewport" }).boundingBox())!.width,
+      )
+      .toBeGreaterThan(200);
     await divider.press("Home");
     await expect(divider).toHaveAttribute("aria-valuenow", "120");
     await page.getByRole("button", { name: "Toggle layers" }).click();

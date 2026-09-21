@@ -39,7 +39,6 @@ const QUEUE_TIMEOUT_MS = Math.max(1000, Math.min(7200000, Number(process.env.ORK
 // gets a generous window; only its last successful read is treated as stale.
 const COOPERATIVE_STARTUP_MS = Math.max(1000, Math.min(600000, Number(process.env.ORKESTRATOR_COOPERATIVE_STARTUP_MS) || 60000));
 const COOPERATIVE_STALE_MS = Math.max(1000, Math.min(600000, Number(process.env.ORKESTRATOR_COOPERATIVE_STALE_MS) || 10000));
-const NO_PROGRESS_MS = Math.max(1000, Math.min(7200000, Number(process.env.ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS) || 300000));
 const MAX_STREAM_BYTES = 32 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 256 * 1024 * 1024;
 let totalBytes = 0;
@@ -255,13 +254,17 @@ async function execute(cmd, index) {
       }
     };
     const timeout = cooperative ? setInterval(updateClock, 100) : setTimeout(() => stopJob("Validation command timed out"), cmd.timeoutMs);
-    // A foreground server can be alive forever without advancing validation.
-    // Start only after admission; queue time is never a no-output failure.
+    // Silence is ambiguous for compilers and integration tests, so only exact
+    // repository profiles that require output as a lifecycle signal opt into
+    // this watchdog. The environment can tune an opted-in profile for a run,
+    // but cannot silently add the policy to an arbitrary discovered command.
+    const profileNoProgressMs = profile.noProgressTimeoutMs;
+    const noProgressMs = profileNoProgressMs === undefined ? undefined : Math.max(1000, Math.min(7200000, Number(process.env.ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS) || profileNoProgressMs));
     let lastOutputAt = performance.now();
-    const noProgress = cooperative ? undefined : setInterval(() => {
-      if (performance.now() - lastOutputAt >= NO_PROGRESS_MS)
-        stopJob("Validation command produced no output for " + NO_PROGRESS_MS + "ms; command may be stuck in a foreground service; validation is incomplete");
-    }, Math.min(1000, NO_PROGRESS_MS / 4));
+    const noProgress = cooperative || noProgressMs === undefined ? undefined : setInterval(() => {
+      if (performance.now() - lastOutputAt >= noProgressMs)
+        stopJob("Validation command produced no output for " + noProgressMs + "ms; command may be stuck in a foreground service; validation is incomplete");
+    }, Math.min(1000, noProgressMs / 4));
     child.on("error", () => stopJob("Validation command could not start"));
     [child.stdout, child.stderr].forEach((source, i) => source.on("data", chunk => {
       if (failure) return;

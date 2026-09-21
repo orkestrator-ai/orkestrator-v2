@@ -83,6 +83,10 @@ test("real gateway saves a design and rehydrates another client's edits", async 
       html: "<h1 id='title'>Updated by another client</h1>",
     });
     await expect(embedded.getByRole("heading")).toHaveText("Updated by another client");
+    await page.getByRole("button", { name: "Undo design change" }).click();
+    await expect(embedded.getByRole("heading")).toHaveText("Shared design");
+    await page.getByRole("button", { name: "Redo design change" }).click();
+    await expect(embedded.getByRole("heading")).toHaveText("Updated by another client");
     await page.reload();
     await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
     await page.getByText(env.name, { exact: true }).first().click();

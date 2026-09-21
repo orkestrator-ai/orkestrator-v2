@@ -1,36 +1,55 @@
 import "./design.css";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Plus, Minus, Save, Download, Layers, MousePointer2 } from "lucide-react";
+import { Plus, Minus, Save, Download, Layers, MousePointer2, Undo2, Redo2 } from "lucide-react";
 import {
   DESIGN_EVENT,
   type DesignCanvas,
   type DesignChange,
   type DesignElement,
   type DesignFrame,
+  type DesignHistoryStatus,
   type DesignLayer,
 } from "@orkestrator/protocol/design-canvas";
 import { Button } from "@/components/ui/button";
 import { invoke } from "@/lib/native/backend";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
-import { designAction, getCanvas, getChanges } from "./design-client";
+import { designAction, getCanvas, getCanvasState, getChanges } from "./design-client";
 import { DesignFrameView, type DesignSelection } from "./DesignFrameView";
 import { DesignInspector } from "./DesignInspector";
 import { DesignFrameBridge } from "./frame-bridge";
 import { LatestMutationQueue } from "./latest-mutation-queue";
 
+const EMPTY_HISTORY: DesignHistoryStatus = {
+  revision: 0,
+  undoCount: 0,
+  redoCount: 0,
+  canUndo: false,
+  canRedo: false,
+};
+
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    Boolean(target.closest('input, textarea, [contenteditable="true"]'))
+  );
+}
+
 export function DesignCanvasTab({
   canvasId,
   environmentId,
   isActive,
+  ownsGlobalShortcuts,
 }: {
   canvasId: string;
   environmentId: string;
   isActive: boolean;
+  ownsGlobalShortcuts: boolean;
 }) {
   const [canvas, setCanvas] = useState<DesignCanvas | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [history, setHistory] = useState<DesignHistoryStatus>(EMPTY_HISTORY);
   const [selection, setSelection] = useState<DesignSelection | null>(null);
   const [layers, setLayers] = useState<Record<string, DesignLayer[]>>({});
   const [showLayers, setShowLayers] = useState(true);
@@ -60,6 +79,9 @@ export function DesignCanvasTab({
     (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)),
     [],
   );
+  useEffect(() => {
+    setHistory(EMPTY_HISTORY);
+  }, [canvasId]);
   useEffect(() => {
     const target = canvasBody.current;
     if (!isActive || !target) return;
@@ -105,7 +127,10 @@ export function DesignCanvasTab({
           const changes = await getChanges(environmentId, canvasId, generation, after);
           if (disposed) return;
           if (changes.reset || changes.revision !== after) {
-            const snapshot = await getCanvas(environmentId, canvasId);
+            const { canvas: snapshot, history: nextHistory } = await getCanvasState(
+              environmentId,
+              canvasId,
+            );
             if (disposed) return;
             if (!canvasRef.current || canvasRef.current.revision <= snapshot.revision)
               canvasRef.current = snapshot;
@@ -113,6 +138,7 @@ export function DesignCanvasTab({
               current && current.revision > snapshot.revision ? current : snapshot,
             );
             after = snapshot.revision;
+            setHistory(nextHistory);
           }
           generation = changes.generation;
         } while (again && !disposed);
@@ -151,10 +177,13 @@ export function DesignCanvasTab({
     const latestFrame = frameId
       ? canvasRef.current?.frames.find((frame) => frame.id === frameId)
       : undefined;
+    const latestCanvas = canvasRef.current;
     const input =
       latestFrame && "expectedRevision" in request.input
         ? { ...request.input, expectedRevision: latestFrame.revision }
-        : request.input;
+        : latestCanvas && "expectedRevision" in request.input
+          ? { ...request.input, expectedRevision: latestCanvas.revision }
+          : request.input;
     try {
       await designAction(environmentId, request.action, { canvasId, ...input });
     } catch (reason) {
@@ -170,6 +199,34 @@ export function DesignCanvasTab({
     const key = typeof input.frameId === "string" ? input.frameId : "canvas";
     mutationQueue.current!.enqueue(key, { action, input });
   }, []);
+  const restoreHistory = useCallback(
+    (action: "undo" | "redo") => {
+      const current = canvasRef.current;
+      if (!current) return;
+      mutate(action, { expectedRevision: current.revision });
+    },
+    [mutate],
+  );
+  useEffect(() => {
+    if (!ownsGlobalShortcuts) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.altKey ||
+        (!event.metaKey && !event.ctrlKey) ||
+        isTextEditingTarget(event.target)
+      )
+        return;
+      const key = event.key.toLowerCase();
+      const redo = (key === "z" && event.shiftKey) || (key === "y" && event.ctrlKey);
+      const undo = key === "z" && !event.shiftKey;
+      if (busy || (!undo && !redo) || (undo ? !history.canUndo : !history.canRedo)) return;
+      event.preventDefault();
+      restoreHistory(undo ? "undo" : "redo");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busy, history.canRedo, history.canUndo, ownsGlobalShortcuts, restoreHistory]);
   const selectLayer = (frame: DesignFrame, selector: string) => {
     const bridge = bridges.current.get(frame.id);
     if (!bridge || bridge.renderedRevision !== frame.revision) return;
@@ -287,6 +344,26 @@ export function DesignCanvasTab({
           }}
         >
           <Plus className="size-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Undo design change"
+          title="Undo (Ctrl/⌘+Z)"
+          disabled={!canvas || busy || !history.canUndo}
+          onClick={() => restoreHistory("undo")}
+        >
+          <Undo2 className="size-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Redo design change"
+          title="Redo (Ctrl/⌘+Shift+Z)"
+          disabled={!canvas || busy || !history.canRedo}
+          onClick={() => restoreHistory("redo")}
+        >
+          <Redo2 className="size-4" />
         </Button>
         <Button
           variant="ghost"

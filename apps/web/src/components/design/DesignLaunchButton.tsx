@@ -5,6 +5,15 @@ import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
 import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
 import { MAX_TABS } from "@/contexts";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -145,8 +154,7 @@ export function DesignLaunchButton({
           >
             <label className="grid gap-1 text-sm">
               Name
-              <input
-                className="rounded border bg-background p-2"
+              <Input
                 required
                 maxLength={120}
                 value={name}
@@ -155,20 +163,23 @@ export function DesignLaunchButton({
             </label>
             <label className="grid gap-1 text-sm">
               Agent
-              <select
-                aria-label="Design agent"
-                className="rounded border bg-background p-2"
+              <Select
                 value={agent}
-                onChange={(event) => setAgent(event.target.value as "claude" | "codex")}
+                onValueChange={(value) => setAgent(value as "claude" | "codex")}
               >
-                <option value="claude">Claude</option>
-                <option value="codex">Codex</option>
-              </select>
+                <SelectTrigger aria-label="Design agent" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="claude">Claude</SelectItem>
+                  <SelectItem value="codex">Codex</SelectItem>
+                </SelectContent>
+              </Select>
             </label>
             <label className="grid gap-1 text-sm">
               Design brief
-              <textarea
-                className="min-h-24 rounded border bg-background p-2"
+              <Textarea
+                className="min-h-24"
                 maxLength={20000}
                 placeholder="Review this repo and mock up…"
                 value={prompt}
@@ -187,33 +198,32 @@ export function DesignLaunchButton({
           {existing.length > 0 && (
             <label className="grid gap-1 text-sm">
               Open a saved canvas
-              <select
-                className="rounded border bg-background p-2"
-                defaultValue=""
-                onChange={(event) => {
-                  if (event.target.value) {
-                    try {
-                      openCanvas(event.target.value);
-                    } catch (reason) {
-                      fail(reason);
-                    }
+              <Select
+                value=""
+                onValueChange={(value) => {
+                  try {
+                    openCanvas(value);
+                  } catch (reason) {
+                    fail(reason);
                   }
                 }}
               >
-                <option value="" disabled>
-                  Choose canvas…
-                </option>
-                {existing.map((canvas) => (
-                  <option key={canvas.id} value={canvas.id}>
-                    {canvas.name}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger aria-label="Open a saved canvas" className="w-full">
+                  <SelectValue placeholder="Choose canvas…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {existing.map((canvas) => (
+                    <SelectItem key={canvas.id} value={canvas.id}>
+                      {canvas.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </label>
           )}
           <label className="grid gap-1 text-sm">
             Import .orkdes
-            <input
+            <Input
               type="file"
               accept=".orkdes,application/json"
               disabled={busy}

@@ -55,7 +55,8 @@ test("real gateway saves a design and rehydrates another client's edits", async 
     await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
     await page.getByText(env.name, { exact: true }).first().click();
     await page.getByRole("button", { name: "New design workspace" }).click();
-    await page.getByLabel("Open a saved canvas").selectOption(canvas.id);
+    await page.getByRole("combobox", { name: "Open a saved canvas" }).click();
+    await page.getByRole("option", { name: "Gateway design", exact: true }).click();
 
     const embedded = page.frameLocator('iframe[title="Screen"]');
     await expect(embedded.getByRole("heading")).toHaveText("Shared design");
@@ -92,7 +93,8 @@ test("real gateway saves a design and rehydrates another client's edits", async 
     expect(serialized).not.toContain("<h1");
     await page.getByRole("button", { name: "New design workspace" }).click();
     await page.getByRole("textbox", { name: "Name", exact: true }).fill("Guided design");
-    await page.getByRole("combobox", { name: "Design agent", exact: true }).selectOption("codex");
+    await page.getByRole("combobox", { name: "Design agent", exact: true }).click();
+    await page.getByRole("option", { name: "Codex", exact: true }).click();
     await page.getByRole("button", { name: "Create design workspace", exact: true }).click();
     await expect(page.getByText("Guided design", { exact: true })).toBeVisible();
     await expect(

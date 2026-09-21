@@ -999,24 +999,34 @@ export class MultiReviewService {
       const controlled = await this.loadControlled(workflowId);
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
       const { workflow, token } = controlled;
-      if (
-        workflow.phase !== "preparing" ||
-        !workflow.validationRun ||
-        (workflow.validationRun.status !== "planned" && workflow.validationRun.status !== "running")
-      ) {
-        throw new Error("Validation can only be stopped while tests are running");
-      }
-      if (workflow.validationStopRequested === true) {
+      let handedToSupervisor = false;
+      try {
+        if (
+          workflow.phase !== "preparing" ||
+          !workflow.validationRun ||
+          (workflow.validationRun.status !== "planned" &&
+            workflow.validationRun.status !== "running")
+        ) {
+          throw new Error("Validation can only be stopped while tests are running");
+        }
+        if (workflow.validationStopRequested === true) {
+          handedToSupervisor = true;
+          void this.advanceNow(workflowId);
+          return workflow;
+        }
+        // Persist intent before touching the worker. If the backend restarts after
+        // cancellation, the supervisor still knows that a cancelled run should be
+        // packaged as partial evidence rather than failed or restarted.
+        workflow.validationStopRequested = true;
+        const saved = await this.save(workflow, token);
+        handedToSupervisor = true;
         void this.advanceNow(workflowId);
-        return workflow;
+        return saved;
+      } finally {
+        // Guard failures and failed saves do not have a supervisor continuation
+        // that can retire this claim. Do not leave their lease renewable forever.
+        if (!handedToSupervisor) await this.release(workflow, token);
       }
-      // Persist intent before touching the worker. If the backend restarts after
-      // cancellation, the supervisor still knows that a cancelled run should be
-      // packaged as partial evidence rather than failed or restarted.
-      workflow.validationStopRequested = true;
-      const saved = await this.save(workflow, token);
-      void this.advanceNow(workflowId);
-      return saved;
     });
   }
 
@@ -3045,9 +3055,25 @@ export class MultiReviewService {
     if (!controlled) return;
     const { workflow, token } = controlled;
     if (isMultiReviewTerminalPhase(workflow.phase)) return;
+    if (
+      workflow.validationRun &&
+      (workflow.validationRun.status === "planned" || workflow.validationRun.status === "running")
+    ) {
+      try {
+        workflow.validationRun = await this.invoke("cancel_review_validation", {
+          environmentId: workflow.environmentId,
+          run: workflow.validationRun,
+        });
+      } catch {
+        // The workflow failure that brought us here remains authoritative. The
+        // cancellation request is best-effort cleanup for an environment-owned
+        // worker and must never replace or hide that original error.
+      }
+    }
     const failedDuringReview = workflow.phase === "reviewing";
     workflow.phase = "failed";
     workflow.error = errorMessage(error).slice(0, 4_096);
+    delete workflow.validationStopRequested;
     if (error instanceof ReviewSnapshotChangedError) {
       workflow.reviewSnapshotStale = true;
     }

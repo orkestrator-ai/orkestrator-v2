@@ -1078,7 +1078,13 @@ function MultiReviewOverviewTab({
                   ? () => void stopValidation()
                   : undefined
               }
-              stopping={stoppingValidation || workflow.validationStopRequested === true}
+              stopping={
+                stoppingValidation ||
+                (workflow.phase === "preparing" &&
+                  (workflow.validationRun.status === "planned" ||
+                    workflow.validationRun.status === "running") &&
+                  workflow.validationStopRequested === true)
+              }
             />
           )}
           <section className="rounded-xl border border-border/60 bg-card/35 p-4">

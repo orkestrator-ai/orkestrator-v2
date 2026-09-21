@@ -435,7 +435,7 @@ async function main() {
     if (stopping) stop("Validation was cancelled");
     await Promise.all(tasks);
     if (stopping) {
-      for (const i of pending) Object.assign(run.results[i], { status: "skipped", limitation: "Validation was cancelled" });
+      for (const i of pending) Object.assign(run.results[i], { status: "incomplete", limitation: "Validation was cancelled before this command started" });
       run.status = run.error && run.error !== schedulingLimitation ? "failed" : "cancelled";
     } else if (!headMatches()) {
       run.status = "failed";

@@ -252,8 +252,12 @@ export function validationPreparation(
     throw new Error(run.error ?? "Review validation has not completed");
   return {
     validation: run.results.map((r) => {
+      const cancellationSkip =
+        stoppedEarly &&
+        r.status === "skipped" &&
+        r.limitation?.trim() === "Validation was cancelled";
       const status =
-        stoppedEarly && ["pending", "queued", "running"].includes(r.status)
+        stoppedEarly && (["pending", "queued", "running"].includes(r.status) || cancellationSkip)
           ? "incomplete"
           : r.status;
       if (
@@ -286,6 +290,9 @@ export function validationPreparation(
       ...run.plan.limitations,
       ...(stoppedEarly
         ? ["Validation was stopped before every command completed; partial results were preserved."]
+        : []),
+      ...(stoppedEarly && run.error?.trim() && !run.plan.limitations.includes(run.error.trim())
+        ? [run.error.trim()]
         : []),
       ...(run.environmentChangesOmitted
         ? [

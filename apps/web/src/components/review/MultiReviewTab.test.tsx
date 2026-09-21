@@ -681,6 +681,91 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     ).toBe(true);
   });
 
+  test("surfaces a stop-validation failure and makes the control usable again", async () => {
+    const workflow = validatingWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const stopValidation = mock(async () => {
+      throw new Error("Validation cancellation failed");
+    });
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+        commands={{
+          address: mock(async () => workflow),
+          retry: mock(async () => workflow),
+          cancel: mock(async () => workflow),
+          stopValidation,
+          stopReviewer: mock(async () => workflow),
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop tests and continue" }));
+    await waitFor(() => expect(screen.getByText("Validation cancellation failed")).toBeTruthy());
+    const retry = screen.getByRole("button", { name: "Stop tests and continue" });
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(retry);
+    await waitFor(() => expect(stopValidation).toHaveBeenCalledTimes(2));
+  });
+
+  test("suppresses stop validation while another workflow command is pending", async () => {
+    const workflow = validatingWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    let finishCancel!: (value: MultiReviewWorkflow) => void;
+    const cancel = mock(
+      () =>
+        new Promise<MultiReviewWorkflow>((resolve) => {
+          finishCancel = resolve;
+        }),
+    );
+    const stopValidation = mock(async () => workflow);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+        commands={{
+          address: mock(async () => workflow),
+          retry: mock(async () => workflow),
+          cancel,
+          stopValidation,
+          stopReviewer: mock(async () => workflow),
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Stop tests and continue" }));
+    expect(stopValidation).not.toHaveBeenCalled();
+    await act(async () => finishCancel(workflow));
+  });
+
+  test("does not show a stale stopping state after validation has failed", () => {
+    const workflow = validatingWorkflow();
+    workflow.phase = "failed";
+    workflow.error = "Packaging failed";
+    workflow.validationStopRequested = true;
+    workflow.validationRun!.status = "cancelled";
+    workflow.validationRun!.completedAt = "2026-09-08T20:00:10.000Z";
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+      />,
+    );
+
+    expect(screen.queryByText("Stopping") === null).toBe(true);
+    expect(screen.getByText("cancelled")).toBeTruthy();
+  });
+
   test("keeps a running validation clock live while the workflow is cancelling", () => {
     const originalNow = Date.now;
     const originalSetInterval = window.setInterval;

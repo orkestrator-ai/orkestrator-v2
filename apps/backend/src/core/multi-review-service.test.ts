@@ -721,6 +721,10 @@ test("MultiReviewService settles the interactive Fix card in the background with
 
       provider.statusValue = "idle";
       await waitUntil(async () => (await snapshot(started.id))?.fixSession?.status === "idle");
+      await waitUntil(async () => {
+        const environment = await storage.getEnvironment("env-interactive-fix-settlement");
+        return environment?.agentActivitySources?.["multi-review"]?.state === "idle";
+      });
 
       const settled = (await snapshot(started.id))!;
       expect(settled).toMatchObject({

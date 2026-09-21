@@ -354,11 +354,13 @@ export function VirtualizedMessageList<TMessage>({
         totalListHeightChanged={scrollProps.totalListHeightChanged}
         restoreStateFrom={scrollProps.restoreStateFrom}
         scrollerRef={scrollProps.scrollerRef}
-        // A tool block can be hundreds of pixels tall. Using it as Virtuoso's
+        // A tool block can be thousands of pixels tall. Using it as Virtuoso's
         // default probe height overestimates new text/tool rows, briefly pushes
         // visible history out of the window, then remounts it after measurement.
-        // Keep unmeasured rows modest; measured rows retain their real heights.
-        defaultItemHeight={80}
+        // 320px is near a representative mixed transcript row while still far
+        // below those outliers; it also bounds the cold-fill render count.
+        // Measured and restored rows retain their real heights.
+        defaultItemHeight={320}
         increaseViewportBy={{ top: 400, bottom: 200 }}
         style={{ height: "100%" }}
         className="py-4"

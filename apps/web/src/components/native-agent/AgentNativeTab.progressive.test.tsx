@@ -7,7 +7,7 @@
  * and editable before session state arrives, actions are not, and a refresh
  * over an authoritative snapshot never withdraws either.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   NativeAgentDiscoveryUpdate,
@@ -85,6 +85,7 @@ const identity: NativeAgentViewIdentity = {
 
 let transcriptUpdates: Array<() => Promise<NativeAgentTranscriptUpdate<TestMessage>>> = [];
 let stateUpdates: Array<() => Promise<NativeAgentSessionStateUpdate>> = [];
+let transcriptReads = 0;
 let dispatched: string[] = [];
 let backgroundTaskStops: string[] = [];
 
@@ -116,6 +117,7 @@ mock.module("@/lib/backend", () => ({
     throw new Error("joined projection must not run on the progressive path");
   },
   getNativeAgentTranscriptUpdate: async () => {
+    transcriptReads += 1;
     const next = transcriptUpdates.shift();
     if (next) return next();
     return {
@@ -283,6 +285,7 @@ beforeEach(() => {
   resetNativeAgentSyncCapabilityForTests();
   transcriptUpdates = [];
   stateUpdates = [];
+  transcriptReads = 0;
   dispatched = [];
   backgroundTaskStops = [];
   dispatchNativeAgentIntentMock.mockClear();
@@ -709,13 +712,36 @@ describe("AgentNativeTab progressive controller", () => {
     ];
     stateUpdates = [async () => stateSnapshot("state-1")];
 
-    renderTab();
-    await waitFor(() => expect(screen.getByTestId("progressive-transcript-list")).toBeTruthy());
-    expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
-    expect(screen.queryByRole("status") === null).toBe(true);
+    let runIdlePoll: (() => void) | undefined;
+    const realSetInterval = window.setInterval.bind(window);
+    const intervalSpy = spyOn(window, "setInterval").mockImplementation(((
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      if (timeout === 1_500 && typeof handler === "function") {
+        runIdlePoll = () => handler(...args);
+        return 91_501;
+      }
+      return realSetInterval(handler, timeout, ...args);
+    }) as typeof window.setInterval);
+    try {
+      renderTab();
+      await waitFor(() => expect(screen.getByTestId("progressive-transcript-list")).toBeTruthy());
+      expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
+      expect(screen.queryByRole("status") === null).toBe(true);
 
-    await new Promise((resolve) => setTimeout(resolve, 1_600));
-    expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
-    expect(screen.queryByRole("status") === null).toBe(true);
+      const readsBeforePoll = transcriptReads;
+      expect(runIdlePoll).toBeDefined();
+      await act(async () => {
+        runIdlePoll!();
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(transcriptReads).toBeGreaterThan(readsBeforePoll));
+      expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
+      expect(screen.queryByRole("status") === null).toBe(true);
+    } finally {
+      intervalSpy.mockRestore();
+    }
   });
 });

@@ -5461,39 +5461,59 @@ describe("AgentNativeTab", () => {
         }),
     );
 
-    render(<AgentNativeTab tabId="tab-new-cursor-fail" data={freshTab("cursor")} isActive />);
-    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+    let runIdlePoll: (() => void) | undefined;
+    const realSetInterval = window.setInterval.bind(window);
+    const intervalSpy = spyOn(window, "setInterval").mockImplementation(((
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      if (timeout === 1_500 && typeof handler === "function") {
+        runIdlePoll = () => handler(...args);
+        return 91_500;
+      }
+      return realSetInterval(handler, timeout, ...args);
+    }) as typeof window.setInterval);
+    try {
+      render(<AgentNativeTab tabId="tab-new-cursor-fail" data={freshTab("cursor")} isActive />);
+      await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
 
-    await act(async () => {
-      dispatchResourceChange({
-        resource: "native-agent-session",
-        id: "env-1",
-        revision: 1,
+      await act(async () => {
+        dispatchResourceChange({
+          resource: "native-agent-session",
+          id: "env-1",
+          revision: 1,
+        });
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 120);
+        });
       });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 120);
-      });
-    });
 
-    await act(async () => {
-      failEnsure!();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
+      await act(async () => {
+        failEnsure!();
+        await Promise.resolve();
       });
-    });
 
-    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
-    // The actionable reason, not "Unable to connect".
-    expect(screen.getByText("Cursor SDK bridge is not available")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+      await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+      // The actionable reason, not "Unable to connect".
+      expect(screen.getByText("Cursor SDK bridge is not available")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
 
-    // And it survives the poll loop, which reads the same absent session again.
-    await act(async () => {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 1_700);
+      // Drive the registered production poll once. Advancing the callback is
+      // stronger and faster than sleeping beyond its nominal interval.
+      const readsBeforePoll = getNativeAgentProjectionMock.mock.calls.length;
+      expect(runIdlePoll).toBeDefined();
+      await act(async () => {
+        runIdlePoll!();
+        await Promise.resolve();
       });
-    });
-    expect(screen.getByText("Cursor SDK bridge is not available")).toBeTruthy();
+      await waitFor(() =>
+        expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(readsBeforePoll),
+      );
+      expect(screen.getByText("Cursor SDK bridge is not available")).toBeTruthy();
+    } finally {
+      intervalSpy.mockRestore();
+    }
   }, 10_000);
 
   test("releases a creation failure once a read finds the session", async () => {

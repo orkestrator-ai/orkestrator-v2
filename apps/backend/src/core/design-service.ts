@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   DESIGN_CONFLICT,
   DESIGN_EVENT,
+  DESIGN_HISTORY_LIMIT,
   DESIGN_MAX_DOCUMENT_BYTES,
   DESIGN_MAX_FRAMES,
   DESIGN_MAX_HTML_BYTES,
@@ -12,6 +13,7 @@ import {
   type DesignChange,
   type DesignChanges,
   type DesignFrame,
+  type DesignHistoryStatus,
   type DesignOperation,
 } from "@orkestrator/protocol/design-canvas";
 import { DesignRenderer } from "./design-renderer.js";
@@ -54,6 +56,28 @@ export const canvasSchema = z
     "Duplicate frame ids",
   );
 
+type DesignHistoryEntry =
+  | {
+      kind: "create-frame";
+      index: number;
+      after: DesignFrame;
+    }
+  | {
+      kind: "update-frame";
+      frameId: string;
+      before: DesignFrame;
+      after: DesignFrame;
+    };
+
+interface DesignHistory {
+  undo: DesignHistoryEntry[];
+  redo: DesignHistoryEntry[];
+}
+
+function copyFrame(frame: DesignFrame): DesignFrame {
+  return { ...frame };
+}
+
 export class DesignService {
   readonly generation = randomUUID();
   private readonly root: string;
@@ -61,6 +85,7 @@ export class DesignService {
   private pending = 0;
   private readonly events: DesignChange[] = [];
   private readonly metadata = new Map<string, { environmentId: string; revision: number }>();
+  private readonly histories = new Map<string, DesignHistory>();
   private initialized = false;
   private initialization: Promise<void> | undefined;
   constructor(
@@ -162,7 +187,7 @@ export class DesignService {
     }
     return false;
   }
-  private async commit(canvas: DesignCanvas, frameId?: string) {
+  private async commit(canvas: DesignCanvas, frameId?: string, beforePublish?: () => void) {
     canvasSchema.parse(canvas);
     // Use the export representation for the limit too, so every saved canvas
     // can be imported again without pretty-printing pushing it over the bound.
@@ -183,6 +208,7 @@ export class DesignService {
     } finally {
       await unlink(temp).catch(() => undefined);
     }
+    beforePublish?.();
     const event: DesignChange = {
       canvasId: canvas.id,
       revision: canvas.revision,
@@ -196,6 +222,33 @@ export class DesignService {
     if (this.events.length > 256) this.events.shift();
     // Content-free bounded hints; clients read snapshots and detect gaps.
     this.emit(DESIGN_EVENT, { ...event, generation: this.generation });
+  }
+  private history(canvasId: string): DesignHistory {
+    let history = this.histories.get(canvasId);
+    if (!history) {
+      history = { undo: [], redo: [] };
+      this.histories.set(canvasId, history);
+    }
+    return history;
+  }
+  private record(canvasId: string, entry: DesignHistoryEntry): void {
+    const history = this.history(canvasId);
+    history.undo.push(entry);
+    if (history.undo.length > DESIGN_HISTORY_LIMIT) history.undo.shift();
+    history.redo = [];
+  }
+  private status(canvas: DesignCanvas): DesignHistoryStatus {
+    const history = this.history(canvas.id);
+    return {
+      revision: canvas.revision,
+      undoCount: history.undo.length,
+      redoCount: history.redo.length,
+      canUndo: history.undo.length > 0,
+      canRedo: history.redo.length > 0,
+    };
+  }
+  async historyStatus(canvasId: string, environmentId: string): Promise<DesignHistoryStatus> {
+    return this.status(await this.get(canvasId, environmentId));
   }
   async create(
     environmentId: string,
@@ -227,6 +280,7 @@ export class DesignService {
       const canvas = await this.get(canvasId, environmentId);
       await unlink(this.file(canvas.id));
       this.metadata.delete(canvas.id);
+      this.histories.delete(canvas.id);
       for (let index = this.events.length - 1; index >= 0; index--) {
         if (this.events[index]?.canvasId === canvas.id) this.events.splice(index, 1);
       }
@@ -243,6 +297,7 @@ export class DesignService {
           if (error.code !== "ENOENT") throw error;
         });
         this.metadata.delete(id);
+        this.histories.delete(id);
       }
       for (let index = this.events.length - 1; index >= 0; index--) {
         if (ids.includes(this.events[index]!.canvasId)) this.events.splice(index, 1);
@@ -279,7 +334,13 @@ export class DesignService {
       });
       canvas.frames.push(frame);
       canvas.revision++;
-      await this.commit(canvas, frame.id);
+      await this.commit(canvas, frame.id, () =>
+        this.record(canvas.id, {
+          kind: "create-frame",
+          index: canvas.frames.length - 1,
+          after: copyFrame(frame),
+        }),
+      );
       return { frame, canvasRevision: canvas.revision };
     });
   }
@@ -313,8 +374,78 @@ export class DesignService {
       });
       canvas.frames[canvas.frames.indexOf(frame)] = next;
       canvas.revision++;
-      await this.commit(canvas, frame.id);
+      await this.commit(canvas, frame.id, () =>
+        this.record(canvas.id, {
+          kind: "update-frame",
+          frameId: frame.id,
+          before: copyFrame(frame),
+          after: copyFrame(next),
+        }),
+      );
       return { frame: next, canvasRevision: canvas.revision };
+    });
+  }
+  async undo(canvasId: string, environmentId: string, expectedRevision: number) {
+    return this.restoreHistory(canvasId, environmentId, expectedRevision, "undo");
+  }
+  async redo(canvasId: string, environmentId: string, expectedRevision: number) {
+    return this.restoreHistory(canvasId, environmentId, expectedRevision, "redo");
+  }
+  private async restoreHistory(
+    canvasId: string,
+    environmentId: string,
+    expectedRevision: number,
+    direction: "undo" | "redo",
+  ) {
+    return this.exclusive(async () => {
+      const canvas = await this.get(canvasId, environmentId);
+      this.compare(expectedRevision, canvas.revision);
+      const history = this.history(canvas.id);
+      const source = direction === "undo" ? history.undo : history.redo;
+      const entry = source.at(-1);
+      if (!entry) throw new Error(`Nothing to ${direction}`);
+
+      let restoredEntry: DesignHistoryEntry;
+      let frameId: string;
+      if (entry.kind === "create-frame") {
+        frameId = entry.after.id;
+        if (direction === "undo") {
+          const index = canvas.frames.findIndex((frame) => frame.id === frameId);
+          if (index < 0) throw new Error("Design history is out of sync");
+          const removed = copyFrame(canvas.frames[index]!);
+          canvas.frames.splice(index, 1);
+          restoredEntry = { ...entry, index, after: removed };
+        } else {
+          if (canvas.frames.some((frame) => frame.id === frameId))
+            throw new Error("Design history is out of sync");
+          const restored = copyFrame(entry.after);
+          restored.revision++;
+          canvas.frames.splice(Math.min(entry.index, canvas.frames.length), 0, restored);
+          restoredEntry = { ...entry, after: copyFrame(restored) };
+        }
+      } else {
+        frameId = entry.frameId;
+        const index = canvas.frames.findIndex((frame) => frame.id === frameId);
+        if (index < 0) throw new Error("Design history is out of sync");
+        const current = canvas.frames[index]!;
+        const target = direction === "undo" ? entry.before : entry.after;
+        const restored = copyFrame(target);
+        restored.revision =
+          Math.max(current.revision, entry.before.revision, entry.after.revision) + 1;
+        canvas.frames[index] = restored;
+        restoredEntry =
+          direction === "undo"
+            ? { ...entry, before: copyFrame(restored) }
+            : { ...entry, after: copyFrame(restored) };
+      }
+
+      canvas.revision++;
+      const destination = direction === "undo" ? history.redo : history.undo;
+      await this.commit(canvas, frameId, () => {
+        source.pop();
+        destination.push(restoredEntry);
+      });
+      return { canvasRevision: canvas.revision, history: this.status(canvas) };
     });
   }
   async changes(

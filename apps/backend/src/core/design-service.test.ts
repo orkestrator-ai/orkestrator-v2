@@ -109,6 +109,75 @@ describe("backend design canvases", () => {
     ).rejects.toThrow("not found");
   });
 
+  test("stores frame before/after history and restores it with monotonic revisions", async () => {
+    const canvas = await service.create("env-1");
+    const { frame: created } = await service.createFrame(canvas.id, "env-1", 1, frame);
+    await service.mutate(canvas.id, "env-1", created.id, 1, { html: "<p>After</p>" });
+    expect(await service.historyStatus(canvas.id, "env-1")).toEqual({
+      revision: 3,
+      undoCount: 2,
+      redoCount: 0,
+      canUndo: true,
+      canRedo: false,
+    });
+
+    await expect(service.undo(canvas.id, "env-1", 2)).rejects.toThrow("revision conflict");
+    await service.undo(canvas.id, "env-1", 3);
+    expect(await service.getFrame(canvas.id, "env-1", created.id)).toMatchObject({
+      html: frame.html,
+      revision: 3,
+    });
+    await service.undo(canvas.id, "env-1", 4);
+    expect((await service.get(canvas.id, "env-1")).frames).toEqual([]);
+    expect(await service.historyStatus(canvas.id, "env-1")).toMatchObject({
+      revision: 5,
+      undoCount: 0,
+      redoCount: 2,
+      canUndo: false,
+      canRedo: true,
+    });
+
+    await service.redo(canvas.id, "env-1", 5);
+    expect(await service.getFrame(canvas.id, "env-1", created.id)).toMatchObject({
+      html: frame.html,
+      revision: 4,
+    });
+    await service.redo(canvas.id, "env-1", 6);
+    expect(await service.getFrame(canvas.id, "env-1", created.id)).toMatchObject({
+      html: "<p>After</p>",
+      revision: 5,
+    });
+    await expect(service.redo(canvas.id, "env-1", 7)).rejects.toThrow("Nothing to redo");
+  });
+
+  test("keeps only ten undo steps and clears redo after a new edit", async () => {
+    const canvas = await service.create("env-1");
+    const { frame: created } = await service.createFrame(canvas.id, "env-1", 1, frame);
+    for (let value = 1; value <= 11; value++)
+      await service.mutate(canvas.id, "env-1", created.id, value, { x: value });
+    expect(await service.historyStatus(canvas.id, "env-1")).toMatchObject({
+      revision: 13,
+      undoCount: 10,
+      redoCount: 0,
+    });
+
+    for (let revision = 13; revision < 23; revision++)
+      await service.undo(canvas.id, "env-1", revision);
+    expect((await service.getFrame(canvas.id, "env-1", created.id)).x).toBe(1);
+    await expect(service.undo(canvas.id, "env-1", 23)).rejects.toThrow("Nothing to undo");
+
+    await service.redo(canvas.id, "env-1", 23);
+    const redone = await service.getFrame(canvas.id, "env-1", created.id);
+    expect(redone.x).toBe(2);
+    await service.mutate(canvas.id, "env-1", created.id, redone.revision, { x: 99 });
+    expect(await service.historyStatus(canvas.id, "env-1")).toMatchObject({
+      revision: 25,
+      undoCount: 2,
+      redoCount: 0,
+      canRedo: false,
+    });
+  });
+
   test("skips unreadable files without hiding healthy canvases", async () => {
     const canvas = await service.create("env-1", "Healthy");
     await service.close();

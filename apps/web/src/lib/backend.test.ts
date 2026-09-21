@@ -1860,6 +1860,36 @@ describe("backend native agent and looped review wrappers", () => {
       kind: "consolidate",
     });
 
+    const restartModel = {
+      agent: "claude" as const,
+      model: "opus",
+      reasoningEffort: "high",
+    };
+    await expect(
+      backendWrappers.restartMultiReviewStep("multi-1", "consolidate", restartModel),
+    ).resolves.toBe(workflow);
+    expect(invokeMock).toHaveBeenLastCalledWith("restart_multi_review_step", {
+      workflowId: "multi-1",
+      kind: "consolidate",
+      model: restartModel,
+    });
+
+    await expect(backendWrappers.pauseMultiReviewStep("multi-1", "consolidate")).resolves.toBe(
+      workflow,
+    );
+    expect(invokeMock).toHaveBeenLastCalledWith("pause_multi_review_step", {
+      workflowId: "multi-1",
+      kind: "consolidate",
+    });
+
+    await expect(backendWrappers.resumeMultiReviewStep("multi-1", "consolidate")).resolves.toBe(
+      workflow,
+    );
+    expect(invokeMock).toHaveBeenLastCalledWith("resume_multi_review_step", {
+      workflowId: "multi-1",
+      kind: "consolidate",
+    });
+
     await expect(backendWrappers.unstickMultiReviewReviewer("multi-1", "reviewer-1")).resolves.toBe(
       workflow,
     );

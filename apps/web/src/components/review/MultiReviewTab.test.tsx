@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   MULTI_REVIEW_FIX_TAB_TITLE,
+  type MultiReviewModelSelection,
+  type MultiReviewStepKind,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
@@ -1777,6 +1779,118 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
       await waitFor(() => expect(restartStep).toHaveBeenLastCalledWith(completed.id, kind));
     }
+  });
+
+  test("opens Restart in for a step and submits its current model selection", async () => {
+    const ready = readyWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+    const restartStep = mock(
+      async (_workflowId: string, _kind: MultiReviewStepKind, _model?: MultiReviewModelSelection) =>
+        ready,
+    );
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+        commands={{
+          address: mock(async () => ready),
+          retry: mock(async () => ready),
+          cancel: mock(async () => ready),
+          stopReviewer: mock(async () => ready),
+          restartStep,
+        }}
+      />,
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Open consolidation session" }).closest("section")!,
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart in…" }));
+    expect(await screen.findByRole("heading", { name: "Restart Consolidation" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Restart Consolidation" }));
+    await waitFor(() => expect(restartStep).toHaveBeenCalledTimes(1));
+    expect(restartStep.mock.calls[0]?.[0]).toBe(ready.id);
+    expect(restartStep.mock.calls[0]?.[1]).toBe("consolidate");
+    expect(restartStep.mock.calls[0]?.[2]).toMatchObject({
+      agent: "codex",
+      reasoningEffort: "high",
+    });
+  });
+
+  test("pauses and resumes the active workflow step from its context menu", async () => {
+    const ready = readyWorkflow();
+    const timestamp = ready.createdAt;
+    const preparing: MultiReviewWorkflow = {
+      ...ready,
+      phase: "preparing",
+      consolidatedReport: undefined,
+      activeRequest: {
+        kind: "prepare",
+        requestId: "prepare-2",
+        state: "sent",
+        createdAt: timestamp,
+      },
+      fixSession: {
+        ...ready.fixSession!,
+        requestIds: [...ready.fixSession!.requestIds, "prepare-2"],
+        status: "running",
+        completedAt: undefined,
+      },
+    };
+    const paused: MultiReviewWorkflow = {
+      ...preparing,
+      phase: "paused",
+      pausedFromPhase: "preparing",
+      pausedStep: "prepare",
+      activeRequest: undefined,
+      fixSession: { ...preparing.fixSession!, status: "idle" },
+    };
+    const resumed: MultiReviewWorkflow = {
+      ...paused,
+      phase: "preparing",
+      pausedFromPhase: undefined,
+      pausedStep: undefined,
+    };
+    useMultiReviewStore.getState().replaceWorkflow(preparing);
+    const pauseStep = mock(async (_workflowId: string, _kind: MultiReviewStepKind) => paused);
+    const resumeStep = mock(async (_workflowId: string, _kind: MultiReviewStepKind) => resumed);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: preparing.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => preparing)}
+        commands={{
+          address: mock(async () => preparing),
+          retry: mock(async () => preparing),
+          cancel: mock(async () => preparing),
+          stopReviewer: mock(async () => preparing),
+          pauseStep,
+          resumeStep,
+        }}
+      />,
+    );
+
+    const preparationTile = () =>
+      screen
+        .getByRole("button", { name: "Open review package generation session" })
+        .closest("section")!;
+    fireEvent.contextMenu(preparationTile());
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Pause" }));
+    await waitFor(() => expect(pauseStep).toHaveBeenCalledWith(preparing.id, "prepare"));
+    expect(await screen.findByText("Multi Review paused")).toBeTruthy();
+
+    fireEvent.contextMenu(preparationTile());
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Resume" }));
+    await waitFor(() => expect(resumeStep).toHaveBeenCalledWith(preparing.id, "prepare"));
+    expect(
+      await screen.findByText(
+        "Discovering validation, running checks, and preparing shared evidence",
+      ),
+    ).toBeTruthy();
   });
 
   test("offers step restart from a touch long press", async () => {

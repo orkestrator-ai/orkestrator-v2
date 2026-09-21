@@ -4652,6 +4652,14 @@ describe("multi review commands", () => {
       ...workflow("restartStep"),
       id,
     }));
+    const pauseStep = mock(async (id: string, _kind: string) => ({
+      ...workflow("pauseStep"),
+      id,
+    }));
+    const resumeStep = mock(async (id: string, _kind: string) => ({
+      ...workflow("resumeStep"),
+      id,
+    }));
     const unstickReviewer = mock(async (id: string, _reviewerId: string) => ({
       ...workflow("unstickReviewer"),
       id,
@@ -4666,6 +4674,8 @@ describe("multi review commands", () => {
       stopReviewer,
       restartReviewer,
       restartStep,
+      pauseStep,
+      resumeStep,
       unstickReviewer,
     } as unknown as NonNullable<CommandContext["multiReviews"]>;
 
@@ -4695,7 +4705,16 @@ describe("multi review commands", () => {
           ["cancel_multi_review", { workflowId: "multi-1" }],
           ["stop_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
           ["restart_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
-          ["restart_multi_review_step", { workflowId: "multi-1", kind: "consolidate" }],
+          [
+            "restart_multi_review_step",
+            {
+              workflowId: "multi-1",
+              kind: "consolidate",
+              model: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+            },
+          ],
+          ["pause_multi_review_step", { workflowId: "multi-1", kind: "consolidate" }],
+          ["resume_multi_review_step", { workflowId: "multi-1", kind: "consolidate" }],
           ["unstick_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
         ];
         for (const [command, args] of calls) {
@@ -4719,7 +4738,13 @@ describe("multi review commands", () => {
         expect(cancel).toHaveBeenCalledWith("multi-1");
         expect(stopReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
         expect(restartReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
-        expect(restartStep).toHaveBeenCalledWith("multi-1", "consolidate");
+        expect(restartStep).toHaveBeenCalledWith("multi-1", "consolidate", {
+          agent: "codex",
+          model: "gpt-5.6",
+          reasoningEffort: "high",
+        });
+        expect(pauseStep).toHaveBeenCalledWith("multi-1", "consolidate");
+        expect(resumeStep).toHaveBeenCalledWith("multi-1", "consolidate");
         expect(unstickReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
       },
       { multiReviews: supervisor },
@@ -4800,7 +4825,7 @@ describe("multi review commands", () => {
             workflowId: "multi-1",
             kind: "reviewers",
           }),
-        ).rejects.toThrow("Invalid multi review step");
+        ).rejects.toThrow("Invalid multi review step restart request");
         expect(start).not.toHaveBeenCalled();
         expect(lifecycle).not.toHaveBeenCalled();
       },

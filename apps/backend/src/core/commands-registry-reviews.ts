@@ -7,6 +7,8 @@ import {
   LOOPED_REVIEW_WORKFLOW_VERSION,
   isLoopedReviewTerminalPhase,
   isLoopedReviewWorkflow,
+  isMultiReviewStepControlInput,
+  isRestartMultiReviewStepInput,
   isStartMultiReviewCustomFixInput,
   isStartLoopedReviewInput,
   isStartMultiReviewInput,
@@ -296,13 +298,31 @@ export function registerReviewWorkflowCommands(
       )
       .then(stripLoopedReviewSnapshotSecrets);
   });
-  register("restart_multi_review_step", ({ workflowId, kind }, context) => {
+  register("restart_multi_review_step", (args, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
-    if (kind !== "prepare" && kind !== "consolidate" && kind !== "fix") {
-      throw new Error("Invalid multi review step");
+    if (!isRestartMultiReviewStepInput(args)) {
+      throw new Error("Invalid multi review step restart request");
     }
     return context.multiReviews
-      .restartStep(asNonBlankString(workflowId, "workflowId"), kind)
+      .restartStep(args.workflowId, args.kind, args.model)
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
+  register("pause_multi_review_step", (args, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    if (!isMultiReviewStepControlInput(args)) {
+      throw new Error("Invalid multi review step pause request");
+    }
+    return context.multiReviews
+      .pauseStep(args.workflowId, args.kind)
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
+  register("resume_multi_review_step", (args, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    if (!isMultiReviewStepControlInput(args)) {
+      throw new Error("Invalid multi review step resume request");
+    }
+    return context.multiReviews
+      .resumeStep(args.workflowId, args.kind)
       .then(stripLoopedReviewSnapshotSecrets);
   });
   register("unstick_multi_review_reviewer", ({ workflowId, reviewerId }, context) => {

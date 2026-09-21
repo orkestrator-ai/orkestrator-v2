@@ -9,6 +9,7 @@ import {
   CircleAlert,
   FileWarning,
   Loader2,
+  Pause,
   Play,
   RefreshCw,
   RotateCcw,
@@ -39,6 +40,7 @@ import { useOptionalTerminalContext, type CreateTabOptions } from "@/contexts/Te
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import * as backend from "@/lib/backend";
 import { MultiReviewFixPromptDialog } from "./MultiReviewFixPromptDialog";
+import { MultiReviewRestartDialog } from "./MultiReviewRestartDialog";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { formatElapsed } from "@/lib/format-elapsed";
 import { runtimeSummary } from "@/lib/review/runtime-summary";
@@ -54,7 +56,13 @@ interface MultiReviewCommands {
   cancel: (workflowId: string) => Promise<MultiReviewWorkflow>;
   stopReviewer: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
   restartReviewer?: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
-  restartStep?: (workflowId: string, kind: MultiReviewStepKind) => Promise<MultiReviewWorkflow>;
+  restartStep?: (
+    workflowId: string,
+    kind: MultiReviewStepKind,
+    model?: MultiReviewWorkflow["fixModel"],
+  ) => Promise<MultiReviewWorkflow>;
+  pauseStep?: (workflowId: string, kind: MultiReviewStepKind) => Promise<MultiReviewWorkflow>;
+  resumeStep?: (workflowId: string, kind: MultiReviewStepKind) => Promise<MultiReviewWorkflow>;
   unstickReviewer?: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
 }
 
@@ -67,6 +75,8 @@ const defaultCommands: MultiReviewCommands = {
   stopReviewer: backend.stopMultiReviewReviewer,
   restartReviewer: backend.restartMultiReviewReviewer,
   restartStep: backend.restartMultiReviewStep,
+  pauseStep: backend.pauseMultiReviewStep,
+  resumeStep: backend.resumeMultiReviewStep,
   unstickReviewer: backend.unstickMultiReviewReviewer,
 };
 
@@ -86,6 +96,7 @@ function phaseCopy(workflow: MultiReviewWorkflow): string {
     ready: "Consolidated report ready",
     fixing: "The fix model is addressing every finding",
     interactive: "The fix model is working interactively",
+    paused: "Multi Review paused",
     completed: "All findings were addressed",
     cancelling: "Cancelling Multi Review",
     cancelled: "Multi Review cancelled",
@@ -168,6 +179,7 @@ export function multiReviewReviewSessionTabOptions(
 export type MultiReviewStepState =
   | "not-started"
   | "running"
+  | "paused"
   | "complete"
   | "failed"
   | "cancelling"
@@ -206,6 +218,9 @@ function cancellationStep(phase: MultiReviewPhase): MultiReviewStepStatus | null
 /** Keep preparation visible as a completed step after the workflow moves on. */
 export function reviewPackageGenerationStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
   if (workflow.phase === "preparing") return step("Generating package", "running");
+  if (workflow.phase === "paused" && workflow.pausedStep === "prepare") {
+    return step("Paused", "paused");
+  }
   // Workflows persisted before file-backed packages were introduced can have
   // advanced beyond preparation without carrying a reviewPackage pointer, so a
   // phase or a dispatched reviewer stands in as the evidence. A reviewer only
@@ -229,6 +244,9 @@ export function reviewPackageGenerationStep(workflow: MultiReviewWorkflow): Mult
 export function consolidationStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
   if (workflow.consolidatedReport !== undefined) return step("Complete", "complete");
   if (workflow.phase === "consolidating") return step("Consolidating findings", "running");
+  if (workflow.phase === "paused" && workflow.pausedStep === "consolidate") {
+    return step("Paused", "paused");
+  }
   if (workflow.phase === "reviewing") return step("Waiting for reviews", "not-started");
   if (workflow.phase === "preparing") return step("Waiting for review package", "not-started");
   const cancelled = cancellationStep(workflow.phase);
@@ -247,6 +265,9 @@ export function consolidationStep(workflow: MultiReviewWorkflow): MultiReviewSte
 export function fixStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
   if (workflow.phase === "completed") return step("Complete", "complete");
   if (workflow.phase === "fixing") return step("Addressing findings", "running");
+  if (workflow.phase === "paused" && workflow.pausedStep === "fix") {
+    return step("Paused", "paused");
+  }
   if (workflow.phase === "interactive") {
     if (workflow.addressPromptPending === true) return step("Starting fix session", "running");
     if (
@@ -289,6 +310,14 @@ export function fixSessionRuntimeStep(workflow: MultiReviewWorkflow): MultiRevie
     case "fixing":
     case "completed":
       return "fix";
+    case "paused":
+      return workflow.pausedStep === "prepare"
+        ? "package"
+        : workflow.pausedStep === "consolidate"
+          ? "consolidation"
+          : workflow.pausedStep === "fix"
+            ? "fix"
+            : null;
     // The address turn has not been dispatched yet, so the session still carries
     // consolidation's timings and no step may claim them.
     case "interactive":
@@ -444,6 +473,8 @@ function MultiReviewStepIcon({
   switch (state) {
     case "running":
       return <Loader2 className={`${STEP_ICON_CLASS} animate-spin text-primary`} />;
+    case "paused":
+      return <Pause className={`${STEP_ICON_CLASS} text-amber-400`} />;
     case "failed":
       return <AlertCircle className={`${STEP_ICON_CLASS} text-destructive`} />;
     case "cancelling":
@@ -504,6 +535,12 @@ function MultiReviewStepSection({
   canRestart,
   restarting,
   onRestart,
+  onRestartIn,
+  canPause,
+  canResume,
+  lifecyclePending,
+  onPause,
+  onResume,
   requireDirectActivation = false,
 }: {
   heading: string;
@@ -520,6 +557,12 @@ function MultiReviewStepSection({
   canRestart: boolean;
   restarting: boolean;
   onRestart: () => void;
+  onRestartIn: () => void;
+  canPause: boolean;
+  canResume: boolean;
+  lifecyclePending: boolean;
+  onPause: () => void;
+  onResume: () => void;
   /**
    * Preparation and consolidation are backend-owned sessions. Keep them out of
    * the pane layout until an input actually begins on their card.
@@ -636,11 +679,35 @@ function MultiReviewStepSection({
           </div>
         </section>
       </ContextMenuTrigger>
-      <ContextMenuContent className="w-40">
-        <ContextMenuItem disabled={!canRestart || restarting} onSelect={onRestart}>
+      <ContextMenuContent className="w-44">
+        <ContextMenuItem
+          disabled={!canRestart || restarting || lifecyclePending}
+          onSelect={onRestart}
+        >
           {restarting ? <Loader2 className="animate-spin" /> : <RotateCcw />}
           Restart
         </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!canRestart || restarting || lifecyclePending}
+          onSelect={onRestartIn}
+        >
+          <RotateCcw />
+          Restart in…
+        </ContextMenuItem>
+        {canResume ? (
+          <ContextMenuItem disabled={lifecyclePending || restarting} onSelect={onResume}>
+            {lifecyclePending ? <Loader2 className="animate-spin" /> : <Play />}
+            Resume
+          </ContextMenuItem>
+        ) : (
+          <ContextMenuItem
+            disabled={!canPause || lifecyclePending || restarting}
+            onSelect={onPause}
+          >
+            {lifecyclePending ? <Loader2 className="animate-spin" /> : <Pause />}
+            Pause
+          </ContextMenuItem>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -666,10 +733,19 @@ function MultiReviewOverviewTab({
     kind: "restart" | "unstick";
   } | null>(null);
   const [restartingStep, setRestartingStep] = useState<MultiReviewStepKind | null>(null);
+  const [stepLifecycleAction, setStepLifecycleAction] = useState<{
+    kind: MultiReviewStepKind;
+    action: "pause" | "resume";
+  } | null>(null);
+  const [restartDialogStep, setRestartDialogStep] = useState<MultiReviewStepKind | null>(null);
+  const [restartDialogError, setRestartDialogError] = useState<string | null>(null);
   const [customFixPromptOpen, setCustomFixPromptOpen] = useState(false);
   const [customFixPending, setCustomFixPending] = useState(false);
   const [customFixError, setCustomFixError] = useState<string | null>(null);
-  const modelCatalog = useReviewModelCatalog(workflow?.projectId ?? "", customFixPromptOpen);
+  const modelCatalog = useReviewModelCatalog(
+    workflow?.projectId ?? "",
+    customFixPromptOpen || restartDialogStep !== null,
+  );
   const [reviewPanelNow, setReviewPanelNow] = useState(() => Date.now());
   const mountedRef = useRef(false);
   const isActiveRef = useRef(isActive);
@@ -834,16 +910,52 @@ function MultiReviewOverviewTab({
     }
   };
 
-  const restartStep = async (kind: MultiReviewStepKind) => {
-    if (!workflow || !commands.restartStep || restartingStep !== null || pending) return;
+  const restartStep = async (
+    kind: MultiReviewStepKind,
+    model?: MultiReviewWorkflow["fixModel"],
+  ) => {
+    if (
+      !workflow ||
+      !commands.restartStep ||
+      restartingStep !== null ||
+      stepLifecycleAction !== null ||
+      pending
+    )
+      return;
     setRestartingStep(kind);
     setError(null);
+    setRestartDialogError(null);
     try {
-      replaceWorkflow(await commands.restartStep(workflow.id, kind));
+      replaceWorkflow(
+        await (model
+          ? commands.restartStep(workflow.id, kind, model)
+          : commands.restartStep(workflow.id, kind)),
+      );
+      if (model) setRestartDialogStep(null);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setError(message);
+      if (model) setRestartDialogError(message);
+    } finally {
+      setRestartingStep(null);
+    }
+  };
+
+  const runStepLifecycle = async (
+    kind: MultiReviewStepKind,
+    action: "pause" | "resume",
+    command: MultiReviewCommands["pauseStep"] | MultiReviewCommands["resumeStep"],
+  ) => {
+    if (!workflow || !command || stepLifecycleAction !== null || restartingStep !== null || pending)
+      return;
+    setStepLifecycleAction({ kind, action });
+    setError(null);
+    try {
+      replaceWorkflow(await command(workflow.id, kind));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      setRestartingStep(null);
+      setStepLifecycleAction(null);
     }
   };
 
@@ -1047,6 +1159,19 @@ function MultiReviewOverviewTab({
             canRestart={packageStatus.state !== "not-started" && Boolean(commands.restartStep)}
             restarting={restartingStep === "prepare"}
             onRestart={() => void restartStep("prepare")}
+            onRestartIn={() => {
+              setRestartDialogError(null);
+              setRestartDialogStep("prepare");
+            }}
+            canPause={workflow.phase === "preparing" && Boolean(commands.pauseStep)}
+            canResume={
+              workflow.phase === "paused" &&
+              workflow.pausedStep === "prepare" &&
+              Boolean(commands.resumeStep)
+            }
+            lifecyclePending={stepLifecycleAction !== null}
+            onPause={() => void runStepLifecycle("prepare", "pause", commands.pauseStep)}
+            onResume={() => void runStepLifecycle("prepare", "resume", commands.resumeStep)}
             requireDirectActivation
           />
           {workflow.validationRun && (
@@ -1264,6 +1389,19 @@ function MultiReviewOverviewTab({
             }
             restarting={restartingStep === "consolidate"}
             onRestart={() => void restartStep("consolidate")}
+            onRestartIn={() => {
+              setRestartDialogError(null);
+              setRestartDialogStep("consolidate");
+            }}
+            canPause={workflow.phase === "consolidating" && Boolean(commands.pauseStep)}
+            canResume={
+              workflow.phase === "paused" &&
+              workflow.pausedStep === "consolidate" &&
+              Boolean(commands.resumeStep)
+            }
+            lifecyclePending={stepLifecycleAction !== null}
+            onPause={() => void runStepLifecycle("consolidate", "pause", commands.pauseStep)}
+            onResume={() => void runStepLifecycle("consolidate", "resume", commands.resumeStep)}
             requireDirectActivation
           />
 
@@ -1287,6 +1425,19 @@ function MultiReviewOverviewTab({
             canRestart={fixStatus.state !== "not-started" && Boolean(commands.restartStep)}
             restarting={restartingStep === "fix"}
             onRestart={() => void restartStep("fix")}
+            onRestartIn={() => {
+              setRestartDialogError(null);
+              setRestartDialogStep("fix");
+            }}
+            canPause={workflow.phase === "fixing" && Boolean(commands.pauseStep)}
+            canResume={
+              workflow.phase === "paused" &&
+              workflow.pausedStep === "fix" &&
+              Boolean(commands.resumeStep)
+            }
+            lifecyclePending={stepLifecycleAction !== null}
+            onPause={() => void runStepLifecycle("fix", "pause", commands.pauseStep)}
+            onResume={() => void runStepLifecycle("fix", "resume", commands.resumeStep)}
           />
 
           {workflow.consolidatedReport && (
@@ -1408,6 +1559,23 @@ function MultiReviewOverviewTab({
         busy={customFixPending}
         onSubmit={startCustomFix}
       />
+      {restartDialogStep ? (
+        <MultiReviewRestartDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) {
+              setRestartDialogStep(null);
+              setRestartDialogError(null);
+            }
+          }}
+          kind={restartDialogStep}
+          catalog={modelCatalog}
+          defaultSelection={restartDialogStep === "fix" ? workflow.fixModel : reviewSelection}
+          error={restartDialogError}
+          busy={restartingStep === restartDialogStep}
+          onSubmit={(selection) => void restartStep(restartDialogStep, selection)}
+        />
+      ) : null}
     </div>
   );
 }

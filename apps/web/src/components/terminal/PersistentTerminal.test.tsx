@@ -10,6 +10,7 @@ import {
   restoreMatchMedia,
   setMobileViewport,
 } from "../../../../../tests/mocks/match-media";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 
 // Mock modules that require a real backend runtime or have side effects.
 // IMPORTANT: Do NOT mock @/stores (barrel) or @/lib/backend here — doing so
@@ -4912,30 +4913,39 @@ describe("PersistentTerminal", () => {
         : undefined,
     );
 
-    const view = render(
-      <PersistentTerminal
-        terminalData={createTerminalData()}
-        tabId="tab-1"
-        tabType="claude"
-        containerId="container-1"
-        environmentId="env-1"
-        isEnvironmentVisible={true}
-        isActive={true}
-        isFocused={true}
-        isFirstTab={false}
-        paneId="pane-1"
-      />,
-    );
+    const clock = installControlledTimeout(300);
+    try {
+      const view = render(
+        <PersistentTerminal
+          terminalData={createTerminalData()}
+          tabId="tab-1"
+          tabType="claude"
+          containerId="container-1"
+          environmentId="env-1"
+          isEnvironmentVisible={true}
+          isActive={true}
+          isFocused={true}
+          isFirstTab={false}
+          paneId="pane-1"
+        />,
+      );
 
-    act(() => {
-      terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
-    });
-    await waitFor(() => expect(bootstrapWrites()).toHaveLength(1));
-    view.unmount();
-    await new Promise((resolve) => setTimeout(resolve, 400));
+      act(() => {
+        terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
+      });
+      await act(async () => {
+        clock.advance();
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(bootstrapWrites()).toHaveLength(1));
+      view.unmount();
+      act(() => clock.advance());
 
-    expect(bootstrapWrites()).toHaveLength(1);
-    expect(markBootstrappedMock).not.toHaveBeenCalled();
+      expect(bootstrapWrites()).toHaveLength(1);
+      expect(markBootstrappedMock).not.toHaveBeenCalled();
+    } finally {
+      clock.restore();
+    }
   });
 
   it("ignores a bootstrap completion from a replaced terminal session", async () => {

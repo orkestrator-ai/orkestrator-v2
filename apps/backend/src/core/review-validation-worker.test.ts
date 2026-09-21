@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, mkdir, writeFile, readFile, rm, chmod } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm, chmod, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -102,23 +102,59 @@ async function control(
   expect(isReviewValidationRun(result)).toBe(true);
   return result as ReviewValidationRun;
 }
-async function completed(root: string, run: ReviewValidationRun) {
-  let next = await control(root, run);
-  const deadline = Date.now() + 12000;
-  while (["planned", "running"].includes(next.status) && Date.now() < deadline) {
-    await Bun.sleep(50);
-    next = await control(root, run, "status");
+
+async function observeWorkerState(root: string, expected: ReviewValidationRun) {
+  const statePath = path.join(root, ".orkestrator", "review-artifacts", expected.id, "state.json");
+  const info = await stat(statePath);
+  if (!info.isFile() || info.size > 1024 * 1024) throw new Error("Invalid fixture state file");
+  const record = JSON.parse(await readFile(statePath, "utf8")) as {
+    run?: unknown;
+    heartbeat?: unknown;
+  };
+  if (!isReviewValidationRun(record.run)) throw new Error("Invalid fixture validation run");
+  if (
+    record.run.id !== expected.id ||
+    JSON.stringify(record.run.plan) !== JSON.stringify(expected.plan)
+  )
+    throw new Error("Fixture validation identity changed");
+  if (typeof record.heartbeat !== "number") throw new Error("Invalid fixture heartbeat");
+  return record.run;
+}
+
+async function observeUntil(
+  root: string,
+  run: ReviewValidationRun,
+  predicate: (next: ReviewValidationRun) => boolean,
+  timeoutMs: number,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let next: ReviewValidationRun | undefined;
+  while (Date.now() < deadline) {
+    try {
+      next = await observeWorkerState(root, run);
+      if (predicate(next)) return next;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await Bun.sleep(20);
   }
-  expect(["planned", "running"]).not.toContain(next.status);
-  return next;
+  throw new Error(
+    `Timed out observing validation ${run.id}: ${next?.status ?? "state not created"}`,
+  );
+}
+
+async function completed(root: string, run: ReviewValidationRun) {
+  const started = await control(root, run);
+  if (["planned", "running"].includes(started.status)) {
+    await observeUntil(root, run, (next) => !["planned", "running"].includes(next.status), 12_000);
+  }
+  const final = await control(root, run, "status");
+  expect(["planned", "running"]).not.toContain(final.status);
+  return final;
 }
 async function waitUntilQueued(root: string, run: ReviewValidationRun) {
-  const deadline = Date.now() + 3000;
-  let next = await control(root, run, "status");
-  while (next.results[0]!.status !== "queued" && Date.now() < deadline) {
-    await Bun.sleep(20);
-    next = await control(root, run, "status");
-  }
+  await observeUntil(root, run, (next) => next.results[0]?.status === "queued", 3_000);
+  const next = await control(root, run, "status");
   expect(next.results[0]!.status).toBe("queued");
   return next;
 }
@@ -128,14 +164,18 @@ async function waitFor(
   timeoutMs: number,
   extraEnv: Record<string, string> = {},
 ) {
-  let next = await control(root, run, "start", extraEnv);
-  const deadline = Date.now() + timeoutMs;
-  while (["planned", "running"].includes(next.status) && Date.now() < deadline) {
-    await Bun.sleep(100);
-    next = await control(root, run, "status");
+  const started = await control(root, run, "start", extraEnv);
+  if (["planned", "running"].includes(started.status)) {
+    await observeUntil(
+      root,
+      run,
+      (next) => !["planned", "running"].includes(next.status),
+      timeoutMs,
+    );
   }
-  expect(["planned", "running"]).not.toContain(next.status);
-  return next;
+  const final = await control(root, run, "status");
+  expect(["planned", "running"]).not.toContain(final.status);
+  return final;
 }
 async function cooperativeFixture(
   commands: ReviewValidationPlan["commands"],

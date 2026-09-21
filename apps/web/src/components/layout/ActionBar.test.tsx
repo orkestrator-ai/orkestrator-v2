@@ -4073,31 +4073,31 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    render(<ActionBar presentation="grid" />);
+    jest.useFakeTimers();
+    try {
+      render(<ActionBar presentation="grid" />);
 
-    const reviewButton = screen.getByRole("button", { name: "Code review" });
-    fireEvent.pointerDown(reviewButton, {
-      pointerId: 1,
-      pointerType: "touch",
-      clientX: 24,
-      clientY: 24,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    await waitFor(
-      () => {
-        expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
-      },
-      { timeout: 10_000 },
-    );
+      const reviewButton = screen.getByRole("button", { name: "Code review" });
+      fireEvent.pointerDown(reviewButton, {
+        pointerId: 1,
+        pointerType: "touch",
+        clientX: 24,
+        clientY: 24,
+      });
+      await act(async () => jest.advanceTimersByTime(15));
+      expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
 
-    await new Promise((resolve) => setTimeout(resolve, 1_025));
-    fireEvent.click(reviewButton);
+      await act(async () => jest.advanceTimersByTime(CLICK_SUPPRESSION_MS));
+      fireEvent.click(reviewButton);
 
-    expect(createTabMock).toHaveBeenCalledTimes(1);
-    expect(createTabMock).toHaveBeenCalledWith(
-      "codex",
-      expect.objectContaining({ displayTitle: "Review", isReviewTab: true }),
-    );
+      expect(createTabMock).toHaveBeenCalledTimes(1);
+      expect(createTabMock).toHaveBeenCalledWith(
+        "codex",
+        expect.objectContaining({ displayTitle: "Review", isReviewTab: true }),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
   }, 20_000);
 
   test("clears active long-press click suppression when the action bar unmounts", async () => {

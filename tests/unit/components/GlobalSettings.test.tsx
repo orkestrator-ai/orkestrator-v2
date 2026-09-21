@@ -13,6 +13,7 @@ import {
 import { MAX_OPENCODE_MODEL_PROVIDERS } from "../../../packages/protocol/src/native-agent";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 import { BUNDLED_APP_VERSION } from "@/lib/app-version";
+import { installControlledTimeout } from "../../helpers/controlled-timeout";
 
 const mockUpdateGlobalConfig = mock(async (globalConfig: unknown) => ({
   version: "1.0",
@@ -148,9 +149,13 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+let autoSaveClock: ReturnType<typeof installControlledTimeout>;
+
 async function flushAutoSave() {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    await Promise.resolve();
+    autoSaveClock.advance();
+    await Promise.resolve();
   });
 }
 
@@ -169,6 +174,7 @@ describe("GlobalSettings", () => {
   };
 
   beforeEach(() => {
+    autoSaveClock = installControlledTimeout(400);
     cleanup();
     mockUpdateGlobalConfig.mockClear();
     mockSetGitHubToken.mockClear();
@@ -280,6 +286,7 @@ describe("GlobalSettings", () => {
 
   afterEach(() => {
     cleanup();
+    autoSaveClock.restore();
     window.orkestratorGateway = undefined;
   });
 
@@ -2375,9 +2382,23 @@ describe("GlobalSettings", () => {
     unmount();
 
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    await flushAutoSave();
+    expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1);
     expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).toMatchObject({
       envFilePatterns: [".env"],
     });
+  });
+
+  test("does not save a valid edit before its debounce callback runs", async () => {
+    render(<GlobalSettings activeSection="general" />);
+    fireEvent.change(screen.getByPlaceholderText(".env, .env.local"), {
+      target: { value: ".env" },
+    });
+
+    expect(autoSaveClock.pendingCount()).toBe(1);
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+    await flushAutoSave();
+    expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1);
   });
 
   test("writes once with the final value after a sustained edit burst", async () => {
@@ -2386,11 +2407,11 @@ describe("GlobalSettings", () => {
 
     fireEvent.change(env, { target: { value: ".env" } });
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await Promise.resolve();
     });
     fireEvent.change(env, { target: { value: ".env.local" } });
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await Promise.resolve();
     });
     fireEvent.change(env, { target: { value: ".env.local, .env.production" } });
     await flushAutoSave();
@@ -2447,10 +2468,13 @@ describe("GlobalSettings", () => {
     fireEvent.change(env, { target: { value: ".env.local" } });
     expect(env.value).toBe(".env.local");
 
-    firstSave.resolve({
-      version: "1.0",
-      global: { ...useConfigStore.getState().config.global, envFilePatterns: [".env"] },
-      repositories: {},
+    await act(async () => {
+      firstSave.resolve({
+        version: "1.0",
+        global: { ...useConfigStore.getState().config.global, envFilePatterns: [".env"] },
+        repositories: {},
+      });
+      await firstSave.promise;
     });
     await flushAutoSave();
 

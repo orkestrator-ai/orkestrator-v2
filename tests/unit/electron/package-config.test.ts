@@ -155,6 +155,14 @@ describe("Electron packaging configuration", () => {
       desktopMain.indexOf("await createWindow();"),
     );
     expect(desktopMain).toContain("registerBrowserPreviewWindowActivation");
+    expect(desktopMain.indexOf("registerBrowserPreviewWindowActivation({")).toBeGreaterThan(
+      desktopMain.indexOf("if (isPrimaryInstance)"),
+    );
+    expect(desktopMain.indexOf("registerBrowserPreviewWindowActivation({")).toBeLessThan(
+      desktopMain.indexOf(".then(startApplication)"),
+    );
+    expect(desktopMain).toContain("quitReopen.deferReopenWhileQuitting() || !startupComplete");
+    expect(desktopMain).toContain("relaunch: () => quitReopen.scheduleRelaunch()");
     expect(desktopMain).toContain("createSerializedMacOsPermissionProbe");
     expect(desktopMain).toContain("shouldProbeMacOsPermissionsBeforeBackend");
     expect(desktopMain).toContain("createMacOsPermissionSplashWindow");

@@ -19,6 +19,36 @@ Search for `[bridge-diagnostics]`. The JSON `bridge` field identifies `claude`,
 log sink and its rotation and retention. Docker output goes to the existing
 `/tmp/<provider>-bridge.log` files (`/tmp/grok-acp-bridge.log` for Grok).
 
+## Desktop startup failures
+
+The application log also records `[DesktopStartup]` events. `checking` followed
+by `ready` means the renderer reached the desktop IPC bridge and, for Local,
+completed a backend configuration read before mounting the workspace. A late
+preload or rejected read is retried serially within a ten-second deadline; a
+hung request is not duplicated. Failure shows a reload screen before any Docker
+checks or project loading, so an unavailable desktop connection cannot appear
+as a Docker outage or an empty project list.
+
+- `bridge-unavailable`: the preload API or connection-list IPC did not answer.
+- `backend-unavailable`: IPC answered, but Local was unavailable or its backend
+  read did not complete successfully.
+- `preload-failed`: Electron rejected the preload; `reason` classifies missing
+  modules, permissions, module format, syntax, or an unknown failure.
+- `page-load-failed`: Chromium failed the main document load; `code` is its
+  numeric network error code.
+- `renderer-load-failed`, `renderer-error`, `unhandled-rejection`, and
+  `renderer-gone`: application loading or renderer execution failed.
+
+Remote windows still allow their connection settings to open if the remote
+host is offline. Reloading the recovery screen reloads only that window; it
+neither restarts the backend nor cancels background environments.
+
+Only exact, allowlisted console markers and bounded lifecycle metadata enter
+the desktop log. Raw renderer console output, error messages, stacks, URLs,
+paths and backend responses are not forwarded. Duplicate events are suppressed
+per main-frame navigation, with a maximum of 32 records per navigation. Existing
+Save Logs for Debugging and retention settings apply.
+
 ## Shared implementation
 
 `packages/protocol/src/bridge-diagnostics.ts` owns flag interpretation, periodic

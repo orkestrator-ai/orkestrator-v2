@@ -510,7 +510,13 @@ function normalizeInteractionKinds(value: unknown): AgentInteractionKind[] | und
   return [...new Set(kinds)];
 }
 
-function isNormalizedProgressiveMessage(value: unknown): boolean {
+function isNormalizedProgressiveMessage(value: unknown): value is {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  parts: unknown[];
+  createdAt: string;
+} {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const message = value as Record<string, unknown>;
   const role = message.role;
@@ -1578,7 +1584,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     initialPromptPresentation: PersistedNativeAgentSession["initialPromptPresentation"],
   ): void {
     if (snapshot.complete !== false) return;
-    if (this.progressivePreviewFillsWindow(snapshot, input.liveWindow)) return;
+    if (!snapshot.omittedParts && this.progressivePreviewFillsWindow(snapshot, input.liveWindow))
+      return;
     const sourceToken = progressiveHydrationToken(snapshot);
     const existing = this.progressiveHydrations.get(key);
     if (existing && existing.sourceToken === sourceToken) return;
@@ -1642,7 +1649,26 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       return snapshot;
     }
     const normalized = normalizedProgressiveMessages(fuller);
-    if (!normalized || normalized.length <= snapshot.messages.length) return snapshot;
+    if (!normalized) return snapshot;
+    // A single long Codex turn can lose tool/commentary parts without losing a
+    // message. Message count alone rejects that exact recovery indefinitely.
+    const previewHead = snapshot.messages[0];
+    const recoveredHead = normalized.find(
+      (message) =>
+        isNormalizedProgressiveMessage(previewHead) &&
+        isNormalizedProgressiveMessage(message) &&
+        message.id === previewHead.id,
+    );
+    const recoveredParts =
+      snapshot.omittedParts &&
+      isNormalizedProgressiveMessage(previewHead) &&
+      isNormalizedProgressiveMessage(recoveredHead) &&
+      recoveredHead.parts.length > previewHead.parts.length;
+    if (
+      normalized.length < snapshot.messages.length ||
+      (normalized.length === snapshot.messages.length && !recoveredParts)
+    )
+      return snapshot;
     const historyStartIndex =
       snapshot.historyStartIndex === undefined
         ? undefined
@@ -1650,6 +1676,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     return {
       ...snapshot,
       messages: normalized,
+      omittedParts: undefined,
       ...(historyStartIndex === undefined ? {} : { historyStartIndex }),
       complete: normalized.length < liveWindow.messages,
       freshness: "current",
@@ -1668,6 +1695,43 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ??
       `in-process:${input.agent}`;
     const identity = this.progressiveIdentity(input, providerSessionId, sourceGeneration);
+    const previewHead = snapshot.messages[0];
+    const displayedHead = previous?.value.messages.find(
+      (message) =>
+        isNormalizedProgressiveMessage(previewHead) &&
+        isNormalizedProgressiveMessage(message) &&
+        message.id === previewHead.id,
+    );
+    /*
+     * A byte-trimmed message is not a replacement for the full turn already on
+     * screen. Keep the bounded display snapshot until the background exact read
+     * above recovers its parts. Merging by array index would misidentify tool
+     * details (and progress rows need not project one-to-one), so install that
+     * recovery atomically instead. Epoch/session/generation changes and complete
+     * snapshots remain authoritative replacements, including real deletions.
+     */
+    if (
+      snapshot.complete === false &&
+      (snapshot.omittedParts ?? 0) > 0 &&
+      snapshot.historyEpoch !== undefined &&
+      previous?.value.historyEpoch === snapshot.historyEpoch &&
+      previous.value.identity.providerSessionId === providerSessionId &&
+      previous.value.identity.sourceGeneration === identity.sourceGeneration &&
+      isNormalizedProgressiveMessage(previewHead) &&
+      isNormalizedProgressiveMessage(displayedHead) &&
+      ((previous.value.historyComplete && !previous.value.messageWindow?.omittedParts) ||
+        displayedHead.parts.length > previewHead.parts.length)
+    ) {
+      return {
+        value: previous.value,
+        ...(previous.historyStartIndex === undefined
+          ? {}
+          : { historyStartIndex: previous.historyStartIndex }),
+        ...(previous.historyEndIndex === undefined
+          ? {}
+          : { historyEndIndex: previous.historyEndIndex }),
+      };
+    }
     const normalized = this.projectionMessages(
       nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
       snapshot.messages,

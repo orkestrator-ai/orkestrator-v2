@@ -28,6 +28,140 @@ function progressiveMessages(count: number, prefix = "m") {
 }
 
 describe("native agent progressive remainder", () => {
+  test.each([false, true])(
+    "keeps long-turn activity visible while recovering a part-trimmed preview (prompt: %s)",
+    async (withPrompt) => {
+      let revision = 1;
+      let contentEpoch = 1;
+      let large = false;
+      let release: (() => void) | undefined;
+      const transcript = () => [
+        ...(withPrompt ? [{ ...progressiveMessage("prompt"), role: "user" }] : []),
+        {
+          ...progressiveMessage("response", `Update ${revision}`),
+          parts: [
+            ...Array.from({ length: revision >= 3 ? 4 : 3 }, (_, index) => ({
+              type: "tool-invocation",
+              toolUseId: `call-${index}`,
+              toolName: "exec_command",
+              content: `Command ${index}`,
+              toolOutput: large ? "x".repeat((revision >= 3 ? 160 : 250) * 1024) : "done",
+              toolState: "success",
+            })),
+            { type: "text", content: `Update ${revision}` },
+          ],
+        },
+      ];
+      const messages = mock(async () => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return transcript();
+      });
+      const stub = createProviderStub("codex", {
+        messages,
+        transcriptSnapshot: async () => {
+          const update = bridgeTranscriptUpdate(transcript(), {
+            sessionIdentity: "session-1",
+            generation: 1,
+            contentEpoch,
+            revision,
+            limit: liveWindow.messages,
+            targetBytes: liveWindow.targetBytes,
+            complete: true,
+          });
+          if (update.status !== "snapshot") throw new Error("expected snapshot");
+          return {
+            ...update.value,
+            omittedParts: update.value.messageWindow.omittedParts,
+            historyStartIndex: update.value.startIndex,
+            sourceToken: update.token,
+            historyEpoch: `1:${contentEpoch}`,
+          };
+        },
+      });
+      await withService(
+        { prefix: "orkestrator-progressive-part-flicker-", provider: async () => stub.provider },
+        async ({ service }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent: "codex" as const,
+            logicalSessionKey: "env-env-1:part-flicker",
+          };
+          await service.ensureSession(identity);
+          const read = () =>
+            service.getTranscriptUpdate({
+              ...identity,
+              viewVersion: 1,
+              liveWindow,
+              forceSnapshot: true,
+            });
+          const initial = await read();
+          if (initial.status !== "snapshot") throw new Error("expected snapshot");
+          try {
+            large = true;
+            for (revision = 2; revision <= 3; revision += 1) {
+              const pending = await read();
+              if (pending.status !== "snapshot") throw new Error("expected snapshot");
+              expect(pending.value.messages).toEqual(initial.value.messages);
+              await waitForCondition(() => release !== undefined);
+              const finish = release!;
+              release = undefined;
+              finish();
+              await waitForCondition(async () => {
+                const next = await read();
+                return (
+                  next.status === "snapshot" &&
+                  (next.value.messages.at(-1) as { content: string }).content ===
+                    `Update ${revision}`
+                );
+              });
+              const hydrated = await read();
+              if (hydrated.status !== "snapshot") throw new Error("expected snapshot");
+              expect(hydrated.value.messages).toHaveLength(withPrompt ? 2 : 1);
+              expect(hydrated.value.messages.at(-1)).toMatchObject({
+                parts: [
+                  ...Array.from({ length: revision >= 3 ? 4 : 3 }, (_, index) => ({
+                    type: "tool-invocation",
+                    content: `Command ${index}`,
+                  })),
+                  { type: "text", content: `Update ${revision}` },
+                ],
+              });
+              expect(JSON.stringify(hydrated.value).length).toBeLessThan(liveWindow.targetBytes);
+              initial.value = hydrated.value;
+            }
+            // A rewrite must not preserve activity from the old history.
+            contentEpoch += 1;
+            const rewritten = await read();
+            if (rewritten.status !== "snapshot") throw new Error("expected snapshot");
+            expect(
+              (rewritten.value.messages.at(-1) as { parts: unknown[] }).parts.length,
+            ).toBeLessThan(5);
+            await waitForCondition(() => release !== undefined);
+            release!();
+            release = undefined;
+            await waitForCondition(async () => {
+              const recovered = await read();
+              return (
+                recovered.status === "snapshot" &&
+                (recovered.value.messages.at(-1) as { parts: unknown[] }).parts.length === 5
+              );
+            });
+            // Complete snapshots still replace an earlier, longer reply.
+            large = false;
+            revision = 1;
+            const complete = await read();
+            if (complete.status !== "snapshot") throw new Error("expected snapshot");
+            expect(complete.value.messages.at(-1)).toMatchObject({ content: "Update 1" });
+          } finally {
+            release?.();
+          }
+        },
+      );
+    },
+  );
+
   test.each([
     { name: "disjoint preview", epoch: "epoch-1", ids: ["other"], expected: ["other"] },
     { name: "reordered overlap", epoch: "epoch-1", ids: ["m1", "m0"], expected: ["m1", "m0"] },

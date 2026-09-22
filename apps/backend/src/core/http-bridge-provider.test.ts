@@ -1991,6 +1991,7 @@ describe("HTTP bridge progressive transcript", () => {
           value: {
             messages: [{ id: "m1", content: "hello", parts: [] }],
             startIndex: 3,
+            messageWindow: { truncated: true, omittedParts: 7 },
             complete: true,
             generation: 4,
             contentEpoch: 2,
@@ -2006,6 +2007,7 @@ describe("HTTP bridge progressive transcript", () => {
     if ("unchanged" in snapshot) throw new Error("expected a snapshot");
     expect(snapshot.historyEpoch).toBe("4:2");
     expect(snapshot.historyStartIndex).toBe(3);
+    expect(snapshot.omittedParts).toBe(7);
     expect(snapshot.sourceToken).toBe("bt1.def");
     expect(snapshot.title).toBe("Titled");
     expect(snapshot.revision).toBe(9);

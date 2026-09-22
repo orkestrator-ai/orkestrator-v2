@@ -51,7 +51,7 @@ import {
 } from "./browser-preview-startup.js";
 import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapters.js";
 import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
-import { registerWindowAllClosedQuit } from "./quit-policy.js";
+import { registerQuitReopenRelaunch, registerWindowAllClosedQuit } from "./quit-policy.js";
 import { createApplicationMenuTemplate } from "./application-menu.js";
 import {
   applyWindowTitle,
@@ -126,6 +126,10 @@ const windowAllClosedQuit = registerWindowAllClosedQuit({
   app,
   platform: process.platform,
   alwaysQuit: runtimeFlavor === "agent-test",
+});
+const quitReopen = registerQuitReopenRelaunch({
+  app,
+  allowRelaunch: runtimeFlavor !== "agent-test",
 });
 const toolchainProgress = createToolchainProgressController({
   createWindow: () =>
@@ -237,6 +241,7 @@ function createMenu(): void {
 
 async function createWindow(connectionId?: string): Promise<void> {
   if (!connectionManager) throw new Error("Connections are not initialized");
+  if (quitReopen.isQuitting()) throw new Error(`${productName} is quitting`);
   const currentContext = focusedContext();
   const inheritedConnectionId =
     connectionId ??
@@ -251,6 +256,12 @@ async function createWindow(connectionId?: string): Promise<void> {
   } catch (error) {
     windowSlots.release(slot);
     throw error;
+  }
+  // A quit may have stopped the Local backend while the binding was pending.
+  if (quitReopen.isQuitting()) {
+    connectionManager.release(scope);
+    windowSlots.release(slot);
+    throw new Error(`${productName} is quitting`);
   }
   const activeConnection = connectionList.connections.find((connection) => connection.active);
   const activeConnectionId = activeConnection?.id ?? LOCAL_CONNECTION_ID;
@@ -554,17 +565,24 @@ async function startApplication(): Promise<void> {
   registerBrowserPreviewWindowActivation({
     onActivate: (listener) => app.on("activate", listener),
     getWindowCount: () => BrowserWindow.getAllWindows().length,
-    createWindow,
+    createWindow: async () => {
+      if (!quitReopen.deferReopenWhileQuitting()) await createWindow();
+    },
     onCreateError: (error) => console.error("[Desktop] Failed to recreate the main window:", error),
   });
 }
 
 if (isPrimaryInstance) {
+  // Registered first: a launch during quit relaunches instead of reaching
+  // windows that are closing or bound to the stopped Local backend.
+  app.on("second-instance", () => {
+    quitReopen.deferReopenWhileQuitting();
+  });
   registerSecondInstanceFocus(
     app,
-    () => focusedContext()?.window ?? null,
+    () => (quitReopen.isQuitting() ? null : (focusedContext()?.window ?? null)),
     () => {
-      if (!windowRequestGate.request()) return;
+      if (quitReopen.isQuitting() || !windowRequestGate.request()) return;
       void createWindow().catch((error) =>
         console.error("[Desktop] Failed to create a window for a second launch:", error),
       );
@@ -575,6 +593,8 @@ if (isPrimaryInstance) {
     .whenReady()
     .then(startApplication)
     .catch((error: unknown) => {
+      // Quitting mid-startup stops the backend under it; that is not a failure.
+      if (quitReopen.isQuitting()) return;
       console.error("[Desktop] Startup failed:", error);
       dialog.showErrorBox(
         `${productName} failed to start`,

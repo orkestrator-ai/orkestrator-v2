@@ -37,3 +37,41 @@ export function registerWindowAllClosedQuit(options: {
     },
   };
 }
+
+/**
+ * Turns a request to open the app while it is quitting into a relaunch.
+ *
+ * `before-quit` stops the Local backend, but the process lingers while the
+ * log flush holds `will-quit` open. macOS "Quit & Reopen" (after a privacy
+ * grant such as Full Disk Access) asks LaunchServices to open the app during
+ * that window; LaunchServices finds the dying process and sends it a reopen
+ * instead of starting a new one. Answering with a window leaves a renderer
+ * bound to a stopped backend, and no fresh process is started to replace it.
+ * Relaunching after exit gives the user the new instance they asked for.
+ */
+export function registerQuitReopenRelaunch(options: {
+  app: Pick<Electron.App, "on" | "relaunch" | "quit">;
+  /** Agent-test launchers supervise one process; never spawn a replacement. */
+  allowRelaunch: boolean;
+}): { isQuitting(): boolean; deferReopenWhileQuitting(): boolean } {
+  let quitting = false;
+  let relaunchScheduled = false;
+  options.app.on("before-quit", () => {
+    quitting = true;
+  });
+  return {
+    isQuitting: () => quitting,
+    deferReopenWhileQuitting(): boolean {
+      if (!quitting) return false;
+      if (options.allowRelaunch && !relaunchScheduled) {
+        relaunchScheduled = true;
+        // Each call starts one more instance after exit, so schedule it once.
+        options.app.relaunch();
+      }
+      // The relaunch waits for exit. Re-request the quit so a shutdown that is
+      // still held open (or was interrupted) finishes instead of lingering.
+      options.app.quit();
+      return true;
+    },
+  };
+}

@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { registerWindowAllClosedQuit } from "../../../apps/desktop/electron/quit-policy";
+import {
+  registerQuitReopenRelaunch,
+  registerWindowAllClosedQuit,
+} from "../../../apps/desktop/electron/quit-policy";
 
 type Listener = () => void;
 
@@ -80,5 +83,60 @@ describe("window-all-closed quit policy", () => {
     harness.markMainWindowCreated();
     harness.closeLastWindow();
     expect(harness.quitCalls).toBe(1);
+  });
+});
+
+function registerReopen(allowRelaunch = true) {
+  const listeners = new Map<string, Listener[]>();
+  const calls = { relaunch: 0, quit: 0 };
+  const app = {
+    on: (event: string, listener: Listener) => {
+      listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+    },
+    relaunch: () => {
+      calls.relaunch += 1;
+    },
+    quit: () => {
+      calls.quit += 1;
+    },
+  } as unknown as Electron.App;
+  const guard = registerQuitReopenRelaunch({ app, allowRelaunch });
+  return {
+    ...guard,
+    calls,
+    beginQuit() {
+      for (const listener of listeners.get("before-quit") ?? []) listener();
+    },
+  };
+}
+
+describe("reopen during quit", () => {
+  test("leaves ordinary reopens to window creation", () => {
+    const harness = registerReopen();
+    expect(harness.isQuitting()).toBe(false);
+    expect(harness.deferReopenWhileQuitting()).toBe(false);
+    expect(harness.calls).toEqual({ relaunch: 0, quit: 0 });
+  });
+
+  test("relaunches once instead of opening a window on the stopped backend", () => {
+    // macOS "Quit & Reopen" after a Full Disk Access grant reopens the app
+    // while the log flush still holds the quit open. A window created then
+    // could never reach the Local backend that before-quit had stopped.
+    const harness = registerReopen();
+    harness.beginQuit();
+
+    expect(harness.isQuitting()).toBe(true);
+    expect(harness.deferReopenWhileQuitting()).toBe(true);
+    expect(harness.deferReopenWhileQuitting()).toBe(true);
+    expect(harness.calls.relaunch).toBe(1);
+    expect(harness.calls.quit).toBe(2);
+  });
+
+  test("never spawns a replacement for a supervised agent-test process", () => {
+    const harness = registerReopen(false);
+    harness.beginQuit();
+
+    expect(harness.deferReopenWhileQuitting()).toBe(true);
+    expect(harness.calls).toEqual({ relaunch: 0, quit: 1 });
   });
 });

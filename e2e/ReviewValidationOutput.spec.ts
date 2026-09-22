@@ -107,11 +107,18 @@ test("terminal output title and long command stay inside the dialog and are cent
 test("validation run and queue times share columns across mixed rows", async ({ page }) => {
   await page.goto("/review-validation-output");
 
-  const list = page.getByRole("list", { name: "Validation commands" });
+  const list = page.getByRole("table", { name: "Validation commands" });
   await expect(list).toBeVisible();
+  await expect(list.getByRole("columnheader")).toHaveText([
+    "Command",
+    "Status",
+    "Duration",
+    "Queued",
+    "Output",
+  ]);
 
   const alignment = await list.evaluate((element) => {
-    const rows = Array.from(element.querySelectorAll("button"));
+    const rows = Array.from(element.querySelectorAll("tbody tr"));
     const elapsed = rows.map((row) => row.querySelector("[data-slot='validation-elapsed']"));
     const queued = rows.map((row) => row.querySelector("[data-slot='validation-queued']"));
     if (
@@ -128,6 +135,10 @@ test("validation run and queue times share columns across mixed rows", async ({ 
 
     return {
       rowCount: rows.length,
+      rowBorders: rows.slice(0, -1).map((row) => getComputedStyle(row).borderBottomWidth),
+      columnBorders: Array.from(rows[0]!.querySelectorAll("td"))
+        .slice(0, -1)
+        .map((cell) => getComputedStyle(cell).borderRightWidth),
       elapsedLefts: lefts(elapsed as HTMLElement[]),
       elapsedRights: rights(elapsed as HTMLElement[]),
       queuedLefts: lefts(queued as HTMLElement[]),
@@ -138,6 +149,8 @@ test("validation run and queue times share columns across mixed rows", async ({ 
   });
 
   expect(alignment.rowCount).toBeGreaterThan(1);
+  expect(alignment.rowBorders.every((width) => parseFloat(width) > 0)).toBe(true);
+  expect(alignment.columnBorders.every((width) => parseFloat(width) > 0)).toBe(true);
   expect(alignment.elapsedValues).toContain("46.2s");
   expect(alignment.elapsedValues).toContain("2.3s");
   expect(alignment.queuedValues).toContain("2.0s");
@@ -151,7 +164,9 @@ test("validation run and queue times share columns across mixed rows", async ({ 
 test("limited rows keep their column alignment and visible separation", async ({ page }) => {
   await page.goto("/review-validation-output");
 
-  const row = page.getByRole("button", { name: "View terminal output for mise run buildworld" });
+  const row = page.getByRole("row").filter({
+    has: page.getByRole("button", { name: "View terminal output for mise run buildworld" }),
+  });
   const limitation = row.locator("[data-slot='validation-limitation']");
   await expect(limitation).toContainText("Build runner was unavailable.");
 
@@ -162,17 +177,11 @@ test("limited rows keep their column alignment and visible separation", async ({
       throw new Error("Missing limited validation row content");
     }
 
-    const commandRowElements = Array.from(element.children).filter(
-      (child) => child !== limitationElement,
-    );
-    const commandRowBottom = Math.max(
-      ...commandRowElements.map((child) => child.getBoundingClientRect().bottom),
-    );
     const commandRect = command.getBoundingClientRect();
     const limitationRect = limitationElement.getBoundingClientRect();
     return {
       leftOffset: Math.abs(limitationRect.left - commandRect.left),
-      verticalGap: limitationRect.top - commandRowBottom,
+      verticalGap: limitationRect.top - commandRect.bottom,
     };
   });
 
@@ -180,15 +189,17 @@ test("limited rows keep their column alignment and visible separation", async ({
   expect(layout.verticalGap).toBeGreaterThanOrEqual(3);
 });
 
-test("the widest queued status and long commands fit the mobile validation grid", async ({
+test("the mobile validation table scrolls within its container and keeps commands readable", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
   await page.goto("/review-validation-output");
 
-  const list = page.getByRole("list", { name: "Validation commands" });
-  const queuedRow = page.getByRole("button", {
-    name: "View terminal output for mise run typecheck",
+  const list = page.getByRole("table", { name: "Validation commands" });
+  const queuedRow = page.getByRole("row").filter({
+    has: page.getByRole("button", {
+      name: "View terminal output for mise run typecheck",
+    }),
   });
   await expect(queuedRow.locator("[data-slot='validation-status']")).toHaveText(
     "waiting for capacity",
@@ -196,26 +207,34 @@ test("the widest queued status and long commands fit the mobile validation grid"
 
   const containment = await list.evaluate((element) => {
     const listRect = element.getBoundingClientRect();
-    const rows = Array.from(element.querySelectorAll("button"));
+    const rows = Array.from(element.querySelectorAll("tbody tr"));
     const commands = rows.map((row) => row.querySelector("code"));
     if (commands.some((command) => !(command instanceof HTMLElement))) {
       throw new Error("Missing validation command cells");
     }
 
     return {
-      listInsideViewport: listRect.left >= 0 && listRect.right <= window.innerWidth,
+      containerInsideViewport:
+        element.parentElement!.getBoundingClientRect().left >= 0 &&
+        element.parentElement!.getBoundingClientRect().right <= window.innerWidth,
+      scrollable:
+        getComputedStyle(element.parentElement!).overflowX === "auto" &&
+        element.parentElement!.scrollWidth > element.parentElement!.clientWidth,
       rowsInsideList: rows.every((row) => {
         const rect = row.getBoundingClientRect();
         return rect.left >= listRect.left && rect.right <= listRect.right;
       }),
-      commandWidths: commands.map((command) => command?.getBoundingClientRect().width ?? 0),
+      commandWidths: commands.map(
+        (command) => command?.parentElement?.getBoundingClientRect().width ?? 0,
+      ),
       overflowWidths: [element, ...rows].map((target) => target.scrollWidth - target.clientWidth),
     };
   });
 
-  expect(containment.listInsideViewport).toBe(true);
+  expect(containment.containerInsideViewport).toBe(true);
+  expect(containment.scrollable).toBe(true);
   expect(containment.rowsInsideList).toBe(true);
-  expect(Math.min(...containment.commandWidths)).toBeGreaterThan(0);
+  expect(Math.min(...containment.commandWidths)).toBeGreaterThan(100);
   expect(Math.max(...containment.overflowWidths)).toBeLessThanOrEqual(1);
 });
 
@@ -223,7 +242,9 @@ test("queue diagnostics rehydrate after an inactive view and clear on completion
   page,
 }) => {
   await page.goto("/review-validation-output");
-  const row = page.getByRole("button", { name: "View terminal output for mise run typecheck" });
+  const row = page.getByRole("row").filter({
+    has: page.getByRole("button", { name: "View terminal output for mise run typecheck" }),
+  });
   await expect(row.locator("[data-slot='validation-queue-reason']")).toContainText("2/8 slots");
   await page.getByRole("button", { name: "Hide validation", exact: true }).click();
   await expect(row).toHaveCount(0);

@@ -6003,6 +6003,58 @@ describe("ActionBar run commands", () => {
     );
   });
 
+  test("re-scans run commands when the environment's agent finishes working", async () => {
+    currentWorkspaceReady = true;
+    currentEnvironment = { ...selectedEnvironment, agentActivityState: "idle" };
+    readContainerFileMock.mockResolvedValue({ content: "{}" });
+    const { rerender } = render(<ActionBar />);
+
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
+    const runButton = screen.getByRole("button", { name: "Run commands" });
+    expect(runButton.getAttribute("aria-disabled")).toBe("true");
+
+    // The run-script agent starts; nothing is re-read while it works.
+    currentEnvironment = { ...currentEnvironment, agentActivityState: "working" };
+    rerender(<ActionBar />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(readContainerFileMock).toHaveBeenCalledTimes(1);
+
+    // The agent writes orkestrator-ai.json and goes idle.
+    readContainerFileMock.mockResolvedValue({ content: '{"run":["bun run dev"]}' });
+    currentEnvironment = { ...currentEnvironment, agentActivityState: "idle" };
+    rerender(<ActionBar />);
+
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(2));
+    expect(readContainerFileMock).toHaveBeenLastCalledWith("container-1", "orkestrator-ai.json");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+      ).toBe("false"),
+    );
+  });
+
+  test("re-scans run commands once per finished working period", async () => {
+    currentWorkspaceReady = true;
+    currentEnvironment = { ...selectedEnvironment, agentActivityState: "working" };
+    readContainerFileMock.mockResolvedValue({ content: "{}" });
+    const { rerender } = render(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
+
+    // Leaving "working" re-reads once; later non-working changes do not.
+    currentEnvironment = { ...currentEnvironment, agentActivityState: "waiting" };
+    rerender(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(2));
+
+    currentEnvironment = { ...currentEnvironment, agentActivityState: "idle" };
+    rerender(<ActionBar />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(readContainerFileMock).toHaveBeenCalledTimes(2);
+  });
+
   test("loads local run commands from the worktree", async () => {
     currentEnvironment = {
       ...selectedEnvironment,

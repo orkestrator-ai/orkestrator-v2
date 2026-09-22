@@ -20,7 +20,7 @@ import {
 } from "@/stores";
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalContext, MAX_TABS, type AgentLaunchModeOverride } from "@/contexts";
-import type { DefaultAgent } from "@/types";
+import type { DefaultAgent, Environment } from "@/types";
 import type {
   ActionDefaultKey,
   ResolvedActionDefault,
@@ -159,6 +159,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const [editorError, setEditorError] = useState<string | null>(null);
   const [runCommands, setRunCommands] = useState<string[] | null>(null);
   const [isLoadingRunCommands, setIsLoadingRunCommands] = useState(false);
+  /** Bumped to re-read orkestrator-ai.json without changing the environment. */
+  const [runCommandsRescanToken, setRunCommandsRescanToken] = useState(0);
+  /** Source of the last run-command load; a repeat read of it refreshes quietly. */
+  const runCommandsSourceRef = useRef<string | null>(null);
+  const agentActivityObservationRef = useRef<{
+    environmentId: string | null;
+    state: Environment["agentActivityState"];
+  }>({ environmentId: null, state: undefined });
   const [cleanupDialogOpen, setCleanupDialogOpen] = useState(false);
   const [cleanupTarget, setCleanupTarget] = useState<{
     environmentId: string;
@@ -1128,12 +1136,18 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     const hasWorktree = isLocalEnvironment && !!worktreePath;
 
     if ((!hasContainer && !hasWorktree) || !isRunning || !workspaceReady) {
+      runCommandsSourceRef.current = null;
       setRunCommands(null);
       return;
     }
 
     let cancelled = false;
-    setIsLoadingRunCommands(true);
+    // Re-reading the same source (after an agent finishes) keeps the current
+    // commands usable instead of flashing the run button disabled.
+    const source = hasContainer ? `container:${containerId}` : `local:${worktreePath}`;
+    const isRescan = runCommandsSourceRef.current === source;
+    runCommandsSourceRef.current = source;
+    if (!isRescan) setIsLoadingRunCommands(true);
 
     const readConfigPromise =
       isLocalEnvironment && worktreePath
@@ -1188,7 +1202,27 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     isLocalEnvironment,
     isRunning,
     workspaceReady,
+    runCommandsRescanToken,
   ]);
+
+  // Re-scan orkestrator-ai.json whenever the selected environment's agents stop
+  // working, so a run script written by an agent (e.g. the "Create run script"
+  // session) enables the run button without reselecting the environment.
+  const selectedAgentActivityState = selectedEnvironment?.agentActivityState;
+  useEffect(() => {
+    const previous = agentActivityObservationRef.current;
+    agentActivityObservationRef.current = {
+      environmentId: selectedEnvironmentId,
+      state: selectedAgentActivityState,
+    };
+    if (
+      previous.environmentId === selectedEnvironmentId &&
+      previous.state === "working" &&
+      selectedAgentActivityState !== "working"
+    ) {
+      setRunCommandsRescanToken((token) => token + 1);
+    }
+  }, [selectedAgentActivityState, selectedEnvironmentId]);
 
   // Handler for run commands
   const handleRun = useCallback(async () => {

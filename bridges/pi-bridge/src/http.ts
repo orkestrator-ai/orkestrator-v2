@@ -10,6 +10,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
   authenticate,
   COMPOSER_HYDRATION_WAIT_MS,
@@ -671,7 +672,11 @@ async function handleSteer(
   const body = await readJson(request);
   const text = readBoundedString(body.input, 64 * 1024, "input");
   const attachments = parsePromptAttachments(body.attachments);
-  const images = await readPromptImages(attachments, workingDirectory);
+  const images = await readPromptImages(
+    attachments,
+    workingDirectory,
+    state.session?.model?.inputLimits?.images?.resize,
+  );
   const requestId = readBoundedString(body.requestId, 512, "requestId");
   const expectedRunId = readBoundedString(body.expectedRunId, 512, "expectedRunId");
   if (!text) throw new HttpError(400, "input is required");
@@ -726,10 +731,12 @@ async function handleSteer(
     });
   }
 
-  // Register correlation before entering Pi. `steer()` queues synchronously
-  // inside an async method, so its delivery event may win the microtask race
-  // with this continuation.
-  state.pendingSteerDeliveries.push({ requestId, text });
+  // Register correlation before entering Pi: its delivery event may win the
+  // microtask race with this continuation. `steer()` is not a synchronous
+  // enqueue, though — since 0.87 it awaits the extensions' `input` handlers
+  // first, so the run can settle (and `settleTurn` clear Pi's queue) before
+  // the instruction is queued at all. That window is closed after the await.
+  state.pendingSteerDeliveries.push({ requestId, text, expectedRunId });
   try {
     await session.steer(
       text,
@@ -744,6 +751,20 @@ async function handleSteer(
     await persistBarrier();
     return json(response, 503, { outcome: "unknown", requestId });
   }
+  if (
+    state.steerJournal.get(requestId)?.state !== "delivered" &&
+    !steerStillPendingOnRun(state, session, requestId, expectedRunId)
+  ) {
+    // The run this steer was pinned to settled while Pi ran its input
+    // handlers, so the instruction reached Pi's queue after `settleTurn`
+    // cleared it. Left there, the next ordinary prompt would consume it.
+    const outcome = withdrawLateSteer(state, session, requestId);
+    setSteerJournal(state, { ...prepared, state: outcome });
+    await persistBarrier();
+    return outcome === "dropped"
+      ? json(response, 409, { outcome: "idle" })
+      : json(response, 503, { outcome: "unknown", requestId });
+  }
   if (state.steerJournal.get(requestId)?.state !== "delivered") {
     setSteerJournal(state, { ...prepared, state: "queued" });
   }
@@ -757,6 +778,51 @@ async function handleSteer(
       ? { outcome: "applied", requestId }
       : { outcome: "unknown", requestId },
   );
+}
+
+/** True while the steer is still waiting on the live run it was pinned to. */
+function steerStillPendingOnRun(
+  state: SessionState,
+  session: AgentSession,
+  requestId: string,
+  expectedRunId: string,
+): boolean {
+  return (
+    state.session === session &&
+    state.status === "running" &&
+    !state.dispatching &&
+    piRunId(state) === expectedRunId &&
+    state.pendingSteerDeliveries.some((candidate) => candidate.requestId === requestId)
+  );
+}
+
+/**
+ * Take a steer that outlived its run back out of Pi's queue.
+ *
+ * Pi has no selective removal, so `clearQueue()` is only safe when nothing
+ * else legitimate is queued: either no turn is live (anything left is stale,
+ * exactly as at `settleTurn`), or this steer is the only queued message. A
+ * replacement turn with its own queue is left alone and the steer reported
+ * ambiguous — clearing would silently discard that turn's instructions.
+ */
+function withdrawLateSteer(
+  state: SessionState,
+  session: AgentSession,
+  requestId: string,
+): "dropped" | "ambiguous" {
+  const pendingIndex = state.pendingSteerDeliveries.findIndex(
+    (candidate) => candidate.requestId === requestId,
+  );
+  if (pendingIndex >= 0) state.pendingSteerDeliveries.splice(pendingIndex, 1);
+  const liveTurn = state.session === session && (state.status === "running" || state.dispatching);
+  if (liveTurn && session.pendingMessageCount > 1) return "ambiguous";
+  try {
+    session.clearQueue();
+  } catch {
+    return "ambiguous";
+  }
+  if (!liveTurn && state.session === session) state.queue.steering = [];
+  return "dropped";
 }
 
 async function handleFork(
@@ -835,6 +901,9 @@ async function handlePrompt(
     }
     if (journaled.state === "prepared")
       throw new HttpError(409, "Prompt dispatch is still preparing");
+    if (journaled.state === "dropped") {
+      throw new HttpError(409, "The queued follow-up outlived its target turn and was dropped");
+    }
     return json(response, 202, { accepted: true, duplicate: true });
   }
   const idleSteer = idleSteerPromptReply(prompt, "Pi");
@@ -860,15 +929,32 @@ async function handlePrompt(
   // queue with the live run, and its state events rehydrate `/queue` even when
   // the renderer that submitted it is no longer mounted.
   if (state.status === "running" && !state.dispatching && !state.compacting && state.session) {
-    const images = await readPromptImages(attachments, workingDirectory);
+    const session = state.session;
+    const expectedRunId = piRunId(state);
+    const images = await readPromptImages(
+      attachments,
+      workingDirectory,
+      session.model?.inputLimits?.images?.resize,
+    );
     const files = await resolvePromptFiles(attachments, workingDirectory);
     const text = prompt + promptFileReferences(files);
     if (requestId) {
       setPromptJournal(state, { requestId, state: "prepared", acceptedAt: Date.now() });
       await persistBarrier();
     }
+    if (
+      state.session !== session ||
+      state.status !== "running" ||
+      state.dispatching ||
+      state.compacting ||
+      piRunId(state) !== expectedRunId
+    ) {
+      if (requestId) state.promptJournal.delete(requestId);
+      await persistBarrier();
+      return json(response, 409, { accepted: false, outcome: "idle" });
+    }
     try {
-      await state.session.followUp(
+      await session.followUp(
         text,
         images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType })),
       );
@@ -876,6 +962,20 @@ async function handlePrompt(
       if (requestId) state.promptJournal.delete(requestId);
       schedulePersist();
       throw error;
+    }
+    if (
+      state.session !== session ||
+      state.status !== "running" ||
+      state.dispatching ||
+      state.compacting ||
+      piRunId(state) !== expectedRunId
+    ) {
+      const outcome = withdrawLateFollowUp(state, session);
+      if (requestId) journal(state, requestId, outcome);
+      await persistBarrier();
+      return outcome === "dropped"
+        ? json(response, 409, { accepted: false, outcome: "idle" })
+        : json(response, 503, { accepted: false, outcome: "unknown", requestId });
     }
     journal(state, requestId, "accepted");
     schedulePersist();
@@ -981,6 +1081,19 @@ async function handlePrompt(
   void handle.completion;
   void clientSignal;
   return json(response, 202, { accepted: true });
+}
+
+/** Remove a follow-up that Pi enqueued after the run it targeted had ended. */
+function withdrawLateFollowUp(state: SessionState, session: AgentSession): "dropped" | "ambiguous" {
+  const liveTurn = state.session === session && (state.status === "running" || state.dispatching);
+  if (liveTurn && session.pendingMessageCount > 1) return "ambiguous";
+  try {
+    session.clearQueue();
+  } catch {
+    return "ambiguous";
+  }
+  if (state.session === session) state.queue.followUp = [];
+  return "dropped";
 }
 
 function appendLocalExchange(

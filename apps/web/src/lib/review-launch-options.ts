@@ -3,6 +3,8 @@ import type {
   ReviewModelOption,
   ReviewTabType,
 } from "@/components/review/ReviewLaunchDialog";
+import type { ClaudeModel } from "@/lib/claude-client";
+import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
 import { CODEX_MODELS } from "@/lib/codex-client";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
@@ -21,48 +23,24 @@ import type { DefaultAgent, Environment, GlobalConfig, RepositoryConfig } from "
  * are keyed by alias, so without it no configured Claude default can ever be
  * matched back to the option that represents it.
  */
-const CLAUDE_FALLBACK_MODELS: ReviewModelOption[] = [
-  {
-    id: "default",
-    name: "Default (recommended)",
-    description: "Opus 5 with 1M context · Best for everyday, complex tasks",
-    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-    resolvedModel: "claude-opus-5[1m]",
-    supportsSpeed: true,
-  },
-  {
-    id: "opus[1m]",
-    name: "Opus (1M context)",
-    description: "Opus 5 with 1M context · Best for everyday, complex tasks",
-    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-    resolvedModel: "claude-opus-5[1m]",
-    supportsSpeed: true,
-  },
-  {
-    id: "claude-fable-5[1m]",
-    name: "Fable 5",
-    description: "Most capable for difficult, long-running tasks",
-    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-    resolvedModel: "claude-fable-5",
-    supportsSpeed: true,
-  },
-  {
-    id: "sonnet",
-    name: "Sonnet",
-    description: "Sonnet 5 · Efficient for routine tasks",
-    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-    resolvedModel: "claude-sonnet-5",
-    supportsSpeed: true,
-  },
-  {
-    id: "haiku",
-    name: "Haiku",
-    description: "Fastest for quick tasks",
-    reasoningEfforts: [],
-    resolvedModel: "claude-haiku-4-5-20251001",
-    supportsSpeed: true,
-  },
-];
+function claudeReviewModelOption(model: ClaudeModel): ReviewModelOption {
+  return {
+    id: model.id,
+    name: model.name,
+    description: model.description,
+    reasoningEfforts: model.supportedEffortLevels?.length
+      ? [...model.supportedEffortLevels]
+      : model.supportsEffort
+        ? ["low", "medium", "high"]
+        : [],
+    ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
+    ...(model.supportsFastMode !== false ? { supportsSpeed: true as const } : {}),
+  };
+}
+
+/** The renderer's shared Claude fallback, shaped like a live catalogue entry. */
+const CLAUDE_FALLBACK_MODELS: ReviewModelOption[] =
+  FALLBACK_CLAUDE_MODELS.map(claudeReviewModelOption);
 
 const OPENCODE_DEFAULT_MODEL: ReviewModelOption = {
   id: "default",
@@ -114,18 +92,7 @@ export function includeMissingOpenCodeModels(
 export function buildReviewModelCatalog(
   environmentId: string | null | undefined,
 ): ReviewModelCatalog {
-  const liveClaudeModels = useClaudeStore.getState().models.map((model) => ({
-    id: model.id,
-    name: model.name,
-    description: model.description,
-    reasoningEfforts: model.supportedEffortLevels?.length
-      ? [...model.supportedEffortLevels]
-      : model.supportsEffort
-        ? ["low", "medium", "high"]
-        : [],
-    ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
-    ...(model.supportsFastMode !== false ? { supportsSpeed: true as const } : {}),
-  }));
+  const liveClaudeModels = useClaudeStore.getState().models.map(claudeReviewModelOption);
   const claude = liveClaudeModels.length > 0 ? liveClaudeModels : CLAUDE_FALLBACK_MODELS;
 
   const codexModels = useCodexStore.getState().models;

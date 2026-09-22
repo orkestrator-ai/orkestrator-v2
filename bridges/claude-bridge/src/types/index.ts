@@ -376,6 +376,17 @@ export interface SessionState {
   lastStreamedRevisionAt?: number;
   /** Latest provider-reported context, token, cost, and rate-limit snapshot. */
   usage?: SessionUsageSnapshot;
+  /**
+   * The provider's running totals as of the last result message.
+   *
+   * A result's `total_cost_usd` and `modelUsage` are cumulative, not per turn:
+   * across the results of one `query()`, and since Claude Code 2.1.277 across a
+   * resume too. Each result is turned into a per-turn delta against this. When
+   * a bridge attaches without the in-memory baseline, the first turn is
+   * bootstrapped from completed stream calls instead of charging the saved
+   * transcript as new work.
+   */
+  claudeUsageBaseline?: ClaudeCumulativeUsage;
   /** Monotonic lower bound from completed model calls in the query still running. */
   inProgressUsage?: SessionUsageSnapshot;
   /** Prevents an older released query from overwriting a newer turn's live meter. */
@@ -562,6 +573,15 @@ export type StopBackgroundTaskResult =
       reason: "session_not_found" | "task_not_found" | "no_control_channel";
       message: string;
     };
+
+/** Running provider totals carried by a Claude result message. */
+export interface ClaudeCumulativeUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+}
 
 export interface SessionUsageSnapshot {
   usedTokens: number;

@@ -5522,14 +5522,16 @@ describe("ActionBar configured action defaults", () => {
       model: "gpt-5.4",
       reasoningEffort: "xhigh",
     });
+    // Configured as Fable 5, which Claude Code 2.1.280 superseded with Fable
+    // 5.1: the saved choice carries forward rather than dropping to Default.
     expect(launch.reviewers[2]).toMatchObject({
       agent: "claude",
-      model: "claude-fable-5[1m]",
+      model: "claude-fable-5-1[1m]",
       reasoningEffort: "xhigh",
     });
     expect(launch.fixModel).toMatchObject({
       agent: "claude",
-      model: "claude-fable-5[1m]",
+      model: "claude-fable-5-1[1m]",
       reasoningEffort: "xhigh",
     });
   });

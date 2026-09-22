@@ -23,6 +23,30 @@ const part: NativeAsyncQuestionPart = {
 };
 
 describe("NativeAsyncQuestionCard", () => {
+  test.each([false, true])(
+    "renders repeated question text once (multiple questions: %s)",
+    (multiple) => {
+      const questions = multiple
+        ? part.asyncQuestion.questions
+        : part.asyncQuestion.questions.slice(0, 1);
+      render(
+        <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
+          <NativeAsyncQuestionCard
+            part={{
+              ...part,
+              content: "  Which\n target?  ",
+              asyncQuestion: { ...part.asyncQuestion, questions },
+            }}
+          />
+        </AsyncQuestionResponseContext.Provider>,
+      );
+
+      expect(screen.getAllByText("Which target?")).toHaveLength(1);
+      expect(screen.getByRole("group", { name: "Which target?" })).toBeTruthy();
+      expect(screen.getByLabelText("Custom answer for Which target?")).toBeTruthy();
+    },
+  );
+
   test("renders the agent's accompanying text with activity-neutral copy", () => {
     render(
       <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>

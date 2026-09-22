@@ -92,6 +92,7 @@ import {
   resolveProjectArrangement,
   resolveRemoveProjectFromFolder,
   resolveRenameProjectFolder,
+  resolveSortProjectFolder,
   resolveUngroupProjectFolder,
   type ProjectArrangement,
   type ProjectFolderEntry,
@@ -696,6 +697,12 @@ export function HierarchicalSidebar() {
       });
   };
 
+  const handleSortFolder = (folderName: string): void => {
+    void applyArrangement(resolveSortProjectFolder(projects, folderName)).catch((err) => {
+      console.error("Failed to sort project folder:", err);
+    });
+  };
+
   const handleAddProject = async (gitUrl: string, localPath?: string) => {
     try {
       await addProject(gitUrl, localPath);
@@ -1273,6 +1280,7 @@ export function HierarchicalSidebar() {
                       isCollapsed={isProjectFolderCollapsed(collapsedProjectFolders, entry.name)}
                       onToggleCollapse={() => toggleProjectFolderCollapse(entry.name)}
                       onRename={(nextName) => handleRenameFolder(entry.name, nextName)}
+                      onSort={() => handleSortFolder(entry.name)}
                       onUngroup={() => handleUngroupFolder(entry.name)}
                     >
                       {entry.projects.map(renderProjectGroup)}

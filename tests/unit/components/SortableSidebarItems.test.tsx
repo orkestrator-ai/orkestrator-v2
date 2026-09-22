@@ -230,6 +230,7 @@ describe("sortable sidebar items", () => {
           isCollapsed={false}
           onToggleCollapse={() => {}}
           onRename={() => {}}
+          onSort={() => {}}
           onUngroup={() => {}}
         >
           <SortableProjectGroup {...sharedProps} project={nestedProject} environments={[]} />
@@ -635,6 +636,7 @@ describe("sortable sidebar items", () => {
         isCollapsed={false}
         onToggleCollapse={() => {}}
         onRename={() => {}}
+        onSort={() => {}}
         onUngroup={() => {}}
         {...overrides}
       >
@@ -648,6 +650,16 @@ describe("sortable sidebar items", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Rename Folder" }));
     return await screen.findByLabelText("Rename folder Work");
   }
+
+  test("SortableProjectFolder offers its sort action from the context menu", async () => {
+    const onSort = mock(() => {});
+    renderFolder({ onSort });
+
+    fireEvent.contextMenu(screen.getByTitle("Collapse folder Work"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Sort" }));
+
+    expect(onSort).toHaveBeenCalledTimes(1);
+  });
 
   test("SortableProjectFolder ignores a rename submitted with a blank draft", async () => {
     const onRename = mock(() => {});
@@ -714,6 +726,7 @@ describe("sortable sidebar items", () => {
         isCollapsed={false}
         onToggleCollapse={onToggleCollapse}
         onRename={() => {}}
+        onSort={() => {}}
         onUngroup={() => {}}
       >
         <div>Members</div>

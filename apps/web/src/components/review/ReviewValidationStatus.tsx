@@ -322,16 +322,16 @@ export function ReviewValidationStatus({
               <th scope="col" className="px-2 py-2 font-medium">
                 Command
               </th>
-              <th scope="col" className="w-20 px-2 py-2 font-medium sm:w-36">
+              <th scope="col" className="w-36 px-2 py-2 font-medium">
                 Status
               </th>
-              <th scope="col" className="w-16 px-2 py-2 text-right font-medium sm:w-20">
+              <th scope="col" className="w-20 px-2 py-2 text-right font-medium">
                 Duration
               </th>
-              <th scope="col" className="w-16 px-2 py-2 text-right font-medium sm:w-20">
+              <th scope="col" className="w-20 px-2 py-2 text-right font-medium">
                 Queued
               </th>
-              <th scope="col" className="w-14 px-1 py-2 text-center font-medium sm:w-16">
+              <th scope="col" className="w-16 px-1 py-2 text-center font-medium">
                 Output
               </th>
             </tr>
@@ -343,8 +343,16 @@ export function ReviewValidationStatus({
               return (
                 <tr
                   key={result.id}
-                  className="cursor-pointer divide-x divide-border transition-colors hover:bg-accent/50 focus-within:bg-accent/50"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`View terminal output for ${result.command}`}
+                  className="cursor-pointer divide-x divide-border transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
                   onClick={() => setSelectedResultId(result.id)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    if (event.key === " ") event.preventDefault();
+                    setSelectedResultId(result.id);
+                  }}
                 >
                   <td className="px-2 py-2 align-top">
                     <code className="break-all">{result.command}</code>
@@ -368,7 +376,7 @@ export function ReviewValidationStatus({
                   </td>
                   <td
                     data-slot="validation-status"
-                    className="break-words px-2 py-2 align-top text-muted-foreground"
+                    className="whitespace-nowrap px-2 py-2 align-top text-muted-foreground"
                   >
                     {result.status === "queued" ? "waiting for capacity" : result.status}
                   </td>
@@ -385,17 +393,12 @@ export function ReviewValidationStatus({
                     {queuedMs > 0 ? formatSeconds(queuedMs) : ""}
                   </td>
                   <td className="px-1 py-1 text-center align-top">
-                    <button
-                      type="button"
-                      className="inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                      aria-label={`View terminal output for ${result.command}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setSelectedResultId(result.id);
-                      }}
+                    <span
+                      className="inline-flex size-6 items-center justify-center text-muted-foreground"
+                      aria-hidden="true"
                     >
                       <SquareTerminal className="size-3.5" aria-hidden="true" />
-                    </button>
+                    </span>
                   </td>
                 </tr>
               );

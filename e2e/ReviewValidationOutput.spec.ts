@@ -1,7 +1,11 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const longValidationCommand =
   "mise run test:logged -- --name review-validation-output -- bun test ./apps/web/src/components/review/ReviewValidationStatus.test.tsx --parallel=1 --only-failures";
+
+function validationRow(page: Page, command: string) {
+  return page.getByRole("button", { name: `View terminal output for ${command}` });
+}
 
 test("terminal output title and long command stay inside the dialog and are centered", async ({
   page,
@@ -164,9 +168,7 @@ test("validation run and queue times share columns across mixed rows", async ({ 
 test("limited rows keep their column alignment and visible separation", async ({ page }) => {
   await page.goto("/review-validation-output");
 
-  const row = page.getByRole("row").filter({
-    has: page.getByRole("button", { name: "View terminal output for mise run buildworld" }),
-  });
+  const row = validationRow(page, "mise run buildworld");
   const limitation = row.locator("[data-slot='validation-limitation']");
   await expect(limitation).toContainText("Build runner was unavailable.");
 
@@ -196,14 +198,23 @@ test("the mobile validation table scrolls within its container and keeps command
   await page.goto("/review-validation-output");
 
   const list = page.getByRole("table", { name: "Validation commands" });
-  const queuedRow = page.getByRole("row").filter({
-    has: page.getByRole("button", {
-      name: "View terminal output for mise run typecheck",
-    }),
+  const queuedRow = validationRow(page, "mise run typecheck");
+  const queuedStatus = queuedRow.locator("[data-slot='validation-status']");
+  await expect(queuedStatus).toHaveText("waiting for capacity");
+
+  const statusLayout = await queuedStatus.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const textRects = Array.from(range.getClientRects());
+    const style = getComputedStyle(element);
+    const horizontalPadding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+    return {
+      contentWidth: element.getBoundingClientRect().width - horizontalPadding,
+      lineCount: textRects.length,
+      textWidth: Math.max(...textRects.map((rect) => rect.width)),
+      whiteSpace: style.whiteSpace,
+    };
   });
-  await expect(queuedRow.locator("[data-slot='validation-status']")).toHaveText(
-    "waiting for capacity",
-  );
 
   const containment = await list.evaluate((element) => {
     const listRect = element.getBoundingClientRect();
@@ -236,15 +247,16 @@ test("the mobile validation table scrolls within its container and keeps command
   expect(containment.rowsInsideList).toBe(true);
   expect(Math.min(...containment.commandWidths)).toBeGreaterThan(100);
   expect(Math.max(...containment.overflowWidths)).toBeLessThanOrEqual(1);
+  expect(statusLayout.whiteSpace).toBe("nowrap");
+  expect(statusLayout.lineCount).toBe(1);
+  expect(statusLayout.contentWidth).toBeGreaterThanOrEqual(statusLayout.textWidth);
 });
 
 test("queue diagnostics rehydrate after an inactive view and clear on completion", async ({
   page,
 }) => {
   await page.goto("/review-validation-output");
-  const row = page.getByRole("row").filter({
-    has: page.getByRole("button", { name: "View terminal output for mise run typecheck" }),
-  });
+  const row = validationRow(page, "mise run typecheck");
   await expect(row.locator("[data-slot='validation-queue-reason']")).toContainText("2/8 slots");
   await page.getByRole("button", { name: "Hide validation", exact: true }).click();
   await expect(row).toHaveCount(0);

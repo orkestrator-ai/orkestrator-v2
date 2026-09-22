@@ -235,9 +235,16 @@ describe("ReviewValidationStatus", () => {
     const buildRow = screen.getByText("bun run build").closest("tr")!;
     expect(checkRow.textContent).toContain("A prerequisite did not pass.");
     expect(buildRow.textContent).toContain("A prerequisite did not pass.");
-    for (const row of [checkRow, buildRow]) {
+    for (const [row, command] of [
+      [checkRow, "bun run check"],
+      [buildRow, "bun run build"],
+    ] as const) {
       const limitation = row.querySelector("[data-slot='validation-limitation']");
-      expect(limitation?.className.split(/\s+/)).toEqual(expect.arrayContaining(["mt-1"]));
+      expect(limitation?.className.split(/\s+/)).toEqual(
+        expect.arrayContaining(["mt-1", "break-words"]),
+      );
+      expect(limitation?.parentElement).toBe(row.cells[0]);
+      expect(limitation?.parentElement?.querySelector("code")?.textContent).toBe(command);
     }
     expect(screen.getAllByText("A prerequisite did not pass.")).toHaveLength(2);
     const notes = screen.getByText("Notes").closest("details")!;
@@ -245,6 +252,38 @@ describe("ReviewValidationStatus", () => {
     expect(notes.querySelector(".text-amber-500") === null).toBe(true);
     fireEvent.click(screen.getByText("Notes"));
     expect(screen.getByText("No CI workflows are present.")).toBeTruthy();
+  });
+
+  test("opens terminal output from the row body", () => {
+    const run = runningValidation();
+    render(<ReviewValidationStatus environmentId="env-1" run={run} />);
+
+    fireEvent.click(screen.getByText("bun run check"));
+
+    expect(screen.getByRole("dialog", { name: "Terminal output" })).toBeTruthy();
+  });
+
+  test("makes every output row focusable and activatable with Enter or Space", () => {
+    const run = runningValidation();
+    render(<ReviewValidationStatus environmentId="env-1" run={run} />);
+
+    const checkRow = screen.getByRole("button", {
+      name: "View terminal output for bun run check",
+    });
+    const buildRow = screen.getByRole("button", {
+      name: "View terminal output for bun run build",
+    });
+    expect(checkRow.tagName).toBe("TR");
+    expect(checkRow.tabIndex).toBe(0);
+
+    fireEvent.keyDown(checkRow, { key: "Enter" });
+    expect(screen.getByRole("dialog", { name: "Terminal output" })).toBeTruthy();
+    expect(
+      screen.getByText("bun run check", { selector: "[data-slot='dialog-description']" }),
+    ).toBeTruthy();
+
+    expect(fireEvent.keyDown(buildRow, { key: " " })).toBe(false);
+    expect(screen.getByText("This step was skipped, so it has no terminal output.")).toBeTruthy();
   });
 
   test("opens a modal and loads the selected command's captured output", async () => {

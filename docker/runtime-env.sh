@@ -314,9 +314,10 @@ orkestrator_source_runtime_env() {
         if [ -n "$github_token" ]; then
             GITHUB_TOKEN="$github_token"
             GH_TOKEN="$github_token"
-            export GITHUB_TOKEN GH_TOKEN
+            GITHUB_PERSONAL_ACCESS_TOKEN="$github_token"
+            export GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN
         else
-            unset GITHUB_TOKEN GH_TOKEN
+            unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN
         fi
         unset github_token
     fi

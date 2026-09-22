@@ -431,7 +431,7 @@ export async function startContainerOpenCodeServer(
     printf '%s' ${quoteShell(authToken)} > /tmp/opencode-server-password
     source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
     orkestrator_source_runtime_env 2>/dev/null || true
-    unset GITHUB_TOKEN GH_TOKEN
+    unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN
     export OPENCODE_SERVER_USERNAME=opencode
     export OPENCODE_SERVER_PASSWORD=${quoteShell(authToken)}
     setsid opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0 > /tmp/opencode-serve.log 2>&1 &
@@ -520,7 +520,7 @@ export async function startContainerClaudeServer(
       source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
       orkestrator_source_runtime_env 2>/dev/null || true
       export ${CLAUDE_GITHUB_CREDENTIAL_FILE_ENV}=${quoteShell(CONTAINER_GITHUB_CREDENTIAL_FILE)}
-      unset GITHUB_TOKEN GH_TOKEN
+      unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN
       export PORT=${CLAUDE_BRIDGE_PORT}
       export HOSTNAME=0.0.0.0
       export CLAUDE_BRIDGE_TOKEN=${quoteShell(authToken)}

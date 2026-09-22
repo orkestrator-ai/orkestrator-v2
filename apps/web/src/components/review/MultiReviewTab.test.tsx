@@ -623,7 +623,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         "10s",
       );
       const validationRow = () =>
-        screen.getByRole("button", { name: "View terminal output for bun run check" });
+        screen
+          .getByRole("button", { name: "View terminal output for bun run check" })
+          .closest("tr")!;
       expect(validationRow().textContent).toContain("running");
       expect(validationRow().querySelector("[data-slot='validation-elapsed']")?.textContent).toBe(
         "5.0s",

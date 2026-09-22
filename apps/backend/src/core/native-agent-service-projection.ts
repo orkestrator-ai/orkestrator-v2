@@ -510,7 +510,13 @@ function normalizeInteractionKinds(value: unknown): AgentInteractionKind[] | und
   return [...new Set(kinds)];
 }
 
-function isNormalizedProgressiveMessage(value: unknown): boolean {
+function isNormalizedProgressiveMessage(value: unknown): value is {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  parts: unknown[];
+  createdAt: string;
+} {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const message = value as Record<string, unknown>;
   const role = message.role;
@@ -566,6 +572,17 @@ function progressiveHydrationToken(snapshot: ProviderTranscriptSnapshot): string
   ].join(":");
 }
 
+const PROGRESSIVE_HYDRATION_MAX_ATTEMPTS = 3;
+const PROGRESSIVE_HYDRATION_RETRY_BASE_MS = 25;
+
+type ProgressiveHydrationEntry = {
+  sourceToken: string;
+  snapshot?: ProviderTranscriptSnapshot;
+  promise?: Promise<void>;
+  attempts: number;
+  holdPreview: boolean;
+};
+
 export abstract class NativeAgentServiceProjection extends NativeAgentServiceDispatch {
   private readonly progressiveInstanceId = randomUUID();
   private readonly progressiveTranscriptCache = new Map<
@@ -618,14 +635,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     string,
     { input: NativeAgentProgressiveInput; value: NativeAgentTranscriptView }
   >();
-  private readonly progressiveHydrations = new Map<
-    string,
-    {
-      sourceToken: string;
-      snapshot?: ProviderTranscriptSnapshot;
-      promise?: Promise<void>;
-    }
-  >();
+  private readonly progressiveHydrations = new Map<string, ProgressiveHydrationEntry>();
   private readonly progressiveHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly progressiveMetrics = new ProgressiveReadMetrics();
 
@@ -1578,55 +1588,70 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     initialPromptPresentation: PersistedNativeAgentSession["initialPromptPresentation"],
   ): void {
     if (snapshot.complete !== false) return;
-    if (this.progressivePreviewFillsWindow(snapshot, input.liveWindow)) return;
+    if (
+      (snapshot.omittedParts ?? 0) <= 0 &&
+      this.progressivePreviewFillsWindow(snapshot, input.liveWindow)
+    )
+      return;
     const sourceToken = progressiveHydrationToken(snapshot);
     const existing = this.progressiveHydrations.get(key);
     if (existing && existing.sourceToken === sourceToken) return;
     const previousTimer = this.progressiveHydrationTimers.get(key);
     if (previousTimer) clearTimeout(previousTimer);
-    const entry: {
-      sourceToken: string;
-      snapshot?: ProviderTranscriptSnapshot;
-      promise?: Promise<void>;
-    } = { sourceToken };
+    const entry: ProgressiveHydrationEntry = {
+      sourceToken,
+      attempts: 0,
+      holdPreview: (snapshot.omittedParts ?? 0) > 0,
+    };
     this.progressiveHydrations.set(key, entry);
-    const timer = setTimeout(() => {
-      if (this.progressiveHydrationTimers.get(key) === timer) {
-        this.progressiveHydrationTimers.delete(key);
-      }
-      if (this.stopped) return;
-      const promise = this.fillIncompleteProgressiveSnapshot(
-        provider,
-        sessionId,
-        snapshot,
-        input.liveWindow,
-      )
-        .then((hydrated) => {
-          if (this.stopped) return;
-          const current = this.progressiveHydrations.get(key);
-          if (!current || current.sourceToken !== sourceToken) return;
-          current.snapshot = hydrated;
-          if (hydrated === snapshot) return;
-          this.commitProgressiveTranscript(
-            key,
-            input,
-            this.projectProgressiveTranscript(
-              input,
+    const scheduleAttempt = (delayMs: number): void => {
+      const timer = setTimeout(() => {
+        if (this.progressiveHydrationTimers.get(key) === timer) {
+          this.progressiveHydrationTimers.delete(key);
+        }
+        if (this.stopped || this.progressiveHydrations.get(key) !== entry) return;
+        entry.attempts += 1;
+        const promise = this.fillIncompleteProgressiveSnapshot(
+          provider,
+          sessionId,
+          snapshot,
+          input.liveWindow,
+        )
+          .catch(() => snapshot)
+          .then((hydrated) => {
+            if (this.stopped || this.progressiveHydrations.get(key) !== entry) return;
+            if (hydrated === snapshot) {
+              // The preview is safer than freezing a stale, fuller revision.
+              // Keep retrying exact recovery in the background, but only the
+              // first attempt is allowed to hold the visible transcript.
+              entry.holdPreview = false;
+              if (entry.attempts < PROGRESSIVE_HYDRATION_MAX_ATTEMPTS) {
+                scheduleAttempt(PROGRESSIVE_HYDRATION_RETRY_BASE_MS * 2 ** (entry.attempts - 1));
+              }
+              return;
+            }
+            entry.holdPreview = false;
+            entry.snapshot = hydrated;
+            this.commitProgressiveTranscript(
               key,
-              hydrated,
-              sessionId,
-              initialPromptPresentation,
-            ),
-          );
-        })
-        .catch(() => undefined)
-        .finally(() => {
-          const current = this.progressiveHydrations.get(key);
-          if (current?.promise === promise) current.promise = undefined;
-        });
-      entry.promise = promise;
-    }, 0);
-    this.progressiveHydrationTimers.set(key, timer);
+              input,
+              this.projectProgressiveTranscript(
+                input,
+                key,
+                hydrated,
+                sessionId,
+                initialPromptPresentation,
+              ),
+            );
+          })
+          .finally(() => {
+            if (entry.promise === promise) entry.promise = undefined;
+          });
+        entry.promise = promise;
+      }, delayMs);
+      this.progressiveHydrationTimers.set(key, timer);
+    };
+    scheduleAttempt(0);
   }
 
   private async fillIncompleteProgressiveSnapshot(
@@ -1642,7 +1667,26 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       return snapshot;
     }
     const normalized = normalizedProgressiveMessages(fuller);
-    if (!normalized || normalized.length <= snapshot.messages.length) return snapshot;
+    if (!normalized) return snapshot;
+    // A single long Codex turn can lose tool/commentary parts without losing a
+    // message. Message count alone rejects that exact recovery indefinitely.
+    const previewHead = snapshot.messages[0];
+    const recoveredHead = normalized.find(
+      (message) =>
+        isNormalizedProgressiveMessage(previewHead) &&
+        isNormalizedProgressiveMessage(message) &&
+        message.id === previewHead.id,
+    );
+    const recoveredParts =
+      snapshot.omittedParts &&
+      isNormalizedProgressiveMessage(previewHead) &&
+      isNormalizedProgressiveMessage(recoveredHead) &&
+      recoveredHead.parts.length > previewHead.parts.length;
+    if (
+      normalized.length < snapshot.messages.length ||
+      (normalized.length === snapshot.messages.length && !recoveredParts)
+    )
+      return snapshot;
     const historyStartIndex =
       snapshot.historyStartIndex === undefined
         ? undefined
@@ -1650,6 +1694,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     return {
       ...snapshot,
       messages: normalized,
+      omittedParts: undefined,
       ...(historyStartIndex === undefined ? {} : { historyStartIndex }),
       complete: normalized.length < liveWindow.messages,
       freshness: "current",
@@ -1668,6 +1713,47 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ??
       `in-process:${input.agent}`;
     const identity = this.progressiveIdentity(input, providerSessionId, sourceGeneration);
+    const previewHead = snapshot.messages[0];
+    const displayedHead = previous?.value.messages.find(
+      (message) =>
+        isNormalizedProgressiveMessage(previewHead) &&
+        isNormalizedProgressiveMessage(message) &&
+        message.id === previewHead.id,
+    );
+    /*
+     * A byte-trimmed message is not a replacement for the full turn already on
+     * screen. Keep the bounded display snapshot until the background exact read
+     * above recovers its parts. Merging by array index would misidentify tool
+     * details (and progress rows need not project one-to-one), so install that
+     * recovery atomically instead. Epoch/session/generation changes and complete
+     * snapshots remain authoritative replacements, including real deletions.
+     */
+    const hydration = this.progressiveHydrations.get(key);
+    const hydrationHoldingPreview =
+      hydration?.sourceToken === progressiveHydrationToken(snapshot) &&
+      hydration.holdPreview &&
+      (hydration.promise !== undefined || this.progressiveHydrationTimers.has(key));
+    if (
+      snapshot.complete === false &&
+      (snapshot.omittedParts ?? 0) > 0 &&
+      hydrationHoldingPreview &&
+      snapshot.historyEpoch !== undefined &&
+      previous?.value.historyEpoch === snapshot.historyEpoch &&
+      previous.value.identity.providerSessionId === providerSessionId &&
+      previous.value.identity.sourceGeneration === identity.sourceGeneration &&
+      isNormalizedProgressiveMessage(previewHead) &&
+      isNormalizedProgressiveMessage(displayedHead)
+    ) {
+      return {
+        value: previous.value,
+        ...(previous.historyStartIndex === undefined
+          ? {}
+          : { historyStartIndex: previous.historyStartIndex }),
+        ...(previous.historyEndIndex === undefined
+          ? {}
+          : { historyEndIndex: previous.historyEndIndex }),
+      };
+    }
     const normalized = this.projectionMessages(
       nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
       snapshot.messages,

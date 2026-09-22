@@ -1991,6 +1991,7 @@ describe("HTTP bridge progressive transcript", () => {
           value: {
             messages: [{ id: "m1", content: "hello", parts: [] }],
             startIndex: 3,
+            messageWindow: { truncated: true, omittedParts: 7 },
             complete: true,
             generation: 4,
             contentEpoch: 2,
@@ -2006,10 +2007,39 @@ describe("HTTP bridge progressive transcript", () => {
     if ("unchanged" in snapshot) throw new Error("expected a snapshot");
     expect(snapshot.historyEpoch).toBe("4:2");
     expect(snapshot.historyStartIndex).toBe(3);
+    expect(snapshot.omittedParts).toBe(7);
     expect(snapshot.sourceToken).toBe("bt1.def");
     expect(snapshot.title).toBe("Titled");
     expect(snapshot.revision).toBe(9);
     expect(snapshot.freshness).toBe("cached");
+  });
+
+  test.each([
+    { name: "a missing message window", value: undefined },
+    { name: "zero omitted parts", value: { omittedParts: 0 } },
+    { name: "fractional omitted parts", value: { omittedParts: 1.5 } },
+    { name: "non-numeric omitted parts", value: { omittedParts: "1" } },
+  ])("leaves omittedParts unset for $name", async ({ value }) => {
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          version: 1,
+          status: "snapshot",
+          token: "bt1.no-omission",
+          value: {
+            messages: [{ id: "m1", content: "hello", parts: [] }],
+            ...(value === undefined ? {} : { messageWindow: value }),
+            complete: false,
+            generation: 1,
+            contentEpoch: 1,
+          },
+        }),
+      codexConnection,
+    );
+
+    const snapshot = await provider.transcriptSnapshot!("session-1", transcriptOptions);
+    if ("unchanged" in snapshot) throw new Error("expected a snapshot");
+    expect(snapshot.omittedParts).toBeUndefined();
   });
 
   test("rejects a malformed transcript envelope instead of showing an empty tab", async () => {

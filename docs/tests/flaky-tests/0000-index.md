@@ -24,6 +24,7 @@ with full history. Status lives in this index so a model can skip those files.
 
 | ID | Status | Test | File | Symptom | Case |
 | --- | --- | --- | --- | --- | --- |
+| 0156 | open | `DesignCanvasTab history > only the focused pane handles a shared shortcut` | apps/web/src/components/design/DesignCanvasTab.test.tsx | Keyboard event was not prevented in aggregate; owning file passes alone. | [0156-design-canvas-focused-shortcut.md](0156-design-canvas-focused-shortcut.md) |
 | 0155 | open | `agent upgrade runbook contracts > no tracked file anywhere still references the removed Codex guide` | tests/unit/docs/upgrade-agents-docs.test.ts | Five-second timeout under the root aggregate; owning file passes alone. | [0155-upgrade-agents-doc-scan-timeout.md](0155-upgrade-agents-doc-scan-timeout.md) |
 | 0154 | open | `Electron backend command registry > survives a login shell whose logout hook fails` | tests/unit/electron/commands-container-exec.test.ts | Thirty-second timeout and a downstream missing-cwd error under the root aggregate; owning file passes alone. | [0154-container-exec-logout-hook-timeout.md](0154-container-exec-logout-hook-timeout.md) |
 | 0153 | open | `live transcript follow releases on scroll-up and re-engages at bottom` | e2e/VirtuosoFollow.spec.ts | Parallel browser run remained at the bottom after scroll release; owning file passed alone. | [0153-virtuoso-follow-parallel-scroll-release.md](0153-virtuoso-follow-parallel-scroll-release.md) |

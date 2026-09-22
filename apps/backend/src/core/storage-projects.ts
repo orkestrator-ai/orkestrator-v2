@@ -1157,7 +1157,8 @@ export abstract class StorageProjects extends StorageBase {
    * Backend observations are serialized but may share a millisecond with the
    * preceding working edge. Advance the durable token on a collision rather
    * than dropping a real completion as stale. Callers must invoke this exactly
-   * once per observed per-session transition.
+   * once per observed per-session transition. The separate completion token
+   * lets readers observe this edge while the aggregate remains working.
    */
   async recordEnvironmentSessionCompletion(
     environmentId: string,
@@ -1179,6 +1180,12 @@ export abstract class StorageProjects extends StorageBase {
           ? previousTime + 1
           : occurredTime;
       environment.lastActivityAt = new Date(acceptedTime).toISOString();
+      const previousCompletionTime = Date.parse(environment.agentSessionCompletedAt ?? "");
+      environment.agentSessionCompletedAt = new Date(
+        Number.isFinite(previousCompletionTime)
+          ? Math.max(acceptedTime, previousCompletionTime + 1)
+          : acceptedTime,
+      ).toISOString();
       environment.hasUnreadWork = true;
       await this.saveEnvironments(environments);
       this.announce("environment", environmentId, environment.projectId);

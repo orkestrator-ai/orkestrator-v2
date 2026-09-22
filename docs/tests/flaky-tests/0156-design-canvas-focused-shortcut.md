@@ -23,3 +23,10 @@
   not a confirmed cause; the aggregate also printed act warnings for this
   component. No design-canvas implementation or assertions changed during the
   Codex transcript investigation.
+- **Recurrence (2026-09-23):** `mise run test` again received `false` instead of
+  `true` at the same assertion (9.93 ms) while validating the ActionBar run-script
+  fix. The web workspace group reported one failed test; the owning file passed
+  alone with `mise run test:logged -- --name design-canvas-isolated -- bun test
+  --cwd apps/web ./src/components/design/DesignCanvasTab.test.tsx --parallel=1
+  --only-failures` (0.2 s). Artifact:
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.4bbPpy/workspace-web-backend-desktop-web-public-cli-protocol.log.gz`.

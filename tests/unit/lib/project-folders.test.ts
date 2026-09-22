@@ -277,6 +277,26 @@ describe("folder maintenance arrangements", () => {
     expect(resolveSortProjectFolder(projects, "Absent")).toBeNull();
   });
 
+  test("sorts non-contiguous folder members against the rendered tree order", () => {
+    const outside = makeProject("outside", 1);
+    const unsortedProjects = [
+      { ...makeProject("zulu", 0, "Work"), name: "Zulu" },
+      outside,
+      { ...makeProject("alpha", 2, "Work"), name: "Alpha" },
+    ];
+    expect(resolveSortProjectFolder(unsortedProjects, "Work")).toEqual({
+      projectIds: ["alpha", "zulu", "outside"],
+      folders: {},
+    });
+
+    const alreadySortedProjects = [
+      { ...makeProject("alpha", 0, "Work"), name: "Alpha" },
+      outside,
+      { ...makeProject("zulu", 2, "Work"), name: "Zulu" },
+    ];
+    expect(resolveSortProjectFolder(alreadySortedProjects, "Work")).toBeNull();
+  });
+
   test("ungrouping returns every member to the root", () => {
     expect(resolveUngroupProjectFolder(projects, "work")).toEqual({
       projectIds: ["alpha", "beta", "gamma"],

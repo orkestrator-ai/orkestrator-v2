@@ -61,6 +61,7 @@ import {
 } from "@/stores/claudeTmuxStore";
 import { serializeClaudeQuestionAnswer } from "@orkestrator/protocol/agent-interactions";
 import type { ClaudeEffortLevel, ClaudeModel } from "@/lib/claude-client";
+import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
 import {
   tmuxPlanDraftKey,
   tmuxElicitationDraftKey,
@@ -71,51 +72,23 @@ import { composerOccupiedError } from "@/lib/prompt-queue-errors";
 import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 import type { FileCandidate, FileMention } from "@/types";
 
-export const TMUX_FALLBACK_MODELS: ClaudeModel[] = [
-  {
-    id: "default",
-    name: "Default (recommended)",
-    description: "Opus 5 with 1M context · Best for everyday, complex tasks",
-    supportsFastMode: true,
-    supportsEffort: true,
-    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-  },
-  {
-    id: "opus[1m]",
-    name: "Opus (1M context)",
-    description: "Opus 5 with 1M context · Best for everyday, complex tasks",
-    supportsFastMode: true,
-    supportsEffort: true,
-    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-  },
-  {
-    id: "claude-fable-5[1m]",
-    name: "Fable",
-    description: "Fable 5 · Most capable for your hardest and longest-running tasks",
-    supportsEffort: true,
-    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-  },
-  {
-    id: "sonnet",
-    name: "Sonnet",
-    description: "Sonnet 5 · Efficient for routine tasks",
-    supportsEffort: true,
-    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-  },
-  {
-    id: "haiku",
-    name: "Haiku",
-    description: "Haiku 4.5 · Fastest for quick answers",
-  },
-];
+/** The renderer's shared Claude fallback catalogue; see claude-fallback-models.ts. */
+export const TMUX_FALLBACK_MODELS: ClaudeModel[] = FALLBACK_CLAUDE_MODELS;
 export const DEFAULT_MODEL = "default";
 
 /**
  * Model ids we persisted before switching to SDK-style ids/aliases. Mapped so
  * an old saved preference still resolves to a sensible current model.
+ *
+ * A mapping applies only when the catalogue does not offer the saved id
+ * itself, so an environment still on an older Claude Code keeps honouring the
+ * ids that version reports (`claude-fable-5[1m]` before 2.1.280, for one).
  */
 export const LEGACY_TMUX_MODEL_ALIASES: Record<string, string> = {
   "claude-fable-5": "default",
+  "claude-fable-5[1m]": "claude-fable-5-1[1m]",
+  "claude-opus-5-5": "default",
+  "claude-opus-5-5[1m]": "opus[1m]",
   "claude-opus-5": "default",
   "claude-opus-5[1m]": "opus[1m]",
   "claude-opus-4-8": "default",
@@ -146,13 +119,19 @@ export function resolveTmuxModelPreference(
   modelId: string | undefined,
   models: ClaudeModel[],
 ): string {
-  const normalized = modelId ? (LEGACY_TMUX_MODEL_ALIASES[modelId] ?? modelId) : undefined;
-  return models.some((model) => model.id === normalized) ? normalized! : DEFAULT_MODEL;
+  if (!modelId) return DEFAULT_MODEL;
+  const normalized = normalizeTmuxModelId(modelId, models);
+  return models.some((model) => model.id === normalized) ? normalized : DEFAULT_MODEL;
+}
+
+function normalizeTmuxModelId(modelId: string, models: ClaudeModel[]): string {
+  if (models.some((model) => model.id === modelId)) return modelId;
+  return LEGACY_TMUX_MODEL_ALIASES[modelId] ?? modelId;
 }
 
 /** Whether `modelId` is one this catalog can actually honour. */
 export function tmuxModelIsAvailable(modelId: string, models: ClaudeModel[]): boolean {
-  const normalized = LEGACY_TMUX_MODEL_ALIASES[modelId] ?? modelId;
+  const normalized = normalizeTmuxModelId(modelId, models);
   return models.some((model) => model.id === normalized);
 }
 

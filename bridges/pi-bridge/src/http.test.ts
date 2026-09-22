@@ -1473,6 +1473,64 @@ describe("steering", () => {
     });
   });
 
+  test("withdraws a steer Pi queued after its run settled", async () => {
+    // Pi 0.87 awaits extension `input` handlers inside `steer()` before it
+    // queues. A run that settles in that window has already had its queue
+    // cleared, so the late instruction would otherwise wait for the next prompt.
+    const state = seedSession();
+    let finishRun: () => void = () => undefined;
+    let queued = 0;
+    let clears = 0;
+    state.session = fakeAgentSession({
+      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+        options.preflightResult?.(true);
+        return new Promise<void>((resolve) => {
+          finishRun = resolve;
+        });
+      },
+      steer: async () => {
+        finishRun();
+        await waitFor(() => state.status === "idle");
+        queued += 1;
+      },
+      clearQueue: () => {
+        clears += 1;
+        queued = 0;
+        return { steering: [], followUp: [] };
+      },
+      get pendingMessageCount() {
+        return queued;
+      },
+    });
+
+    const prompt = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "first", requestId: "prompt-late-steer" }),
+    });
+    expect(prompt.status).toBe(202);
+    await waitFor(() => state.status === "running" && !state.dispatching);
+
+    const response = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "arrives too late",
+        requestId: "steer-late",
+        expectedRunId: piRunId(state),
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ outcome: "idle" });
+    // Once by `settleTurn`, once more for the instruction queued after it.
+    expect(clears).toBe(2);
+    expect(queued).toBe(0);
+    expect(state.pendingSteerDeliveries).toEqual([]);
+    expect(state.steerJournal.get("steer-late")?.state).toBe("dropped");
+    expect(
+      await (await call(`/session/${state.id}/steer/dispatch?requestId=steer-late`)).json(),
+    ).toEqual({ dispatch: "absent" });
+  });
+
   test("refuses steering while the initial prompt is still in preflight", async () => {
     const state = seedSession();
     let announcePreflight: (accepted: boolean) => void = () => undefined;

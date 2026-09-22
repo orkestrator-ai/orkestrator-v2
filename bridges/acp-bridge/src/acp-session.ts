@@ -895,6 +895,25 @@ function appendNonTextContent(
   if (state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES) boundTranscript(state);
 }
 
+function recordAcpNotice(state: SessionState, update: JsonObject): void {
+  const title = typeof update.title === "string" ? update.title.trim() : "";
+  if (!title) return;
+  // The schema leaves severity open-ended; an unrecognised level is reported
+  // at the recorder's default rather than promoted to an error advisory.
+  const severity =
+    update.severity === "info" || update.severity === "warning" || update.severity === "error"
+      ? update.severity
+      : "warning";
+  const description = typeof update.description === "string" ? update.description.trim() : "";
+  state.health.recordNotice({
+    method: "notice",
+    severity,
+    source: "provider",
+    message: title,
+    ...(description ? { detail: description } : {}),
+  });
+}
+
 export function applySessionUpdate(state: SessionState, params: JsonObject): void {
   if (params.sessionId !== state.acpSessionId || !isObject(params.update)) return;
   const update = params.update;
@@ -919,6 +938,15 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     // hydrating load holds no snapshot of its own, and there its replay is the
     // only record the panel will ever get for that turn.
     if (state.historyReplay !== "ignore") recordTurnUsage(state, update);
+    return;
+  }
+  if (kind === "notice") {
+    // ACP 1.5 (`ClientSessionCapabilities.notices`): a fire-and-forget
+    // advisory, not transcript. It lands in the shared runtime-health notices,
+    // which already bound, dedupe and surface errors as transcript advisories.
+    // A reconnect replays notices already recorded, so they are dropped like
+    // replayed usage rather than inflating the occurrence count.
+    if (state.historyReplay !== "ignore") recordAcpNotice(state, update);
     return;
   }
   if (kind === "config_option_update") {

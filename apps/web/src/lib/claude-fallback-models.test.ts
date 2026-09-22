@@ -2,22 +2,23 @@ import { describe, expect, test } from "bun:test";
 import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
 
 // These are the Claude models offered in the settings UI when no bridge server
-// is reachable. They mirror the bridge-side fallback list
-// (bridges/claude-bridge/src/services/session-manager.ts getAvailableModels);
-// this test guards the renderer copy against drift.
+// is reachable. They mirror what Claude Code 2.1.280's supportedModels()
+// reports and the bridge-side fallback list
+// (bridges/claude-bridge/src/services/session-manager-interactions.ts
+// getAvailableModelCatalog); this test guards the renderer copy against drift.
 describe("FALLBACK_CLAUDE_MODELS", () => {
   test("offers the current Claude model line-up in priority order", () => {
     expect(FALLBACK_CLAUDE_MODELS.map((m) => m.id)).toEqual([
       "default",
       "opus[1m]",
-      "claude-fable-5[1m]",
+      "claude-fable-5-1[1m]",
       "sonnet",
       "haiku",
     ]);
   });
 
   test("reasoning-capable models expose the full low..max effort ladder", () => {
-    for (const id of ["default", "opus[1m]", "claude-fable-5[1m]", "sonnet"]) {
+    for (const id of ["default", "opus[1m]", "claude-fable-5-1[1m]", "sonnet"]) {
       const model = FALLBACK_CLAUDE_MODELS.find((m) => m.id === id);
       expect(model?.supportsEffort).toBe(true);
       expect(model?.supportedEffortLevels).toEqual(["low", "medium", "high", "xhigh", "max"]);
@@ -29,10 +30,10 @@ describe("FALLBACK_CLAUDE_MODELS", () => {
     expect(haiku?.supportsEffort).toBeUndefined();
   });
 
-  test("identifies Opus 5 in both the recommended and explicit Opus entries", () => {
+  test("identifies Opus 5.5 in both the recommended and explicit Opus entries", () => {
     for (const id of ["default", "opus[1m]"]) {
       const model = FALLBACK_CLAUDE_MODELS.find((m) => m.id === id);
-      expect(model?.description).toContain("Opus 5");
+      expect(model?.description).toContain("Opus 5.5 with 1M context");
       expect(model?.supportsFastMode).toBe(true);
     }
   });
@@ -45,9 +46,9 @@ describe("FALLBACK_CLAUDE_MODELS", () => {
     // options with every other assertion in this file still green. Mirrors
     // bridges/claude-bridge/src/services/session-manager-interactions.ts.
     expect(Object.fromEntries(FALLBACK_CLAUDE_MODELS.map((m) => [m.id, m.resolvedModel]))).toEqual({
-      default: "claude-opus-5[1m]",
-      "opus[1m]": "claude-opus-5[1m]",
-      "claude-fable-5[1m]": "claude-fable-5",
+      default: "claude-opus-5-5[1m]",
+      "opus[1m]": "claude-opus-5-5[1m]",
+      "claude-fable-5-1[1m]": "claude-fable-5-1",
       sonnet: "claude-sonnet-5",
       haiku: "claude-haiku-4-5-20251001",
     });

@@ -267,33 +267,35 @@ export async function getAvailableModelCatalog(): Promise<{
     };
   } catch (error) {
     console.error("[session-manager] Error fetching supported models:", error);
-    // Return fallback models if SDK call fails
+    // Return fallback models if SDK call fails. Mirrors what Claude Code
+    // 2.1.280's supportedModels() reports; the renderer keeps a copy in
+    // apps/web/src/lib/claude-fallback-models.ts.
     return {
       source: "fallback",
       models: [
         {
           id: "default",
-          resolvedModel: "claude-opus-5[1m]",
+          resolvedModel: "claude-opus-5-5[1m]",
           name: "Default (recommended)",
-          description: "Opus 5 with 1M context · Best for everyday, complex tasks",
+          description: "Opus 5.5 with 1M context · Best for everyday, complex tasks",
           supportsFastMode: true,
           supportsEffort: true,
           supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
         },
         {
           id: "opus[1m]",
-          resolvedModel: "claude-opus-5[1m]",
+          resolvedModel: "claude-opus-5-5[1m]",
           name: "Opus (1M context)",
-          description: "Opus 5 with 1M context · Best for everyday, complex tasks",
+          description: "Opus 5.5 with 1M context · Best for everyday, complex tasks",
           supportsFastMode: true,
           supportsEffort: true,
           supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
         },
         {
-          id: "claude-fable-5[1m]",
-          resolvedModel: "claude-fable-5",
+          id: "claude-fable-5-1[1m]",
+          resolvedModel: "claude-fable-5-1",
           name: "Fable",
-          description: "Fable 5 · Most capable for your hardest and longest-running tasks",
+          description: "Fable 5.1 · Most capable for your hardest and longest-running tasks",
           supportsEffort: true,
           supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
         },

@@ -32,6 +32,39 @@ describe("firstModelFor", () => {
     expect(firstModelFor("claude", catalog, { claude: "claude-retired" })).toBe("claude-a");
   });
 
+  test("carries a superseded Claude model forward to its successor", () => {
+    const upgraded: AgentModelCatalog = {
+      ...catalog,
+      claude: [
+        {
+          id: "default",
+          name: "Default",
+          reasoningEfforts: [],
+          resolvedModel: "claude-opus-5-5[1m]",
+        },
+        { id: "claude-fable-5-1[1m]", name: "Fable", reasoningEfforts: [] },
+      ],
+    };
+    expect(firstModelFor("claude", upgraded, { claude: "claude-fable-5[1m]" })).toBe(
+      "claude-fable-5-1[1m]",
+    );
+    expect(firstModelFor("claude", upgraded, { claude: "claude-opus-5[1m]" })).toBe("default");
+  });
+
+  test("keeps a superseded id an older CLI still offers", () => {
+    const older: AgentModelCatalog = {
+      ...catalog,
+      claude: [
+        { id: "claude-a", name: "Claude A", reasoningEfforts: [] },
+        { id: "claude-fable-5[1m]", name: "Fable 5", reasoningEfforts: [] },
+        { id: "claude-fable-5-1[1m]", name: "Fable", reasoningEfforts: [] },
+      ],
+    };
+    expect(firstModelFor("claude", older, { claude: "claude-fable-5[1m]" })).toBe(
+      "claude-fable-5[1m]",
+    );
+  });
+
   test("reads only the requested agent's preference", () => {
     // A Codex preference must not win a Claude lookup.
     expect(firstModelFor("claude", catalog, { codex: "codex-a" })).toBe("claude-a");
@@ -78,6 +111,39 @@ describe("defaultEffortFor", () => {
 
   test("returns the default when no preferences are supplied", () => {
     expect(defaultEffortFor("claude", "claude-a", catalog)).toBe("default");
+  });
+
+  test("carries a superseded Claude model forward to its successor", () => {
+    const upgraded: AgentModelCatalog = {
+      ...catalog,
+      claude: [
+        {
+          id: "default",
+          name: "Default",
+          reasoningEfforts: [],
+          resolvedModel: "claude-opus-5-5[1m]",
+        },
+        { id: "claude-fable-5-1[1m]", name: "Fable", reasoningEfforts: [] },
+      ],
+    };
+    expect(firstModelFor("claude", upgraded, { claude: "claude-fable-5[1m]" })).toBe(
+      "claude-fable-5-1[1m]",
+    );
+    expect(firstModelFor("claude", upgraded, { claude: "claude-opus-5[1m]" })).toBe("default");
+  });
+
+  test("keeps a superseded id an older CLI still offers", () => {
+    const older: AgentModelCatalog = {
+      ...catalog,
+      claude: [
+        { id: "claude-a", name: "Claude A", reasoningEfforts: [] },
+        { id: "claude-fable-5[1m]", name: "Fable 5", reasoningEfforts: [] },
+        { id: "claude-fable-5-1[1m]", name: "Fable", reasoningEfforts: [] },
+      ],
+    };
+    expect(firstModelFor("claude", older, { claude: "claude-fable-5[1m]" })).toBe(
+      "claude-fable-5[1m]",
+    );
   });
 
   test("reads only the requested agent's preference", () => {

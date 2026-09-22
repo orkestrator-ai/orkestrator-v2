@@ -75,10 +75,23 @@ describe("getAvailableModels", () => {
     expect(catalog.models.map((model) => model.id)).toEqual([
       "default",
       "opus[1m]",
-      "claude-fable-5[1m]",
+      "claude-fable-5-1[1m]",
       "sonnet",
       "haiku",
     ]);
+    // Claude Code 2.1.280 made Opus 5.5 (1M context) the default Opus.
+    expect(Object.fromEntries(catalog.models.map((m) => [m.id, m.resolvedModel]))).toEqual({
+      default: "claude-opus-5-5[1m]",
+      "opus[1m]": "claude-opus-5-5[1m]",
+      "claude-fable-5-1[1m]": "claude-fable-5-1",
+      sonnet: "claude-sonnet-5",
+      haiku: "claude-haiku-4-5-20251001",
+    });
+    for (const id of ["default", "opus[1m]"]) {
+      expect(catalog.models.find((m) => m.id === id)?.description).toBe(
+        "Opus 5.5 with 1M context · Best for everyday, complex tasks",
+      );
+    }
   });
 
   test("fallback marks the Opus aliases as fast-mode capable and Haiku without effort", async () => {
@@ -98,7 +111,7 @@ describe("getAvailableModels", () => {
     ]);
 
     // Reasoning-capable models expose the full effort ladder incl. xhigh/max.
-    for (const id of ["default", "opus[1m]", "claude-fable-5[1m]", "sonnet"]) {
+    for (const id of ["default", "opus[1m]", "claude-fable-5-1[1m]", "sonnet"]) {
       const model = byId.get(id);
       expect(model?.supportsEffort).toBe(true);
       expect(model?.supportedEffortLevels).toEqual(["low", "medium", "high", "xhigh", "max"]);
@@ -1312,36 +1325,99 @@ describe("claude usage snapshot", () => {
     });
   });
 
-  test("accumulates counters across turns while context stays a level", async () => {
-    const session = createSession("accumulating");
-    track(session.id);
-    const turn = {
+  // Each result's `modelUsage` and `total_cost_usd` are running totals. Claude
+  // Code before 2.1.277 restarted them for every resumed `query()`, so two
+  // identical results mean two identical turns; from 2.1.277 a resumed query
+  // continues its transcript's totals, so the second turn's result carries the
+  // first turn as well. Both must settle on the same session numbers.
+  function cumulativeTurn(multiple: number) {
+    return {
       type: "result",
       subtype: "success",
       modelUsage: {
         "claude-opus-5": {
-          inputTokens: 10,
-          outputTokens: 20,
-          cacheReadInputTokens: 70,
+          inputTokens: 10 * multiple,
+          outputTokens: 20 * multiple,
+          cacheReadInputTokens: 70 * multiple,
           contextWindow: 1000,
         },
       },
-      total_cost_usd: 0.5,
+      total_cost_usd: 0.5 * multiple,
       duration_ms: 100,
       duration_api_ms: 80,
       num_turns: 3,
       ttft_ms: 25,
       permission_denials: [{ tool_name: "Bash", tool_use_id: "tool-denied" }],
     };
+  }
 
-    for (let index = 0; index < 2; index += 1) {
-      const promptPromise = sendPrompt(session.id, `turn ${index}`);
+  async function runTurns(sessionId: string, turns: Array<{ cli: string; results: object[] }>) {
+    for (const [index, { cli, results }] of turns.entries()) {
+      const promptPromise = sendPrompt(sessionId, `turn ${index}`);
       const call = await nextQueryCall();
-      call.push(turn);
+      call.push({
+        type: "system",
+        subtype: "init",
+        session_id: "sdk-usage",
+        claude_code_version: cli,
+      });
+      for (const result of results) call.push(result);
       call.finish();
       await promptPromise;
     }
+  }
 
+  for (const { cli, multiples } of [
+    { cli: "2.1.276", multiples: [1, 1] },
+    { cli: "2.1.280", multiples: [1, 2] },
+  ]) {
+    test(`accumulates counters across turns while context stays a level (CLI ${cli})`, async () => {
+      const session = createSession(`accumulating-${cli}`);
+      track(session.id);
+      await runTurns(
+        session.id,
+        multiples.map((multiple) => ({ cli, results: [cumulativeTurn(multiple)] })),
+      );
+      expectTwoAccumulatedTurns(session.id);
+    });
+  }
+
+  test("a restarted provider count is read as the turn's own usage", async () => {
+    const session = createSession("accumulating-reset");
+    track(session.id);
+    // The second query resumed a transcript that saved no totals (or followed a
+    // `/clear`): its count went down, so it is this turn alone.
+    await runTurns(session.id, [
+      { cli: "2.1.280", results: [cumulativeTurn(3)] },
+      { cli: "2.1.280", results: [cumulativeTurn(1)] },
+    ]);
+    expect(getSession(session.id)?.usage).toMatchObject({ inputTokens: 40, costUsd: 2 });
+  });
+
+  test("a zeroed result neither counts nor resets the baseline", async () => {
+    const session = createSession("accumulating-zeroed");
+    track(session.id);
+    await runTurns(session.id, [
+      { cli: "2.1.280", results: [cumulativeTurn(1)] },
+      { cli: "2.1.280", results: [cumulativeTurn(0)] },
+      { cli: "2.1.280", results: [cumulativeTurn(2)] },
+    ]);
+    expect(getSession(session.id)?.usage).toMatchObject({ inputTokens: 20, costUsd: 1 });
+  });
+
+  test("a second result in one query adds only what it ran since the first", async () => {
+    const session = createSession("accumulating-continuation");
+    track(session.id);
+    // A background-task continuation delivers a second result on the same
+    // `query()`, whichever CLI is running; it has always been cumulative.
+    await runTurns(session.id, [
+      { cli: "2.1.276", results: [cumulativeTurn(1), cumulativeTurn(2)] },
+    ]);
+    expect(getSession(session.id)?.usage).toMatchObject({ inputTokens: 20, costUsd: 1 });
+  });
+
+  function expectTwoAccumulatedTurns(sessionId: string) {
+    const session = { id: sessionId };
     expect(getSession(session.id)?.usage).toMatchObject({
       // A level, not a running total: this is the size of the context now.
       usedTokens: 100,
@@ -1373,7 +1449,7 @@ describe("claude usage snapshot", () => {
       { toolName: "Bash", toolUseId: "tool-denied" },
       { toolName: "Bash", toolUseId: "tool-denied" },
     ]);
-  });
+  }
 
   test("publishes nothing when a turn reports no tokens", async () => {
     const { session } = await runPromptWithMessages([{ type: "result", subtype: "success" }]);

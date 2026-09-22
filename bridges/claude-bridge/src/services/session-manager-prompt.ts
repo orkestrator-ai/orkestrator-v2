@@ -187,6 +187,7 @@ import {
   PLAN_APPROVAL_TIMEOUT_MS,
   QUESTION_TIMEOUT_MS,
   applySessionPlanMode,
+  beginClaudeUsageQuery,
   buildClaudeUsageSnapshot,
   claimedPromptDispatches,
   claudeExecutableOptions,
@@ -1188,7 +1189,7 @@ export async function sendPrompt(
         // events a failed lifecycle hook would silently leave task or
         // compaction projection stale.
         includeHookEvents: true,
-        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.276: although the
+        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.280: although the
         // SDK warns that bypassPermissions shadows canUseTool for ordinary
         // tool permission checks, AskUserQuestion is a special case. A live
         // contract probe confirmed it still reaches this callback and the SDK
@@ -1561,6 +1562,7 @@ export async function sendPrompt(
       if (message.type === "system" && message.subtype === "init") {
         // Store the SDK session ID for resume functionality
         const initMsg = message as SDKSystemMessage & Record<string, unknown>;
+        beginClaudeUsageQuery(session, initMsg.claude_code_version);
         const sdkSessionId = initMsg.session_id;
         if (sdkSessionId) {
           const gainedDurableIdentity = session.sdkSessionId !== sdkSessionId;

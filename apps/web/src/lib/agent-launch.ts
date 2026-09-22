@@ -11,6 +11,7 @@ import {
   resolveReasoningId,
   type AgentModel,
 } from "@orkestrator/protocol/native-agent";
+import { SUPERSEDED_CLAUDE_MODEL_IDS } from "@/lib/claude-fallback-models";
 
 export type LaunchAgent = AgentPlatform;
 
@@ -70,6 +71,26 @@ function catalogIdFor(
 }
 
 /**
+ * Per-harness model ids an upgrade replaced. A preference naming one resolves
+ * to its successor once the catalog stops offering the original, rather than
+ * falling back to the first entry. Harnesses that resolve their catalog live
+ * and rename nothing in place have no entry.
+ */
+const SUPERSEDED_MODEL_IDS: Partial<Record<LaunchAgent, Readonly<Record<string, string>>>> = {
+  claude: SUPERSEDED_CLAUDE_MODEL_IDS,
+};
+
+function preferredCatalogId(
+  agent: LaunchAgent,
+  models: AgentModelOption[],
+  preferred: string | undefined,
+): string | undefined {
+  const direct = catalogIdFor(models, preferred);
+  if (direct || !preferred) return direct;
+  return catalogIdFor(models, SUPERSEDED_MODEL_IDS[agent]?.[preferred]);
+}
+
+/**
  * The preferred model when the catalog still offers it, otherwise the first one.
  *
  * A configured default can name a model the running agent no longer exposes;
@@ -81,7 +102,7 @@ export function firstModelFor(
   preferredModels?: Partial<Record<LaunchAgent, string>>,
 ): string {
   const models = modelsForAgent(catalog, agent);
-  return catalogIdFor(models, preferredModels?.[agent]) ?? models[0]?.id ?? "default";
+  return preferredCatalogId(agent, models, preferredModels?.[agent]) ?? models[0]?.id ?? "default";
 }
 
 export function defaultEffortFor(

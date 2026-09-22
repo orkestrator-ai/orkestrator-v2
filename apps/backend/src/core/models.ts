@@ -235,6 +235,8 @@ export interface Environment {
   createdAt: string;
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt?: string;
+  /** Last backend-observed native session completion, even if another session is working. */
+  agentSessionCompletedAt?: string;
   /** Backend-owned aggregate agent activity shared by every frontend. */
   agentActivityState?: AgentActivityState;
   /** Last-write-wins timestamp for the aggregate activity snapshot. */

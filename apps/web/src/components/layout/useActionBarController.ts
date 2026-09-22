@@ -166,7 +166,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const agentActivityObservationRef = useRef<{
     environmentId: string | null;
     state: Environment["agentActivityState"];
-  }>({ environmentId: null, state: undefined });
+    completedAt: Environment["agentSessionCompletedAt"];
+  }>({ environmentId: null, state: undefined, completedAt: undefined });
   const [cleanupDialogOpen, setCleanupDialogOpen] = useState(false);
   const [cleanupTarget, setCleanupTarget] = useState<{
     environmentId: string;
@@ -1144,7 +1145,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     let cancelled = false;
     // Re-reading the same source (after an agent finishes) keeps the current
     // commands usable instead of flashing the run button disabled.
-    const source = hasContainer ? `container:${containerId}` : `local:${worktreePath}`;
+    const source = hasContainer
+      ? `${selectedEnvironmentId}:container:${containerId}`
+      : `${selectedEnvironmentId}:local:${worktreePath}`;
     const isRescan = runCommandsSourceRef.current === source;
     runCommandsSourceRef.current = source;
     if (!isRescan) setIsLoadingRunCommands(true);
@@ -1178,12 +1181,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             setRunCommands(null);
           }
         } catch {
-          setRunCommands(null);
+          if (!isRescan) setRunCommands(null);
         }
       })
       .catch((error) => {
         console.error("[ActionBar] Failed to read orkestrator-ai.json:", error);
-        if (!cancelled) {
+        if (!cancelled && !isRescan) {
           setRunCommands(null);
         }
       })
@@ -1197,6 +1200,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       cancelled = true;
     };
   }, [
+    selectedEnvironmentId,
     selectedEnvironment?.containerId,
     selectedEnvironment?.worktreePath,
     isLocalEnvironment,
@@ -1205,24 +1209,27 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     runCommandsRescanToken,
   ]);
 
-  // Re-scan orkestrator-ai.json whenever the selected environment's agents stop
-  // working, so a run script written by an agent (e.g. the "Create run script"
-  // session) enables the run button without reselecting the environment.
+  // A native session can finish while another one keeps the aggregate working.
+  // The backend's per-session completion token catches that case; the aggregate
+  // edge still covers other agent sources.
   const selectedAgentActivityState = selectedEnvironment?.agentActivityState;
+  const selectedAgentSessionCompletedAt = selectedEnvironment?.agentSessionCompletedAt;
   useEffect(() => {
     const previous = agentActivityObservationRef.current;
     agentActivityObservationRef.current = {
       environmentId: selectedEnvironmentId,
       state: selectedAgentActivityState,
+      completedAt: selectedAgentSessionCompletedAt,
     };
     if (
       previous.environmentId === selectedEnvironmentId &&
-      previous.state === "working" &&
-      selectedAgentActivityState !== "working"
+      ((previous.state === "working" && selectedAgentActivityState !== "working") ||
+        (selectedAgentSessionCompletedAt !== undefined &&
+          previous.completedAt !== selectedAgentSessionCompletedAt))
     ) {
       setRunCommandsRescanToken((token) => token + 1);
     }
-  }, [selectedAgentActivityState, selectedEnvironmentId]);
+  }, [selectedAgentActivityState, selectedAgentSessionCompletedAt, selectedEnvironmentId]);
 
   // Handler for run commands
   const handleRun = useCallback(async () => {

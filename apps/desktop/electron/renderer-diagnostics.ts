@@ -13,7 +13,7 @@ function preloadFailureKind(error: Error): string {
 }
 
 export function installRendererDiagnostics(
-  contents: Pick<WebContents, "on">,
+  contents: Pick<WebContents, "mainFrame" | "on">,
   log: (message: string) => void = (message) => console.info(message),
 ): void {
   // A broken renderer must not flood the persistent log. Reset on a reload so
@@ -48,7 +48,7 @@ export function installRendererDiagnostics(
       : "unknown";
     record(`[DesktopStartup] renderer-gone reason=${reason}`);
   });
-  contents.on("console-message", ({ message }) => {
-    if (isDesktopStartupMessage(message)) record(message);
+  contents.on("console-message", ({ frame, message }) => {
+    if (frame === contents.mainFrame && isDesktopStartupMessage(message)) record(message);
   });
 }

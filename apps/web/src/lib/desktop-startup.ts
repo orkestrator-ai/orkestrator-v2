@@ -38,16 +38,16 @@ export function waitForDesktopConnection({
     const attempt = async () => {
       try {
         const api = getApi();
-        failure = "bridge-unavailable";
         if (typeof api?.invoke === "function" && typeof api.connections?.list === "function") {
           // This round trip proves the preload and trusted IPC route both work.
           const connections = await api.connections.list();
           if (finished) return;
           failure = "backend-unavailable";
           // Remote connection recovery/settings remain accessible when a remote
-          // host is offline. Local must answer before its workspace is mounted.
-          if (connections.activeConnectionId === "local") {
-            if (!connections.localAvailable) throw new Error("Local backend unavailable");
+          // host is offline. A permanently failed Local backend is mountable too:
+          // App owns its degraded-state banner and connection switching remains
+          // available, while another reload cannot revive the backend process.
+          if (connections.activeConnectionId === "local" && connections.localAvailable) {
             await api.invoke("get_config");
           }
           finish("ready");
@@ -120,8 +120,12 @@ export async function startDesktopRenderer({
       console.info(desktopStartupMessage("ready"));
     }
     await start();
-  } catch {
+  } catch (error) {
     console.error(desktopStartupMessage("renderer-load-failed"));
+    console.error("[DesktopStartup] Renderer failed to load", {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     showStartupScreen(target.document, true, () => target.location.reload());
   }
 }

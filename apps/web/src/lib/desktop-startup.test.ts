@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import {
   isDesktopRenderer,
   startDesktopRenderer,
@@ -26,12 +26,12 @@ function clock() {
     pending,
   };
 }
-function api(remote = false) {
+function api(remote = false, localAvailable = true) {
   return {
     connections: {
       list: mock(async () => ({
         activeConnectionId: remote ? "remote" : "local",
-        localAvailable: true,
+        localAvailable,
       })),
     },
     invoke: mock(async () => ({})),
@@ -121,6 +121,41 @@ describe("desktop startup connection", () => {
     );
     expect(bridge.invoke).not.toHaveBeenCalled();
   });
+
+  test("a permanently unavailable Local backend mounts the degraded application state", async () => {
+    const time = clock();
+    const bridge = api(false, false);
+    expect(await waitForDesktopConnection({ getApi: () => bridge, timer: time.timer })).toBe(
+      "ready",
+    );
+    expect(bridge.invoke).not.toHaveBeenCalled();
+  });
+
+  test("keeps a confirmed backend failure when a retry connection-list request hangs", async () => {
+    const time = clock();
+    const bridge = api();
+    bridge.invoke = mock(async () => {
+      throw new Error("backend stopped");
+    }) as typeof bridge.invoke;
+    let hang!: () => void;
+    bridge.connections!.list = mock()
+      .mockResolvedValueOnce({ activeConnectionId: "local", localAvailable: true })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            hang = () => resolve({ activeConnectionId: "local", localAvailable: true });
+          }),
+      ) as never;
+
+    const ready = waitForDesktopConnection({ getApi: () => bridge, timer: time.timer });
+    await time.fire(0);
+    await time.fire(250);
+    await time.fire(10_000);
+    expect(await ready).toBe("backend-unavailable");
+    hang();
+    await time.fire(0);
+    expect(bridge.invoke).toHaveBeenCalledTimes(1);
+  });
 });
 
 function target(protocol = "file:", userAgent = "Electron/42") {
@@ -163,6 +198,21 @@ describe("desktop startup screen", () => {
     expect(start).toHaveBeenCalledTimes(1);
   });
 
+  test("the application mount replaces the temporary startup panel", async () => {
+    const view = target();
+    const start = mock(async () => {
+      const application = view.document.createElement("section");
+      application.dataset.testid = "application";
+      view.document.getElementById("root")!.replaceChildren(application);
+    });
+
+    await startDesktopRenderer({ target: view as never, start, connect: async () => "ready" });
+
+    expect(view.document.querySelector('[role="status"]')).toBeFalsy();
+    expect(view.document.querySelector('[data-testid="application"]')).not.toBeNull();
+    expect(view.document.getElementById("root")?.children).toHaveLength(1);
+  });
+
   test("ordinary browser gateways bypass the desktop check", async () => {
     const view = target("https:", "Chrome/140");
     const connect = mock(async () => "ready" as const);
@@ -176,13 +226,22 @@ describe("desktop startup screen", () => {
 
   test("a failed renderer import has a reload action instead of a blank window", async () => {
     const view = target();
-    await startDesktopRenderer({
-      target: view as never,
-      connect: async () => "ready",
-      start: async () => {
-        throw new Error("chunk missing");
-      },
-    });
-    expect(view.document.querySelector("button")?.textContent).toBe("Reload window");
+    const error = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await startDesktopRenderer({
+        target: view as never,
+        connect: async () => "ready",
+        start: async () => {
+          throw new Error("chunk missing");
+        },
+      });
+      expect(view.document.querySelector("button")?.textContent).toBe("Reload window");
+      expect(error.mock.calls).toContainEqual([
+        "[DesktopStartup] Renderer failed to load",
+        expect.objectContaining({ message: "chunk missing", stack: expect.any(String) }),
+      ]);
+    } finally {
+      error.mockRestore();
+    }
   });
 });

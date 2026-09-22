@@ -4,7 +4,7 @@ import App from "./App";
 import "./lib/native/web-gateway";
 import { renderReactRoot } from "./lib/app-renderer";
 import { startApp } from "./lib/app-startup";
-import { desktopStartupMessage } from "@orkestrator/protocol/debug-logging";
+import { createReactRootErrorOptions } from "./lib/react-root-errors";
 
 const runtimeProfile = import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim();
 if (runtimeProfile) {
@@ -12,39 +12,11 @@ if (runtimeProfile) {
   document.title = `Orkestrator AI — DEV [${runtimeProfile}]`;
 }
 
-function logReactRootError(
-  label: string,
-  error: unknown,
-  errorInfo?: { componentStack?: string | null },
-) {
-  console.error(desktopStartupMessage("renderer-error"));
-  const message = error instanceof Error ? error.message : String(error);
-  const stack = error instanceof Error ? error.stack : undefined;
-  const componentStack = errorInfo?.componentStack ?? undefined;
-
-  console.error(`[ReactRoot] ${label}`, {
-    error,
-    message,
-    stack,
-    componentStack,
-  });
-}
-
-function renderApp(): void {
+function renderApp(reportStartupError?: () => void): void {
   renderReactRoot({
     document,
     createRoot: ReactDOM.createRoot,
-    rootOptions: {
-      onCaughtError: (error, errorInfo) => {
-        logReactRootError("Caught error", error, errorInfo);
-      },
-      onUncaughtError: (error, errorInfo) => {
-        logReactRootError("Uncaught error", error, errorInfo);
-      },
-      onRecoverableError: (error, errorInfo) => {
-        logReactRootError("Recoverable error", error, errorInfo);
-      },
-    },
+    rootOptions: createReactRootErrorOptions({ reportStartupError }),
     children: (
       <React.StrictMode>
         <App />
@@ -53,6 +25,8 @@ function renderApp(): void {
   });
 }
 
-export async function startRenderer(): Promise<void> {
-  await startApp({ render: renderApp });
+export async function startRenderer({
+  reportStartupError,
+}: { reportStartupError?: () => void } = {}): Promise<void> {
+  await startApp({ render: () => renderApp(reportStartupError) });
 }

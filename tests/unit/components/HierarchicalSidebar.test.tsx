@@ -2475,6 +2475,25 @@ describe("HierarchicalSidebar", () => {
       );
     });
 
+    test("sorts a folder's projects alphabetically from its context menu", async () => {
+      projectsValue = [
+        { ...project, id: "project-zulu", name: "Zulu", folder: "Work", order: 0 },
+        { ...secondProject, id: "project-alpha", name: "alpha", folder: "Work", order: 1 },
+        { ...project, id: "project-outside", name: "Outside", order: 2 },
+      ];
+      render(<HierarchicalSidebar />);
+
+      fireEvent.contextMenu(await screen.findByTitle("Collapse folder Work"));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Sort" }));
+
+      await waitFor(() =>
+        expect(arrangeProjectsMock).toHaveBeenCalledWith(
+          ["project-alpha", "project-zulu", "project-outside"],
+          {},
+        ),
+      );
+    });
+
     test("renaming a folder rewrites every member", async () => {
       projectsValue = [
         { ...project, folder: "Work" },

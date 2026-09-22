@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { applySessionEvent } from "./translate.js";
 import { newSessionState } from "./agent-session.js";
 import { MAX_PARTS_PER_MESSAGE } from "./config.js";
-import type { BridgeTextPart, BridgeToolPart, SessionState } from "./state.js";
+import { piRunId, type BridgeTextPart, type BridgeToolPart, type SessionState } from "./state.js";
 
 function running(): SessionState {
   const state = newSessionState();
@@ -301,6 +301,39 @@ describe("tool cards", () => {
 });
 
 describe("session events", () => {
+  test("correlates a steer after an extension rewrites its text", () => {
+    const state = running();
+    const expectedRunId = piRunId(state);
+    state.pendingSteerDeliveries.push({
+      requestId: "rewritten-steer",
+      text: "original instruction",
+      expectedRunId,
+    });
+    state.steerJournal.set("rewritten-steer", {
+      requestId: "rewritten-steer",
+      inputDigest: "a".repeat(64),
+      expectedRunId,
+      state: "queued",
+      createdAt: 1,
+    });
+
+    applySessionEvent(state, {
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "extension-rewritten instruction" }],
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(state.pendingSteerDeliveries).toEqual([]);
+    expect(state.steerJournal.get("rewritten-steer")?.state).toBe("delivered");
+    expect(state.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: "extension-rewritten instruction",
+    });
+  });
+
   test("accumulates usage across the turns of one prompt", () => {
     const state = running();
     applySessionEvent(state, {

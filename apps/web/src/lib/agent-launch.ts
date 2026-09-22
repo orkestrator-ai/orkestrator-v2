@@ -80,14 +80,14 @@ const SUPERSEDED_MODEL_IDS: Partial<Record<LaunchAgent, Readonly<Record<string, 
   claude: SUPERSEDED_CLAUDE_MODEL_IDS,
 };
 
-function preferredCatalogId(
+export function resolveCatalogModelId(
   agent: LaunchAgent,
   models: AgentModelOption[],
-  preferred: string | undefined,
+  modelId: string | undefined,
 ): string | undefined {
-  const direct = catalogIdFor(models, preferred);
-  if (direct || !preferred) return direct;
-  return catalogIdFor(models, SUPERSEDED_MODEL_IDS[agent]?.[preferred]);
+  const direct = catalogIdFor(models, modelId);
+  if (direct || !modelId) return direct;
+  return catalogIdFor(models, SUPERSEDED_MODEL_IDS[agent]?.[modelId]);
 }
 
 /**
@@ -102,7 +102,9 @@ export function firstModelFor(
   preferredModels?: Partial<Record<LaunchAgent, string>>,
 ): string {
   const models = modelsForAgent(catalog, agent);
-  return preferredCatalogId(agent, models, preferredModels?.[agent]) ?? models[0]?.id ?? "default";
+  return (
+    resolveCatalogModelId(agent, models, preferredModels?.[agent]) ?? models[0]?.id ?? "default"
+  );
 }
 
 export function defaultEffortFor(
@@ -111,8 +113,9 @@ export function defaultEffortFor(
   catalog: AgentModelCatalog,
   preferredEfforts?: Partial<Record<LaunchAgent, string>>,
 ): string {
-  const options =
-    modelsForAgent(catalog, agent).find((model) => model.id === modelId)?.reasoningEfforts ?? [];
+  const models = modelsForAgent(catalog, agent);
+  const resolvedModelId = resolveCatalogModelId(agent, models, modelId);
+  const options = models.find((model) => model.id === resolvedModelId)?.reasoningEfforts ?? [];
   const preferred = preferredEfforts?.[agent];
   // Launch dialogs always offer Default as a selectable setting, so the shared
   // fallback prefers it over high unless a still-supported preference hits.

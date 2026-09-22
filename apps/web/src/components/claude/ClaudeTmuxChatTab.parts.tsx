@@ -85,7 +85,7 @@ export const DEFAULT_MODEL = "default";
  * ids that version reports (`claude-fable-5[1m]` before 2.1.280, for one).
  */
 export const LEGACY_TMUX_MODEL_ALIASES: Record<string, string> = {
-  "claude-fable-5": "default",
+  "claude-fable-5": "claude-fable-5-1[1m]",
   "claude-fable-5[1m]": "claude-fable-5-1[1m]",
   "claude-opus-5-5": "default",
   "claude-opus-5-5[1m]": "opus[1m]",

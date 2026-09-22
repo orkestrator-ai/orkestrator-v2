@@ -189,6 +189,7 @@ import {
   applySessionPlanMode,
   beginClaudeUsageQuery,
   buildClaudeUsageSnapshot,
+  claudeCliContinuesResumedUsage,
   claimedPromptDispatches,
   claudeExecutableOptions,
   createStructuredUsageRefreshCoordinator,
@@ -495,6 +496,12 @@ export async function sendPrompt(
   // false`; leaving it false would let a concurrent `GET /:id/messages` replace
   // `session.messages` (and `taskRegistry`) out from under this turn.
   const needsTranscriptHydration = session.persistedMessagesLoaded === false;
+  // A bridge that attaches after the transcript already exists has no in-memory
+  // cumulative origin. Its first result must be bootstrapped from this query's
+  // streamed calls, or the whole transcript is published as one new turn.
+  let bootstrapClaudeUsage =
+    session.claudeUsageBaseline === undefined &&
+    (needsTranscriptHydration || session.messages.length > 0 || session.usage !== undefined);
   session.persistedMessagesLoaded = true;
   // Set when the pre-turn read fails. The claim above is still correct for the
   // duration of the turn, but leaving it set afterwards would hide the on-disk
@@ -668,6 +675,21 @@ export async function sendPrompt(
     stream.beginPostSteerScope();
   };
   const streamUsage = new ClaudeStreamUsageAccumulator();
+  const advanceBaselineForInterruptedStream = () => {
+    const baseline = session.claudeUsageBaseline;
+    if (!baseline) return;
+    const completed = streamUsage.completedTotals();
+    session.claudeUsageBaseline = {
+      input: baseline.input + completed.inputTokens,
+      output: baseline.output + completed.outputTokens,
+      cacheRead: baseline.cacheRead + completed.cacheReadTokens,
+      cacheWrite: baseline.cacheWrite + completed.cacheWriteTokens,
+      // Stream events expose tokens but no price. Leaving cost at the last
+      // terminal result makes the next cumulative result reconcile the missing
+      // interrupted cost exactly once.
+      cost: baseline.cost,
+    };
+  };
   const { toolTracker, taskRegistry, activeTaskIds } = stream;
   const recordInterruptedStructuredOutputIfCurrent = () => {
     if (
@@ -1563,6 +1585,9 @@ export async function sendPrompt(
         // Store the SDK session ID for resume functionality
         const initMsg = message as SDKSystemMessage & Record<string, unknown>;
         beginClaudeUsageQuery(session, initMsg.claude_code_version);
+        if (!claudeCliContinuesResumedUsage(initMsg.claude_code_version)) {
+          bootstrapClaudeUsage = false;
+        }
         const sdkSessionId = initMsg.session_id;
         if (sdkSessionId) {
           const gainedDurableIdentity = session.sdkSessionId !== sdkSessionId;
@@ -2261,12 +2286,21 @@ export async function sendPrompt(
         // Account allocation can advance during the last model request. Queue
         // one final coalesced refresh before publishing the completed token
         // snapshot, preserving the previous end-of-turn exactness.
+        if (!ownsActiveTurn()) {
+          if (abortController.signal.aborted) recordInterruptedStructuredOutputIfCurrent();
+          closeTurnInput();
+          return;
+        }
         await structuredUsageRefresh?.trigger();
         const exactUsage = await buildClaudeUsageSnapshot(
           session,
           resultMsg,
-          session.queryControl,
+          queryIteratorControl,
           options?.model,
+          {
+            ...(bootstrapClaudeUsage ? { bootstrapTurnTokens: streamUsage.completedTotals() } : {}),
+            stillOwnsTurn: ownsActiveTurn,
+          },
         );
         if (!ownsActiveTurn()) {
           if (abortController.signal.aborted) {
@@ -2279,6 +2313,7 @@ export async function sendPrompt(
           closeTurnInput();
           return;
         }
+        bootstrapClaudeUsage = false;
         const streamedUsage =
           session.inProgressUsageGeneration === turnGeneration
             ? session.inProgressUsage
@@ -2636,7 +2671,10 @@ export async function sendPrompt(
     if (session.inProgressUsageGeneration === turnGeneration) {
       // Preserve tokens already observed on interrupted/error paths; the
       // provider may never send the terminal result that would reconcile them.
-      if (session.inProgressUsage) session.usage = session.inProgressUsage;
+      if (session.inProgressUsage) {
+        advanceBaselineForInterruptedStream();
+        session.usage = session.inProgressUsage;
+      }
       session.inProgressUsage = undefined;
       session.inProgressUsageGeneration = undefined;
     }

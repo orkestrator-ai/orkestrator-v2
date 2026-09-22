@@ -381,9 +381,10 @@ export interface SessionState {
    *
    * A result's `total_cost_usd` and `modelUsage` are cumulative, not per turn:
    * across the results of one `query()`, and since Claude Code 2.1.277 across a
-   * resume too. Each result is turned into a per-turn delta against this, and
-   * it lives exactly as long as `usage` does, so losing both together (a bridge
-   * restart) still leaves the next result reading as the correct absolute.
+   * resume too. Each result is turned into a per-turn delta against this. When
+   * a bridge attaches without the in-memory baseline, the first turn is
+   * bootstrapped from completed stream calls instead of charging the saved
+   * transcript as new work.
    */
   claudeUsageBaseline?: ClaudeCumulativeUsage;
   /** Monotonic lower bound from completed model calls in the query still running. */

@@ -1,12 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
+import { CLAUDE_FALLBACK_MODEL_CATALOG } from "@orkestrator/protocol/claude-model-catalog";
 
 // These are the Claude models offered in the settings UI when no bridge server
 // is reachable. They mirror what Claude Code 2.1.280's supportedModels()
-// reports and the bridge-side fallback list
-// (bridges/claude-bridge/src/services/session-manager-interactions.ts
-// getAvailableModelCatalog); this test guards the renderer copy against drift.
+// reports. The bridge and renderer both project the same protocol constant;
+// this test guards the renderer projection as well as the shipped contents.
 describe("FALLBACK_CLAUDE_MODELS", () => {
+  test("projects the catalogue shared with the Claude bridge", () => {
+    expect(FALLBACK_CLAUDE_MODELS).toEqual([...CLAUDE_FALLBACK_MODEL_CATALOG]);
+  });
+
   test("offers the current Claude model line-up in priority order", () => {
     expect(FALLBACK_CLAUDE_MODELS.map((m) => m.id)).toEqual([
       "default",

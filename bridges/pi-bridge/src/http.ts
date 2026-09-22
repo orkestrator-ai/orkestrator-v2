@@ -736,7 +736,7 @@ async function handleSteer(
   // enqueue, though — since 0.87 it awaits the extensions' `input` handlers
   // first, so the run can settle (and `settleTurn` clear Pi's queue) before
   // the instruction is queued at all. That window is closed after the await.
-  state.pendingSteerDeliveries.push({ requestId, text });
+  state.pendingSteerDeliveries.push({ requestId, text, expectedRunId });
   try {
     await session.steer(
       text,
@@ -901,6 +901,9 @@ async function handlePrompt(
     }
     if (journaled.state === "prepared")
       throw new HttpError(409, "Prompt dispatch is still preparing");
+    if (journaled.state === "dropped") {
+      throw new HttpError(409, "The queued follow-up outlived its target turn and was dropped");
+    }
     return json(response, 202, { accepted: true, duplicate: true });
   }
   const idleSteer = idleSteerPromptReply(prompt, "Pi");
@@ -926,10 +929,12 @@ async function handlePrompt(
   // queue with the live run, and its state events rehydrate `/queue` even when
   // the renderer that submitted it is no longer mounted.
   if (state.status === "running" && !state.dispatching && !state.compacting && state.session) {
+    const session = state.session;
+    const expectedRunId = piRunId(state);
     const images = await readPromptImages(
       attachments,
       workingDirectory,
-      state.session.model?.inputLimits?.images?.resize,
+      session.model?.inputLimits?.images?.resize,
     );
     const files = await resolvePromptFiles(attachments, workingDirectory);
     const text = prompt + promptFileReferences(files);
@@ -937,8 +942,19 @@ async function handlePrompt(
       setPromptJournal(state, { requestId, state: "prepared", acceptedAt: Date.now() });
       await persistBarrier();
     }
+    if (
+      state.session !== session ||
+      state.status !== "running" ||
+      state.dispatching ||
+      state.compacting ||
+      piRunId(state) !== expectedRunId
+    ) {
+      if (requestId) state.promptJournal.delete(requestId);
+      await persistBarrier();
+      return json(response, 409, { accepted: false, outcome: "idle" });
+    }
     try {
-      await state.session.followUp(
+      await session.followUp(
         text,
         images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType })),
       );
@@ -946,6 +962,20 @@ async function handlePrompt(
       if (requestId) state.promptJournal.delete(requestId);
       schedulePersist();
       throw error;
+    }
+    if (
+      state.session !== session ||
+      state.status !== "running" ||
+      state.dispatching ||
+      state.compacting ||
+      piRunId(state) !== expectedRunId
+    ) {
+      const outcome = withdrawLateFollowUp(state, session);
+      if (requestId) journal(state, requestId, outcome);
+      await persistBarrier();
+      return outcome === "dropped"
+        ? json(response, 409, { accepted: false, outcome: "idle" })
+        : json(response, 503, { accepted: false, outcome: "unknown", requestId });
     }
     journal(state, requestId, "accepted");
     schedulePersist();
@@ -1051,6 +1081,19 @@ async function handlePrompt(
   void handle.completion;
   void clientSignal;
   return json(response, 202, { accepted: true });
+}
+
+/** Remove a follow-up that Pi enqueued after the run it targeted had ended. */
+function withdrawLateFollowUp(state: SessionState, session: AgentSession): "dropped" | "ambiguous" {
+  const liveTurn = state.session === session && (state.status === "running" || state.dispatching);
+  if (liveTurn && session.pendingMessageCount > 1) return "ambiguous";
+  try {
+    session.clearQueue();
+  } catch {
+    return "ambiguous";
+  }
+  if (state.session === session) state.queue.followUp = [];
+  return "dropped";
 }
 
 function appendLocalExchange(

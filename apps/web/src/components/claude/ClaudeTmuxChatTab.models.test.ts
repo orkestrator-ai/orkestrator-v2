@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ClaudeModel } from "@/lib/claude-client";
 import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
+import { firstModelFor, type AgentModelCatalog } from "@/lib/agent-launch";
 import {
   DEFAULT_MODEL,
   TMUX_FALLBACK_MODELS,
@@ -27,8 +28,22 @@ describe("tmux Claude model preferences", () => {
   });
 
   test("upgrades a saved Fable 5 selection to Fable 5.1", () => {
+    expect(resolveTmuxModelPreference("claude-fable-5", TMUX_FALLBACK_MODELS)).toBe(
+      "claude-fable-5-1[1m]",
+    );
     expect(resolveTmuxModelPreference("claude-fable-5[1m]", TMUX_FALLBACK_MODELS)).toBe(
       "claude-fable-5-1[1m]",
+    );
+    const launchCatalog: AgentModelCatalog = {
+      claude: FALLBACK_CLAUDE_MODELS.map((model) => ({
+        ...model,
+        reasoningEfforts: model.supportedEffortLevels ?? [],
+      })),
+      codex: [],
+      opencode: [],
+    };
+    expect(resolveTmuxModelPreference("claude-fable-5", TMUX_FALLBACK_MODELS)).toBe(
+      firstModelFor("claude", launchCatalog, { claude: "claude-fable-5" }),
     );
   });
 

@@ -118,7 +118,7 @@ function resetTestDependencies(): void {
 }
 
 function fakeAgentSession(overrides: Record<string, unknown> = {}): AgentSession {
-  return {
+  const session = {
     sessionId: "pi-session-test",
     sessionFile: "/tmp/pi-session-test.jsonl",
     promptTemplates: [],
@@ -134,8 +134,9 @@ function fakeAgentSession(overrides: Record<string, unknown> = {}): AgentSession
     getContextUsage: () => undefined,
     getSessionStats: () => ({ cost: 0 }),
     getAvailableThinkingLevels: () => ["off", "minimal", "low", "medium", "high", "xhigh"],
-    ...overrides,
   } as unknown as AgentSession;
+  Object.defineProperties(session, Object.getOwnPropertyDescriptors(overrides));
+  return session;
 }
 
 describe("authentication", () => {
@@ -1384,19 +1385,11 @@ describe("steering", () => {
         timestamp: Date.now(),
       },
     });
-    expect(state.pendingSteerDeliveries).toHaveLength(1);
-    expect(state.steerJournal.get("steer-4")?.state).toBe("queued");
-    expect(state.messages).toHaveLength(0);
-
-    applySessionEvent(state, {
-      type: "message_start",
-      message: {
-        role: "user",
-        content: [{ type: "text", text: request.input }],
-        timestamp: Date.now(),
-      },
+    expect(state.pendingSteerDeliveries).toEqual([]);
+    expect(state.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: "a different instruction",
     });
-    expect(state.messages.at(-1)).toMatchObject({ role: "user", content: request.input });
     expect(state.steerJournal.get("steer-4")?.state).toBe("delivered");
     expect(
       await (await call(`/session/${state.id}/steer/dispatch?requestId=steer-4`)).json(),
@@ -1531,6 +1524,111 @@ describe("steering", () => {
     ).toEqual({ dispatch: "absent" });
   });
 
+  test("leaves a late steer ambiguous when a replacement run owns multiple queued messages", async () => {
+    const state = seedSession();
+    let finishRun: () => void = () => undefined;
+    let queued = 0;
+    let clears = 0;
+    state.session = fakeAgentSession({
+      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+        options.preflightResult?.(true);
+        return new Promise<void>((resolve) => {
+          finishRun = resolve;
+        });
+      },
+      steer: async () => {
+        finishRun();
+        await waitFor(() => state.status === "idle");
+        state.status = "running";
+        state.promptSequence += 1;
+        queued = 2;
+      },
+      clearQueue: () => {
+        clears += 1;
+        queued = 0;
+        return { steering: [], followUp: [] };
+      },
+      get pendingMessageCount() {
+        return queued;
+      },
+    });
+
+    expect(
+      (
+        await call(`/session/${state.id}/prompt`, {
+          method: "POST",
+          body: JSON.stringify({ prompt: "first", requestId: "prompt-before-replacement" }),
+        })
+      ).status,
+    ).toBe(202);
+    await waitFor(() => state.status === "running" && !state.dispatching);
+    const expectedRunId = piRunId(state);
+
+    const response = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "late steer",
+        requestId: "steer-replacement-ambiguous",
+        expectedRunId,
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(state.steerJournal.get("steer-replacement-ambiguous")?.state).toBe("ambiguous");
+    expect(queued).toBe(2);
+    // The terminal cleanup cleared the old run once; withdrawal did not clear
+    // the replacement run's queue.
+    expect(clears).toBe(1);
+  });
+
+  test("leaves a late steer ambiguous when Pi refuses queue cleanup", async () => {
+    const state = seedSession();
+    let finishRun: () => void = () => undefined;
+    let clearAttempts = 0;
+    state.session = fakeAgentSession({
+      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+        options.preflightResult?.(true);
+        return new Promise<void>((resolve) => {
+          finishRun = resolve;
+        });
+      },
+      steer: async () => {
+        finishRun();
+        await waitFor(() => state.status === "idle");
+      },
+      clearQueue: () => {
+        clearAttempts += 1;
+        throw new Error("queue unavailable");
+      },
+      get pendingMessageCount() {
+        return 1;
+      },
+    });
+
+    expect(
+      (
+        await call(`/session/${state.id}/prompt`, {
+          method: "POST",
+          body: JSON.stringify({ prompt: "first", requestId: "prompt-before-clear-failure" }),
+        })
+      ).status,
+    ).toBe(202);
+    await waitFor(() => state.status === "running" && !state.dispatching);
+
+    const response = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "late steer",
+        requestId: "steer-clear-ambiguous",
+        expectedRunId: piRunId(state),
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(state.steerJournal.get("steer-clear-ambiguous")?.state).toBe("ambiguous");
+    expect(clearAttempts).toBe(2);
+  });
+
   test("refuses steering while the initial prompt is still in preflight", async () => {
     const state = seedSession();
     let announcePreflight: (accepted: boolean) => void = () => undefined;
@@ -1629,6 +1727,69 @@ describe("provider-owned follow-ups", () => {
 
     expect(response.status).toBe(500);
     expect(state.promptJournal.has("follow-up-failed")).toBe(false);
+  });
+
+  test("withdraws a follow-up Pi queues after its target run settles", async () => {
+    const state = seedSession();
+    let finishRun: () => void = () => undefined;
+    let promptCalls = 0;
+    let queued = 0;
+    const queuedAtLaterPrompt: number[] = [];
+    state.session = fakeAgentSession({
+      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+        promptCalls += 1;
+        options.preflightResult?.(true);
+        if (promptCalls === 1) {
+          return new Promise<void>((resolve) => {
+            finishRun = resolve;
+          });
+        }
+        queuedAtLaterPrompt.push(queued);
+        return Promise.resolve();
+      },
+      followUp: async () => {
+        finishRun();
+        await waitFor(() => state.status === "idle");
+        queued += 1;
+        state.queue.followUp = ["late follow-up"];
+      },
+      clearQueue: () => {
+        queued = 0;
+        return { steering: [], followUp: [] };
+      },
+      get pendingMessageCount() {
+        return queued;
+      },
+    });
+
+    expect(
+      (
+        await call(`/session/${state.id}/prompt`, {
+          method: "POST",
+          body: JSON.stringify({ prompt: "first", requestId: "prompt-before-follow-up" }),
+        })
+      ).status,
+    ).toBe(202);
+    await waitFor(() => state.status === "running" && !state.dispatching);
+
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "late follow-up", requestId: "late-follow-up" }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ accepted: false, outcome: "idle" });
+    expect(state.promptJournal.get("late-follow-up")?.state).toBe("dropped");
+    expect(state.queue.followUp).toEqual([]);
+    expect(queued).toBe(0);
+
+    const later = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "ordinary later prompt", requestId: "later-prompt" }),
+    });
+    expect(later.status).toBe(202);
+    await waitFor(() => state.status === "idle");
+    expect(queuedAtLaterPrompt).toEqual([0]);
   });
 });
 

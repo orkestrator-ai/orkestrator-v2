@@ -7,56 +7,20 @@
  * environment would offer no Claude model at all, which used to be handled
  * inside the repository dialog and is now shared by all three tiers.
  *
- * This is the renderer's single copy: the tmux composer and the review launch
- * dialog derive theirs from it. It mirrors what Claude Code 2.1.280's
- * `supportedModels()` reports, and the bridge-side fallback in
- * bridges/claude-bridge/src/services/session-manager-interactions.ts, which the
- * renderer cannot import.
+ * The tmux composer and launch surfaces derive from this renderer projection.
+ * Its canonical data lives in @orkestrator/protocol so the Claude bridge's
+ * fallback cannot drift from it.
  */
 import type { ClaudeModel } from "@/lib/claude-client";
+import { CLAUDE_FALLBACK_MODEL_CATALOG } from "@orkestrator/protocol/claude-model-catalog";
 
-export const FALLBACK_CLAUDE_MODELS: Array<ClaudeModel & { resolvedModel?: string }> = [
-  {
-    id: "default",
-    name: "Default (recommended)",
-    description: "Opus 5.5 with 1M context · Best for everyday, complex tasks",
-    supportsFastMode: true,
-    supportsEffort: true,
-    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-    resolvedModel: "claude-opus-5-5[1m]",
-  },
-  {
-    id: "opus[1m]",
-    name: "Opus (1M context)",
-    description: "Opus 5.5 with 1M context · Best for everyday, complex tasks",
-    supportsFastMode: true,
-    supportsEffort: true,
-    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-    resolvedModel: "claude-opus-5-5[1m]",
-  },
-  {
-    id: "claude-fable-5-1[1m]",
-    name: "Fable",
-    description: "Fable 5.1 · Most capable for your hardest and longest-running tasks",
-    supportsEffort: true,
-    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-    resolvedModel: "claude-fable-5-1",
-  },
-  {
-    id: "sonnet",
-    name: "Sonnet",
-    description: "Sonnet 5 · Efficient for routine tasks",
-    supportsEffort: true,
-    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-    resolvedModel: "claude-sonnet-5",
-  },
-  {
-    id: "haiku",
-    name: "Haiku",
-    description: "Haiku 4.5 · Fastest for quick answers",
-    resolvedModel: "claude-haiku-4-5-20251001",
-  },
-];
+export const FALLBACK_CLAUDE_MODELS: Array<ClaudeModel & { resolvedModel?: string }> =
+  CLAUDE_FALLBACK_MODEL_CATALOG.map((model) => ({
+    ...model,
+    ...(model.supportedEffortLevels
+      ? { supportedEffortLevels: [...model.supportedEffortLevels] }
+      : {}),
+  }));
 
 /**
  * Claude model ids a newer Claude Code replaced, mapped to their successor.

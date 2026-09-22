@@ -1,6 +1,6 @@
 import type { SessionState, SessionUsageSnapshot } from "../types/index.js";
 
-interface UsageTotals {
+export interface UsageTotals {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -119,6 +119,11 @@ export class ClaudeStreamUsageAccumulator {
     this.completed = emptyTotals();
     this.current = undefined;
     this.currentModelId = undefined;
+  }
+
+  /** Completed provider calls observed in this query, excluding any open call. */
+  completedTotals(): UsageTotals {
+    return { ...this.completed };
   }
 }
 

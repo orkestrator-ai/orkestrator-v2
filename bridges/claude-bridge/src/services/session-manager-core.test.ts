@@ -1405,6 +1405,100 @@ describe("claude usage snapshot", () => {
     expect(getSession(session.id)?.usage).toMatchObject({ inputTokens: 20, costUsd: 1 });
   });
 
+  test("does not count a pre-attach transcript as the first observed turn", async () => {
+    const session = createSession("attached cumulative usage");
+    track(session.id);
+    session.sdkSessionId = "11111111-2222-4333-8444-555555555555";
+    session.messages.push({
+      id: "persisted-user",
+      role: "user",
+      content: "Earlier work",
+      parts: [{ type: "text", content: "Earlier work" }],
+      createdAt: new Date(0).toISOString(),
+    });
+
+    const prompt = sendPrompt(session.id, "new work");
+    const call = await nextQueryCall();
+    call.push({
+      type: "system",
+      subtype: "init",
+      session_id: session.sdkSessionId,
+      claude_code_version: "2.1.280",
+    });
+    call.push({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: { usage: { input_tokens: 10, cache_read_input_tokens: 70 } },
+      },
+    });
+    call.push({
+      type: "stream_event",
+      event: { type: "message_delta", usage: { output_tokens: 20 } },
+    });
+    call.push({ type: "stream_event", event: { type: "message_stop" } });
+    call.push(cumulativeTurn(3));
+    call.finish();
+    await prompt;
+
+    expect(session.usage).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 20,
+      cacheReadTokens: 70,
+      lastTurnTokens: 100,
+      sessionTokens: 100,
+      costUsd: 0,
+    });
+    expect(session.usage?.turns?.at(-1)).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 20,
+      cacheReadTokens: 70,
+      costUsd: 0,
+    });
+  });
+
+  test("does not count interrupted streamed tokens again on the next resumed result", async () => {
+    const session = createSession("interrupted cumulative usage");
+    track(session.id);
+    await runTurns(session.id, [{ cli: "2.1.280", results: [cumulativeTurn(1)] }]);
+
+    const interrupted = sendPrompt(session.id, "interrupted turn");
+    const interruptedCall = await nextQueryCall();
+    interruptedCall.push({
+      type: "system",
+      subtype: "init",
+      session_id: "sdk-usage",
+      claude_code_version: "2.1.280",
+    });
+    interruptedCall.push({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: { usage: { input_tokens: 10, cache_read_input_tokens: 70 } },
+      },
+    });
+    interruptedCall.push({
+      type: "stream_event",
+      event: { type: "message_delta", usage: { output_tokens: 20 } },
+    });
+    interruptedCall.push({ type: "stream_event", event: { type: "message_stop" } });
+    await waitFor(() => session.inProgressUsage?.sessionTokens === 200);
+    interruptedCall.fail(new Error("provider disconnected"));
+    await expect(interrupted).rejects.toThrow("provider disconnected");
+    expect(session.usage).toMatchObject({ sessionTokens: 200, costUsd: 0.5 });
+
+    await runTurns(session.id, [{ cli: "2.1.280", results: [cumulativeTurn(3)] }]);
+
+    expect(session.usage).toMatchObject({
+      inputTokens: 30,
+      outputTokens: 60,
+      cacheReadTokens: 210,
+      sessionTokens: 300,
+      lastTurnTokens: 100,
+      costUsd: 1.5,
+    });
+  });
+
   test("a second result in one query adds only what it ran since the first", async () => {
     const session = createSession("accumulating-continuation");
     track(session.id);

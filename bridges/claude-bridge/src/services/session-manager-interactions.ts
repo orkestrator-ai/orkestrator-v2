@@ -34,6 +34,7 @@ import type {
 } from "../types/index.js";
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
+import { CLAUDE_FALLBACK_MODEL_CATALOG } from "@orkestrator/protocol/claude-model-catalog";
 import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import {
@@ -267,53 +268,16 @@ export async function getAvailableModelCatalog(): Promise<{
     };
   } catch (error) {
     console.error("[session-manager] Error fetching supported models:", error);
-    // Return fallback models if SDK call fails. Mirrors what Claude Code
-    // 2.1.280's supportedModels() reports; the renderer keeps a copy in
-    // apps/web/src/lib/claude-fallback-models.ts.
+    // Return the shared fallback if SDK discovery fails. The renderer projects
+    // the same protocol constant into its local ClaudeModel shape.
     return {
       source: "fallback",
-      models: [
-        {
-          id: "default",
-          resolvedModel: "claude-opus-5-5[1m]",
-          name: "Default (recommended)",
-          description: "Opus 5.5 with 1M context · Best for everyday, complex tasks",
-          supportsFastMode: true,
-          supportsEffort: true,
-          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-        },
-        {
-          id: "opus[1m]",
-          resolvedModel: "claude-opus-5-5[1m]",
-          name: "Opus (1M context)",
-          description: "Opus 5.5 with 1M context · Best for everyday, complex tasks",
-          supportsFastMode: true,
-          supportsEffort: true,
-          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-        },
-        {
-          id: "claude-fable-5-1[1m]",
-          resolvedModel: "claude-fable-5-1",
-          name: "Fable",
-          description: "Fable 5.1 · Most capable for your hardest and longest-running tasks",
-          supportsEffort: true,
-          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-        },
-        {
-          id: "sonnet",
-          resolvedModel: "claude-sonnet-5",
-          name: "Sonnet",
-          description: "Sonnet 5 · Efficient for routine tasks",
-          supportsEffort: true,
-          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-        },
-        {
-          id: "haiku",
-          resolvedModel: "claude-haiku-4-5-20251001",
-          name: "Haiku",
-          description: "Haiku 4.5 · Fastest for quick answers",
-        },
-      ],
+      models: CLAUDE_FALLBACK_MODEL_CATALOG.map((model) => ({
+        ...model,
+        ...(model.supportedEffortLevels
+          ? { supportedEffortLevels: [...model.supportedEffortLevels] }
+          : {}),
+      })),
     };
   } finally {
     if (q?.return) {

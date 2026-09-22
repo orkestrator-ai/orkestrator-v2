@@ -23,29 +23,59 @@ const part: NativeAsyncQuestionPart = {
 };
 
 describe("NativeAsyncQuestionCard", () => {
-  test.each([false, true])(
-    "renders repeated question text once (multiple questions: %s)",
-    (multiple) => {
-      const questions = multiple
-        ? part.asyncQuestion.questions
-        : part.asyncQuestion.questions.slice(0, 1);
-      render(
-        <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
-          <NativeAsyncQuestionCard
-            part={{
-              ...part,
-              content: "  Which\n target?  ",
-              asyncQuestion: { ...part.asyncQuestion, questions },
-            }}
-          />
-        </AsyncQuestionResponseContext.Provider>,
-      );
+  test("normalizes the question title before suppressing repeated accompanying text", () => {
+    render(
+      <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
+        <NativeAsyncQuestionCard
+          part={{
+            ...part,
+            content: "Which target?",
+            asyncQuestion: {
+              ...part.asyncQuestion,
+              questions: [{ id: "item-1:0", title: "  Which\n   target?  ", options: ["Staging"] }],
+            },
+          }}
+        />
+      </AsyncQuestionResponseContext.Provider>,
+    );
 
-      expect(screen.getAllByText("Which target?")).toHaveLength(1);
-      expect(screen.getByRole("group", { name: "Which target?" })).toBeTruthy();
-      expect(screen.getByLabelText("Custom answer for Which target?")).toBeTruthy();
-    },
-  );
+    expect(screen.getAllByText("Which target?")).toHaveLength(1);
+    expect(screen.getByRole("group", { name: "Which target?" })).toBeTruthy();
+    expect(screen.getByLabelText("Custom answer for Which target?")).toBeTruthy();
+  });
+
+  test("suppresses accompanying text that repeats a later question title", () => {
+    render(
+      <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
+        <NativeAsyncQuestionCard part={{ ...part, content: "  Any\n constraints?  " }} />
+      </AsyncQuestionResponseContext.Provider>,
+    );
+
+    expect(screen.getAllByText("Any constraints?")).toHaveLength(1);
+    expect(screen.getByRole("group", { name: "Any constraints?" })).toBeTruthy();
+  });
+
+  test("renders accompanying text that combines multiple question titles", () => {
+    render(
+      <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
+        <NativeAsyncQuestionCard part={{ ...part, content: "Which target? Any constraints?" }} />
+      </AsyncQuestionResponseContext.Provider>,
+    );
+
+    expect(screen.getByText("Which target? Any constraints?")).toBeTruthy();
+  });
+
+  test("renders accompanying text that starts with a question title and adds context", () => {
+    render(
+      <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
+        <NativeAsyncQuestionCard
+          part={{ ...part, content: "Which target? I need this before deployment." }}
+        />
+      </AsyncQuestionResponseContext.Provider>,
+    );
+
+    expect(screen.getByText("Which target? I need this before deployment.")).toBeTruthy();
+  });
 
   test("renders the agent's accompanying text with activity-neutral copy", () => {
     render(

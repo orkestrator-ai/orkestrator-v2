@@ -41,6 +41,18 @@ export class DesktopWindowRequestGate {
   }
 }
 
+/** Releases a completed asynchronous bind if shutdown began while it waited. */
+export function releaseBoundWindowIfQuitting(options: {
+  isQuitting(): boolean;
+  releaseScope(): void;
+  releaseSlot(): void;
+}): boolean {
+  if (!options.isQuitting()) return false;
+  options.releaseScope();
+  options.releaseSlot();
+  return true;
+}
+
 function connectionPartitionKey(connectionId: string): string {
   return createHash("sha256").update(connectionId).digest("hex").slice(0, 16);
 }

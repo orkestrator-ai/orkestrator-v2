@@ -50,28 +50,47 @@ export function registerWindowAllClosedQuit(options: {
  * Relaunching after exit gives the user the new instance they asked for.
  */
 export function registerQuitReopenRelaunch(options: {
-  app: Pick<Electron.App, "on" | "relaunch" | "quit">;
+  app: Pick<Electron.App, "on" | "relaunch">;
   /** Agent-test launchers supervise one process; never spawn a replacement. */
   allowRelaunch: boolean;
-}): { isQuitting(): boolean; deferReopenWhileQuitting(): boolean } {
+}): {
+  isQuitting(): boolean;
+  scheduleRelaunch(): void;
+  deferReopenWhileQuitting(): boolean;
+} {
   let quitting = false;
   let relaunchScheduled = false;
+  const scheduleRelaunch = (): void => {
+    if (relaunchScheduled) return;
+    relaunchScheduled = true;
+    options.app.relaunch();
+  };
   options.app.on("before-quit", () => {
     quitting = true;
   });
   return {
     isQuitting: () => quitting,
+    scheduleRelaunch,
     deferReopenWhileQuitting(): boolean {
       if (!quitting) return false;
       if (options.allowRelaunch && !relaunchScheduled) {
-        relaunchScheduled = true;
-        // Each call starts one more instance after exit, so schedule it once.
-        options.app.relaunch();
+        scheduleRelaunch();
       }
-      // The relaunch waits for exit. Re-request the quit so a shutdown that is
-      // still held open (or was interrupted) finishes instead of lingering.
-      options.app.quit();
+      // The pending quit resumes after the logging shutdown flushes its tail.
+      // A second quit here would bypass that will-quit hold.
       return true;
     },
   };
+}
+
+/** Startup promises can reject after before-quit has stopped their backend. */
+export function handleStartupFailure(options: {
+  isQuitting(): boolean;
+  error: unknown;
+  report(error: unknown): void;
+  quit(): void;
+}): void {
+  if (options.isQuitting()) return;
+  options.report(options.error);
+  options.quit();
 }

@@ -2,7 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { GITHUB_CREDENTIAL_FILE_ENV, runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
+import {
+  GITHUB_CREDENTIAL_FILE_ENV,
+  GITHUB_MCP_TOKEN_ENV,
+  runtimeEnvironmentForAgentQuery,
+} from "./runtime-env.js";
+
+const noGhToken = async () => undefined;
 
 describe("Claude Agent SDK runtime environment", () => {
   test("preserves the inherited environment when no managed file is configured", async () => {
@@ -13,6 +19,7 @@ describe("Claude Agent SDK runtime environment", () => {
     });
 
     expect(environment).toMatchObject({
+      [GITHUB_MCP_TOKEN_ENV]: "host-token",
       PATH: "/usr/bin:/bin",
       GITHUB_TOKEN: "host-token",
       GH_TOKEN: "host-token",
@@ -62,5 +69,70 @@ describe("Claude Agent SDK runtime environment", () => {
 
     expect(environment.GITHUB_TOKEN).toBeUndefined();
     expect(environment.GH_TOKEN).toBeUndefined();
+  });
+
+  test("falls back to the gh CLI token for the GitHub MCP header on local bridges", async () => {
+    const ghEnvironments: NodeJS.ProcessEnv[] = [];
+    const environment = await runtimeEnvironmentForAgentQuery(
+      { PATH: "/opt/homebrew/bin:/usr/bin" },
+      undefined,
+      async (env) => {
+        ghEnvironments.push(env);
+        return "gh-cli-token";
+      },
+    );
+
+    expect(environment[GITHUB_MCP_TOKEN_ENV]).toBe("gh-cli-token");
+    expect(ghEnvironments[0]?.PATH).toBe("/opt/homebrew/bin:/usr/bin");
+    // Only the MCP header variable is filled; gh keeps using its own keyring.
+    expect(environment.GITHUB_TOKEN).toBeUndefined();
+    expect(environment.GH_TOKEN).toBeUndefined();
+  });
+
+  test("keeps an explicit GitHub MCP token without consulting gh", async () => {
+    let ghCalls = 0;
+    const environment = await runtimeEnvironmentForAgentQuery(
+      { [GITHUB_MCP_TOKEN_ENV]: "explicit-pat", GITHUB_TOKEN: "host-token" },
+      undefined,
+      async () => {
+        ghCalls += 1;
+        return "gh-cli-token";
+      },
+    );
+
+    expect(environment[GITHUB_MCP_TOKEN_ENV]).toBe("explicit-pat");
+    expect(ghCalls).toBe(0);
+  });
+
+  test("leaves the GitHub MCP token unset when gh has no login", async () => {
+    const environment = await runtimeEnvironmentForAgentQuery(
+      { PATH: "/usr/bin" },
+      undefined,
+      noGhToken,
+    );
+
+    expect(environment[GITHUB_MCP_TOKEN_ENV]).toBeUndefined();
+  });
+
+  test("uses the managed container token for the GitHub MCP header", async () => {
+    let ghCalls = 0;
+    const readGhToken = async () => {
+      ghCalls += 1;
+      return "gh-cli-token";
+    };
+    const base = {
+      [GITHUB_CREDENTIAL_FILE_ENV]: "/tmp/orkestrator-ai/github-token",
+    };
+
+    const managed = await runtimeEnvironmentForAgentQuery(
+      base,
+      async () => "managed-token\n",
+      readGhToken,
+    );
+    expect(managed[GITHUB_MCP_TOKEN_ENV]).toBe("managed-token");
+
+    const cleared = await runtimeEnvironmentForAgentQuery(base, async () => "", readGhToken);
+    expect(cleared[GITHUB_MCP_TOKEN_ENV]).toBeUndefined();
+    expect(ghCalls).toBe(0);
   });
 });

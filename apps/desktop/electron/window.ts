@@ -5,6 +5,7 @@ import { PRODUCT_NAME } from "./app-constants.js";
 import { installDefaultContextMenu } from "./context-menu.js";
 import { resolveRendererIndexPath } from "./paths.js";
 import { desktopTitleBarStyle } from "./title-bar-inset.js";
+import { installRendererDiagnostics } from "./renderer-diagnostics.js";
 
 type BrowserWindowConstructor = new (options: BrowserWindowConstructorOptions) => BrowserWindow;
 type ContextMenuMenu = Parameters<typeof installDefaultContextMenu>[1];
@@ -74,6 +75,7 @@ export async function createMainWindow(options: CreateMainWindowOptions): Promis
   });
 
   installDefaultContextMenu(mainWindow, options.menu, options.writeClipboardText);
+  installRendererDiagnostics(mainWindow.webContents);
   mainWindow.webContents.on("will-navigate", (event) => {
     if (!isTrustedRendererUrl(event.url, trustedRendererUrl)) {
       event.preventDefault();

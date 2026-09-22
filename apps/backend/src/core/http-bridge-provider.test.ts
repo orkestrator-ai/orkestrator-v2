@@ -2014,6 +2014,34 @@ describe("HTTP bridge progressive transcript", () => {
     expect(snapshot.freshness).toBe("cached");
   });
 
+  test.each([
+    { name: "a missing message window", value: undefined },
+    { name: "zero omitted parts", value: { omittedParts: 0 } },
+    { name: "fractional omitted parts", value: { omittedParts: 1.5 } },
+    { name: "non-numeric omitted parts", value: { omittedParts: "1" } },
+  ])("leaves omittedParts unset for $name", async ({ value }) => {
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          version: 1,
+          status: "snapshot",
+          token: "bt1.no-omission",
+          value: {
+            messages: [{ id: "m1", content: "hello", parts: [] }],
+            ...(value === undefined ? {} : { messageWindow: value }),
+            complete: false,
+            generation: 1,
+            contentEpoch: 1,
+          },
+        }),
+      codexConnection,
+    );
+
+    const snapshot = await provider.transcriptSnapshot!("session-1", transcriptOptions);
+    if ("unchanged" in snapshot) throw new Error("expected a snapshot");
+    expect(snapshot.omittedParts).toBeUndefined();
+  });
+
   test("rejects a malformed transcript envelope instead of showing an empty tab", async () => {
     for (const body of [
       { version: 1, status: "snapshot" },

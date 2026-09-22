@@ -572,6 +572,17 @@ function progressiveHydrationToken(snapshot: ProviderTranscriptSnapshot): string
   ].join(":");
 }
 
+const PROGRESSIVE_HYDRATION_MAX_ATTEMPTS = 3;
+const PROGRESSIVE_HYDRATION_RETRY_BASE_MS = 25;
+
+type ProgressiveHydrationEntry = {
+  sourceToken: string;
+  snapshot?: ProviderTranscriptSnapshot;
+  promise?: Promise<void>;
+  attempts: number;
+  holdPreview: boolean;
+};
+
 export abstract class NativeAgentServiceProjection extends NativeAgentServiceDispatch {
   private readonly progressiveInstanceId = randomUUID();
   private readonly progressiveTranscriptCache = new Map<
@@ -624,14 +635,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     string,
     { input: NativeAgentProgressiveInput; value: NativeAgentTranscriptView }
   >();
-  private readonly progressiveHydrations = new Map<
-    string,
-    {
-      sourceToken: string;
-      snapshot?: ProviderTranscriptSnapshot;
-      promise?: Promise<void>;
-    }
-  >();
+  private readonly progressiveHydrations = new Map<string, ProgressiveHydrationEntry>();
   private readonly progressiveHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly progressiveMetrics = new ProgressiveReadMetrics();
 
@@ -1584,56 +1588,70 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     initialPromptPresentation: PersistedNativeAgentSession["initialPromptPresentation"],
   ): void {
     if (snapshot.complete !== false) return;
-    if (!snapshot.omittedParts && this.progressivePreviewFillsWindow(snapshot, input.liveWindow))
+    if (
+      (snapshot.omittedParts ?? 0) <= 0 &&
+      this.progressivePreviewFillsWindow(snapshot, input.liveWindow)
+    )
       return;
     const sourceToken = progressiveHydrationToken(snapshot);
     const existing = this.progressiveHydrations.get(key);
     if (existing && existing.sourceToken === sourceToken) return;
     const previousTimer = this.progressiveHydrationTimers.get(key);
     if (previousTimer) clearTimeout(previousTimer);
-    const entry: {
-      sourceToken: string;
-      snapshot?: ProviderTranscriptSnapshot;
-      promise?: Promise<void>;
-    } = { sourceToken };
+    const entry: ProgressiveHydrationEntry = {
+      sourceToken,
+      attempts: 0,
+      holdPreview: (snapshot.omittedParts ?? 0) > 0,
+    };
     this.progressiveHydrations.set(key, entry);
-    const timer = setTimeout(() => {
-      if (this.progressiveHydrationTimers.get(key) === timer) {
-        this.progressiveHydrationTimers.delete(key);
-      }
-      if (this.stopped) return;
-      const promise = this.fillIncompleteProgressiveSnapshot(
-        provider,
-        sessionId,
-        snapshot,
-        input.liveWindow,
-      )
-        .then((hydrated) => {
-          if (this.stopped) return;
-          const current = this.progressiveHydrations.get(key);
-          if (!current || current.sourceToken !== sourceToken) return;
-          current.snapshot = hydrated;
-          if (hydrated === snapshot) return;
-          this.commitProgressiveTranscript(
-            key,
-            input,
-            this.projectProgressiveTranscript(
-              input,
+    const scheduleAttempt = (delayMs: number): void => {
+      const timer = setTimeout(() => {
+        if (this.progressiveHydrationTimers.get(key) === timer) {
+          this.progressiveHydrationTimers.delete(key);
+        }
+        if (this.stopped || this.progressiveHydrations.get(key) !== entry) return;
+        entry.attempts += 1;
+        const promise = this.fillIncompleteProgressiveSnapshot(
+          provider,
+          sessionId,
+          snapshot,
+          input.liveWindow,
+        )
+          .catch(() => snapshot)
+          .then((hydrated) => {
+            if (this.stopped || this.progressiveHydrations.get(key) !== entry) return;
+            if (hydrated === snapshot) {
+              // The preview is safer than freezing a stale, fuller revision.
+              // Keep retrying exact recovery in the background, but only the
+              // first attempt is allowed to hold the visible transcript.
+              entry.holdPreview = false;
+              if (entry.attempts < PROGRESSIVE_HYDRATION_MAX_ATTEMPTS) {
+                scheduleAttempt(PROGRESSIVE_HYDRATION_RETRY_BASE_MS * 2 ** (entry.attempts - 1));
+              }
+              return;
+            }
+            entry.holdPreview = false;
+            entry.snapshot = hydrated;
+            this.commitProgressiveTranscript(
               key,
-              hydrated,
-              sessionId,
-              initialPromptPresentation,
-            ),
-          );
-        })
-        .catch(() => undefined)
-        .finally(() => {
-          const current = this.progressiveHydrations.get(key);
-          if (current?.promise === promise) current.promise = undefined;
-        });
-      entry.promise = promise;
-    }, 0);
-    this.progressiveHydrationTimers.set(key, timer);
+              input,
+              this.projectProgressiveTranscript(
+                input,
+                key,
+                hydrated,
+                sessionId,
+                initialPromptPresentation,
+              ),
+            );
+          })
+          .finally(() => {
+            if (entry.promise === promise) entry.promise = undefined;
+          });
+        entry.promise = promise;
+      }, delayMs);
+      this.progressiveHydrationTimers.set(key, timer);
+    };
+    scheduleAttempt(0);
   }
 
   private async fillIncompleteProgressiveSnapshot(
@@ -1710,17 +1728,21 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
      * recovery atomically instead. Epoch/session/generation changes and complete
      * snapshots remain authoritative replacements, including real deletions.
      */
+    const hydration = this.progressiveHydrations.get(key);
+    const hydrationHoldingPreview =
+      hydration?.sourceToken === progressiveHydrationToken(snapshot) &&
+      hydration.holdPreview &&
+      (hydration.promise !== undefined || this.progressiveHydrationTimers.has(key));
     if (
       snapshot.complete === false &&
       (snapshot.omittedParts ?? 0) > 0 &&
+      hydrationHoldingPreview &&
       snapshot.historyEpoch !== undefined &&
       previous?.value.historyEpoch === snapshot.historyEpoch &&
       previous.value.identity.providerSessionId === providerSessionId &&
       previous.value.identity.sourceGeneration === identity.sourceGeneration &&
       isNormalizedProgressiveMessage(previewHead) &&
-      isNormalizedProgressiveMessage(displayedHead) &&
-      ((previous.value.historyComplete && !previous.value.messageWindow?.omittedParts) ||
-        displayedHead.parts.length > previewHead.parts.length)
+      isNormalizedProgressiveMessage(displayedHead)
     ) {
       return {
         value: previous.value,

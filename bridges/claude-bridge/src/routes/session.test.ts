@@ -2661,6 +2661,7 @@ describe("persisted session routes", () => {
         },
         rateLimits: [{ label: "Five Hour", usedPercent: 42 }],
         completionBlockedByBackgroundTasks: true,
+        retainedContinuationRequestIds: new Set(["request-1"]),
         rewindInProgress: true,
       } as ReturnType<typeof mockGetSession>);
 
@@ -2679,6 +2680,7 @@ describe("persisted session routes", () => {
       });
       expect(data.rateLimits).toEqual([{ label: "Five Hour", usedPercent: 42 }]);
       expect(data.completionBlockedByBackgroundTasks).toBe(true);
+      expect(data.retainedContinuationRequestIds).toEqual(["request-1"]);
       expect(data.rewindInProgress).toBe(true);
     });
 
@@ -2686,6 +2688,7 @@ describe("persisted session routes", () => {
       const data = await jsonBody(await app.request("/session/s-1"));
       expect(data.backgroundTasks).toEqual({});
       expect(data.completionBlockedByBackgroundTasks).toBe(false);
+      expect(data.retainedContinuationRequestIds).toEqual([]);
       expect(data.rewindInProgress).toBe(false);
     });
   });

@@ -3023,6 +3023,23 @@ export class MultiReviewService {
         : await provider.structured<unknown>(session.providerSessionId, request.requestId);
     await this.assertFence(workflow.id, token);
     if (!result) {
+      if (observation.backgroundWorkLive) {
+        // Waiting on background agents it launched is progress, not idleness;
+        // the transcript stall clock still bounds it.
+        if (request.idleResultPolls !== undefined) {
+          delete request.idleResultPolls;
+          await this.save(workflow, token);
+        }
+        await this.observeFixSessionProgress(
+          workflow,
+          token,
+          provider,
+          session,
+          observation.contextUsage,
+          request.kind,
+        );
+        return;
+      }
       request.idleResultPolls = (request.idleResultPolls ?? 0) + 1;
       await this.save(workflow, token);
       if (request.idleResultPolls >= MAX_IDLE_RESULT_POLLS) {

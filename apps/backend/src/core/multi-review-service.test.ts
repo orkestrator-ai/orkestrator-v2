@@ -181,6 +181,8 @@ class Provider implements BuildPipelineProvider {
   usageTokens: number | undefined;
   usageUsedTokens: number | undefined;
   usagePending = false;
+  backgroundWorkLive = false;
+  retainedContinuation = false;
   usageFromMessages?: (messages: readonly unknown[]) => NativeAgentContextUsage | undefined;
   usageMessageLimit?: number;
   readonly messageOptions: Array<{ limit?: number } | undefined> = [];
@@ -194,7 +196,7 @@ class Provider implements BuildPipelineProvider {
   private messagesGate: Promise<void> | null = null;
   private releaseMessagesGate: (() => void) | null = null;
   private readonly sessionIdsByClientKey = new Map<string, string>();
-  constructor(private readonly returnStructured = true) {}
+  constructor(public returnStructured = true) {}
   async createSession(
     _phase: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts",
     _label: string,
@@ -261,6 +263,10 @@ class Provider implements BuildPipelineProvider {
       status,
       ...(contextUsage ? { contextUsage } : {}),
       ...(this.usagePending ? { usagePending: true } : {}),
+      ...(this.backgroundWorkLive ? { backgroundWorkLive: true } : {}),
+      ...(this.retainedContinuation
+        ? { retainedContinuationRequestIds: Array.from(this.sends.keys()) }
+        : {}),
     };
   }
   async messages(_sessionId: string, options?: { limit?: number }): Promise<unknown[]> {
@@ -4345,6 +4351,110 @@ test("MultiReviewService bounds a blocked reviewer and clears the count once it 
   });
 });
 
+/*
+ * Claude releases a turn to idle as soon as its root result arrives, even while
+ * background agents it launched keep working, and resumes the turn when they
+ * settle. A reviewer that fans out that way must not be failed as idle.
+ */
+test("MultiReviewService accepts a reviewer report after the last background task settles", async () => {
+  const provider = new Provider(false);
+  provider.backgroundWorkLive = true;
+  await withService("env-background-work", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    for (let attempt = 0; attempt < 8; attempt++) await service.advanceNow(started.id);
+
+    const waiting = await snapshot(started.id);
+    expect(waiting?.phase).toBe("reviewing");
+    expect(waiting?.reviewers[0]?.status).toBe("running");
+    expect(waiting?.reviewers[0]?.idleResultPolls).toBeUndefined();
+
+    provider.backgroundWorkLive = false;
+    provider.retainedContinuation = true;
+    for (let attempt = 0; attempt < 8; attempt++) await service.advanceNow(started.id);
+    expect((await snapshot(started.id))?.reviewers[0]?.status).toBe("running");
+    provider.retainedContinuation = false;
+    provider.returnStructured = true;
+    await service.advanceNow(started.id);
+    expect((await snapshot(started.id))?.reviewers[0]?.status).toBe("completed");
+  });
+});
+
+test("MultiReviewService keeps a released fix turn open until its result arrives", async () => {
+  const provider = new Provider(false);
+  provider.backgroundWorkLive = true;
+  await withService("env-fix-background", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-fix-background");
+    for (let attempt = 0; attempt < 8; attempt++) await service.advanceNow(workflowId);
+    expect((await snapshot(workflowId))?.phase).toBe("fixing");
+    expect((await snapshot(workflowId))?.fixSession?.idleResultPolls).toBeUndefined();
+    provider.backgroundWorkLive = false;
+    provider.retainedContinuation = true;
+    for (let attempt = 0; attempt < 8; attempt++) await service.advanceNow(workflowId);
+    expect((await snapshot(workflowId))?.phase).toBe("fixing");
+    provider.retainedContinuation = false;
+    provider.returnStructured = true;
+    await service.advanceNow(workflowId);
+    expect((await snapshot(workflowId))?.phase).not.toBe("failed");
+  });
+});
+
+test("MultiReviewService keeps preparation open while background work finishes", async () => {
+  const provider = new Provider(false);
+  provider.backgroundWorkLive = true;
+  await withService(
+    "env-prep-background",
+    provider,
+    async ({ service, snapshot }) => {
+      const started = await service.start({
+        environmentId: "env-prep-background",
+        projectId: "project-1",
+        targetBranch: "main",
+        reviewers: [{ agent: "claude", model: "reviewer" }],
+        reviewModel: { agent: "claude", model: "preparation-model" },
+        fixModel: { agent: "codex", model: "fix-model" },
+      });
+      for (let attempt = 0; attempt < 8; attempt++) await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.phase).not.toBe("failed");
+      expect((await snapshot(started.id))?.activeRequest?.idleResultPolls).toBeUndefined();
+      provider.backgroundWorkLive = false;
+      provider.returnStructured = true;
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.phase).not.toBe("failed");
+    },
+    { packageFlow: true },
+  );
+});
+
+test("MultiReviewService keeps consolidation open while background work finishes", async () => {
+  const provider = new Provider();
+  const send = provider.send.bind(provider);
+  provider.send = async (sessionId, prompt, options) => {
+    await send(sessionId, prompt, options);
+    if (prompt.includes("<multi-review-reports-json>")) {
+      provider.returnStructured = false;
+      provider.backgroundWorkLive = true;
+    }
+  };
+  await withService(
+    "env-consolidation-background",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.activeRequest?.kind === "consolidate";
+      });
+      for (let attempt = 0; attempt < 8; attempt++) await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.phase).toBe("consolidating");
+      expect((await snapshot(started.id))?.activeRequest?.idleResultPolls).toBeUndefined();
+      provider.backgroundWorkLive = false;
+      provider.returnStructured = true;
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.phase).not.toBe("failed");
+    },
+  );
+});
+
 test("MultiReviewService identifies the preparation model when it returns no result", async () => {
   const provider = new Provider(false);
   await withService(
@@ -6350,6 +6460,52 @@ test("MultiReviewService abandons a reviewer whose transcript stopped moving", a
       expect(failed.phase).toBe("failed");
     },
     { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } },
+  );
+});
+
+test("MultiReviewService bounds a background reviewer with the transcript stall clock", async () => {
+  const provider = new Provider(false);
+  provider.backgroundWorkLive = true;
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Waiting" }];
+  await withService(
+    "env-background-stall",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.reviewers[0]?.status === "failed";
+      });
+      expect((await snapshot(started.id))?.reviewers[0]?.error).toContain("produced no activity");
+      expect(provider.aborted).toContain("session-1");
+    },
+    { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } },
+  );
+});
+
+test("MultiReviewService warns when an idle background reviewer stops making progress", async () => {
+  const provider = new Provider(false);
+  provider.backgroundWorkLive = true;
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Waiting" }];
+  await withService(
+    "env-background-warning",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.reviewers[0]?.stalledSince !== undefined;
+      });
+      expect((await snapshot(started.id))?.reviewers[0]?.status).toBe("running");
+      expect(provider.aborted).toEqual([]);
+    },
+    {
+      serviceOptions: {
+        progressProbeIntervalMs: 0,
+        stallWarningMs: 0,
+        stallAbandonMs: 60 * 60_000,
+      },
+    },
   );
 });
 

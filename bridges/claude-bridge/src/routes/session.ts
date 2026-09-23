@@ -310,6 +310,7 @@ session.get("/:id", async (c) => {
         ? String(sessionData.latestTurnGeneration)
         : undefined,
     backgroundTasks: sessionData.backgroundTasks ?? {},
+    retainedContinuationRequestIds: Array.from(sessionData.retainedContinuationRequestIds ?? []),
     completionBlockedByBackgroundTasks: sessionData.completionBlockedByBackgroundTasks === true,
     rewindInProgress: sessionData.rewindInProgress === true,
     // The bridge-owned command inventory revision, the same number the

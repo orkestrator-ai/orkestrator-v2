@@ -62,7 +62,10 @@ import {
 import { HttpBridgeInteractionAdapter } from "./http-bridge-interactions.js";
 import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./http-bridge-catalog.js";
 import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
-import { normalizeClaudeBackgroundTasks } from "./http-bridge-claude-runtime.js";
+import {
+  hasLiveClaudeBackgroundTask,
+  normalizeClaudeBackgroundTasks,
+} from "./http-bridge-claude-runtime.js";
 import {
   readHttpBridgeAuthoritativeSessionState,
   readHttpBridgeLegacyTranscript,
@@ -544,6 +547,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       contextUsage !== undefined &&
       contextUsage.sessionTokens === undefined
         ? { usagePending: true }
+        : {}),
+      ...(status === "idle" && hasLiveClaudeBackgroundTask(body.backgroundTasks)
+        ? { backgroundWorkLive: true }
         : {}),
     };
   }

@@ -1700,6 +1700,26 @@ describe("HTTP bridge provider", () => {
     }
   });
 
+  test("flags an idle session whose turn was released to live background tasks", async () => {
+    const observe = async (backgroundTasks: unknown, status = "idle") => {
+      const { provider } = httpProvider(() => Response.json({ status, backgroundTasks }));
+      return provider.observeSession!("session-1");
+    };
+
+    await expect(
+      observe({ "task-1": { status: "running" }, "task-2": { status: "completed" } }),
+    ).resolves.toMatchObject({ status: "idle", backgroundWorkLive: true });
+    await expect(observe({ "task-1": { status: "paused" } })).resolves.toMatchObject({
+      backgroundWorkLive: true,
+    });
+    for (const settled of [{ "task-1": { status: "completed" } }, {}, undefined]) {
+      expect((await observe(settled)).backgroundWorkLive).toBeUndefined();
+    }
+    expect(
+      (await observe({ "task-1": { status: "running" } }, "running")).backgroundWorkLive,
+    ).toBeUndefined();
+  });
+
   test("preserves the bridge failure detail from an errored session", async () => {
     const { provider } = httpProvider(
       () =>

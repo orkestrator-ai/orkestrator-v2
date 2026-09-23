@@ -989,6 +989,13 @@ export class ReviewFanoutRunner {
         : await provider.structured<unknown>(reviewer.providerSessionId, reviewer.requestId);
     await host.assertFence();
     if (!result) {
+      if (observation.backgroundWorkLive) {
+        // The reviewer ended its turn to wait on background agents it launched;
+        // the provider resumes it when they settle. That is progress, not an
+        // idle reviewer, so it stays bounded by the transcript stall clock.
+        await this.clearStall(reviewer);
+        return this.observeReviewerProgress(provider, reviewer, messages, usageChanged);
+      }
       return this.recordStall(
         reviewer,
         "The reviewer became idle without returning its structured report",

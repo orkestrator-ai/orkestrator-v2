@@ -12,9 +12,12 @@ function startedAtField(startedAt: unknown): { startedAt?: string } {
   return value ? { startedAt: value } : {};
 }
 
+function isLiveTaskStatus(status: unknown): boolean {
+  return status === "pending" || status === "running" || status === "paused";
+}
+
 function settledAtFromEndedAt(endedAt: unknown, status: unknown): { settledAt?: string } {
-  const live = status === "pending" || status === "running" || status === "paused";
-  if (live) return {};
+  if (isLiveTaskStatus(status)) return {};
   const settledAt = isoFromEpoch(endedAt);
   return settledAt ? { settledAt } : {};
 }
@@ -45,4 +48,18 @@ export function normalizeClaudeBackgroundTasks(
         },
       ];
     });
+}
+
+/**
+ * Whether a session snapshot still holds a background task that can do work.
+ *
+ * Claude releases a turn to `idle` as soon as its root result arrives, even
+ * when that turn launched background agents or commands. The SDK re-enters the
+ * same session once they settle, so an idle session with live tasks has not
+ * finished the work its prompt asked for.
+ */
+export function hasLiveClaudeBackgroundTask(value: unknown): boolean {
+  return (normalizeClaudeBackgroundTasks(value) ?? []).some((task) =>
+    isLiveTaskStatus(task.status),
+  );
 }

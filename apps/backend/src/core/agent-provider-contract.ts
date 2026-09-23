@@ -55,6 +55,13 @@ export interface ProviderSessionObservation {
   contextUsage?: NativeAgentContextUsage;
   /** A terminal provider is still reconciling its exact cumulative total. */
   usagePending?: boolean;
+  /**
+   * The session is `idle` only because its turn was released to background
+   * tasks that are still live; the provider resumes the turn when they settle.
+   * `status` stays `idle` because the composer can take input, but a workflow
+   * still waiting on this turn's result must not treat it as finished.
+   */
+  backgroundWorkLive?: boolean;
 }
 
 export interface ProviderPromptImage {

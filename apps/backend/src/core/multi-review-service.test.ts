@@ -181,6 +181,7 @@ class Provider implements BuildPipelineProvider {
   usageTokens: number | undefined;
   usageUsedTokens: number | undefined;
   usagePending = false;
+  backgroundWorkLive = false;
   usageFromMessages?: (messages: readonly unknown[]) => NativeAgentContextUsage | undefined;
   usageMessageLimit?: number;
   readonly messageOptions: Array<{ limit?: number } | undefined> = [];
@@ -261,6 +262,7 @@ class Provider implements BuildPipelineProvider {
       status,
       ...(contextUsage ? { contextUsage } : {}),
       ...(this.usagePending ? { usagePending: true } : {}),
+      ...(this.backgroundWorkLive ? { backgroundWorkLive: true } : {}),
     };
   }
   async messages(_sessionId: string, options?: { limit?: number }): Promise<unknown[]> {
@@ -4341,6 +4343,32 @@ test("MultiReviewService bounds a blocked reviewer and clears the count once it 
     expect(failed?.reviewers[0]).toMatchObject({
       status: "failed",
       error: "The reviewer stayed blocked without a resolvable interaction",
+    });
+  });
+});
+
+/*
+ * Claude releases a turn to idle as soon as its root result arrives, even while
+ * background agents it launched keep working, and resumes the turn when they
+ * settle. A reviewer that fans out that way must not be failed as idle.
+ */
+test("MultiReviewService waits on a reviewer whose idle turn still has live background work", async () => {
+  const provider = new Provider(false);
+  provider.backgroundWorkLive = true;
+  await withService("env-background-work", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    for (let attempt = 0; attempt < 8; attempt++) await service.advanceNow(started.id);
+
+    const waiting = await snapshot(started.id);
+    expect(waiting?.phase).toBe("reviewing");
+    expect(waiting?.reviewers[0]?.status).toBe("running");
+    expect(waiting?.reviewers[0]?.idleResultPolls).toBeUndefined();
+
+    provider.backgroundWorkLive = false;
+    for (let attempt = 0; attempt < 6; attempt++) await service.advanceNow(started.id);
+    expect((await snapshot(started.id))?.reviewers[0]).toMatchObject({
+      status: "failed",
+      error: "The reviewer became idle without returning its structured report",
     });
   });
 });

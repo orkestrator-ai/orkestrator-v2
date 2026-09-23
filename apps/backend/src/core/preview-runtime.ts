@@ -188,6 +188,27 @@ export class PreviewRuntime {
   }
 
   /**
+   * Safe diagnostics for the trusted control API: counts, bounded categories,
+   * and operator status only — never URLs, paths, headers, or secrets.
+   */
+  diagnostics() {
+    return {
+      registry: this.registry.diagnostics(),
+      access: this.access.stats(),
+      resolver: this.resolver.stats(),
+      readiness: this.readiness.stats(),
+      metrics: this.metrics.snapshot(),
+      settings: {
+        transport: this.effectiveSettings().transport,
+        relay: this.effectiveSettings().relay,
+        publicationEnabled: this.effectiveSettings().publication.enabled,
+      },
+      publication: this.publicationDetail(),
+      relay: this.relayStatus(),
+    };
+  }
+
+  /**
    * Advertise each mode only when its server dependencies are actually ready.
    * Components that attach later (access, publication, relay) contribute
    * through the provider hooks below.
@@ -243,6 +264,8 @@ export class PreviewRuntime {
     available: false,
     reason: "No private preview domain is configured.",
   });
+  /** Operator-facing publication detail (domain, listener, certificate expiry). */
+  publicationDetail: () => unknown = () => null;
   relayStatus: () => { available: boolean; reason?: string } = () => ({
     available: false,
     reason: "The container relay is disabled.",

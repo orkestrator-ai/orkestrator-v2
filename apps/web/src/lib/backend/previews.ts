@@ -47,16 +47,29 @@ export interface PreviewSettingsShape {
   };
 }
 
+export interface PreviewPublicationDetail {
+  enabled: boolean;
+  available: boolean;
+  reason?: string;
+  domain: string | null;
+  listening: { address: string; port: number } | null;
+  certificate: { validTo: string; coversHosts: boolean } | null;
+}
+
+/** Safe operator diagnostics: counts and bounded categories only. */
 export interface PreviewDiagnosticsSnapshot {
   registry: Record<string, number | string>;
   access: Record<string, number>;
+  resolver: Record<string, number>;
+  readiness: Record<string, number>;
   metrics: {
     counters: Record<string, number>;
     histograms: Record<string, { count: number; p50: number; p95: number; max: number }>;
     gauges: Record<string, number>;
   };
-  publication: { available: boolean; reason?: string } | null;
-  relay: { available: boolean; reason?: string } | null;
+  settings: { transport: boolean; relay: boolean; publicationEnabled: boolean };
+  publication: PreviewPublicationDetail | null;
+  relay: { available: boolean; reason?: string };
 }
 
 function operationId(): string {

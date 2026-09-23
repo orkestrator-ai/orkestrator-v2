@@ -17,12 +17,14 @@ import {
   Cable,
   MessagesSquare,
   RadioTower,
+  MonitorPlay,
   Volume2,
 } from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
 import { SkillsSettings } from "./SkillsSettings";
 import { McpSettings } from "./McpSettings";
+import { PreviewSettings } from "./PreviewSettings";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 import { MessagingSettings } from "./MessagingSettings";
 import { ConnectionsSettings } from "./ConnectionsSettings";
@@ -69,6 +71,7 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "terminal", label: "Terminal", icon: <Terminal className="h-4 w-4" /> },
   { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },
   { id: "web-client", label: "Web client", icon: <Globe2 className="h-4 w-4" /> },
+  { id: "previews", label: "Browser previews", icon: <MonitorPlay className="h-4 w-4" /> },
   { id: "mcp", label: "MCP", icon: <Cable className="h-4 w-4" /> },
   { id: "messaging", label: "Messaging", icon: <MessagesSquare className="h-4 w-4" /> },
   { id: "sounds", label: "Sounds", icon: <Volume2 className="h-4 w-4" /> },
@@ -125,6 +128,8 @@ export function SettingsPage({ open, onOpenChange, defaultSection }: SettingsPag
           <ConnectionsSettings />
         ) : activeSection === "mcp" ? (
           <McpSettings />
+        ) : activeSection === "previews" ? (
+          <PreviewSettings />
         ) : activeSection === "messaging" ? (
           <MessagingSettings />
         ) : isLoading && !initialLoadDone ? (

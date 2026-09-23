@@ -157,6 +157,10 @@ export function registerPreviewCommands(register: CommandRegistrar): void {
     };
   });
 
+  register("get_preview_diagnostics", async (_args, context) =>
+    (await previews(context)).diagnostics(),
+  );
+
   register("get_preview_settings", async (_args, context) => {
     const runtime = await previews(context);
     return { stored: runtime.storedSettings(), effective: runtime.effectiveSettings() };

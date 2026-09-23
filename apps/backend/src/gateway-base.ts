@@ -198,6 +198,13 @@ export abstract class GatewayBase {
       });
       const tunnel = this.previewTunnel;
       this.previews.tunnelReady = () => tunnel.listening && this.servers.size > 0;
+      this.previewMetrics.gauge("tunnel.sockets", () => tunnel.stats().sockets);
+      this.previewMetrics.gauge("tunnel.queued_bytes", () => tunnel.stats().aggregateQueuedBytes);
+      this.previewMetrics.gauge("tunnel.active", () => tunnel.stats().admission.active);
+      this.previewMetrics.gauge(
+        "legacy.http_active",
+        () => this.legacyPreviewAdmission.stats().active,
+      );
     }
     this.eventReplay = new GatewayEventReplay(randomBytes(16).toString("hex"), options.eventReplay);
     this.replayHandshakeFrameCapacity = Math.max(

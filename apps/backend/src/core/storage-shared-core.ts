@@ -726,10 +726,15 @@ export function isPortNumber(value: unknown): value is number {
 }
 
 export function isPortMapping(value: unknown): value is PortMapping {
+  if (!isRecord(value)) return false;
+  // Automatic allocation is explicit; a 0 host port is valid only in that mode.
+  const hostPortValid =
+    value.hostPortMode === "auto"
+      ? value.hostPort === 0
+      : value.hostPortMode === undefined && isPortNumber(value.hostPort);
   return (
-    isRecord(value) &&
     isPortNumber(value.containerPort) &&
-    isPortNumber(value.hostPort) &&
+    hostPortValid &&
     (value.protocol === "tcp" || value.protocol === "udp")
   );
 }

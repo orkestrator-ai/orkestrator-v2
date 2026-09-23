@@ -132,6 +132,13 @@ export class PreviewPublicationManager implements PreviewPublicationPort {
       upstream: { ca: () => options.runtime.upstreamCa() },
     });
     options.runtime.publicationStatus = () => this.capability();
+    options.runtime.publicationDetail = () => this.status();
+    options.runtime.metrics.gauge("publication.sockets", () => this.sockets.size);
+    options.runtime.metrics.gauge("publication.http_active", () => this.proxy.stats().http.active);
+    options.runtime.metrics.gauge(
+      "publication.upgrades_active",
+      () => this.proxy.stats().upgrades.active,
+    );
     this.unsubscribe = options.runtime.onSettingsChanged(() => {
       void this.reconfigure().catch((error: unknown) => {
         options.logger.warn(

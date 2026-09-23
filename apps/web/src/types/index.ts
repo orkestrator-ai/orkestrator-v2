@@ -50,6 +50,8 @@ export interface PortMapping {
   hostPort: number;
   /** Protocol (tcp or udp), defaults to tcp */
   protocol: PortProtocol;
+  /** "auto": Docker chooses the host port (hostPort is then 0). */
+  hostPortMode?: "auto";
 }
 
 export type ClaudeCatalogEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";

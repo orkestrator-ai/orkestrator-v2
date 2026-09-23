@@ -461,6 +461,20 @@ describe("Electron StorageService", () => {
     expect((await storage.getProject(firstProject.id))?.gitUrl).toBe(
       "git@github.com:acme/first-moved.git",
     );
+    await storage.updateProject(firstProject.id, {
+      gitUrl: "https://user:token@github.com/acme/credentialed.git",
+    });
+    expect((await storage.getProject(firstProject.id))?.gitUrl).toBe(
+      "https://github.com/acme/credentialed.git",
+    );
+    await expect(
+      storage.updateProject(firstProject.id, {
+        gitUrl: "https://user:token@github.com/acme/second.git",
+      }),
+    ).rejects.toThrow("Duplicate project URL: https://github.com/acme/second.git");
+    expect((await storage.getProject(firstProject.id))?.gitUrl).toBe(
+      "https://github.com/acme/credentialed.git",
+    );
     expect(
       (await storage.reorderProjects([secondProject.id])).map((project) => project.id),
     ).toEqual([secondProject.id, firstProject.id]);

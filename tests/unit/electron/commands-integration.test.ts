@@ -259,10 +259,34 @@ describe("storage-backed command delegation", () => {
     ).rejects.toThrow("Git URL must be an HTTPS, SSH, or git@ remote URL");
     await expect(
       commands.get("update_project")?.(
+        {
+          projectId: "project-1",
+          updates: { name: "renamed", gitUrl: "  git@github.com:acme/moved.git  " },
+        },
+        context,
+      ),
+    ).resolves.toEqual({ name: "renamed", gitUrl: "  git@github.com:acme/moved.git  " });
+    const legacyProject = { ...project, gitUrl: "/tmp/origin.git" };
+    storage.getProject.mockResolvedValueOnce(legacyProject);
+    await expect(
+      commands.get("update_project")?.(
+        { projectId: "project-1", updates: { name: "legacy renamed", gitUrl: "/tmp/origin.git" } },
+        context,
+      ),
+    ).resolves.toEqual({ name: "legacy renamed", gitUrl: "/tmp/origin.git" });
+    await expect(
+      commands.get("update_project")?.(
         { projectId: "project-1", updates: { gitUrl: 42 } },
         context,
       ),
     ).rejects.toThrow("updates.gitUrl");
+    storage.updateProject.mockRejectedValueOnce(new Error("Duplicate project URL"));
+    await expect(
+      commands.get("update_project")?.(
+        { projectId: "project-1", updates: { gitUrl: "https://github.com/acme/duplicate.git" } },
+        context,
+      ),
+    ).rejects.toThrow("Duplicate project URL");
     await expect(
       commands.get("reorder_projects")?.({ projectIds: ["project-2", "project-1"] }, context),
     ).resolves.toEqual(["project-2", "project-1"]);
@@ -1498,6 +1522,62 @@ exit 0
       if (previousCursorApiKey === undefined) delete process.env.CURSOR_API_KEY;
       else process.env.CURSOR_API_KEY = previousCursorApiKey;
     }
+  });
+
+  test("new environments use an updated project remote when created and started", async () => {
+    const project = {
+      id: "project-1",
+      name: "Moved repository",
+      gitUrl: "https://git.example.invalid/old.git",
+      localPath: null,
+      addedAt: new Date(0).toISOString(),
+      order: 0,
+    };
+    const { context } = createContext([], { project });
+    Object.assign(context.storage, {
+      updateProject: mock(async (_id: string, updates: { gitUrl?: string }) => {
+        if (updates.gitUrl !== undefined) project.gitUrl = updates.gitUrl;
+        return project;
+      }),
+    });
+    const commands = createCommandRegistry();
+    const movedUrl = "https://git.example.invalid/moved.git";
+    const gitLog = path.join(await createTempDir("ork-updated-remote-"), "git.log");
+
+    await expect(
+      commands.get("update_project")?.(
+        { projectId: project.id, updates: { gitUrl: movedUrl } },
+        context,
+      ),
+    ).resolves.toMatchObject({ gitUrl: movedUrl });
+
+    await withGitArgumentStub(
+      `  *ls-remote*) printf '%s\\n' "$*" >> '${gitLog}'; exit 0 ;;`,
+      async () => {
+        const created = (await commands.get("create_environment")?.(
+          { projectId: project.id, name: "after-move", networkAccessMode: "full" },
+          context,
+        )) as Environment;
+        expect(created.projectId).toBe(project.id);
+        expect(await fs.readFile(gitLog, "utf8")).toContain(movedUrl);
+
+        await withFakeDocker(
+          `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "create" ]; then exit 42; fi
+exit 0
+`,
+          async (logs) => {
+            await commands
+              .get("start_environment")?.({ environmentId: created.id }, context)
+              .catch(() => undefined);
+            const dockerCalls = await fs.readFile(logs.all, "utf8");
+            expect(dockerCalls).toContain(`GIT_URL=${movedUrl}`);
+            expect(dockerCalls).not.toContain("GIT_URL=https://git.example.invalid/old.git");
+          },
+        );
+      },
+    );
   });
 
   test("forwards a host-inherited Cursor API key but reports its source to the renderer", async () => {

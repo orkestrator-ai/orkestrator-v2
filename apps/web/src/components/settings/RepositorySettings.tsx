@@ -15,8 +15,8 @@ import {
   type AgentSettingsTier,
 } from "@orkestrator/protocol/agent-settings";
 import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
-import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { isGitRemoteUrl, withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -80,6 +80,7 @@ export function RepositorySettings({
   const [localPath, setLocalPath] = useState(project.localPath || "");
   const [projectNameError, setProjectNameError] = useState<string | null>(null);
   const [isReadingRemote, setIsReadingRemote] = useState(false);
+  const remoteReadGeneration = useRef(0);
 
   // Repository config fields
   const [defaultBranch, setDefaultBranch] = useState(initialConfig.defaultBranch);
@@ -105,6 +106,7 @@ export function RepositorySettings({
   // Reset form when project changes or dialog opens
   useEffect(() => {
     if (open) {
+      setIsReadingRemote(false);
       // Reset project fields
       setProjectName(project.name);
       setGitUrl(project.gitUrl);
@@ -120,6 +122,9 @@ export function RepositorySettings({
       setAgentSettings(normalizeAgentSettings(config.agentSettings));
       setEntryPort(config.entryPort != null ? String(config.entryPort) : "");
     }
+    return () => {
+      remoteReadGeneration.current += 1;
+    };
   }, [open, project.id, project.name, project.gitUrl, project.localPath, getRepositoryConfig]);
 
   // Validate project name
@@ -145,19 +150,22 @@ export function RepositorySettings({
   };
 
   const gitUrlError = useMemo(() => {
+    if (gitUrl.trim() === project.gitUrl) return null;
     if (!gitUrl.trim()) return "Git URL cannot be empty";
     if (!isGitRemoteUrl(gitUrl)) return "Enter an HTTPS, SSH, or git@ remote URL";
     return null;
-  }, [gitUrl]);
+  }, [gitUrl, project.gitUrl]);
 
   // Fill the Git URL from the local clone's origin, the usual source of truth
   // once a repository has been moved or renamed.
   const handleUseLocalRemote = async () => {
     const path = localPath.trim();
     if (!path) return;
+    const generation = ++remoteReadGeneration.current;
     setIsReadingRemote(true);
     try {
       const remoteUrl = await backend.getGitRemoteUrl(path);
+      if (generation !== remoteReadGeneration.current) return;
       if (remoteUrl) {
         setGitUrl(remoteUrl);
       } else {
@@ -166,10 +174,11 @@ export function RepositorySettings({
         });
       }
     } catch (err) {
+      if (generation !== remoteReadGeneration.current) return;
       const message = err instanceof Error ? err.message : "Failed to read the Git remote";
       toast.error("Could not read the local remote", { description: message });
     } finally {
-      setIsReadingRemote(false);
+      if (generation === remoteReadGeneration.current) setIsReadingRemote(false);
     }
   };
 
@@ -299,6 +308,7 @@ export function RepositorySettings({
   }, [portMappings]);
 
   const handleSave = async () => {
+    if (isReadingRemote) return;
     // Validate project name
     if (!validateProjectName(projectName)) {
       return;
@@ -378,6 +388,8 @@ export function RepositorySettings({
   };
 
   const handleCancel = () => {
+    remoteReadGeneration.current += 1;
+    setIsReadingRemote(false);
     // Reset project fields
     setProjectName(project.name);
     setGitUrl(project.gitUrl);
@@ -448,7 +460,7 @@ export function RepositorySettings({
                   spellCheck={false}
                   autoCapitalize="off"
                   autoCorrect="off"
-                  disabled={isSaving}
+                  disabled={isSaving || isReadingRemote}
                 />
                 {localPath.trim() && (
                   <Button
@@ -472,7 +484,10 @@ export function RepositorySettings({
                   variant="ghost"
                   size="icon"
                   onClick={() =>
-                    window.open(getGitHubRepositoryUrl(gitUrl) ?? gitUrl.trim(), "_blank")
+                    window.open(
+                      getGitHubRepositoryUrl(gitUrl) ?? withoutUrlCredentials(gitUrl.trim()),
+                      "_blank",
+                    )
                   }
                   disabled={gitUrlError !== null}
                   title="Open in browser"
@@ -498,14 +513,14 @@ export function RepositorySettings({
                   onChange={(e) => setLocalPath(e.target.value)}
                   placeholder="/path/to/repository"
                   className="flex-1"
-                  disabled={isSaving}
+                  disabled={isSaving || isReadingRemote}
                 />
                 <Button
                   type="button"
                   variant="outline"
                   size="icon"
                   onClick={handleBrowse}
-                  disabled={isSaving}
+                  disabled={isSaving || isReadingRemote}
                   title="Browse for local path"
                   aria-label="Browse for local path"
                 >
@@ -741,7 +756,7 @@ export function RepositorySettings({
           <Button variant="outline" onClick={handleCancel}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={isSaving || hasErrors}>
+          <Button onClick={handleSave} disabled={isSaving || isReadingRemote || hasErrors}>
             {isSaving ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />

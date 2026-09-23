@@ -1,5 +1,5 @@
 import { describe, test, expect, mock, beforeEach, afterEach, afterAll } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as realSelect from "@/components/ui/select";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 import type { OpenCodeModelCatalogSnapshot } from "@/lib/backend";
@@ -513,6 +513,41 @@ describe("RepositorySettings", () => {
       expect(onUpdateProject).not.toHaveBeenCalled();
     });
 
+    test("saves unrelated settings for a project with an existing local-path remote", async () => {
+      const onUpdateProject = mock(async (project: Project) => project);
+      renderSettings({
+        section: "branches",
+        project: { gitUrl: "/tmp/origin.git" },
+        onUpdateProject,
+      });
+
+      fireEvent.change(screen.getByLabelText("Default Branch"), { target: { value: "develop" } });
+      expect((getSaveButton() as HTMLButtonElement).disabled).toBe(false);
+      fireEvent.click(getSaveButton());
+
+      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
+      expect(getSavedConfig().defaultBranch).toBe("develop");
+      expect(onUpdateProject).not.toHaveBeenCalled();
+    });
+
+    test("can rename a project with an existing local-path remote", async () => {
+      const onUpdateProject = mock(async (project: Project) => project);
+      renderSettings({
+        section: "general",
+        project: { gitUrl: "/tmp/origin.git" },
+        onUpdateProject,
+      });
+
+      fireEvent.change(screen.getByLabelText("Name"), { target: { value: "renamed" } });
+      fireEvent.click(getSaveButton());
+
+      await waitFor(() => expect(onUpdateProject).toHaveBeenCalledTimes(1));
+      expect(onUpdateProject.mock.calls[0]?.[0]).toMatchObject({
+        name: "renamed",
+        gitUrl: "/tmp/origin.git",
+      });
+    });
+
     test("rejects an empty or malformed Git URL", () => {
       renderSettings({ section: "general" });
       const gitUrlInput = screen.getByLabelText("Git URL");
@@ -526,7 +561,7 @@ describe("RepositorySettings", () => {
       expect((getSaveButton() as HTMLButtonElement).disabled).toBe(true);
 
       fireEvent.change(gitUrlInput, { target: { value: "git@github.com:owner/repo.git" } });
-      expect(screen.queryByText("Enter an HTTPS, SSH, or git@ remote URL")).toBeNull();
+      expect(screen.queryByText("Enter an HTTPS, SSH, or git@ remote URL") === null).toBe(true);
       expect((getSaveButton() as HTMLButtonElement).disabled).toBe(false);
     });
 
@@ -565,14 +600,100 @@ describe("RepositorySettings", () => {
       );
     });
 
+    test("reports a failure to read the local origin", async () => {
+      mockGetGitRemoteUrl.mockImplementation(async () => {
+        throw new Error("git config failed");
+      });
+      renderSettings({ section: "general", project: { localPath: "/tmp/repo" } });
+
+      fireEvent.click(screen.getByRole("button", { name: "Use the local clone's origin remote" }));
+
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("Could not read the local remote", {
+          description: "git config failed",
+        }),
+      );
+      expect((screen.getByLabelText("Git URL") as HTMLInputElement).value).toBe(
+        "git@github.com:test/repo.git",
+      );
+    });
+
+    test("keeps an origin read from racing an edit or save", async () => {
+      let resolveRemote!: (value: string) => void;
+      mockGetGitRemoteUrl.mockImplementation(
+        () => new Promise<string>((resolve) => (resolveRemote = resolve)),
+      );
+      const onUpdateProject = mock(async (project: Project) => project);
+      renderSettings({
+        section: "general",
+        project: { localPath: "/tmp/repo" },
+        onUpdateProject,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Use the local clone's origin remote" }));
+      expect((screen.getByLabelText("Git URL") as HTMLInputElement).disabled).toBe(true);
+      expect((getSaveButton() as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByLabelText("Local Path") as HTMLInputElement).disabled).toBe(true);
+
+      await act(async () => resolveRemote("git@github.com:moved/repo.git"));
+      expect((screen.getByLabelText("Git URL") as HTMLInputElement).value).toBe(
+        "git@github.com:moved/repo.git",
+      );
+      expect((getSaveButton() as HTMLButtonElement).disabled).toBe(false);
+      fireEvent.click(getSaveButton());
+      await waitFor(() => expect(onUpdateProject).toHaveBeenCalledTimes(1));
+      expect(onUpdateProject.mock.calls[0]?.[0].gitUrl).toBe("git@github.com:moved/repo.git");
+    });
+
+    test("ignores an origin result after Cancel", async () => {
+      let resolveRemote!: (value: string) => void;
+      mockGetGitRemoteUrl.mockImplementation(
+        () => new Promise<string>((resolve) => (resolveRemote = resolve)),
+      );
+      renderSettings({ section: "general", project: { localPath: "/tmp/repo" } });
+
+      fireEvent.click(screen.getByRole("button", { name: "Use the local clone's origin remote" }));
+      fireEvent.click(getCancelButton());
+      await act(async () => resolveRemote("git@github.com:late/repo.git"));
+
+      expect((screen.getByLabelText("Git URL") as HTMLInputElement).value).toBe(
+        "git@github.com:test/repo.git",
+      );
+    });
+
+    test("opens GitHub and non-GitHub remotes in the browser", () => {
+      const open = mock(() => null);
+      const previousOpen = window.open;
+      window.open = open;
+      try {
+        renderSettings({ section: "general" });
+        fireEvent.click(screen.getByRole("button", { name: "Open in browser" }));
+        expect(open).toHaveBeenCalledWith("https://github.com/test/repo", "_blank");
+
+        fireEvent.change(screen.getByLabelText("Git URL"), {
+          target: { value: "https://git.example.com/owner/repo.git" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Open in browser" }));
+        expect(open).toHaveBeenLastCalledWith("https://git.example.com/owner/repo.git", "_blank");
+
+        fireEvent.change(screen.getByLabelText("Git URL"), {
+          target: { value: "https://user:token@git.example.com/owner/repo.git" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Open in browser" }));
+        expect(open).toHaveBeenLastCalledWith("https://git.example.com/owner/repo.git", "_blank");
+      } finally {
+        window.open = previousOpen;
+      }
+    });
+
     test("hides the local remote shortcut without a local path", () => {
       renderSettings({ section: "general" });
 
       expect(
         within(getSettingsContent()).queryByRole("button", {
           name: "Use the local clone's origin remote",
-        }),
-      ).toBeNull();
+        }) === null,
+      ).toBe(true);
     });
 
     test("cancel resets edits and closes the dialog", () => {

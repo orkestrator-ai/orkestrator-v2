@@ -9,3 +9,8 @@
 export function isGitRemoteUrl(value: string): boolean {
   return /^(https?:\/\/|git@|ssh:\/\/).+/.test(value.trim());
 }
+
+/** Remove URL userinfo before a remote is persisted or exposed to clients. */
+export function withoutUrlCredentials(gitUrl: string): string {
+  return gitUrl.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/?#]*@/, "$1");
+}

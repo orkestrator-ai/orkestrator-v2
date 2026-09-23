@@ -11,6 +11,7 @@ import {
 import { isEmptyAgentSettings, normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { isTrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
+import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
 import {
   AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
   AGENT_ACTIVITY_SOURCES,
@@ -242,7 +243,7 @@ export abstract class StorageProjects extends StorageBase {
       if (typeof updates.gitUrl === "string") {
         // A repository that moved keeps its project: settings, environments,
         // and history are keyed by project id, not by remote URL.
-        const gitUrl = updates.gitUrl.trim();
+        const gitUrl = withoutUrlCredentials(updates.gitUrl.trim());
         if (!gitUrl) throw new Error("Git URL cannot be empty");
         if (
           projects.some((candidate) => candidate.id !== projectId && candidate.gitUrl === gitUrl)

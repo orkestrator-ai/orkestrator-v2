@@ -466,7 +466,12 @@ export function registerProjectCommands(
       parsedUpdates.gitUrl !== undefined &&
       !isGitRemoteUrl(asString(parsedUpdates.gitUrl, "updates.gitUrl"))
     ) {
-      throw new Error("Git URL must be an HTTPS, SSH, or git@ remote URL");
+      // Existing projects can use local-path remotes. An unrelated settings
+      // change must not force the user to replace a previously accepted URL.
+      const existing = await storage.getProject(asString(projectId, "projectId"));
+      if (existing?.gitUrl !== String(parsedUpdates.gitUrl).trim()) {
+        throw new Error("Git URL must be an HTTPS, SSH, or git@ remote URL");
+      }
     }
     return storage.updateProject(asString(projectId, "projectId"), parsedUpdates);
   });

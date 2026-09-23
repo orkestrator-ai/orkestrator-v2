@@ -111,6 +111,7 @@ function harness() {
   const emitOpenLink = mock(() => undefined);
   const openExternal = mock(() => undefined);
   const menuTemplates: MenuItemConstructorOptions[][] = [];
+  const openServiceExternally = mock(async (_target: BrowserPreviewServiceTarget) => undefined);
   const manager = new BrowserPreviewManager({
     WebContentsViewCtor: FakeView as never,
     browserSession: { partition: "legacy" } as never,
@@ -132,8 +133,19 @@ function harness() {
     writeClipboardText: () => undefined,
     focusAddressBar: () => undefined,
     transport,
+    openServiceExternally,
   });
-  return { manager, views, transport, held, emitState, emitOpenLink, openExternal, menuTemplates };
+  return {
+    manager,
+    views,
+    transport,
+    held,
+    emitState,
+    emitOpenLink,
+    openExternal,
+    openServiceExternally,
+    menuTemplates,
+  };
 }
 
 function linkParams(linkURL: string): ContextMenuParams {
@@ -283,5 +295,32 @@ describe("service previews in BrowserPreviewManager", () => {
     await manager.resetServiceSiteData(service("svc_aaaaaaaa"));
     expect(transport.resetSiteData).toHaveBeenCalled();
     expect(views[0]!.webContents.reload).toHaveBeenCalled();
+  });
+
+  test("opening a service link externally goes through the preview origin, never the ingress URL", async () => {
+    const { manager, views, openExternal, openServiceExternally, menuTemplates } = harness();
+    await manager.attach({ tabId: "tab", service: service("svc_aaaaaaaa"), bounds, visible: true });
+    views[0]!.webContents.emit("context-menu", {}, linkParams("http://127.0.0.1:41001/docs"));
+    const item = menuTemplates.at(-1)!.find((entry) => entry.label === "Open in External Browser")!;
+    expect(item.enabled).toBe(true);
+    (item.click as () => void)();
+    expect(openServiceExternally).toHaveBeenCalledWith({
+      backendInstanceId: "bk_backend_1",
+      environmentId: "env",
+      serviceId: "svc_aaaaaaaa",
+      path: "/docs",
+    });
+    expect(openExternal).not.toHaveBeenCalled();
+
+    views[0]!.webContents.emit("context-menu", {}, linkParams("http://localhost:5173/"));
+    const local = menuTemplates
+      .at(-1)!
+      .find((entry) => entry.label === "Open in External Browser")!;
+    expect(local.enabled).toBe(false);
+    views[0]!.webContents.emit("context-menu", {}, linkParams("https://docs.example.com/"));
+    const external = menuTemplates
+      .at(-1)!
+      .find((entry) => entry.label === "Open in External Browser")!;
+    expect(external.enabled).toBe(true);
   });
 });

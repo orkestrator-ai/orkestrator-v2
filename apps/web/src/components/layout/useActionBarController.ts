@@ -1,4 +1,5 @@
 import { environmentBrowserTarget } from "@/lib/preview-service-entry";
+import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
 import {
   agentSettingsTiers,
   resolvedActionDefault,
@@ -492,7 +493,16 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       (!isLocalEnvironment && !!selectedEnvironment?.containerId));
   const environmentPortAddress = getEnvironmentPortAddress(selectedEnvironment);
   const environmentBrowserUrl = getEnvironmentBrowserUrl(selectedEnvironment);
-  const browserPreviewSupported = isGatewayBrowserPreviewSupported();
+  // Web and iOS clients can preview registered services through private
+  // preview origins (opened top-level), even though they have no native view.
+  const previewPublicationAvailable = usePreviewServiceStore(
+    (state) => state.capabilities?.surfaces.browserTopLevel.available === true,
+  );
+  useEffect(() => {
+    ensurePreviewServiceSync();
+    void usePreviewServiceStore.getState().loadCapabilities();
+  }, []);
+  const browserPreviewSupported = isGatewayBrowserPreviewSupported() || previewPublicationAvailable;
   const canCopyEnvironmentUrl = !!environmentPortAddress;
 
   // The object test only narrows the type: no environment means no

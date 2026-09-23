@@ -49,6 +49,8 @@ import type {
 } from "./browser-preview-manager.js";
 import { PreviewTransportManager } from "./preview-transport-manager.js";
 import { createPreviewPortHints } from "./preview-port-hints.js";
+import { PreviewExternalHandoff } from "./preview-external-handoff.js";
+import type { PreviewAttachmentDescriptor } from "@orkestrator/protocol/preview-access";
 import {
   configurePreviewServiceSession,
   createBrowserPreviewAddressFocusHandler,
@@ -116,6 +118,7 @@ type DesktopWindowContext = {
   previewTransport: PreviewTransportManager;
 };
 let previewPortHints: ReturnType<typeof createPreviewPortHints> | null = null;
+const previewExternalHandoff = new PreviewExternalHandoff((url) => shell.openExternal(url));
 const windowContexts = new Map<number, DesktopWindowContext>();
 const MAX_DESKTOP_WINDOWS = 32;
 const windowSlots = new DesktopWindowSlotAllocator(MAX_DESKTOP_WINDOWS);
@@ -259,6 +262,26 @@ function createWindowBrowserPreviews(
     getAuthorization: (url) =>
       connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
     transport,
+    // External browsers never inherit Electron's request hooks: they sign in
+    // through the private preview origin with a one-use grant POSTed by a
+    // loopback handoff page. The grant is never part of a URL.
+    openServiceExternally: async (target) => {
+      if (!connectionManager) throw new Error("Connections are not initialized");
+      const attachment = await connectionManager.invoke<PreviewAttachmentDescriptor>(
+        "create_preview_attachment",
+        {
+          serviceId: target.serviceId,
+          surface: "browser-top-level",
+          path: target.path,
+          clientKey: createHash("sha256").update(scope).digest("hex").slice(0, 24),
+        },
+        scope,
+      );
+      if (attachment.backendInstanceId !== target.backendInstanceId || !attachment.bootstrap) {
+        throw new Error("This backend cannot publish the preview to an external browser.");
+      }
+      await previewExternalHandoff.open(attachment.attachmentId, attachment.bootstrap);
+    },
   });
   manager = runtime.manager;
   return { ...runtime, previewTransport };
@@ -649,4 +672,8 @@ if (isPrimaryInstance) {
 }
 
 registerBackendShutdown(app, backendProcess);
+// The loopback handoff page only exists while a sign-in is pending.
+app.on("will-quit", () => {
+  void previewExternalHandoff.close().catch(() => undefined);
+});
 registerApplicationLoggingShutdown(app, applicationLogging);

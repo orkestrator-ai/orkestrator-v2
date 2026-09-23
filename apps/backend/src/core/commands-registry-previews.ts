@@ -1,3 +1,7 @@
+import {
+  PREVIEW_SESSION_CODE_TTL_MS,
+  PREVIEW_SESSION_PATH,
+} from "@orkestrator/protocol/preview-access";
 import { previewFailure } from "@orkestrator/protocol/preview-services";
 
 import type { CommandContext } from "./commands-context.js";
@@ -109,6 +113,37 @@ export function registerPreviewCommands(register: CommandRegistrar): void {
   register("release_preview_attachment", async (args, context) => {
     const runtime = await previews(context);
     return runtime.access.releaseAttachment(args.attachmentId);
+  });
+
+  /**
+   * Handoff for clients that cannot POST a grant to the bootstrap authority
+   * (the iOS app hands navigations to Safari as URLs). The grant is consumed
+   * here, server-side; the returned URL carries only the one-use, 30-second
+   * session code bound to the service's own host.
+   */
+  register("create_preview_handoff_url", async (args, context) => {
+    const runtime = await previews(context);
+    const attachment = await runtime.access.createAttachment({
+      ...args,
+      surface: "browser-top-level",
+    });
+    if (!attachment.bootstrap) throw previewFailure("unsupported");
+    const { code, origin } = runtime.access.consumeBootstrapGrant(
+      attachment.attachmentId,
+      attachment.bootstrap.grant,
+    );
+    return {
+      url: `${origin}${PREVIEW_SESSION_PATH}?code=${encodeURIComponent(code)}`,
+      expiresAt: new Date(Date.now() + PREVIEW_SESSION_CODE_TTL_MS).toISOString(),
+    };
+  });
+
+  /** The clean, shareable private origin of a published service (no credential). */
+  register("get_preview_public_origin", async (args, context) => {
+    const runtime = await previews(context);
+    return {
+      origin: runtime.publication?.originFor(requiredString(args.serviceId, "serviceId")) ?? null,
+    };
   });
 
   /** Operator action: close active preview transport. Separate from the issuance kill switch. */

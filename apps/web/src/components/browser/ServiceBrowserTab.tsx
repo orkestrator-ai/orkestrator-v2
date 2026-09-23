@@ -40,6 +40,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import * as backend from "@/lib/backend";
 import { resolveBrowserAddress } from "@/lib/browser-address";
+import { isWkWebViewClient } from "@/lib/client-platform";
 import {
   attachBrowserPreview,
   goBackBrowserPreview,
@@ -406,7 +407,9 @@ function ServicePreview({
 
   const openExternally = useCallback(() => {
     // Pre-open synchronously inside the click so popup blockers allow it.
-    const opener = nativeBrowserPreview ? null : window.open("about:blank", "_blank");
+    // iOS hands URLs to Safari and cancels about:blank, so it never pre-opens.
+    const opener =
+      nativeBrowserPreview || isWkWebViewClient() ? null : window.open("about:blank", "_blank");
     void openServiceExternally({ ...serviceRef, path }, { opener }).catch((error: unknown) => {
       toast.error("Could not open the preview", {
         description: previewErrorFromUnknown(error)?.message ?? errorMessage(error),
@@ -628,6 +631,33 @@ function ServicePreview({
             >
               <Link2 className="h-3.5 w-3.5" />
               Copy application address
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={!service || !capabilities?.surfaces.browserTopLevel.available}
+              onSelect={() => {
+                if (!service) return;
+                void backend
+                  .getPreviewPublicOrigin(service.definition.serviceId)
+                  .then(({ origin }) => {
+                    if (!origin) throw new Error("This service is not published.");
+                    return navigator.clipboard.writeText(`${origin}${path}`);
+                  })
+                  .then(() =>
+                    toast.success("Copied the preview link", {
+                      description:
+                        "It is private to your tailnet. Anyone opening it must also sign in through Orkestrator; copying it grants no access.",
+                    }),
+                  )
+                  .catch((error: unknown) =>
+                    toast.error("Could not copy the preview link", {
+                      description: errorMessage(error),
+                    }),
+                  );
+              }}
+              className="gap-2"
+            >
+              <Link2 className="h-3.5 w-3.5" />
+              Copy preview link
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem

@@ -209,6 +209,9 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       resetServiceSiteData(target: BrowserPreviewServiceTarget): Promise<void> {
         return ipcRenderer.invoke("orkestrator:browser-preview:reset-site-data", target);
       },
+      openServiceExternally(target: BrowserPreviewServiceTarget): Promise<void> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:open-external", target);
+      },
     },
   };
 }

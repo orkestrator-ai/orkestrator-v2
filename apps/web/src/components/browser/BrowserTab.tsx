@@ -33,6 +33,7 @@ import {
   setBrowserPreviewVisible,
 } from "@/lib/native/browser-preview";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { usePreviewServiceStore } from "@/stores/previewServiceStore";
 import type { BrowserTabData } from "@/types/paneLayout";
 import { errorMessage, useBlockingOverlay, useBrowserPreviewAnnotation } from "./browser-tab-hooks";
 import { ServiceBrowserTab } from "./ServiceBrowserTab";
@@ -101,6 +102,9 @@ function ManualBrowserTab({
     );
   });
   const nativeBrowserPreview = hasNativeBrowserPreview();
+  const previewPublicationAvailable = usePreviewServiceStore(
+    (state) => state.capabilities?.surfaces.browserTopLevel.available === true,
+  );
   const browserPreviewSupported = (() => {
     try {
       return isGatewayBrowserPreviewSupported();
@@ -502,8 +506,9 @@ function ManualBrowserTab({
               : "Browser tabs aren’t supported here"}
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            Open this browser tab in the Orkestrator desktop app to view the local development
-            server.
+            {previewPublicationAvailable
+              ? "Manual addresses need the desktop app. Open a registered service from the environment's browser button instead; it opens in its own browser tab on your private network."
+              : "Open this browser tab in the Orkestrator desktop app to view the local development server."}
           </p>
         </div>
       </div>

@@ -158,3 +158,17 @@ export function revokePreviewAccess(serviceId?: string): Promise<{ revoked: numb
 export function getPreviewDiagnostics(): Promise<PreviewDiagnosticsSnapshot> {
   return invoke("get_preview_diagnostics");
 }
+
+/** iOS handoff: the backend consumes the grant and returns a one-use session URL. */
+export function createPreviewHandoffUrl(args: {
+  serviceId: string;
+  path?: string;
+  clientKey?: string;
+}): Promise<{ url: string; expiresAt: string }> {
+  return invoke("create_preview_handoff_url", args);
+}
+
+/** The clean private origin of a published service; never a credential. */
+export function getPreviewPublicOrigin(serviceId: string): Promise<{ origin: string | null }> {
+  return invoke("get_preview_public_origin", { serviceId });
+}

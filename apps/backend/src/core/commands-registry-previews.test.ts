@@ -93,4 +93,31 @@ describe("preview commands", () => {
     const error = await invoke("get_preview_capabilities").catch((failure: unknown) => failure);
     expect(previewErrorFromUnknown(error)?.category).toBe("unsupported");
   });
+
+  test("the iOS handoff URL carries only a one-use session code, never the grant", async () => {
+    harness.runtime.publication = {
+      bootstrapAction: () => "https://bootstrap.preview.test/bootstrap",
+      originFor: () => "https://s-0123.preview.test",
+    };
+    await invoke("update_preview_settings", { settings: { transport: true } });
+    harness.docker.containers.set("container-a", {
+      id: "container-a",
+      environmentId: "a",
+      owner: harness.owner,
+      ports: { "3000/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }] },
+    });
+    await harness.runtime.registry.settle();
+    const serviceId = harness.runtime.registry.snapshot({ environmentId: "a" }).services[0]!
+      .definition.serviceId;
+    const handoff = (await invoke("create_preview_handoff_url", { serviceId, path: "/x" })) as {
+      url: string;
+    };
+    const url = new URL(handoff.url);
+    expect(url.origin).toBe("https://s-0123.preview.test");
+    expect(url.pathname).toBe("/__orkestrator_preview/session");
+    const code = url.searchParams.get("code")!;
+    // The code yields exactly one host-bound session for this service.
+    expect(harness.runtime.access.consumeSessionCode(code, serviceId).path).toBe("/x");
+    expect(() => harness.runtime.access.consumeSessionCode(code, serviceId)).toThrow("forbidden");
+  });
 });

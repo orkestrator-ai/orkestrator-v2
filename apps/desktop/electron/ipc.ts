@@ -89,6 +89,7 @@ export type BrowserPreviewController = {
   destroy(tabId: string): void;
   /** Clear one service's partition (cookies, storage, cache). */
   resetServiceSiteData?(target: BrowserPreviewServiceTarget): Promise<void>;
+  openServiceExternally?(target: BrowserPreviewServiceTarget): Promise<void>;
 };
 
 export type MainIpcDependencies = {
@@ -406,6 +407,11 @@ export function registerMainIpc({
       bounds: browserPreviewBounds(bounds),
       visible,
     });
+  });
+  handle("orkestrator:browser-preview:open-external", (event, target: unknown) => {
+    const controller = previews(event);
+    if (!controller.openServiceExternally) throw new Error("Service previews are unavailable");
+    return controller.openServiceExternally(browserPreviewServiceTarget(target));
   });
   handle("orkestrator:browser-preview:reset-site-data", (event, target: unknown) => {
     const controller = previews(event);

@@ -79,6 +79,8 @@ export interface BrowserPreviewManagerOptions {
   focusAddressBar: (tabId: string) => void;
   /** Service previews are unavailable without a transport (old backend, feature off). */
   transport?: BrowserPreviewServiceTransport;
+  /** Open a service in the default browser through the private preview origin. */
+  openServiceExternally?: (target: BrowserPreviewServiceTarget) => Promise<void>;
 }
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
@@ -152,6 +154,14 @@ function browserTabUrlFromPreviewLink(value: string, sourcePreviewUrl: string): 
     return destination.toString();
   } catch {
     return null;
+  }
+}
+
+function isLoopbackUrl(value: string): boolean {
+  try {
+    return LOOPBACK_HOSTS.has(new URL(value).hostname);
+  } catch {
+    return false;
   }
 }
 
@@ -453,6 +463,15 @@ export class BrowserPreviewManager {
     }
   }
 
+  openServiceExternally(target: BrowserPreviewServiceTarget): Promise<void> {
+    if (!this.options.openServiceExternally) {
+      return Promise.reject(
+        previewFailure("unsupported", { message: "Private preview publication is unavailable." }),
+      );
+    }
+    return this.options.openServiceExternally(target);
+  }
+
   /** Re-emit state for every tab of a service whose transport state changed. */
   refreshService(serviceKey: string): void {
     for (const [tabId, preview] of this.previews) {
@@ -711,9 +730,24 @@ export class BrowserPreviewManager {
           },
           {
             label: "Open in External Browser",
-            enabled: externalBrowserUrl,
+            // A service link's runtime ingress URL means nothing outside this
+            // app; it opens through the private preview origin instead.
+            enabled: preview.service
+              ? serviceTarget
+                ? Boolean(this.options.openServiceExternally)
+                : externalBrowserUrl && !serviceLink && !isLoopbackUrl(params.linkURL)
+              : externalBrowserUrl,
             click: () => {
-              if (externalBrowserUrl) this.options.openExternal(params.linkURL);
+              if (serviceTarget && serviceLink) {
+                void this.options
+                  .openServiceExternally?.({ ...serviceTarget, path: serviceLink.path })
+                  .catch((error: unknown) => {
+                    preview.error = error instanceof Error ? error.message : String(error);
+                    this.emit(tabId, preview);
+                  });
+              } else if (externalBrowserUrl) {
+                this.options.openExternal(params.linkURL);
+              }
             },
           },
           {

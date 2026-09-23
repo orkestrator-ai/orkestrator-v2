@@ -25,6 +25,7 @@ export interface InitializeBrowserPreviewsOptions {
   focusAddressBar: (tabId: string) => void;
   getAuthorization: (url: string) => string | null;
   transport?: BrowserPreviewManagerOptions["transport"];
+  openServiceExternally?: BrowserPreviewManagerOptions["openServiceExternally"];
 }
 
 export interface BrowserPreviewRuntime {
@@ -89,6 +90,7 @@ export function initializeBrowserPreviews({
   focusAddressBar,
   getAuthorization,
   transport,
+  openServiceExternally,
 }: InitializeBrowserPreviewsOptions): BrowserPreviewRuntime {
   const browserSession = fromPartition(partition);
   const manager = new BrowserPreviewManager({
@@ -102,6 +104,7 @@ export function initializeBrowserPreviews({
     writeClipboardText,
     focusAddressBar,
     ...(transport ? { transport } : {}),
+    ...(openServiceExternally ? { openServiceExternally } : {}),
   });
   browserSession.setPermissionCheckHandler(() => false);
   browserSession.setPermissionRequestHandler((webContents, permission, callback, details) => {

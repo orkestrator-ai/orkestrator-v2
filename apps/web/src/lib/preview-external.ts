@@ -2,6 +2,7 @@ import type { BrowserPreviewServiceTarget } from "@orkestrator/protocol/browser-
 import { previewFailure } from "@orkestrator/protocol/preview-services";
 
 import * as backend from "@/lib/backend";
+import { isWkWebViewClient } from "@/lib/client-platform";
 
 /**
  * Submit the one-use grant to the bootstrap authority with a top-level POST in
@@ -55,6 +56,19 @@ export async function openServiceExternally(
   const nativeOpen = window.orkestrator?.browserPreview?.openServiceExternally;
   if (nativeOpen) {
     await nativeOpen(target);
+    return;
+  }
+  if (isWkWebViewClient()) {
+    // The iOS app hands cross-origin navigations to Safari as URLs and cannot
+    // carry a POST. The backend consumes the grant itself and returns a
+    // one-use, 30-second session URL bound to the service's own host.
+    options.opener?.close();
+    const handoff = await backend.createPreviewHandoffUrl({
+      serviceId: target.serviceId,
+      path: target.path,
+      clientKey: "ios-client",
+    });
+    window.location.assign(handoff.url);
     return;
   }
   const pending = options.opener ?? window.open("about:blank", "_blank");

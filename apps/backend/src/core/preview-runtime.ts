@@ -1,8 +1,10 @@
 import { readFile } from "node:fs/promises";
+import type { Duplex } from "node:stream";
 
 import {
   PREVIEW_LIMITS,
   PREVIEW_PROTOCOL_VERSION,
+  previewFailure,
   type PreviewCapabilities,
   type PreviewLimits,
 } from "@orkestrator/protocol/preview-services";
@@ -11,9 +13,11 @@ import { runCommand } from "./commands-dependencies.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import type { Environment } from "./models.js";
 import { PreviewMetrics } from "../preview-metrics.js";
+import { PreviewRelaySupervisor, type RelayProcess } from "../preview-relay-supervisor.js";
 import { PreviewAccessService, type PreviewPublicationPort } from "./preview-access.js";
 import { PreviewReadinessProber } from "./preview-readiness.js";
 import { PreviewServiceRegistry, type PreviewRegistryStorage } from "./preview-service-registry.js";
+import type { ResolvedPreviewTarget } from "./preview-service-registry.js";
 import { PreviewTargetResolver, type DockerRunner } from "./preview-target-resolver.js";
 import { DEFAULT_PREVIEW_SETTINGS, type PreviewSettings } from "./storage-preview-services.js";
 
@@ -35,6 +39,8 @@ export interface PreviewRuntimeOptions {
   /** Test seams. */
   registry?: Partial<ConstructorParameters<typeof PreviewServiceRegistry>[0]>;
   probeFamily?: ConstructorParameters<typeof PreviewTargetResolver>[0]["probeFamily"];
+  /** Starts the in-container relay (defaults to `docker exec -i`). */
+  relaySpawn?: (containerId: string) => RelayProcess;
 }
 
 const defaultDockerRunner: DockerRunner = (args, { timeoutMs }) =>
@@ -61,6 +67,7 @@ export class PreviewRuntime {
   readonly resolver: PreviewTargetResolver;
   readonly readiness: PreviewReadinessProber;
   readonly access: PreviewAccessService;
+  readonly relay: PreviewRelaySupervisor;
   readonly limits: PreviewLimits;
   /** Bounded transport metrics shared by the tunnel and the publication listener. */
   readonly metrics = new PreviewMetrics();
@@ -81,14 +88,34 @@ export class PreviewRuntime {
       strictOwner: options.strictDockerOwner ?? false,
       reservedPorts: () => this.reservedPorts(),
       probeFamily: options.probeFamily,
+      relay: {
+        // Owned containers only; worktrees and backend-host targets never relay.
+        available: (environment) =>
+          this.effectiveSettings().relay &&
+          environment.environmentType !== "local" &&
+          this.relay.healthy(environment.id),
+      },
     });
-    this.readiness = new PreviewReadinessProber({ ca: () => this.upstreamCa() });
+    this.relay = new PreviewRelaySupervisor({
+      spawn: options.relaySpawn,
+      // The relay may open only ports registered for its environment.
+      allowedPorts: (environmentId) =>
+        this.registry
+          .listDefinitions(environmentId)
+          .filter((definition) => definition.targetKind === "container")
+          .map((definition) => definition.applicationPort),
+    });
+    this.readiness = new PreviewReadinessProber({
+      ca: () => this.upstreamCa(),
+      relayConnect: (target, signal) => this.relayConnect(target, signal),
+    });
     this.registry = new PreviewServiceRegistry({
       storage: options.storage,
       emit: options.emit,
       resolver: this.resolver,
       readiness: this.readiness,
       limits: this.limits,
+      onEnvironmentTargetChange: (environmentId) => this.relay.stopEnvironment(environmentId),
       ...options.registry,
     });
     this.access = new PreviewAccessService({
@@ -131,7 +158,18 @@ export class PreviewRuntime {
     }
   }
 
+  /** Open a channel to a relay-backed target; refused while the relay is disabled. */
+  relayConnect(target: ResolvedPreviewTarget, signal: AbortSignal): Promise<Duplex> {
+    if (!this.effectiveSettings().relay || !target.relay) {
+      return Promise.reject(
+        previewFailure("unsupported", { message: "The container relay is disabled." }),
+      );
+    }
+    return this.relay.connect(target.relay, signal);
+  }
+
   dispose(): void {
+    this.relay.dispose();
     this.access.dispose();
     this.registry.dispose();
     this.settingsListeners.clear();
@@ -175,11 +213,25 @@ export class PreviewRuntime {
   async updateSettings(
     update: (current: PreviewSettings) => PreviewSettings,
   ): Promise<PreviewSettings> {
+    const relayBefore = this.effectiveSettings().relay;
     this.settings = await this.options.storage.updatePreviewSettings(update);
     await this.loadUpstreamCa();
     const effective = this.effectiveSettings();
+    if (effective.relay !== relayBefore) await this.reresolveForRelay(effective.relay);
     for (const listener of Array.from(this.settingsListeners)) listener(effective);
     return this.storedSettings();
+  }
+
+  /** Turning the relay on or off changes how unpublished ports resolve. */
+  private async reresolveForRelay(enabled: boolean): Promise<void> {
+    if (!enabled) this.relay.stopAll();
+    for (const environment of await this.options.storage.loadEnvironments()) {
+      if (environment.environmentType === "local") continue;
+      this.resolver.invalidate(environment.id);
+      for (const definition of this.registry.listDefinitions(environment.id)) {
+        await this.registry.refresh(definition.serviceId).catch(() => undefined);
+      }
+    }
   }
 
   onSettingsChanged(listener: (settings: PreviewSettings) => void): () => void {
@@ -204,7 +256,7 @@ export class PreviewRuntime {
         publicationEnabled: this.effectiveSettings().publication.enabled,
       },
       publication: this.publicationDetail(),
-      relay: this.relayStatus(),
+      relay: { ...this.relayStatus(), ...this.relay.stats() },
     };
   }
 
@@ -266,8 +318,8 @@ export class PreviewRuntime {
   });
   /** Operator-facing publication detail (domain, listener, certificate expiry). */
   publicationDetail: () => unknown = () => null;
-  relayStatus: () => { available: boolean; reason?: string } = () => ({
-    available: false,
-    reason: "The container relay is disabled.",
-  });
+  relayStatus: () => { available: boolean; reason?: string } = () =>
+    this.effectiveSettings().relay
+      ? { available: true }
+      : { available: false, reason: "The container relay is disabled." };
 }

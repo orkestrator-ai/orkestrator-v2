@@ -1,6 +1,7 @@
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { connect as netConnect, type Socket } from "node:net";
+import { connect as netConnect } from "node:net";
+import type { Duplex } from "node:stream";
 import { connect as tlsConnect } from "node:tls";
 
 import {
@@ -21,7 +22,7 @@ export interface PreviewReadinessOptions {
   /** Extra CA bundle (PEM) for HTTPS upstream verification. */
   ca?: () => string | undefined;
   /** Relay-backed targets are probed through the relay (step 13). */
-  relayConnect?: (target: ResolvedPreviewTarget, signal: AbortSignal) => Promise<Socket>;
+  relayConnect?: (target: ResolvedPreviewTarget, signal: AbortSignal) => Promise<Duplex>;
 }
 
 type Layers = Pick<PreviewReadiness, "tcp" | "tls" | "http">;
@@ -166,7 +167,7 @@ export class PreviewReadinessProber implements PreviewReadinessPort {
     return layers;
   }
 
-  private connectTcp(target: ResolvedPreviewTarget, signal: AbortSignal): Promise<Socket> {
+  private connectTcp(target: ResolvedPreviewTarget, signal: AbortSignal): Promise<Duplex> {
     if (target.relay && this.options.relayConnect) return this.options.relayConnect(target, signal);
     return new Promise((resolve, reject) => {
       const socket = netConnect({

@@ -73,7 +73,11 @@ export class PreviewTunnelServer {
       perService: limits.tunnelsPerService,
       perBackend: limits.tunnelsPerBackend,
     });
-    this.upstream = { connectTimeoutMs: limits.connectTimeoutMs, ...options.upstream };
+    this.upstream = {
+      connectTimeoutMs: limits.connectTimeoutMs,
+      relayConnect: (target, signal) => options.runtime.relayConnect(target, signal),
+      ...options.upstream,
+    };
   }
 
   get listening(): boolean {

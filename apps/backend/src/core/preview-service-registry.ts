@@ -106,6 +106,8 @@ export interface PreviewRegistryOptions {
   /** Readiness retry schedule while a service is starting. */
   probeBackoffMs?: readonly number[];
   logger?: Pick<Console, "warn">;
+  /** Owned per-environment transport state (the container relay) ends here too. */
+  onEnvironmentTargetChange?: (environmentId: string) => void;
 }
 
 interface RuntimeEntry {
@@ -766,6 +768,7 @@ export class PreviewServiceRegistry {
     const affected = this.listDefinitions(environmentId).map((definition) => definition.serviceId);
     this.options.resolver.invalidate(environmentId);
     if (affected.length) this.revoke(affected, "environment-lifecycle");
+    this.options.onEnvironmentTargetChange?.(environmentId);
   }
 
   private scheduleEnvironmentReconcile(environmentId: string): void {

@@ -50,7 +50,40 @@ export function connectPreviewUpstream(
       return Promise.reject(
         previewFailure("unsupported", { message: "The container relay is unavailable." }),
       );
-    return options.relayConnect(target, signal);
+    const tls = target.tls;
+    const relayed = options.relayConnect(target, signal);
+    if (!tls) return relayed;
+    // HTTPS inside the container: verify the certificate over the relay
+    // channel exactly as for a published port.
+    return relayed.then(
+      (channel) =>
+        new Promise<Duplex>((resolve, reject) => {
+          const secure = tlsConnect({
+            socket: channel,
+            servername: tls.servername,
+            rejectUnauthorized: true,
+            ca: upstreamTrust(options.ca?.()),
+            ALPNProtocols: ["http/1.1"],
+          });
+          const timer = setTimeout(
+            () => fail(previewFailure("connect-timeout")),
+            options.connectTimeoutMs,
+          );
+          const fail = (error: Error) => {
+            clearTimeout(timer);
+            secure.destroy();
+            channel.destroy();
+            reject(error);
+          };
+          secure.once("secureConnect", () => {
+            clearTimeout(timer);
+            secure.removeAllListeners("error");
+            secure.on("error", () => undefined);
+            resolve(secure);
+          });
+          secure.once("error", () => fail(previewFailure("tls-failed")));
+        }),
+    );
   }
   return new Promise((resolve, reject) => {
     const family = target.addressFamily === "ipv6" ? 6 : 4;

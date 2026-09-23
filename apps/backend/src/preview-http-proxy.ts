@@ -85,7 +85,11 @@ export class PreviewHttpProxy {
       headerMaxFields: limits.headerMaxFields,
       ...options.limits,
     };
-    this.upstream = { connectTimeoutMs: limits.connectTimeoutMs, ...options.upstream };
+    this.upstream = {
+      connectTimeoutMs: limits.connectTimeoutMs,
+      relayConnect: (target, signal) => options.runtime.relayConnect(target, signal),
+      ...options.upstream,
+    };
   }
 
   stats() {

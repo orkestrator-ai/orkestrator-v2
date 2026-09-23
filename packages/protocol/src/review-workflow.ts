@@ -375,6 +375,9 @@ export interface LoopedReviewStructuredWait {
   dispatchId: string;
   startedAt: string;
   idlePolls: number;
+  progressAt?: string;
+  progressDigest?: string;
+  lastProbeAt?: string;
 }
 
 export interface LoopedReviewWorkflow {
@@ -1148,7 +1151,16 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
       (!isRecord(workflow.structuredWait) ||
         !isBoundedNonEmptyString(workflow.structuredWait.dispatchId, LOOPED_REVIEW_MAX_ID_LENGTH) ||
         typeof workflow.structuredWait.startedAt !== "string" ||
-        !isNonNegativeInteger(workflow.structuredWait.idlePolls))) ||
+        !isNonNegativeInteger(workflow.structuredWait.idlePolls) ||
+        (workflow.structuredWait.progressAt !== undefined &&
+          (typeof workflow.structuredWait.progressAt !== "string" ||
+            !Number.isFinite(Date.parse(workflow.structuredWait.progressAt)))) ||
+        (workflow.structuredWait.progressDigest !== undefined &&
+          (typeof workflow.structuredWait.progressDigest !== "string" ||
+            !/^[0-9a-f]{64}$/.test(workflow.structuredWait.progressDigest))) ||
+        (workflow.structuredWait.lastProbeAt !== undefined &&
+          (typeof workflow.structuredWait.lastProbeAt !== "string" ||
+            !Number.isFinite(Date.parse(workflow.structuredWait.lastProbeAt)))))) ||
     (workflow.failure !== undefined && !isFailure(workflow.failure)) ||
     !isRecord(workflow.pr) ||
     (workflow.pr.status !== "pending" &&

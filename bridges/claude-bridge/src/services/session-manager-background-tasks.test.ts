@@ -1332,7 +1332,9 @@ describe("background task reducer", () => {
   async function releaseTurnHoldingOneBackgroundTask(title: string) {
     const created = createSession(title);
     track(created.id);
-    const promptPromise = sendPrompt(created.id, "run the suite in the background");
+    const promptPromise = sendPrompt(created.id, "run the suite in the background", {
+      requestId: "background-report",
+    });
     const call = await nextQueryCall();
     const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
     expect((await input.next()).done).toBe(false);
@@ -1399,6 +1401,9 @@ describe("background task reducer", () => {
       tasks: [],
     });
     await waitFor(() => getSession(created.id)?.backgroundTasks?.["bash-task-lf"] === undefined);
+    expect(getSession(created.id)?.retainedContinuationRequestIds?.has("background-report")).toBe(
+      true,
+    );
 
     // Liveness is honest: the task is out of the live set, so no stale running
     // indicator can wedge. But the continuation has not arrived, so neither the
@@ -1425,6 +1430,7 @@ describe("background task reducer", () => {
     // The resumed root loop reclaims the foreground so the UI shows the report
     // being written rather than a session that silently stayed idle.
     await waitFor(() => getSession(created.id)?.status === "running");
+    expect(getSession(created.id)?.retainedContinuationRequestIds).toBeUndefined();
 
     // The edge settles the task the level had already dropped, and the parked
     // snapshot supplies the description the edge itself never carries.
@@ -1453,9 +1459,14 @@ describe("background task reducer", () => {
   test("the continuation watchdog still releases a query parked by a level signal", async () => {
     const created = createSession("level before edge, no continuation");
     track(created.id);
-    const promptPromise = sendPrompt(created.id, "run the suite in the background", undefined, {
-      retainedContinuationTimeoutMs: 25,
-    });
+    const promptPromise = sendPrompt(
+      created.id,
+      "run the suite in the background",
+      { requestId: "watchdog-report" },
+      {
+        retainedContinuationTimeoutMs: 25,
+      },
+    );
     const call = await nextQueryCall();
     const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
     expect((await input.next()).done).toBe(false);
@@ -1483,6 +1494,7 @@ describe("background task reducer", () => {
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
     await waitFor(() => created.settlingBackgroundTasks === undefined);
     expect(created.retainedQueryControls).toBeUndefined();
+    expect(created.retainedContinuationRequestIds).toBeUndefined();
     call.finish();
     await promptPromise;
   });

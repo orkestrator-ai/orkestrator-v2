@@ -63,3 +63,14 @@ export function hasLiveClaudeBackgroundTask(value: unknown): boolean {
     isLiveTaskStatus(task.status),
   );
 }
+
+export function claudeBackgroundObservation(body: Record<string, unknown>, status: string) {
+  if (status !== "idle") return {};
+  const ids = body.retainedContinuationRequestIds;
+  return {
+    ...(hasLiveClaudeBackgroundTask(body.backgroundTasks) ? { backgroundWorkLive: true } : {}),
+    ...(Array.isArray(ids)
+      ? { retainedContinuationRequestIds: ids.filter((id): id is string => typeof id === "string") }
+      : {}),
+  };
+}

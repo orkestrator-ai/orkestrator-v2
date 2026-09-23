@@ -56,12 +56,13 @@ export interface ProviderSessionObservation {
   /** A terminal provider is still reconciling its exact cumulative total. */
   usagePending?: boolean;
   /**
-   * The session is `idle` only because its turn was released to background
-   * tasks that are still live; the provider resumes the turn when they settle.
-   * `status` stays `idle` because the composer can take input, but a workflow
-   * still waiting on this turn's result must not treat it as finished.
+   * This idle turn still has live background work or a retained continuation
+   * for the current request. The composer can take input, but a workflow
+   * awaiting this turn's result must keep supervising it.
    */
   backgroundWorkLive?: boolean;
+  /** Released Claude dispatches whose query is still awaiting its root continuation. */
+  retainedContinuationRequestIds?: string[];
 }
 
 export interface ProviderPromptImage {
@@ -165,6 +166,13 @@ export async function readProviderStatus(
     const observation = provider.observeSession
       ? await provider.observeSession(sessionId)
       : { status: await provider.status(sessionId) };
+    if (
+      requestId &&
+      observation.status === "idle" &&
+      observation.retainedContinuationRequestIds?.includes(requestId)
+    ) {
+      return { ...observation, backgroundWorkLive: true };
+    }
     // Only workflow owners supply a durable request id. UI/status observers
     // must never change another caller's turn permissions.
     if (requestId && (observation.status === "idle" || observation.status === "error")) {

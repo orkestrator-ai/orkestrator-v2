@@ -1720,6 +1720,18 @@ describe("HTTP bridge provider", () => {
     ).toBeUndefined();
   });
 
+  test("keeps only the matching retained continuation unsettled", async () => {
+    const { provider } = httpProvider(() =>
+      Response.json({ status: "idle", retainedContinuationRequestIds: ["request-1"] }),
+    );
+    expect((await readProviderStatus(provider, "session-1", "request-1")).backgroundWorkLive).toBe(
+      true,
+    );
+    expect(
+      (await readProviderStatus(provider, "session-1", "another-request")).backgroundWorkLive,
+    ).toBeUndefined();
+  });
+
   test("preserves the bridge failure detail from an errored session", async () => {
     const { provider } = httpProvider(
       () =>

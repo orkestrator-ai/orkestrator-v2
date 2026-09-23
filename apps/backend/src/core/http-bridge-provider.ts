@@ -63,7 +63,7 @@ import { HttpBridgeInteractionAdapter } from "./http-bridge-interactions.js";
 import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./http-bridge-catalog.js";
 import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
 import {
-  hasLiveClaudeBackgroundTask,
+  claudeBackgroundObservation,
   normalizeClaudeBackgroundTasks,
 } from "./http-bridge-claude-runtime.js";
 import {
@@ -89,12 +89,8 @@ import {
  * Drop the staged `dataUrl` before an attachment reaches a bridge that reads
  * the workspace itself.
  *
- * Those bridges read every attachment's bytes from the workspace and ignore
- * `dataUrl`, but they cap a request body at 2MiB. Forwarding the data URL
- * spends that whole budget on a copy the bridge discards, so a screenshot much
- * over 1.5MB would come back as HTTP 413 — a terminal rejection of a prompt the
- * bridge is perfectly able to read from disk. The Claude and Codex bridges do
- * consume `dataUrl`, so this is deliberately scoped to the ones that do not.
+ * Workspace-reading bridges ignore `dataUrl` but cap request bodies at 2MiB.
+ * Forwarding it could make a valid screenshot fail with HTTP 413. Claude and Codex consume it.
  */
 function bridgePromptAttachments(
   agent: HttpBridgeProvider["agent"],
@@ -548,9 +544,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       contextUsage.sessionTokens === undefined
         ? { usagePending: true }
         : {}),
-      ...(status === "idle" && hasLiveClaudeBackgroundTask(body.backgroundTasks)
-        ? { backgroundWorkLive: true }
-        : {}),
+      ...claudeBackgroundObservation(body, status),
     };
   }
 

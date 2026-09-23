@@ -509,6 +509,8 @@ export interface SessionState {
    * teardown can no longer stop a live CLI writing to the rollout.
    */
   retainedQueryControls?: Set<ClaudeQueryControl>;
+  /** Dispatches whose released query is awaiting a background-task continuation. */
+  retainedContinuationRequestIds?: Set<string>;
   /**
    * Tasks the level signal dropped before their terminal edge explained why.
    *

@@ -893,6 +893,12 @@ export async function sendPrompt(
       if (queryIteratorControl) {
         forgetRetainedQueryControl(session, queryIteratorControl);
       }
+      if (dispatchRequestId) {
+        session.retainedContinuationRequestIds?.delete(dispatchRequestId);
+        if (session.retainedContinuationRequestIds?.size === 0) {
+          session.retainedContinuationRequestIds = undefined;
+        }
+      }
     };
     // A silence watchdog, not a turn deadline: every frame received while it is
     // armed pushes it out again, so a slow continuation is never cut off.
@@ -926,6 +932,9 @@ export async function sendPrompt(
     const waitForContinuationAfterNotification = () => {
       if (!queryIteratorControl) return;
       retainQueryControl(session, queryIteratorControl);
+      if (dispatchRequestId) {
+        (session.retainedContinuationRequestIds ??= new Set()).add(dispatchRequestId);
+      }
       armContinuationWatchdog();
     };
     const reclaimReleasedTurnForAssistant = (message: SdkMessageBase) => {
@@ -2700,6 +2709,12 @@ export async function sendPrompt(
     if (retainedContinuationTimer) {
       clearTimeout(retainedContinuationTimer);
       retainedContinuationTimer = null;
+    }
+    if (dispatchRequestId) {
+      session.retainedContinuationRequestIds?.delete(dispatchRequestId);
+      if (session.retainedContinuationRequestIds?.size === 0) {
+        session.retainedContinuationRequestIds = undefined;
+      }
     }
     // The loop above is the only consumer of this iterator, and it ends either
     // exhausted or through an abrupt exit — which invokes `return()`, i.e. the

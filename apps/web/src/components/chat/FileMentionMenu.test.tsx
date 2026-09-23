@@ -97,4 +97,36 @@ describe("FileMentionMenu", () => {
 
     expect(scrollIntoView).toHaveBeenCalled();
   });
+
+  test("bounds its height by the visible viewport above the composer", () => {
+    const originalVisualViewport = Object.getOwnPropertyDescriptor(window, "visualViewport");
+    // Mobile keyboard open: 200px of visible viewport above the composer.
+    Object.defineProperty(window, "visualViewport", {
+      configurable: true,
+      value: Object.assign(new EventTarget(), { offsetTop: 100, height: 300 }),
+    });
+
+    try {
+      render(
+        <div
+          ref={(node) => {
+            if (node) node.getBoundingClientRect = () => ({ top: 300, bottom: 360 }) as DOMRect;
+          }}
+        >
+          <FileMentionMenu files={files} selectedIndex={0} onSelect={() => {}} onClose={() => {}} />
+        </div>,
+      );
+
+      const menu = screen.getByRole("listbox", { name: "File and folder suggestions" });
+      expect(menu.dataset.side).toBe("top");
+      expect(menu.style.maxHeight).toBe("188px");
+      expect(menu.className).toContain("overflow-y-auto");
+    } finally {
+      if (originalVisualViewport) {
+        Object.defineProperty(window, "visualViewport", originalVisualViewport);
+      } else {
+        delete (window as { visualViewport?: unknown }).visualViewport;
+      }
+    }
+  });
 });

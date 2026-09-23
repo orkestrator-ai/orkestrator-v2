@@ -8,6 +8,7 @@ import {
 import { runCommand } from "./commands-dependencies.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import type { Environment } from "./models.js";
+import { PreviewAccessService, type PreviewPublicationPort } from "./preview-access.js";
 import { PreviewReadinessProber } from "./preview-readiness.js";
 import { PreviewServiceRegistry, type PreviewRegistryStorage } from "./preview-service-registry.js";
 import { PreviewTargetResolver, type DockerRunner } from "./preview-target-resolver.js";
@@ -56,7 +57,10 @@ export class PreviewRuntime {
   readonly registry: PreviewServiceRegistry;
   readonly resolver: PreviewTargetResolver;
   readonly readiness: PreviewReadinessProber;
+  readonly access: PreviewAccessService;
   readonly limits: PreviewLimits;
+  /** Set by the private-origin publication manager when it is running. */
+  publication: PreviewPublicationPort | null = null;
   private settings: PreviewSettings = structuredClone(DEFAULT_PREVIEW_SETTINGS);
   private readonly reserved = new Map<string, ReadonlySet<number>>();
   private readonly env: Record<string, string | undefined>;
@@ -82,6 +86,12 @@ export class PreviewRuntime {
       limits: this.limits,
       ...options.registry,
     });
+    this.access = new PreviewAccessService({
+      registry: this.registry,
+      limits: this.limits,
+      issuanceEnabled: () => this.effectiveSettings().transport,
+      publication: () => this.publication,
+    });
   }
 
   init(): Promise<void> {
@@ -93,6 +103,7 @@ export class PreviewRuntime {
   }
 
   dispose(): void {
+    this.access.dispose();
     this.registry.dispose();
     this.settingsListeners.clear();
   }
@@ -196,10 +207,7 @@ export class PreviewRuntime {
   }
 
   // Provider hooks, replaced as components attach.
-  accessStatus: () => { available: boolean; reason?: string } = () => ({
-    available: false,
-    reason: "Scoped preview access is not available on this backend.",
-  });
+  accessStatus: () => { available: boolean; reason?: string } = () => ({ available: true });
   tunnelReady: () => boolean = () => false;
   publicationStatus: () => { available: boolean; reason?: string } = () => ({
     available: false,

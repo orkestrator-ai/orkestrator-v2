@@ -62,6 +62,7 @@ const backend = new OrkestratorBackend({
 await backend.init();
 
 gateway = new OrkestratorGateway({
+  previews: backend.previews,
   backend,
   dataDir: options.dataDir,
   rendererRoot: options.rendererRoot,
@@ -90,6 +91,15 @@ if (!gatewayInfo) {
     "No Tailscale address was found. Pass --host with a Tailscale address, or use --host 127.0.0.1 --allow-non-tailscale-bind for local development.",
   );
 }
+
+// The gateway's own listeners can never become preview targets.
+backend.previews?.reservePorts(
+  "gateway",
+  [
+    gatewayInfo.port,
+    gatewayInfo.browserUrl ? Number(new URL(gatewayInfo.browserUrl).port) : 0,
+  ].filter((port) => port > 0),
+);
 
 let info = gatewayInfo;
 if (managedWebClient) {

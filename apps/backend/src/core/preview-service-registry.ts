@@ -166,9 +166,7 @@ function lifecycleFingerprint(environment: Environment | null): string {
 }
 
 /** Deterministic generated definitions for an environment's configured ports. */
-export function desiredGeneratedDefinitions(
-  environment: Environment,
-): Array<{
+export function desiredGeneratedDefinitions(environment: Environment): Array<{
   key: string;
   label: string;
   port: number;

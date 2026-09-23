@@ -8,6 +8,10 @@ import type { Socket } from "node:net";
 import { randomBytes } from "node:crypto";
 import { GatewayEventReplay } from "./gateway-event-replay.js";
 import { TerminalWebSocketGateway } from "./terminal-websocket-server.js";
+import type { PreviewRuntime } from "./core/preview-runtime.js";
+import { PreviewAdmission } from "./preview-admission.js";
+import { PreviewMetrics } from "./preview-metrics.js";
+import { PreviewTunnelServer } from "./preview-tunnel-server.js";
 import type { GatewayTokenSettings } from "@orkestrator/protocol/web-client";
 import {
   GatewayTokenValidationError,
@@ -76,6 +80,16 @@ export abstract class GatewayBase {
   protected readonly replayHandshakeMaxBytes: number;
   protected readonly metrics: GatewayMetricsStore;
   protected readonly terminalWebSocket: TerminalWebSocketGateway;
+  /** Backend-owned preview services, when this gateway fronts a full backend. */
+  protected readonly previews?: PreviewRuntime;
+  protected readonly previewMetrics = new PreviewMetrics();
+  protected readonly previewTunnel?: PreviewTunnelServer;
+  /** Legacy `/__orkestrator/browser/loopback/<port>/` concurrency (per port, overall). */
+  protected readonly legacyPreviewAdmission = new PreviewAdmission("http", {
+    perService: 32,
+    perBackend: 128,
+  });
+  protected readonly browserPreviewHeadersTimeoutMs: number;
   protected servers = new Set<Server>();
   protected token = "";
   protected authFile = "";
@@ -173,6 +187,17 @@ export abstract class GatewayBase {
     this.keepaliveMs = options.keepaliveMs ?? KEEPALIVE_MS;
     this.proxyBodyIdleTimeoutMs =
       options.proxyBodyIdleTimeoutMs ?? BUFFERED_PROXY_BODY_IDLE_TIMEOUT_MS;
+    this.browserPreviewHeadersTimeoutMs = options.browserPreviewHeadersTimeoutMs ?? 30_000;
+    this.previews = options.previews;
+    if (this.previews) {
+      this.previewTunnel = new PreviewTunnelServer({
+        runtime: this.previews,
+        metrics: this.previewMetrics,
+        logger: options.logger ?? console,
+      });
+      const tunnel = this.previewTunnel;
+      this.previews.tunnelReady = () => tunnel.listening && this.servers.size > 0;
+    }
     this.eventReplay = new GatewayEventReplay(randomBytes(16).toString("hex"), options.eventReplay);
     this.replayHandshakeFrameCapacity = Math.max(
       1,
@@ -355,6 +380,9 @@ export abstract class GatewayBase {
     });
     server.on("upgrade", (request, socket, head) => {
       try {
+        // Exact-path routing: the preview tunnel claims only its own path and
+        // never steals terminal upgrades; everything unclaimed is destroyed.
+        if (this.previewTunnel?.handleUpgrade(request, socket, head)) return;
         if (!this.terminalWebSocket.handleUpgrade(request, socket, head)) socket.destroy();
       } catch {
         this.logger.warn("[RemoteGateway] WebSocket upgrade failed");
@@ -426,6 +454,11 @@ export abstract class GatewayBase {
         proxyRequest.destroy(new Error("Gateway credential rotated"));
       }
       this.proxyRequests.clear();
+      // Preview access was issued under the previous control credential.
+      // Revoke it (closing tunnels and published-origin sessions); clients
+      // reauthorize through the new credential.
+      this.previews?.access.revokeAll("credential-rotated");
+      this.previewTunnel?.closeAll();
       return { token, editable: true, source: "file" };
     });
   }
@@ -449,6 +482,7 @@ export abstract class GatewayBase {
     this.clients.clear();
     this.eventReplay.releaseRetained();
     this.terminalWebSocket.close();
+    this.previewTunnel?.close();
     for (const proxyRequest of this.proxyRequests) {
       proxyRequest.destroy(new Error("Remote gateway stopped"));
     }

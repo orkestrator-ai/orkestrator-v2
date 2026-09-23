@@ -43,6 +43,15 @@ export const PREVIEW_LIMITS = {
   headerMaxFields: 100,
   upgradesPerService: 8,
   upgradesPerBackend: 128,
+  /**
+   * Desktop tunnel connections carry HTTP/1.1 keep-alive connections as well as
+   * application sockets. Chromium opens up to six HTTP/1.1 connections per
+   * origin, so the tunnel budget is separate from (and larger than) the
+   * published-origin upgrade budget. Each tunnel is exactly one resource.
+   */
+  tunnelsPerService: 16,
+  tunnelsPerBackend: 128,
+  tunnelHandshakesPending: 32,
   tunnelFrameMaxBytes: 32 * 1024,
   tunnelQueueMaxBytesPerDirection: 256 * 1024,
   tunnelQueueMaxBytesAggregate: 64 * 1024 * 1024,
@@ -80,6 +89,8 @@ export const PREVIEW_LIMIT_CEILINGS: PreviewLimits = {
   httpActivePerBackend: 1_024,
   upgradesPerService: 64,
   upgradesPerBackend: 1_024,
+  tunnelsPerService: 64,
+  tunnelsPerBackend: 1_024,
   uploadMaxBytes: 1024 * 1024 * 1024,
   downloadMaxBytes: 8 * 1024 * 1024 * 1024,
   sessionAbsoluteMs: 24 * 60 * 60_000,

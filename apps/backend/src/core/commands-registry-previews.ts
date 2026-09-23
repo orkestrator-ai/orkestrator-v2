@@ -96,6 +96,32 @@ export function registerPreviewCommands(register: CommandRegistrar): void {
     return runtime.registry.refresh(requiredString(args.serviceId, "serviceId"), { probe: true });
   });
 
+  register("create_preview_attachment", async (args, context) => {
+    const runtime = await previews(context);
+    return runtime.access.createAttachment(args);
+  });
+
+  register("renew_preview_attachment", async (args, context) => {
+    const runtime = await previews(context);
+    return runtime.access.renewAttachment(args.attachmentId);
+  });
+
+  register("release_preview_attachment", async (args, context) => {
+    const runtime = await previews(context);
+    return runtime.access.releaseAttachment(args.attachmentId);
+  });
+
+  /** Operator action: close active preview transport. Separate from the issuance kill switch. */
+  register("revoke_preview_access", async (args, context) => {
+    const runtime = await previews(context);
+    const serviceId = optionalString(args.serviceId, "serviceId");
+    return {
+      revoked: serviceId
+        ? runtime.access.revokeServices([serviceId], "operator-revoked")
+        : runtime.access.revokeAll("operator-revoked"),
+    };
+  });
+
   register("get_preview_settings", async (_args, context) => {
     const runtime = await previews(context);
     return { stored: runtime.storedSettings(), effective: runtime.effectiveSettings() };

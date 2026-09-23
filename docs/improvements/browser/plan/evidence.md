@@ -44,6 +44,18 @@ The opt-in gates were enabled with these variables:
 - `ORKESTRATOR_TEST_PREVIEW_VITE_DIR=/tmp/preview-vite`
 - `ORKESTRATOR_PREVIEW_BENCH=1`
 
+### Review follow-up (2026-09-23)
+
+The private-origin Chromium suite passed with the isolated Vite fixture enabled
+(`ORKESTRATOR_TEST_PREVIEW_VITE_DIR=/tmp/preview-vite`). This covered the grant
+POST, host-only session cookie, sibling cross-site refusal, and Vite HMR. The
+Docker preview and relay suites passed with both image variables set to
+`orkestrator-v2:latest`, including the unpublished-port `docker exec` case.
+The complete `codex-bridge` package suite passed on an isolated rerun. The three
+root guard files for diagnostic bounds, mise tasks, and monorepo scripts passed
+after the review fixes. `mise run check` passed, and `mise run test` passed all
+four aggregate groups: workspace, root, bridges, and protocol.
+
 The first `test:changed` run failed in three groups:
 
 - **Root:** two expectations still described the pre-preview layout: the
@@ -52,7 +64,7 @@ The first `test:changed` run failed in three groups:
 - **Workspace:** one backend test file was edited while the run was reading
   it. The test passed 6 of 6 times in isolation afterwards.
 - **Bridges:** the watchdog killed `cursor-bridge` after 300 s with no output.
-  An isolated rerun (`bun run test:bridge` in `bridges/cursor-bridge`, 2
+  An isolated rerun (`bun run --cwd bridges/cursor-bridge test:bridge`, 2
   workers) also hung and was killed after 600 s. This branch changes no files
   under `bridges/`. It changes none of the protocol modules `cursor-bridge`
   imports; the only overlap is new export entries in

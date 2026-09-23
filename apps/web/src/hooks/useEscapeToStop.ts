@@ -7,9 +7,8 @@ interface UseEscapeToStopOptions {
   isLoading: boolean;
   onStop: () => void | Promise<void>;
   /**
-   * The tab's composer. Escape only stops the turn when it is pressed inside
-   * the pane that holds this element (the composer included), or when nothing
-   * has focus at all and no modal surface is open.
+   * The tab's composer. Escape stops the turn inside its pane or agent scope,
+   * or when nothing has focus and no modal surface is open.
    */
   scopeRef: RefObject<HTMLElement | null>;
 }
@@ -70,8 +69,8 @@ export function useEscapeToStop({
       }
 
       const scope = scopeRef.current;
-      // PaneLeafContainer marks its root; hosts without panes fall back to the composer.
-      const pane = scope?.closest("[data-pane-leaf]") ?? scope;
+      // PaneLeafContainer and pane-less hosts mark the full agent surface.
+      const pane = scope?.closest("[data-pane-leaf], [data-agent-scope]") ?? scope;
       const target = event.target;
       const insidePane = target instanceof Node && Boolean(pane?.contains(target));
       const unfocused = isUnfocusedTarget(target) && !isOutsideModalOpen(pane);

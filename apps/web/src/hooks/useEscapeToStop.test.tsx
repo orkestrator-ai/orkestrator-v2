@@ -8,21 +8,30 @@ function Harness({
   isLoading = true,
   onStop,
   modalOpen = false,
+  pane = true,
+  agentScope = false,
+  attachRef = true,
 }: {
   isActive?: boolean;
   isLoading?: boolean;
   onStop: () => void;
   modalOpen?: boolean;
+  pane?: boolean;
+  agentScope?: boolean;
+  attachRef?: boolean;
 }) {
   const composerRef = useRef<HTMLDivElement>(null);
   useEscapeToStop({ isActive, isLoading, onStop, scopeRef: composerRef });
   return (
     <>
-      <div data-pane-leaf="">
+      <div data-pane-leaf={pane ? "" : undefined} data-agent-scope={agentScope ? "" : undefined}>
         <button type="button">Pane tab</button>
-        <div ref={composerRef}>
+        <div ref={attachRef ? composerRef : undefined}>
           <textarea aria-label="Composer" />
         </div>
+      </div>
+      <div data-pane-leaf="">
+        <button type="button">Sibling pane tab</button>
       </div>
       <input aria-label="Sidebar search" />
       {modalOpen ? (
@@ -148,6 +157,51 @@ describe("useEscapeToStop", () => {
 
     fireEvent.keyDown(screen.getByRole("button", { name: "Pane tab" }), { key: "Escape" });
     expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("stops from a sibling control of the composer in a pane-less agent scope", () => {
+    const onStop = mock(() => {});
+    render(<Harness onStop={onStop} pane={false} agentScope />);
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "Pane tab" }), { key: "Escape" });
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps pane-less sidebar and modal controls outside the agent scope", () => {
+    const onStop = mock(() => {});
+    render(<Harness onStop={onStop} pane={false} agentScope modalOpen />);
+
+    fireEvent.keyDown(screen.getByLabelText("Sidebar search"), { key: "Escape" });
+    fireEvent.keyDown(screen.getByLabelText("Settings field"), { key: "Escape" });
+    expect(onStop).not.toHaveBeenCalled();
+  });
+
+  test("falls back to the composer when no pane or agent scope exists", () => {
+    const onStop = mock(() => {});
+    render(<Harness onStop={onStop} pane={false} />);
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "Pane tab" }), { key: "Escape" });
+    fireEvent.keyDown(screen.getByLabelText("Composer"), { key: "Escape" });
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not claim a focused target when the scope ref is null", () => {
+    const onStop = mock(() => {});
+    render(<Harness onStop={onStop} attachRef={false} />);
+
+    fireEvent.keyDown(screen.getByLabelText("Composer"), { key: "Escape" });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Pane tab" }), { key: "Escape" });
+    expect(onStop).not.toHaveBeenCalled();
+  });
+
+  test("ignores Escape aimed at another pane", () => {
+    const onStop = mock(() => {});
+    render(<Harness onStop={onStop} />);
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "Sibling pane tab" }), {
+      key: "Escape",
+    });
+    expect(onStop).not.toHaveBeenCalled();
   });
 
   test("ignores Escape aimed at a control outside the pane", () => {

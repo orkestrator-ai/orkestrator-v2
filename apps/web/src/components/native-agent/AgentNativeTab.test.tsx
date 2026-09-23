@@ -6580,6 +6580,42 @@ describe("AgentNativeTab", () => {
     ).toBe("claude-session");
   });
 
+  test("stops from the transcript in its pane but ignores sidebar Escape", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      turn: { phase: "running" as const },
+      messages: [
+        {
+          id: "assistant-running",
+          role: "assistant" as const,
+          content: "Running transcript",
+          parts: [],
+          createdAt: "2026-08-14T10:00:00.000Z",
+        },
+      ],
+    }));
+    render(
+      <>
+        <div data-pane-leaf="">
+          <AgentNativeTab
+            tabId="tab-escape-scope"
+            data={identity("claude")}
+            isActive
+            ownsGlobalShortcuts
+          />
+        </div>
+        <input aria-label="Sidebar search" />
+      </>,
+    );
+
+    await screen.findByTitle("Stop current query");
+    fireEvent.keyDown(screen.getByLabelText("Sidebar search"), { key: "Escape" });
+    expect(stopNativeAgentSessionMock).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(screen.getByTestId("virtuoso-scroller"), { key: "Escape" });
+    await waitFor(() => expect(stopNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+  });
+
   describe("capability-driven parity", () => {
     test("adds transcript annotations and comments to the next dispatched prompt", async () => {
       seedProjection();

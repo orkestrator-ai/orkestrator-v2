@@ -54,6 +54,11 @@ export interface PreviewForwardHooks {
   connect(signal: AbortSignal): Promise<Duplex>;
   /** Register the in-flight exchange for revocation; returns a release. */
   track?(close: () => void): () => void;
+  /**
+   * Accept an upstream connection back for reuse after a cleanly framed
+   * response. When absent, every exchange uses a fresh connection.
+   */
+  reuse?(socket: Duplex): void;
 }
 
 const STATUS: Partial<Record<PreviewErrorCategory, number>> = {
@@ -176,6 +181,7 @@ export async function forwardPreviewRequest(
   const controller = new AbortController();
   let finished = false;
   let upstream: Duplex | null = null;
+  let reused = false;
   let idle: ReturnType<typeof setTimeout> | null = null;
   const abort = () => {
     if (finished) return;
@@ -199,7 +205,7 @@ export async function forwardPreviewRequest(
   try {
     upstream = await hooks.connect(controller.signal);
     if (controller.signal.aborted) throw previewFailure("access-expired");
-    upstream.on("error", () => undefined);
+    if (upstream.listenerCount("error") === 0) upstream.on("error", () => undefined);
     const incoming = pairsFromRaw(request.rawHeaders);
     const { hasBody, length } = requestBodyLength(incoming);
     let uploadFailure: PreviewErrorCategory | null = null;
@@ -228,6 +234,11 @@ export async function forwardPreviewRequest(
       maxHeaderBytes: limits.headerMaxBytes,
       maxHeaderFields: limits.headerMaxFields,
       signal: controller.signal,
+      keepAlive: Boolean(hooks.reuse),
+      onReusable: (socket) => {
+        reused = true;
+        hooks.reuse?.(socket);
+      },
     }).catch((error: unknown) => {
       if (uploadFailure)
         throw Object.assign(new Error("upload failed"), { previewCategory: uploadFailure });
@@ -310,7 +321,7 @@ export async function forwardPreviewRequest(
     finished = true;
     if (idle) clearTimeout(idle);
     request.off("aborted", abort);
-    upstream?.destroy();
+    if (!reused) upstream?.destroy();
     release?.();
   }
 }

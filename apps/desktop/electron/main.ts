@@ -14,7 +14,7 @@ import {
 } from "electron";
 import path from "node:path";
 import os from "node:os";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { LOCAL_CONNECTION_ID } from "@orkestrator/protocol/connections";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
@@ -43,8 +43,14 @@ import {
   loadAgentPlatformSelection,
   saveAgentPlatformSelection,
 } from "./agent-platform-selection.js";
-import type { BrowserPreviewManager } from "./browser-preview-manager.js";
+import type {
+  BrowserPreviewManager,
+  BrowserPreviewServiceTransport,
+} from "./browser-preview-manager.js";
+import { PreviewTransportManager } from "./preview-transport-manager.js";
+import { createPreviewPortHints } from "./preview-port-hints.js";
 import {
+  configurePreviewServiceSession,
   createBrowserPreviewAddressFocusHandler,
   initializeBrowserPreviews,
   registerBrowserPreviewWindowActivation,
@@ -66,6 +72,7 @@ import {
 } from "./application-logging.js";
 import {
   browserPreviewPartitionForWindow,
+  browserPreviewServicePartition,
   cleanupFailedDesktopWindow,
   DesktopWindowRequestGate,
   DesktopWindowSlotAllocator,
@@ -106,7 +113,9 @@ type DesktopWindowContext = {
   scope: string;
   slot: number;
   browserPreviewManager: BrowserPreviewManager;
+  previewTransport: PreviewTransportManager;
 };
+let previewPortHints: ReturnType<typeof createPreviewPortHints> | null = null;
 const windowContexts = new Map<number, DesktopWindowContext>();
 const MAX_DESKTOP_WINDOWS = 32;
 const windowSlots = new DesktopWindowSlotAllocator(MAX_DESKTOP_WINDOWS);
@@ -193,8 +202,41 @@ function focusDesktopWindow(id: number): void {
 function createWindowBrowserPreviews(
   createdWindow: BrowserWindow,
   scope: string,
-  partition: string,
+  slot: number,
+  connectionId: string,
 ) {
+  const partition = browserPreviewPartitionForWindow(slot, connectionId);
+  let manager: BrowserPreviewManager | null = null;
+  previewPortHints ??= createPreviewPortHints(
+    path.join(app.getPath("userData"), "preview-ports.json"),
+  );
+  // Service previews: a loopback ingress per service over the authenticated
+  // tunnel of *this window's* connection. Never borrows another window's backend.
+  const previewTransport = new PreviewTransportManager({
+    invoke: <T>(command: string, args: Record<string, unknown>) => {
+      if (!connectionManager) throw new Error("Connections are not initialized");
+      return connectionManager.invoke<T>(command, args, scope);
+    },
+    tunnelUrl: () => connectionManager?.getPreviewTunnelUrl(scope) ?? null,
+    isRemote: () => connectionManager?.getConnectionId(scope) !== LOCAL_CONNECTION_ID,
+    partitionFor: (target) => browserPreviewServicePartition(slot, connectionId, target),
+    sessionFor: (partitionName) => session.fromPartition(partitionName),
+    clientKey: createHash("sha256").update(scope).digest("hex").slice(0, 24),
+    portHints: previewPortHints,
+    onStateChange: (serviceKey) => manager?.refreshService(serviceKey),
+    logger: console,
+  });
+  const transport: BrowserPreviewServiceTransport = {
+    acquire: (target, holderId) => previewTransport.acquire(target, holderId),
+    release: (serviceKey, holderId) => previewTransport.release(serviceKey, holderId),
+    scopeFor: (url) => previewTransport.scopeFor(url),
+    describe: (url) => previewTransport.describe(url),
+    target: (serviceKey) => previewTransport.target(serviceKey),
+    transportState: (serviceKey) => previewTransport.transportState(serviceKey),
+    resetSiteData: (target) => previewTransport.resetSiteData(target),
+    sessionFor: (partitionName) =>
+      configurePreviewServiceSession(session.fromPartition(partitionName), () => manager),
+  };
   const emitToOwner = (event: string, payload: unknown) =>
     emitToWindow(createdWindow, event, payload);
   const browserPreviewMainAdapters = createBrowserPreviewMainAdapters({
@@ -203,7 +245,7 @@ function createWindowBrowserPreviews(
     writeClipboardText: (text) => clipboard.writeText(text),
     logError: (message, error) => console.error(message, error),
   });
-  return initializeBrowserPreviews({
+  const runtime = initializeBrowserPreviews({
     fromPartition: (partitionName) => session.fromPartition(partitionName),
     partition,
     WebContentsViewCtor: WebContentsView,
@@ -216,7 +258,10 @@ function createWindowBrowserPreviews(
     }),
     getAuthorization: (url) =>
       connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
+    transport,
   });
+  manager = runtime.manager;
+  return { ...runtime, previewTransport };
 }
 
 function createMenu(): void {
@@ -281,7 +326,8 @@ async function createWindow(connectionId?: string): Promise<void> {
         const browserPreviewRuntime = createWindowBrowserPreviews(
           createdWindow,
           scope,
-          browserPreviewPartitionForWindow(slot, activeConnectionId),
+          slot,
+          activeConnectionId,
         );
         const webContentsId = createdWindow.webContents.id;
         windowContexts.set(webContentsId, {
@@ -289,6 +335,7 @@ async function createWindow(connectionId?: string): Promise<void> {
           scope,
           slot,
           browserPreviewManager: browserPreviewRuntime.manager,
+          previewTransport: browserPreviewRuntime.previewTransport,
         });
         lastFocusedWindowId = webContentsId;
         registered = true;
@@ -308,7 +355,13 @@ async function createWindow(connectionId?: string): Promise<void> {
           createMenu();
         });
         createdWindow.once("closed", () => {
-          windowContexts.get(webContentsId)?.browserPreviewManager.destroyAll();
+          const closing = windowContexts.get(webContentsId);
+          closing?.browserPreviewManager.destroyAll();
+          // Owned local listeners and tunnel connections end with the window;
+          // the backend's services and applications keep running.
+          void closing?.previewTransport.disposeAll().catch((error: unknown) => {
+            console.warn("[Previews] Failed to close preview transport:", error);
+          });
           windowContexts.delete(webContentsId);
           connectionManager?.release(scope);
           windowSlots.release(slot);
@@ -385,17 +438,24 @@ function registerIpc(): void {
       const nextPreviewRuntime = createWindowBrowserPreviews(
         context.window,
         context.scope,
-        browserPreviewPartitionForWindow(context.slot, connectionId),
+        context.slot,
+        connectionId,
       );
       let list: ReturnType<ConnectionManager["getList"]>;
       try {
         list = await manager().use(connectionId, context.scope);
       } catch (error) {
         nextPreviewRuntime.manager.destroyAll();
+        void nextPreviewRuntime.previewTransport.disposeAll().catch(() => undefined);
         throw error;
       }
       context.browserPreviewManager.destroyAll();
+      // A connection change cancels transport owned for the previous backend.
+      void context.previewTransport.disposeAll().catch((error: unknown) => {
+        console.warn("[Previews] Failed to close preview transport:", error);
+      });
       context.browserPreviewManager = nextPreviewRuntime.manager;
+      context.previewTransport = nextPreviewRuntime.previewTransport;
       updateWindowTitle(event);
       publishConnectionLists();
       return list;

@@ -24,11 +24,38 @@ export interface InitializeBrowserPreviewsOptions {
   writeClipboardText: (text: string) => void;
   focusAddressBar: (tabId: string) => void;
   getAuthorization: (url: string) => string | null;
+  transport?: BrowserPreviewManagerOptions["transport"];
 }
 
 export interface BrowserPreviewRuntime {
   manager: BrowserPreviewManager;
   browserSession: Session;
+}
+
+const configuredServiceSessions = new WeakSet<Session>();
+
+/**
+ * Apply the preview permission policy to a service partition: deny every
+ * permission except a user-activated clipboard write inside the preview's own
+ * scope. Request hooks are installed separately by the transport manager.
+ */
+export function configurePreviewServiceSession(
+  serviceSession: Session,
+  getManager: () => Pick<BrowserPreviewManager, "consumeClipboardWriteUserActivation"> | null,
+): Session {
+  if (configuredServiceSessions.has(serviceSession)) return serviceSession;
+  configuredServiceSessions.add(serviceSession);
+  serviceSession.setPermissionCheckHandler(() => false);
+  serviceSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const manager = getManager();
+    callback(
+      Boolean(manager) &&
+        permission === CLIPBOARD_WRITE_PERMISSION &&
+        details.isMainFrame &&
+        manager!.consumeClipboardWriteUserActivation(webContents, details.requestingUrl),
+    );
+  });
+  return serviceSession;
 }
 
 export interface BrowserPreviewAddressFocusOptions {
@@ -61,6 +88,7 @@ export function initializeBrowserPreviews({
   writeClipboardText,
   focusAddressBar,
   getAuthorization,
+  transport,
 }: InitializeBrowserPreviewsOptions): BrowserPreviewRuntime {
   const browserSession = fromPartition(partition);
   const manager = new BrowserPreviewManager({
@@ -73,6 +101,7 @@ export function initializeBrowserPreviews({
     openExternal,
     writeClipboardText,
     focusAddressBar,
+    ...(transport ? { transport } : {}),
   });
   browserSession.setPermissionCheckHandler(() => false);
   browserSession.setPermissionRequestHandler((webContents, permission, callback, details) => {

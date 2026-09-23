@@ -3,10 +3,12 @@ import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protoco
 import type { ConnectToRemoteInput, ConnectionList } from "@orkestrator/protocol/connections";
 import type {
   BrowserPreviewAnnotationStatus,
+  BrowserPreviewServiceTarget,
   BrowserPreviewAttachInput,
   BrowserPreviewBounds,
   BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
+import { isOpaquePreviewId, normalizePreviewPath } from "@orkestrator/protocol/preview-services";
 import {
   isMacOsPrivacySettingsPane,
   type MacOsPermissionsStatus,
@@ -85,6 +87,8 @@ export type BrowserPreviewController = {
   getAnnotationStatus(tabId: string): Promise<BrowserPreviewAnnotationStatus>;
   cancelAnnotation(tabId: string): Promise<void>;
   destroy(tabId: string): void;
+  /** Clear one service's partition (cookies, storage, cache). */
+  resetServiceSiteData?(target: BrowserPreviewServiceTarget): Promise<void>;
 };
 
 export type MainIpcDependencies = {
@@ -125,6 +129,24 @@ function browserPreviewTabId(value: unknown): string {
     throw new Error("Expected a browser preview tab ID");
   }
   return value;
+}
+
+/** A service reference from the renderer. Only identity and an app-relative path are accepted. */
+function browserPreviewServiceTarget(value: unknown): BrowserPreviewServiceTarget {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a browser preview service reference");
+  }
+  const { backendInstanceId, environmentId, serviceId, path } = value as Record<string, unknown>;
+  if (
+    !isOpaquePreviewId(backendInstanceId) ||
+    !isOpaquePreviewId(serviceId) ||
+    typeof environmentId !== "string" ||
+    environmentId.length === 0 ||
+    environmentId.length > 256
+  ) {
+    throw new Error("Expected a browser preview service reference");
+  }
+  return { backendInstanceId, environmentId, serviceId, path: normalizePreviewPath(path) };
 }
 
 function browserPreviewUrl(value: unknown): string {
@@ -366,9 +388,17 @@ export function registerMainIpc({
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error("Expected browser preview attachment details");
     }
-    const { tabId, url, bounds, visible } = value as Record<string, unknown>;
+    const { tabId, url, service, bounds, visible } = value as Record<string, unknown>;
     if (typeof visible !== "boolean") {
       throw new Error("Expected a browser preview URL and visibility");
+    }
+    if (service !== undefined) {
+      return previews(event).attach({
+        tabId: browserPreviewTabId(tabId),
+        service: browserPreviewServiceTarget(service),
+        bounds: browserPreviewBounds(bounds),
+        visible,
+      });
     }
     return previews(event).attach({
       tabId: browserPreviewTabId(tabId),
@@ -376,6 +406,11 @@ export function registerMainIpc({
       bounds: browserPreviewBounds(bounds),
       visible,
     });
+  });
+  handle("orkestrator:browser-preview:reset-site-data", (event, target: unknown) => {
+    const controller = previews(event);
+    if (!controller.resetServiceSiteData) throw new Error("Service previews are unavailable");
+    return controller.resetServiceSiteData(browserPreviewServiceTarget(target));
   });
   handle("orkestrator:browser-preview:set-bounds", (event, tabId: unknown, bounds: unknown) =>
     previews(event).setBounds(browserPreviewTabId(tabId), browserPreviewBounds(bounds)),

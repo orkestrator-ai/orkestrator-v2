@@ -17,8 +17,11 @@ import type {
   BrowserPreviewBounds,
   BrowserPreviewElementDetails,
   BrowserPreviewOpenLinkEvent,
+  BrowserPreviewServiceTarget,
   BrowserPreviewState,
+  BrowserPreviewTransportState,
 } from "@orkestrator/protocol/browser-preview";
+import { previewFailure } from "@orkestrator/protocol/preview-services";
 import { createContextMenuTemplate, type MenuLike } from "./context-menu.js";
 import {
   BROWSER_PREVIEW_ANNOTATION_CANCEL_SCRIPT,
@@ -38,6 +41,30 @@ interface ManagedPreview {
   loading: boolean;
   error: string | null;
   annotationSessionId?: string;
+  /** Service previews: transport key and the partition the view was created with. */
+  service?: { key: string; partition: string };
+}
+
+/**
+ * Service transport owned by Electron main (see `PreviewTransportManager`).
+ * The renderer supplies only a service reference; main resolves the URL.
+ */
+export interface BrowserPreviewServiceTransport {
+  acquire(
+    target: BrowserPreviewServiceTarget,
+    holderId: string,
+  ): Promise<{ serviceKey: string; partition: string; url: string }>;
+  release(serviceKey: string, holderId: string): void;
+  scopeFor(url: string): string | null;
+  describe(
+    url: string,
+  ): { serviceKey: string; serviceId: string; path: string; displayUrl: string } | null;
+  target(serviceKey: string): Omit<BrowserPreviewServiceTarget, "path"> | null;
+  transportState(serviceKey: string): BrowserPreviewTransportState;
+  sessionFor(partition: string): Session;
+  resetSiteData(
+    target: Pick<BrowserPreviewServiceTarget, "backendInstanceId" | "serviceId">,
+  ): Promise<void>;
 }
 
 export interface BrowserPreviewManagerOptions {
@@ -50,6 +77,8 @@ export interface BrowserPreviewManagerOptions {
   openExternal: (url: string) => void;
   writeClipboardText: (text: string) => void;
   focusAddressBar: (tabId: string) => void;
+  /** Service previews are unavailable without a transport (old backend, feature off). */
+  transport?: BrowserPreviewServiceTransport;
 }
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
@@ -133,10 +162,6 @@ function isExternalBrowserUrl(value: string): boolean {
   } catch {
     return false;
   }
-}
-
-function isNavigationWithinScope(value: string, expectedScope: string): boolean {
-  return previewNavigationScope(value) === expectedScope;
 }
 
 function assertTabId(tabId: unknown): asserts tabId is string {
@@ -326,22 +351,38 @@ export class BrowserPreviewManager {
     return typeof factor === "number" && Number.isFinite(factor) && factor > 0 ? factor : 1;
   }
 
+  /** Service transport scope first, then the legacy loopback/gateway rules. */
+  private scopeFor(url: string): string | null {
+    return this.options.transport?.scopeFor(url) ?? previewNavigationScope(url);
+  }
+
+  private withinScope(url: string, scope: string): boolean {
+    return this.scopeFor(url) === scope;
+  }
+
   async attach(input: BrowserPreviewAttachInput): Promise<BrowserPreviewState> {
     assertTabId(input.tabId);
-    const navigationScope = previewNavigationScope(input.url);
-    if (!navigationScope)
+    if (input.service) return this.attachService(input, input.service);
+    const url = input.url;
+    const navigationScope = typeof url === "string" ? previewNavigationScope(url) : null;
+    if (!url || !navigationScope)
       throw new Error("Browser previews require a loopback or authenticated gateway-preview URL");
     const bounds = validateBounds(input.bounds, this.hostZoomFactor());
     let preview = this.previews.get(input.tabId);
+    if (preview?.service) {
+      // A tab switching from a service to a manual URL needs the shared legacy session.
+      this.destroy(input.tabId);
+      preview = undefined;
+    }
 
     if (!preview) {
-      preview = this.createPreview(input.tabId, input.url, navigationScope);
-    } else if (preview.requestedUrl !== input.url) {
+      preview = this.createPreview(input.tabId, url, navigationScope);
+    } else if (preview.requestedUrl !== url) {
       this.clipboardUserActivations.delete(preview.view.webContents);
-      preview.requestedUrl = input.url;
+      preview.requestedUrl = url;
       preview.navigationScope = navigationScope;
       preview.error = null;
-      await this.load(input.tabId, preview, input.url);
+      await this.load(input.tabId, preview, url);
     }
 
     preview.view.setBounds(bounds);
@@ -349,6 +390,74 @@ export class BrowserPreviewManager {
     preview.view.setVisible(visible);
     if (!visible) this.clipboardUserActivations.delete(preview.view.webContents);
     return this.snapshot(input.tabId, preview);
+  }
+
+  private async attachService(
+    input: BrowserPreviewAttachInput,
+    target: BrowserPreviewServiceTarget,
+  ): Promise<BrowserPreviewState> {
+    const transport = this.options.transport;
+    if (!transport) {
+      throw previewFailure("unsupported", { message: "Service previews are not available." });
+    }
+    const bounds = validateBounds(input.bounds, this.hostZoomFactor());
+    const descriptor = await transport.acquire(target, input.tabId);
+    let preview = this.previews.get(input.tabId);
+    // A session cannot change after a view exists: another service (or a
+    // legacy tab) needs a fresh view on this service's partition.
+    // Partitions derive from the service key, so an equal partition is the same service.
+    if (preview && preview.service?.partition !== descriptor.partition) {
+      this.destroy(input.tabId);
+      preview = undefined;
+    }
+    const scope = `service:${descriptor.serviceKey}`;
+    if (!preview) {
+      preview = this.createPreview(input.tabId, descriptor.url, scope, {
+        session: transport.sessionFor(descriptor.partition),
+        service: { key: descriptor.serviceKey, partition: descriptor.partition },
+      });
+    } else {
+      preview.service = { key: descriptor.serviceKey, partition: descriptor.partition };
+      const current = transport.describe(preview.requestedUrl);
+      if (current?.serviceKey !== descriptor.serviceKey || current.path !== target.path) {
+        this.clipboardUserActivations.delete(preview.view.webContents);
+        preview.requestedUrl = descriptor.url;
+        preview.navigationScope = scope;
+        preview.error = null;
+        await this.load(input.tabId, preview, descriptor.url);
+      }
+    }
+    preview.view.setBounds(bounds);
+    const visible = input.visible && bounds.width > 0 && bounds.height > 0;
+    preview.view.setVisible(visible);
+    if (!visible) this.clipboardUserActivations.delete(preview.view.webContents);
+    return this.snapshot(input.tabId, preview);
+  }
+
+  /**
+   * Reset one service's site data. Open views of that service reload so the
+   * page does not keep using state that no longer exists on disk.
+   */
+  async resetServiceSiteData(target: BrowserPreviewServiceTarget): Promise<void> {
+    const transport = this.options.transport;
+    if (!transport) throw previewFailure("unsupported");
+    await transport.resetSiteData(target);
+    for (const preview of this.previews.values()) {
+      const owner = preview.service ? transport.target(preview.service.key) : null;
+      if (
+        owner?.serviceId === target.serviceId &&
+        owner.backendInstanceId === target.backendInstanceId
+      ) {
+        preview.view.webContents.reload();
+      }
+    }
+  }
+
+  /** Re-emit state for every tab of a service whose transport state changed. */
+  refreshService(serviceKey: string): void {
+    for (const [tabId, preview] of this.previews) {
+      if (preview.service?.key === serviceKey) this.emit(tabId, preview);
+    }
   }
 
   setBounds(tabId: string, bounds: BrowserPreviewBounds): BrowserPreviewState {
@@ -381,8 +490,8 @@ export class BrowserPreviewManager {
     const bounds = preview.view.getBounds();
     if (bounds.width <= 0 || bounds.height <= 0) return false;
     if (
-      !isNavigationWithinScope(webContents.getURL(), preview.navigationScope) ||
-      !isNavigationWithinScope(requestingUrl, preview.navigationScope)
+      !this.withinScope(webContents.getURL(), preview.navigationScope) ||
+      !this.withinScope(requestingUrl, preview.navigationScope)
     ) {
       return false;
     }
@@ -396,7 +505,10 @@ export class BrowserPreviewManager {
 
   async navigate(tabId: string, url: string): Promise<BrowserPreviewState> {
     const preview = this.get(tabId);
-    const navigationScope = previewNavigationScope(url);
+    const navigationScope = this.scopeFor(url);
+    if (preview.service && navigationScope !== preview.navigationScope) {
+      throw new Error("Service previews navigate by service path; attach the new path instead");
+    }
     if (!navigationScope)
       throw new Error("Browser previews require a loopback or authenticated gateway-preview URL");
     this.clipboardUserActivations.delete(preview.view.webContents);
@@ -486,6 +598,7 @@ export class BrowserPreviewManager {
     if (!preview) return;
     this.previews.delete(tabId);
     this.clipboardUserActivations.delete(preview.view.webContents);
+    if (preview.service) this.options.transport?.release(preview.service.key, tabId);
     const window = this.options.getWindow();
     if (window && !window.isDestroyed()) {
       window.contentView.removeChildView(preview.view);
@@ -499,12 +612,19 @@ export class BrowserPreviewManager {
     for (const tabId of Array.from(this.previews.keys())) this.destroy(tabId);
   }
 
-  private createPreview(tabId: string, url: string, navigationScope: string): ManagedPreview {
+  private createPreview(
+    tabId: string,
+    url: string,
+    navigationScope: string,
+    service?: { session: Session; service: NonNullable<ManagedPreview["service"]> },
+  ): ManagedPreview {
     const window = this.options.getWindow();
     if (!window || window.isDestroyed()) throw new Error("The main window is not available");
     const view = new this.options.WebContentsViewCtor({
       webPreferences: {
-        session: this.options.browserSession,
+        // Service previews get their own partition; legacy previews share the
+        // window/connection partition as before.
+        session: service?.session ?? this.options.browserSession,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -525,6 +645,7 @@ export class BrowserPreviewManager {
       loadGeneration: 0,
       loading: true,
       error: null,
+      ...(service ? { service: service.service } : {}),
     };
     this.previews.set(tabId, preview);
     this.installListeners(tabId, preview);
@@ -558,14 +679,34 @@ export class BrowserPreviewManager {
 
       const template: MenuItemConstructorOptions[] = [];
       if (params.linkURL) {
-        const browserTabUrl = browserTabUrlFromPreviewLink(params.linkURL, preview.requestedUrl);
+        // Service previews open same-service links as service tabs; anything
+        // else is external-only, so a remote page cannot open a client-local URL.
+        const serviceLink = preview.service
+          ? this.options.transport?.describe(params.linkURL)
+          : null;
+        const serviceTarget =
+          serviceLink && serviceLink.serviceKey === preview.service?.key
+            ? this.options.transport?.target(serviceLink.serviceKey)
+            : null;
+        const browserTabUrl = preview.service
+          ? (serviceLink?.displayUrl ?? null)
+          : browserTabUrlFromPreviewLink(params.linkURL, preview.requestedUrl);
         const externalBrowserUrl = isExternalBrowserUrl(params.linkURL);
         template.push(
           {
             label: "Open Link in New Tab",
-            enabled: browserTabUrl !== null,
+            enabled: browserTabUrl !== null && (!preview.service || Boolean(serviceTarget)),
             click: () => {
-              if (browserTabUrl) this.options.emitOpenLink({ tabId, url: browserTabUrl });
+              if (!browserTabUrl) return;
+              if (serviceTarget && serviceLink) {
+                this.options.emitOpenLink({
+                  tabId,
+                  url: browserTabUrl,
+                  service: { ...serviceTarget, path: serviceLink.path },
+                });
+              } else if (!preview.service) {
+                this.options.emitOpenLink({ tabId, url: browserTabUrl });
+              }
             },
           },
           {
@@ -577,7 +718,8 @@ export class BrowserPreviewManager {
           },
           {
             label: "Copy Link Address",
-            click: () => this.options.writeClipboardText(params.linkURL),
+            // Never copy a runtime ingress URL; copy the application address.
+            click: () => this.options.writeClipboardText(serviceLink?.displayUrl ?? params.linkURL),
           },
         );
       }
@@ -609,11 +751,11 @@ export class BrowserPreviewManager {
     });
     contents.on("will-navigate", (event) => {
       this.clipboardUserActivations.delete(contents);
-      if (!isNavigationWithinScope(event.url, preview.navigationScope)) event.preventDefault();
+      if (!this.withinScope(event.url, preview.navigationScope)) event.preventDefault();
     });
     contents.on("will-redirect", (event) => {
       if (event.isMainFrame) this.clipboardUserActivations.delete(contents);
-      if (event.isMainFrame && !isNavigationWithinScope(event.url, preview.navigationScope)) {
+      if (event.isMainFrame && !this.withinScope(event.url, preview.navigationScope)) {
         event.preventDefault();
       }
     });
@@ -628,13 +770,13 @@ export class BrowserPreviewManager {
     });
     contents.on("did-navigate", (_event, url) => {
       this.clipboardUserActivations.delete(contents);
-      if (isNavigationWithinScope(url, preview.navigationScope)) preview.requestedUrl = url;
+      if (this.withinScope(url, preview.navigationScope)) preview.requestedUrl = url;
       this.emit(tabId, preview);
     });
     contents.on("did-navigate-in-page", (_event, _url, isMainFrame) => {
       if (isMainFrame) {
         const url = contents.getURL();
-        if (isNavigationWithinScope(url, preview.navigationScope)) preview.requestedUrl = url;
+        if (this.withinScope(url, preview.navigationScope)) preview.requestedUrl = url;
         this.emit(tabId, preview);
       }
     });
@@ -678,7 +820,7 @@ export class BrowserPreviewManager {
     if (!canNavigate) return this.snapshot(tabId, preview);
 
     const destination = history.getEntryAtIndex(history.getActiveIndex() + offset);
-    const navigationScope = destination && previewNavigationScope(destination.url);
+    const navigationScope = destination && this.scopeFor(destination.url);
     if (!navigationScope) {
       preview.error = "Blocked browser history navigation outside preview scope";
       return this.snapshot(tabId, preview);
@@ -706,13 +848,31 @@ export class BrowserPreviewManager {
 
   private snapshot(tabId: string, preview: ManagedPreview): BrowserPreviewState {
     const contents = preview.view.webContents;
+    const url = contents.isDestroyed() ? "" : contents.getURL();
+    const transport = this.options.transport;
+    const described =
+      preview.service && transport ? transport.describe(url || preview.requestedUrl) : null;
     return {
       tabId,
-      url: contents.isDestroyed() ? "" : contents.getURL(),
+      url,
       loading: preview.loading,
       canGoBack: !contents.isDestroyed() && contents.navigationHistory.canGoBack(),
       canGoForward: !contents.isDestroyed() && contents.navigationHistory.canGoForward(),
       error: preview.error,
+      ...(preview.service && transport
+        ? {
+            ...(described
+              ? {
+                  service: {
+                    serviceId: described.serviceId,
+                    path: described.path,
+                    displayUrl: described.displayUrl,
+                  },
+                }
+              : {}),
+            transport: transport.transportState(preview.service.key),
+          }
+        : {}),
     };
   }
 

@@ -46,6 +46,13 @@ export interface Http1RequestOptions {
   signal?: AbortSignal;
   /** Keep the connection for a protocol upgrade instead of closing after the response. */
   upgrade?: boolean;
+  /**
+   * Reuse the connection after a cleanly framed response. `onReusable` receives
+   * the socket (paused, detached) only when the request body was fully sent,
+   * the response was length- or chunk-framed, and neither side asked to close.
+   */
+  keepAlive?: boolean;
+  onReusable?: (socket: Duplex) => void;
 }
 
 export interface Http1Response {
@@ -82,7 +89,7 @@ export function serializeRequestHead(
   path: string,
   headers: HeaderList,
   framing: { length: number | null; chunked: boolean },
-  connection: "close" | "upgrade",
+  connection: "close" | "upgrade" | "keep-alive",
 ): Buffer {
   if (!TOKEN.test(method)) throw new PreviewHttp1Error("invalid-request", "Invalid method");
   if (!path.startsWith("/") || /[\s\u0000-\u001f\u007f]/.test(path)) {
@@ -91,7 +98,7 @@ export function serializeRequestHead(
   const lines = [`${method} ${path} HTTP/1.1`];
   for (const [name, value] of headers) {
     const lower = name.toLowerCase();
-    if (connection === "close" && FRAMING_HEADERS.has(lower)) continue;
+    if (connection !== "upgrade" && FRAMING_HEADERS.has(lower)) continue;
     if (connection === "upgrade" && (lower === "content-length" || lower === "transfer-encoding"))
       continue;
     if (!isValidHeaderName(name) || !isValidHeaderValue(value)) {
@@ -99,10 +106,10 @@ export function serializeRequestHead(
     }
     lines.push(`${name}: ${value}`);
   }
-  if (connection === "close") {
+  if (connection !== "upgrade") {
     if (framing.chunked) lines.push("transfer-encoding: chunked");
     else if (framing.length !== null) lines.push(`content-length: ${framing.length}`);
-    lines.push("connection: close");
+    if (connection === "close") lines.push("connection: close");
   }
   return Buffer.from(`${lines.join("\r\n")}\r\n\r\n`, "latin1");
 }
@@ -305,6 +312,7 @@ export function http1Request(socket: Duplex, options: Http1RequestOptions): Prom
   return new Promise((resolve, reject) => {
     const method = options.method.toUpperCase();
     let settled = false;
+    let requestSent = false;
     let head: Buffer = Buffer.alloc(0);
     const cleanupHead = () => {
       clearTimeout(timer);
@@ -370,7 +378,18 @@ export function http1Request(socket: Duplex, options: Http1RequestOptions): Prom
           return;
         }
         try {
-          resolve({ ...parsed, body: bodyStream(socket, responseFraming(method, parsed), rest) });
+          const framing = responseFraming(method, parsed);
+          const upstreamCloses = headerValues(parsed.headers, "connection").some((value) =>
+            /(^|,)\s*close\s*(,|$)/i.test(value),
+          );
+          const reuse =
+            options.keepAlive && options.onReusable && framing.kind !== "close" && !upstreamCloses
+              ? (reusable: Duplex) => {
+                  if (requestSent) options.onReusable!(reusable);
+                  else reusable.destroy();
+                }
+              : null;
+          resolve({ ...parsed, body: bodyStream(socket, framing, rest, reuse) });
         } catch (error) {
           socket.destroy();
           reject(error);
@@ -402,7 +421,7 @@ export function http1Request(socket: Duplex, options: Http1RequestOptions): Prom
         options.path,
         options.headers,
         { length, chunked: hasBody && length === null },
-        options.upgrade ? "upgrade" : "close",
+        options.upgrade ? "upgrade" : options.keepAlive ? "keep-alive" : "close",
       );
     } catch (error) {
       fail(error as Error);
@@ -410,15 +429,27 @@ export function http1Request(socket: Duplex, options: Http1RequestOptions): Prom
     }
     socket.write(requestHead);
     if (options.body) {
-      writeBody(socket, options.body, length === null).catch((error: Error) => fail(error));
+      writeBody(socket, options.body, length === null)
+        .then(() => {
+          requestSent = true;
+        })
+        .catch((error: Error) => fail(error));
+    } else {
+      requestSent = true;
     }
   });
 }
 
-function bodyStream(socket: Duplex, framing: Framing, initial: Buffer): Readable {
+function bodyStream(
+  socket: Duplex,
+  framing: Framing,
+  initial: Buffer,
+  reuse: ((socket: Duplex) => void) | null,
+): Readable {
   const decoder = framing.kind === "chunked" ? new ChunkedDecoder() : null;
   let remaining = framing.kind === "length" ? framing.remaining : Number.POSITIVE_INFINITY;
   let finished = false;
+  let overflow = false;
   const body = new Readable({
     read() {
       if (!finished) socket.resume();
@@ -434,6 +465,11 @@ function bodyStream(socket: Duplex, framing: Framing, initial: Buffer): Readable
     finished = true;
     detach();
     body.push(null);
+    if (reuse && !overflow && !socket.destroyed) {
+      socket.pause();
+      reuse(socket);
+      return;
+    }
     // Connection: close — nothing else may be read from this connection.
     socket.destroy();
   };
@@ -448,6 +484,8 @@ function bodyStream(socket: Duplex, framing: Framing, initial: Buffer): Readable
         if (decoder.done) finish();
       } else if (framing.kind === "length") {
         const take = Math.min(remaining, chunk.length);
+        // Bytes past the declared length would poison a reused connection.
+        if (take < chunk.length) overflow = true;
         push(chunk.subarray(0, take));
         remaining -= take;
         if (remaining === 0) finish();
@@ -485,7 +523,12 @@ function bodyStream(socket: Duplex, framing: Framing, initial: Buffer): Readable
   if (framing.kind === "none" || (framing.kind === "length" && remaining === 0)) {
     finished = true;
     body.push(null);
-    socket.destroy();
+    if (reuse && initial.length === 0 && !socket.destroyed) {
+      socket.pause();
+      reuse(socket);
+    } else {
+      socket.destroy();
+    }
     return body;
   }
   socket.on("data", consume);

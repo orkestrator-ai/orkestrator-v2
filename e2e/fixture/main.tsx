@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { DndContext } from "@dnd-kit/core";
 import { SortableContext } from "@dnd-kit/sortable";
 import "../../apps/web/src/index.css";
+import { DesignLaunchButton } from "../../apps/web/src/components/design/DesignLaunchButton";
 import {
   CreateEnvironmentDialog,
   type ClaudeOptions,
@@ -42,6 +43,7 @@ import {
   resolveSortProjectFolder,
 } from "../../apps/web/src/lib/project-folders";
 import { useProjectStore } from "../../apps/web/src/stores";
+import { usePaneLayoutStore } from "../../apps/web/src/stores/paneLayoutStore";
 import type { Project } from "../../apps/web/src/types";
 import {
   ReviewLaunchDialog,
@@ -105,6 +107,33 @@ function CreateEnvironmentFixture() {
           window.lastCreateEnvironmentOptions = options;
         }}
         defaultPortMappings={[{ containerPort: 3000, hostPort: 3000, protocol: "tcp" }]}
+      />
+    </main>
+  );
+}
+
+function DesignLaunchFixture() {
+  useEffect(() => {
+    usePaneLayoutStore.setState((state) => ({
+      hydration: new Map(state.hydration).set("design-fixture", "done"),
+    }));
+  }, []);
+
+  window.orkestrator = {
+    invoke: async <T,>(command: string) => {
+      if (command === "design_status") return { ready: true } as T;
+      if (command === "design_action") return [] as T;
+      throw new Error(`Unexpected fixture command: ${command}`);
+    },
+  } as Window["orkestrator"];
+
+  return (
+    <main className="min-h-screen bg-background p-4 text-foreground">
+      <DesignLaunchButton
+        environmentId="design-fixture"
+        disabled={false}
+        tabCount={0}
+        createTab={() => true}
       />
     </main>
   );
@@ -1434,6 +1463,7 @@ function PullRequestCheckStatusFixture() {
 
 function fixtureForPath() {
   if (window.location.pathname === "/design-canvas") return <DesignCanvasFixture />;
+  if (window.location.pathname === "/design-launch") return <DesignLaunchFixture />;
   if (window.location.pathname === "/browser") return <BrowserFixture />;
   if (window.location.pathname === "/sortable-project-folder") {
     return <SortableProjectFolderFixture />;

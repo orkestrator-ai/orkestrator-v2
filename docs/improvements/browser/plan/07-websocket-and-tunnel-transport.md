@@ -1,6 +1,6 @@
 # 07 — Forward application WebSockets and desktop tunnel streams
 
-Status: Not started. Depends on: 04–06. Unlocks: 08 and 10.
+Status: Implemented (`a9098b95`); two-machine not run. Depends on: 04–06. Unlocks: 08 and 10.
 
 ## Outcome and integration boundary
 
@@ -103,3 +103,10 @@ to expose queue growth. Assert all counters return to baseline after each
 failure. Backpressure tests must demonstrate unrelated services/control events
 continue making progress. Exit with wire examples and bounds documented, app
 WS semantics verified, and no regression to terminal upgrade handling.
+
+## Implementation record (2026-09-23)
+
+The desktop tunnel (`orkestrator.preview-tunnel.v1`) and application WebSockets run on
+`PreviewWebSocket`, which has real backpressure. The Bun `ws` shim was not used because it does
+not report backpressure. Vite HMR works over the transport and in Chromium. **Not run:** two
+machines and a throttled link. See [evidence](evidence.md).

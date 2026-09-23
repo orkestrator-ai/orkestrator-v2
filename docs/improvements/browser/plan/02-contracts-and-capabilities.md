@@ -1,6 +1,6 @@
 # 02 — Define contracts, limits, and capability negotiation
 
-Status: Not started. Depends on: 01. Unlocks: 03 and shared client work.
+Status: Implemented (`d013f6f7`, extended by later steps). Depends on: 01. Unlocks: 03 and shared client work.
 
 ## Outcome and ownership
 
@@ -128,3 +128,10 @@ redaction, error mapping, deterministic serialization, and old/new capability
 combinations. Include forged backend/environment identity. Add contract fixtures
 that later steps consume. Exit with documented request/response examples using
 synthetic IDs and no usable credentials, and passing protocol/owner typechecks.
+
+## Implementation record (2026-09-23)
+
+`packages/protocol/src/preview-services.ts` and `preview-access.ts` hold the contracts, limits,
+error categories, capabilities, tab URIs, and tunnel frames. `preview-http1.ts`,
+`preview-header-policy.ts`, `preview-forward.ts`, and `preview-websocket.ts` are shared by the
+backend and desktop. Validation: 57 protocol tests; see [evidence](evidence.md).

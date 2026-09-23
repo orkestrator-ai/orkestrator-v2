@@ -1,6 +1,6 @@
 # 06 — Build the streaming HTTP forwarding path
 
-Status: Not started. Depends on: 04–05. Unlocks: 07 and private publication.
+Status: Implemented (`a9098b95`). Depends on: 04–05. Unlocks: 07 and private publication.
 
 ## Outcome and owners
 
@@ -108,3 +108,10 @@ fixture CA and wrong-name/untrusted certificates if advertising that capability.
 Exit with the new proxy reachable through an authenticated fixture ingress,
 legacy focused tests still passing, and no production route enabled without
 scoped auth. Record any unsupported HTTP feature in negotiated capabilities.
+
+## Implementation record (2026-09-23)
+
+Streaming full-origin forwarding goes through the shared `forwardPreviewRequest` with bounded
+admission, deadlines, and limits. Streaming, binary, cookie, redirect, 304/206, compressed
+passthrough, stall, and limit cases pass against real sockets (`preview-forward.test.ts`). HTTPS
+upstreams are verified (`preview-publication.test.ts`). See [evidence](evidence.md).

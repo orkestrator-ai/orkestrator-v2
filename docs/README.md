@@ -25,6 +25,7 @@ Refreshed 2026-09-17 against the current tree.
 | [design-canvas.md](architecture/design-canvas.md) | Living | HTML/CSS canvas, revisions, design MCP and .orkdes files. |
 | [control-mcp.md](architecture/control-mcp.md) | Living | Control MCP operator guide. |
 | [remote-gateway.md](architecture/remote-gateway.md) | Living | Standalone backend, Tailscale Serve, flags, troubleshooting. |
+| [browser-previews.md](architecture/browser-previews.md) | Living | Service previews: registry, desktop tunnel, private HTTPS origins, relay, kill switch, rollback. |
 | [review-preparation.md](architecture/review-preparation.md) | Living | Multi-review pipeline; queue wait is 30 minutes. |
 | [bridge-diagnostics.md](architecture/bridge-diagnostics.md) | Living | Shared bridge debug logging. |
 | [cursor-usage.md](architecture/cursor-usage.md) | Living | Cursor usage mapping. |
@@ -60,6 +61,7 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 | Document | Status | Notes |
 | --- | --- | --- |
 | [sdk-coverage/00-index.md](plans/sdk-coverage/00-index.md) | Active | Living index. 01–03 Done; 04–10 and 14–15 Active; 11–13 code done, QA leftover. |
+| [improvements/browser/plan/00-index.md](improvements/browser/plan/00-index.md) | Active | Browser preview plan. 01–13 implemented behind disabled-by-default capabilities; 14–15 partly evidenced. Browser, Safari/iOS, two-machine, and Docker Desktop runs are outstanding. |
 | [codex-duplicate-agent-cards.md](plans/codex-duplicate-agent-cards.md) | Done | Automated verification landed; isolated browser QA still pending. |
 | [sdk-coverage-2026-09-06.md](plans/sdk-coverage-2026-09-06.md) | Historical | Source review for the SDK plans. Do not pick work from this file. |
 

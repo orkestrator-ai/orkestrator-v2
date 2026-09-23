@@ -1,6 +1,6 @@
 # 13 — Add an optional in-container service relay
 
-Status: Not started; optional extension. Depends on: 04–07, 12.
+Status: Implemented, off by default (`e8094ec4`). Depends on: 04–07, 12.
 Not required for the initial published-port desktop/browser release.
 
 ## Outcome and design boundary
@@ -87,3 +87,12 @@ Run the inactive-environment case and both Linux Docker and Docker Desktop.
 Exit only with bounded resource evidence and documented old-image behavior.
 If this step is deferred, leave its capability disabled and explicitly retain
 the published-port limitation in product documentation.
+
+## Implementation record (2026-09-23)
+
+The relay is a stdio process started with `docker exec -i -u node`. It opens only allowed
+ports, uses per-channel credit windows, caps channels, backs off after crashes, and treats
+lifecycle stops as deliberate. Tests use a local relay process plus real `docker exec` against a
+loopback-only app with no published port. Agent-server ports are refused. **Not run:** Docker
+Desktop and malformed-frame and version-mismatch fault injection. Supervisor code handles those
+cases, but no test covers them. See [evidence](evidence.md).

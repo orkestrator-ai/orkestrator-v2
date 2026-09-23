@@ -122,9 +122,10 @@ named in each row. Timings are observations, not promises.
 | Cancellation and bounded backpressure | Pass (counters return to baseline) | tunnel and HTTP proxy tests |
 | Root URLs without rewriting | Pass | HTTP proxy and ingress tests serve `/`, `/assets/*`, `/api` unchanged |
 | HTTPS preview host + one-use bootstrap, top-level | Pass against a generated test CA with Node clients | `apps/backend/src/preview-publication.test.ts` |
-| Real browser top-level bootstrap, worker interception | **Not run — blocker for enabling browser publication** | Requires a real browser against real private DNS |
+| Real browser top-level bootstrap | Pass in Chromium 153 (headless shell). Uses a throwaway CA pinned by SPKI and a resolver mapping, not real private DNS. Hostile service-worker interception not tested | `e2e/preview/private-origin.spec.ts`; see [evidence](evidence.md) |
 | Hosted-client embedding with third-party cookies blocked; Safari/WKWebView | **Not run — embedded modes stay unadvertised** | Requires Safari/iOS hardware |
 | Second machine (client-local fallback) | **Not run — blocker for remote desktop default-on** | Requires a second tailnet machine |
+| Owned Docker containers: same internal port, host decoy, recreation with a reused port, relay | Pass on Linux Docker Engine 29.7.2 | `core/preview-docker.test.ts`, `preview-relay-supervisor.test.ts` (opt-in) |
 | Docker Desktop | **Not run** | Linux Docker Engine only |
 
 ## Operational comparison
@@ -140,6 +141,11 @@ named in each row. Timings are observations, not promises.
 
 **Default order:** validated preview origin (when configured and healthy) →
 desktop tunnel → legacy gateway path (explicit, with limitations shown).
+
+*Implementation divergence (2026-09-23):* in-app desktop tabs always use the
+desktop tunnel. The private origin is used for **Open in browser** and for web
+and iOS clients. This keeps per-service Electron partitions as the desktop
+isolation boundary. Loopback latency data is in [evidence](evidence.md).
 HTTPS upstreams use the preview origin; on desktop without a preview origin they
 report `unsupported` with that reason.
 

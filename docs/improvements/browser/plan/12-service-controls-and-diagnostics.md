@@ -1,6 +1,6 @@
 # 12 — Add service controls, configuration, and diagnostics
 
-Status: Not started. Depends on: 09; 11 for browser-specific controls.
+Status: Implemented (`e25d3571`). Depends on: 09; 11 for browser-specific controls.
 Unlocks: product completion and optional relay UX.
 
 ## Outcome and owners
@@ -106,3 +106,10 @@ Exit when a user can distinguish a missing mapping, an offline app, expired
 access, and a browser limitation from the UI, with a working next action for
 each supported case. Desktop portions can ship before browser expansion once
 their step-14 gate passes.
+
+## Implementation record (2026-09-23)
+
+Adds the service picker, registration dialog, environment **Preview services** section,
+automatic host ports, **Settings → Previews** (kill switch, revoke, relay, publication), and
+`get_preview_diagnostics`. Validated with component tests only; keyboard and narrow-viewport checks
+in a real browser and Electron window are not run. See [evidence](evidence.md).

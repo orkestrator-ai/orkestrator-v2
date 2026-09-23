@@ -1,13 +1,16 @@
 # Browser implementation plan
 
-Status: Ready for implementation planning; no implementation steps completed.
-Prepared: 2026-09-21. Investigation baseline: `88c2f9cc`.
+Status: Steps 01–13 are implemented behind disabled-by-default capabilities. Steps 14 and
+15 are in progress. The single-machine gate passed; the rows in [evidence](evidence.md)
+marked not run are still open. Prepared: 2026-09-21. Investigation baseline: `88c2f9cc`.
+Implementation: branch `webbrowser-functionality-cfc4abe48d47-r1` (2026-09-23), not merged.
 
 This plan turns the [investigation](../README.md) into individually reviewable
 changes. It covers local worktrees, owned Docker containers, remote Orkestrator
 backends, Electron, external browsers, and eventually embedded web/iOS clients.
-It does not authorize implementation or deployment by itself. All steps below
-are proposed work; writing this plan did not change application code.
+The living product and operator documentation is
+[browser-previews.md](../../../architecture/browser-previews.md). This directory
+remains the execution history.
 
 ## Intended result
 
@@ -23,26 +26,26 @@ sessions, and any client-local transport. React displays reconciled snapshots.
 
 ## Numbered steps
 
-All statuses start as **Not started**. Update this table and the owning step
-when implementation begins; attach PRs and validation evidence when completed.
+Each step file records its commit and remaining evidence under
+**Implementation record**. No step is merged into `main`.
 
-| Step | Work | Depends on | Delivery group |
-| --- | --- | --- | --- |
-| [01](01-architecture-and-fixtures.md) | Set architecture decisions, threat boundaries, and fixture baselines | Investigation | Foundation |
-| [02](02-contracts-and-capabilities.md) | Define service contracts, limits, errors, and capability negotiation | 01 | Foundation |
-| [03](03-service-registry-and-lifecycle.md) | Build backend registry, persistence, lifecycle, and reconciliation | 02 | Foundation |
-| [04](04-target-resolution-and-readiness.md) | Resolve Docker/worktree targets and publish readiness | 03 | Foundation |
-| [05](05-scoped-authentication.md) | Implement scoped grants, sessions, revocation, and bootstrap | 02–04 | Transport |
-| [06](06-http-forwarding.md) | Implement complete streaming HTTP forwarding | 04–05 | Transport |
-| [07](07-websocket-and-tunnel-transport.md) | Implement application WebSockets and desktop tunnel transport | 04–06 | Transport |
-| [08](08-electron-transport-and-isolation.md) | Integrate desktop endpoints, service partitions, and native lifecycle | 05–07 | Desktop |
-| [09](09-client-resolution-and-migration.md) | Migrate tabs and unify entry buttons, address input, and links | 03–04, 08 | Desktop |
-| [10](10-private-preview-origins.md) | Provision isolated private HTTPS preview origins | 01, 05–07 | Browser expansion |
-| [11](11-web-external-and-ios-clients.md) | Enable external browser, then supported embedded web/iOS modes | 09–10 | Browser expansion |
-| [12](12-service-controls-and-diagnostics.md) | Add service picker, registration, settings, and actionable diagnostics | 09; 11 for browser controls | Product completion |
-| [13](13-optional-container-relay.md) | Add an optional container-network relay for unpublished services | 04–07, 12 | Optional extension |
-| [14](14-system-validation-and-observability.md) | Complete cross-platform, failure, resource, and performance validation | Steps in the delivery group; 01–12 for full core, 13 if included | Release gate |
-| [15](15-migration-rollout-and-operations.md) | Roll out capabilities, document operations, and prove rollback | Relevant 14 gate | Release gate |
+| Step | Work | Depends on | Delivery group | Status |
+| --- | --- | --- | --- | --- |
+| [01](01-architecture-and-fixtures.md) | Set architecture decisions, threat boundaries, and fixture baselines | Investigation | Foundation | Done |
+| [02](02-contracts-and-capabilities.md) | Define service contracts, limits, errors, and capability negotiation | 01 | Foundation | Implemented |
+| [03](03-service-registry-and-lifecycle.md) | Build backend registry, persistence, lifecycle, and reconciliation | 02 | Foundation | Implemented |
+| [04](04-target-resolution-and-readiness.md) | Resolve Docker/worktree targets and publish readiness | 03 | Foundation | Implemented; Docker Desktop not run |
+| [05](05-scoped-authentication.md) | Implement scoped grants, sessions, revocation, and bootstrap | 02–04 | Transport | Implemented; Chromium only |
+| [06](06-http-forwarding.md) | Implement complete streaming HTTP forwarding | 04–05 | Transport | Implemented |
+| [07](07-websocket-and-tunnel-transport.md) | Implement application WebSockets and desktop tunnel transport | 04–06 | Transport | Implemented; two-machine not run |
+| [08](08-electron-transport-and-isolation.md) | Integrate desktop endpoints, service partitions, and native lifecycle | 05–07 | Desktop | Implemented; real Electron window not run |
+| [09](09-client-resolution-and-migration.md) | Migrate tabs and unify entry buttons, address input, and links | 03–04, 08 | Desktop | Implemented |
+| [10](10-private-preview-origins.md) | Provision isolated private HTTPS preview origins | 01, 05–07 | Browser expansion | Implemented; real DNS/certs not run |
+| [11](11-web-external-and-ios-clients.md) | Enable external browser, then supported embedded web/iOS modes | 09–10 | Browser expansion | Top-level only; embedded unadvertised |
+| [12](12-service-controls-and-diagnostics.md) | Add service picker, registration, settings, and actionable diagnostics | 09; 11 for browser controls | Product completion | Implemented |
+| [13](13-optional-container-relay.md) | Add an optional container-network relay for unpublished services | 04–07, 12 | Optional extension | Implemented, off by default |
+| [14](14-system-validation-and-observability.md) | Complete cross-platform, failure, resource, and performance validation | Steps in the delivery group; 01–12 for full core, 13 if included | Release gate | In progress (single-machine gate passed) |
+| [15](15-migration-rollout-and-operations.md) | Roll out capabilities, document operations, and prove rollback | Relevant 14 gate | Release gate | In progress (rollout not started) |
 
 The numbering is the recommended integration order. A dependency means its
 contract must be settled and its required implementation available before the

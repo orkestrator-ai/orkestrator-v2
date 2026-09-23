@@ -1,6 +1,6 @@
 # 08 — Integrate Electron transport and service isolation
 
-Status: Not started. Depends on: 05–07. Unlocks: 09.
+Status: Implemented (`abd9e389`); real Electron window not run. Depends on: 05–07. Unlocks: 09.
 
 ## Outcome and owners
 
@@ -112,3 +112,11 @@ Test native HTTP and WS credential injection explicitly. Check zoom, overlays,
 history, annotations, screenshots, DevTools, and clipboard in a real window.
 Exit with stable resource counts across repeated open/hide/close/reconnect cycles
 and with no server process tied to React unmount.
+
+## Implementation record (2026-09-23)
+
+`PreviewTransportManager` provides a per-service credentialed loopback ingress, per-service
+partitions, rebinding checks, and blocking of client-local addresses for remote sessions. It is
+tested over real sockets with Electron sessions stubbed. **Not run:** `mise run
+test:agent:electron` in an isolated profile (real window, zoom, overlays, DevTools, renderer
+crash). See [evidence](evidence.md).

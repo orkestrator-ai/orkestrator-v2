@@ -1,6 +1,6 @@
 # 10 — Publish isolated private HTTPS origins
 
-Status: Not started. Depends on: 01, 05–07. Unlocks: 11.
+Status: Implemented (`d4a09b76`); real DNS and certificates not run. Depends on: 01, 05–07. Unlocks: 11.
 
 ## Outcome and owners
 
@@ -101,3 +101,10 @@ Confirm unrelated Serve configuration survives enable/disable/recovery.
 Exit with reproducible operator setup, automated ownership-aware cleanup, and
 publication capability gated on actual readiness. Record supported deployment
 providers/platforms; untested DNS/TLS arrangements remain unsupported.
+
+## Implementation record (2026-09-23)
+
+`PreviewPublicationManager` adds per-service hosts, a bootstrap host, and loopback or
+Tailscale binds only. It checks certificate coverage and expiry and re-binds on renewal. It runs
+its own listener and never changes Tailscale Serve configuration. Tested with a throwaway CA and in
+Chromium. **Not run:** real private DNS, Tailscale certificates, and a second machine. See [evidence](evidence.md).

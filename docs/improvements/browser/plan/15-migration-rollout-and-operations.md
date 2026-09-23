@@ -1,6 +1,6 @@
 # 15 — Roll out, document operations, and prove rollback
 
-Status: Not started. Depends on: the step-14 gate for the delivery group.
+Status: In progress: controls, docs, and rollback drill done; rollout not started. Depends on: the step-14 gate for the delivery group.
 
 ## Outcome
 
@@ -123,3 +123,18 @@ changes go through PR review; final integration into `main` remains a human
 maintainer action. Full completion means the enabled support matrix is proven,
 documentation matches behavior, and any deferred optional work is explicitly
 listed with its capability disabled.
+
+## Implementation record (2026-09-23)
+
+The operator guide is [browser-previews.md](../../../architecture/browser-previews.md). The
+rollback drill runs against a real gateway (`gateway-preview.test.ts`). Evidence for the
+mixed-version matrix:
+
+- new client / old backend: `previewServiceStore`, `EnvironmentPreviewServices`;
+- old client / new backend: the legacy route tests, and scoped credentials refused on legacy
+  routes;
+- old client opens a service tab: `browser-address.test.ts`;
+- feature disabled: the rollback drill.
+
+Rollout steps 2–7 are operator actions and have not started. Every capability ships disabled by
+default.

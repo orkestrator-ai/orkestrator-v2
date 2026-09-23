@@ -1,6 +1,6 @@
 # 04 — Resolve targets and report readiness
 
-Status: Not started. Depends on: 03. Unlocks: 05 and client resolution.
+Status: Implemented (`51ec63c0`; agent-port exclusion added in step 14). Depends on: 03. Unlocks: 05 and client resolution.
 
 ## Outcome and owners
 
@@ -106,3 +106,10 @@ Exercise the inactive-environment/reload path and verify all readiness layers
 are available through snapshot commands alone. Acceptance requires correct
 target identity, safe failure on ambiguity, bounded job counts, and no automatic
 destructive actions. Linux Docker and Docker Desktop are separate evidence rows.
+
+## Implementation record (2026-09-23)
+
+The resolver verifies container ownership, prefers loopback bindings, refuses Orkestrator
+ports and in-container agent servers (4096–4101), and reports readiness in layers. The two-container,
+host-decoy, and reused-port journeys pass against real Linux Docker (`core/preview-docker.test.ts`,
+opt-in). **Docker Desktop: not run.** See [evidence](evidence.md).

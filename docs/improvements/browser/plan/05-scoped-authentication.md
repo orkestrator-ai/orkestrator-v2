@@ -1,6 +1,6 @@
 # 05 — Add scoped access, bootstrap, and revocation
 
-Status: Not started. Depends on: 02–04 and the step-01 auth decision.
+Status: Implemented (`a9098b95`); Chromium bootstrap evidenced. Depends on: 02–04 and the step-01 auth decision.
 Unlocks: 06–08 and publication/bootstrap work.
 
 ## Outcome and ownership
@@ -112,3 +112,11 @@ Exit with authorization tests independent of UI and a written credential-flow
 diagram matching actual code. Do not advertise browser support before its
 real-browser bootstrap tests pass. Existing legacy route semantics remain
 explicitly isolated from new scoped sessions.
+
+## Implementation record (2026-09-23)
+
+`PreviewAccessService` stores hashed secrets only. It issues one-use grants, host-bound
+30-second session codes, and `__Host-` sessions, and revokes on generation change, removal, token
+rotation, operator action, or shutdown. Scoped credentials are refused on legacy and control routes
+(`gateway-preview`). A real-browser bootstrap passes in Chromium (`e2e/preview/private-origin.spec.ts`).
+**Not run:** hostile service-worker interception, Firefox, and Safari. See [evidence](evidence.md).

@@ -1,6 +1,6 @@
 # 01 — Set architecture decisions and fixture baselines
 
-Status: Not started. Depends on: investigation. Unlocks: step 02.
+Status: Done (`047814da`). Depends on: investigation. Unlocks: step 02.
 
 ## Outcome
 
@@ -101,3 +101,10 @@ identify who owns every socket, cookie, endpoint generation, and cleanup action.
 Remove prototype listeners/processes, stop/reset isolated profiles, and retain
 only scrubbed evidence. Failed prototypes are useful results; update the
 dependent plan before proceeding rather than hiding them behind feature flags.
+
+## Implementation record (2026-09-23)
+
+Commit `047814da` records the decisions, threat boundaries, and credential and data path in the
+[decision record](01-decision-record.md), and adds the synthetic fixtures (`test-fixtures/preview-app`,
+pinned `test-fixtures/preview-vite`). Prototype rows that need a second machine, Safari, or Docker
+Desktop are listed there as not run. Validation: [evidence](evidence.md).

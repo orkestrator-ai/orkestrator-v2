@@ -1,6 +1,8 @@
 # Browser preview improvements
 
-Status: Investigation and proposal; implementation has not started.
+Status: Investigation and proposal (historical). Implemented on branch
+`webbrowser-functionality-cfc4abe48d47-r1` (2026-09-23) behind disabled-by-default capabilities.
+The current behavior is in [browser-previews.md](../../architecture/browser-previews.md).
 Investigated: 2026-09-20–21, repository commit `88c2f9cc`.
 Scope: displaying applications running in containers or on remote backend
 machines, in Electron, web clients, and iOS. No application code was changed.
@@ -16,7 +18,21 @@ Start with [current behavior and findings](current-state.md), then read the
 
 The detailed [implementation plan](plan/00-index.md) breaks the work into 15
 numbered steps with dependencies, implementation tasks, acceptance tests,
-migration rules, and rollout gates. All implementation steps remain unstarted.
+migration rules, and rollout gates. Each step records its implementation and
+evidence; see the [evidence log](plan/evidence.md).
+
+| Finding | Status |
+| --- | --- |
+| F1 — Lost container/service identity | Addressed: service identity, generations, and Docker binding resolution; real-Docker journeys pass |
+| F2 — Missing remote WebSockets | Addressed: desktop tunnel and published origins carry app WebSockets and Vite HMR (Chromium). Two-machine run remains |
+| F3 — Path rewriting limitations | Addressed on the new routes (full origin, no body rewriting). The legacy route keeps its limitations for old clients |
+| F4 — Application authentication conflicts | Addressed: app auth passes through; transport credentials are separate and stripped |
+| F5 — Shared preview storage | Addressed: per-service Electron partitions (unit-level) and per-service hosts (Chromium-verified) |
+| F6 — Creation-time container connectivity | Addressed: automatic host ports, published-port diagnosis, and the optional relay (off by default) |
+| F7 — Buffering and lifetime bounds | Addressed: bounded admission, queues, deadlines, and limits, with tests |
+| F8 — Weak service diagnostics | Addressed: layered readiness, diagnostics command, and UI recovery actions |
+
+The table below is the original proposal priority list, kept for reference.
 
 | Priority | Improvement | Expected result |
 | --- | --- | --- |

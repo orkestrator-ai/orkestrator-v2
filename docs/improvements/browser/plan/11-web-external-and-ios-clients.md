@@ -1,6 +1,6 @@
 # 11 — Enable external browser, web, and iOS clients
 
-Status: Not started. Depends on: 09–10. Unlocks: cross-client completion.
+Status: Partly implemented (`b608828c`): top-level only; embedded modes unadvertised. Depends on: 09–10. Unlocks: cross-client completion.
 
 ## Outcome and owners
 
@@ -96,3 +96,10 @@ Exit with a versioned support matrix. Advertise only passing modes; leave the
 existing unsupported notice, updated with useful fallback actions, for the rest.
 No promise of universal embedded-web compatibility is required to ship a working
 top-level browser preview.
+
+## Implementation record (2026-09-23)
+
+Desktop **Open in browser** uses a one-use loopback POST handoff. The web client opens the
+preview top-level with a form POST. iOS receives a one-use, host-bound session URL. Embedded
+(iframe) modes are not advertised. Top-level bootstrap passes in Chromium. **Not run:** Firefox,
+Safari, WKWebView, and iOS devices. See [evidence](evidence.md).

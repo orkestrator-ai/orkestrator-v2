@@ -1,6 +1,6 @@
 # 14 — Validate the system and add operational evidence
 
-Status: Not started. Depends on: all steps in the release being enabled.
+Status: In progress: single-machine gate passed; see [evidence](evidence.md). Depends on: all steps in the release being enabled.
 Full core validation covers 01–12; include 13 only when shipping the relay.
 Repeat the relevant gate for each delivery group, not every unrelated test.
 
@@ -132,3 +132,16 @@ capabilities, commands, results/counts, safe artifact location, skipped cases
 with reasons, and profile/container cleanup. Exit when every enabled capability
 has its matrix rows passing. Unsupported modes remain disabled rather than
 being inferred from a neighboring platform's result.
+
+## Implementation record (2026-09-23)
+
+This branch adds:
+
+- the redaction test;
+- relay gauges;
+- opt-in real-Docker, Vite, and route-latency tests;
+- the real-Chromium spec (`e2e/preview/`);
+- `evidence.md`.
+
+The two-machine, Safari/iOS, Docker Desktop, and real Electron window rows remain **not run**. The
+capabilities they gate stay off or unadvertised.

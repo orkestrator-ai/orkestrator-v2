@@ -1,6 +1,6 @@
 # 03 — Build the backend service registry and lifecycle
 
-Status: Not started. Depends on: 02. Unlocks: 04.
+Status: Implemented (`51ec63c0`). Depends on: 02. Unlocks: 04.
 
 ## Outcome and code ownership
 
@@ -105,3 +105,11 @@ without a mounted frontend. Existing preview behavior can remain unchanged in
 this step. Keep the new service available behind a capability until transport
 and client integration are ready. Record storage upgrade/downgrade behavior;
 disabling the feature preserves definitions without advertising usable access.
+
+## Implementation record (2026-09-23)
+
+`PreviewServiceRegistry` provides compare-and-set mutations with operation-ID dedupe,
+tombstones, epochs, generations, and lifecycle revocation. It is persisted in
+`preview-services.json`, and the identity lives in `backend-identity.json`. Older backends ignore
+both files, so a downgrade keeps definitions for a later upgrade. Validation:
+`core/preview-service-registry.test.ts`; see [evidence](evidence.md).

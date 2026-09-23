@@ -1,6 +1,6 @@
 # 09 — Unify client resolution and migrate saved tabs
 
-Status: Not started. Depends on: 03–04, 08. Unlocks: browser/client UX work.
+Status: Implemented (`ef636fb3`). Depends on: 03–04, 08. Unlocks: browser/client UX work.
 
 ## Outcome and owners
 
@@ -100,3 +100,11 @@ renderer, and verify it still opens the same service. Include active connection
 switch during resolution, tab closure during attach, native history after
 reattach, and service deletion. Exit when the normal desktop flow no longer
 depends on persisted ephemeral ports and legacy tabs remain explicitly usable.
+
+## Implementation record (2026-09-23)
+
+Service tabs persist `orkestrator-preview://service/...` or `.../intent/...` in
+`browserData.url`. Entry buttons, the address input, and terminal links resolve in their source
+environment. Older clients refuse these URIs without rewriting them (`browser-address.test.ts`).
+Validation: web store, service-tab, and layout tests. The renderer reload in a real Electron
+window is not run. See [evidence](evidence.md).

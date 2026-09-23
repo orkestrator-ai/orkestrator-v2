@@ -72,13 +72,23 @@ import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
 import { AGENT_MCP_SERVER_NAME, getMcpRuntimeConfig } from "./mcp-config.js";
 import {
   claudeDeniedTools,
-  effectiveExecutionPolicy,
   claudeReadOnlyAllowedTools,
   claudeReadOnlySandbox,
   createCoordinatorReadOnlyHook,
   isCoordinatorReadOnlyPolicy,
 } from "./read-only-policy.js";
 import { getPluginsForSdk } from "./plugin-config.js";
+import {
+  claudeSettingSources,
+  claudeTurnPolicy,
+  claudeWorkspaceCwd,
+} from "./claude-query-config.js";
+import {
+  appendLocalCommandResult,
+  readLiveCommandInventory,
+  recordCommandsChanged,
+  recordInitCommandInventory,
+} from "./session-manager-commands.js";
 import type { McpToolMetadata } from "../types/mcp.js";
 
 export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): string {
@@ -598,11 +608,15 @@ export async function sendPrompt(
   // Build the SDK text prompt - excludes image attachments since those are sent as
   // inline base64 content blocks (bypassing the Read tool's 2000x2000 pixel limit).
   // File attachments are still included as XML tags so Claude can read them.
-  let sdkTextPrompt = prompt;
+  // A selected command sends its canonical SDK spelling plus the argument
+  // suffix exactly as typed; the transcript above still shows what the user
+  // wrote. The Claude CLI owns command semantics from here.
+  const providerPrompt = options?.providerPrompt ?? prompt;
+  let sdkTextPrompt = providerPrompt;
   const fileAttachments = options?.attachments?.filter((att) => att.type !== "image") ?? [];
   if (fileAttachments.length > 0) {
     const fileTags = fileAttachments.map(attachmentTag).join("\n");
-    sdkTextPrompt = `${prompt}\n\n<attached-files>\n${fileTags}\n</attached-files>`;
+    sdkTextPrompt = `${providerPrompt}\n\n<attached-files>\n${fileTags}\n</attached-files>`;
   }
   // Add user message with displayPrompt (what the user sees, without planning mode instruction).
   // Re-prompts (e.g. after plan rejection) use role "system" so they don't appear as user-typed.
@@ -694,22 +708,21 @@ export async function sendPrompt(
     const effortLevel = options?.effort ?? "high";
     // Use CWD env var if set (for local environments where bridge runs from its own dir)
     // This allows the Claude SDK to operate on the actual project directory
-    const cwd = process.env.CWD || process.cwd();
+    const cwd = claudeWorkspaceCwd();
 
     // Re-derived at every turn, not read once at create. A session restored
     // from disk, or configured before this process took over, must not carry a
     // policy weaker than the one this process was launched to enforce.
-    const sessionPolicy = effectiveExecutionPolicy(session.executionPolicy);
-    const policy: NativeAgentExecutionPolicy | undefined = options?.readOnly
-      ? {
-          id: "coordinator-read-only",
-          sandbox: "provider",
-          approvals: "deny",
-          projectResources: false,
-          capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
-          networkAccess: "restricted",
-        }
-      : sessionPolicy;
+    const policy: NativeAgentExecutionPolicy | undefined = claudeTurnPolicy(
+      session.executionPolicy,
+      options?.readOnly,
+    );
+    // What a cold command-discovery probe must reproduce to answer for this
+    // session rather than for a default CLI (see `claude-query-config.ts`).
+    session.commandDiscoveryInputs = {
+      readOnly: options?.readOnly === true,
+      includeLocalSettings: options?.includeLocalSettings === true,
+    };
     const includeProjectResources = policy?.projectResources !== false;
     // Load MCP servers and plugins from config files. Both resolutions read
     // the same on-disk config, so they run concurrently and each merges once.
@@ -798,6 +811,7 @@ export async function sendPrompt(
     };
     closeSdkInput = closeTurnInput;
     let receivedResult = false;
+    let localCommandOutputSeen = false;
     const ownsActiveTurn = () =>
       !abortController.signal.aborted &&
       sessions.get(sessionId) === session &&
@@ -1157,13 +1171,7 @@ export async function sendPrompt(
         // A coordinator loads nothing: user settings can declare their own
         // hooks and MCP servers, both of which run programs this boundary is
         // supposed to exclude.
-        settingSources: coordinatorReadOnly
-          ? []
-          : policy?.projectResources !== false
-            ? options?.includeLocalSettings
-              ? ["user", "project", "local"]
-              : ["user", "project"]
-            : ["user"],
+        settingSources: claudeSettingSources(policy, options?.includeLocalSettings),
         // Fast mode is a Claude Code setting (Opus 4.6 priority service tier).
         // Pass it through the flag-layer settings so the user can opt in per prompt.
         ...(fastMode && { settings: { fastMode: true } }),
@@ -1500,6 +1508,9 @@ export async function sendPrompt(
     queryIteratorControl = liveQuery;
     queryStarted = true;
     testHooks?.onQueryStarted?.();
+    // One control read per turn, off the message path, so the inventory a
+    // selected command is validated against is the session's own.
+    readLiveCommandInventory(session, liveQuery);
     let supportedAgents: NonNullable<SessionInitData["agents"]> = [];
     if (typeof queryIterator.supportedAgents === "function") {
       try {
@@ -1627,6 +1638,9 @@ export async function sendPrompt(
           mcpServers: mcpServerStatuses,
           plugins: pluginStatuses,
           slashCommands: initMsg.slash_commands,
+          ...(Array.isArray(initMsg.terminal_slash_commands)
+            ? { terminalSlashCommands: initMsg.terminal_slash_commands.slice(0, 512) }
+            : {}),
           skills: Array.isArray(initMsg.skills) ? initMsg.skills : [],
           apiKeySource: typeof initMsg.apiKeySource === "string" ? initMsg.apiKeySource : undefined,
           agents: supportedAgents,
@@ -1638,6 +1652,10 @@ export async function sendPrompt(
           pluginCount: pluginStatuses.length,
           slashCommandCount: initMsg.slash_commands?.length ?? 0,
         });
+
+        // Init names seed an empty inventory only; they never replace a
+        // live read or a `commands_changed` push.
+        recordInitCommandInventory(session);
 
         // Emit session.init event so frontend can update UI
         eventEmitter.emit({
@@ -1756,7 +1774,25 @@ export async function sendPrompt(
           });
         };
 
-        if (
+        if (sysMsg.subtype === "commands_changed") {
+          // A full replacement (SDKCommandsChangedMessage). Applied to the
+          // bridge-owned inventory whether or not anybody is subscribed.
+          recordCommandsChanged(session, message);
+        } else if (sysMsg.subtype === "local_command_output") {
+          // A command the CLI answered itself (SDKLocalCommandOutputMessage).
+          // Without this row the turn settles with nothing visible.
+          const output = (message as { content?: unknown }).content;
+          if (typeof output === "string") {
+            localCommandOutputSeen = true;
+            appendLocalCommandResult(
+              session,
+              output,
+              typeof sysMsg.uuid === "string"
+                ? sysMsg.uuid
+                : `${turnGeneration}:${sdkMessageCount}`,
+            );
+          }
+        } else if (
           (taskMessage.subtype === "task_started" ||
             taskMessage.subtype === "task_progress" ||
             taskMessage.subtype === "task_updated") &&
@@ -1984,7 +2020,12 @@ export async function sendPrompt(
             },
           ).id;
         }
-        if (sysMsg.subtype && sysMsg.subtype !== "init") {
+        if (
+          sysMsg.subtype &&
+          sysMsg.subtype !== "init" &&
+          sysMsg.subtype !== "commands_changed" &&
+          sysMsg.subtype !== "local_command_output"
+        ) {
           recordSystemMessageNotice(session, sysMsg);
         }
       } else if (message.type === "assistant") {
@@ -2325,6 +2366,23 @@ export async function sendPrompt(
               requestId: structuredRequestId,
               value: resultMsg.structured_output,
             });
+          }
+          // A local command (`/cost`, `/context`, ...) can finish with its
+          // answer only in `result` — no assistant message, no output frame.
+          // Surface that text so the turn does not settle invisibly. Taken
+          // from the SDK's own result, never synthesized from the command.
+          if (
+            !options?.outputSchema &&
+            !localCommandOutputSeen &&
+            !stream.currentAssistantMessage &&
+            typeof resultMsg.result === "string" &&
+            resultMsg.result.trim()
+          ) {
+            appendLocalCommandResult(
+              session,
+              resultMsg.result,
+              `result:${typeof resultMsg.uuid === "string" ? resultMsg.uuid : turnGeneration}`,
+            );
           }
           debugLog("[session-manager] Query completed successfully", { sessionId });
           finishTurnInputIfSettled();

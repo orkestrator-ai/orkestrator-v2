@@ -61,6 +61,7 @@ import {
 } from "./agent-provider-runtime.js";
 import { HttpBridgeInteractionAdapter } from "./http-bridge-interactions.js";
 import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./http-bridge-catalog.js";
+import { bridgePromptBody } from "./http-bridge-prompt-body.js";
 import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
 import { normalizeClaudeBackgroundTasks } from "./http-bridge-claude-runtime.js";
 import {
@@ -320,47 +321,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         `/session/${encodeURIComponent(sessionId)}/prompt`,
         {
           method: "POST",
-          body: JSON.stringify({
-            prompt,
-            requestId: options.requestId,
-            attachments,
-            outputSchema: options.schema,
-            readOnly: options.readOnly ?? (options.mode === "build" ? false : undefined),
-            parameterValues: options.parameterValues,
-            persistDefaults: options.persistDefaults,
-            ...(this.agent === "claude"
-              ? {
-                  model: options.model ?? this.connection.model,
-                  effort: options.effort ?? this.connection.effort,
-                  fastMode: options.fastMode ?? this.connection.fastMode,
-                  agent: options.subAgent,
-                  includeLocalSettings: options.includeLocalSettings,
-                  promptSuggestions: options.promptSuggestions,
-                  agentMcp: options.agentMcp,
-                  permissionMode: options.readOnly
-                    ? "dontAsk"
-                    : options.mode === "plan"
-                      ? "plan"
-                      : typeof options.parameterValues?.permissionMode === "string"
-                        ? options.parameterValues.permissionMode
-                        : "bypassPermissions",
-                }
-              : this.agent === "codex"
-                ? {
-                    fastMode: options.fastMode ?? this.connection.fastMode,
-                    agentMcp: options.agentMcp,
-                    workflowResultTool: options.workflowResultTool,
-                  }
-                : this.agent === "cursor" || this.agent === "grok" || this.agent === "pi"
-                  ? {
-                      fastMode: options.fastMode ?? this.connection.fastMode,
-                      model: options.model ?? this.connection.model,
-                      reasoningEffort: options.effort ?? this.connection.effort,
-                      mode: options.mode,
-                      agentMcp: options.agentMcp,
-                    }
-                  : { fastMode: options.fastMode ?? this.connection.fastMode }),
-          }),
+          body: JSON.stringify(
+            bridgePromptBody(this.agent, this.connection, prompt, options, attachments),
+          ),
         },
         this.fetchImpl,
         "prompt",
@@ -406,6 +369,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         detailText &&
         detail?.kind === "authentication-required"
       ) {
+        throw new PromptRejectedError(detailText);
+      }
+      // A selected command the bridge could no longer run was refused before
+      // anything was sent. Its message is already user-facing and specific.
+      if (response.status === 422 && detailText && detail?.kind === "command-unavailable") {
         throw new PromptRejectedError(detailText);
       }
       const detailMessage = detailText ? `: ${detailText}` : "";
@@ -769,6 +737,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         composer: composer as unknown as NativeAgentComposerState,
         ...(readiness ? { readiness } : {}),
         providerRevision: providerRevision as number,
+        ...(Number.isSafeInteger(payload?.commandRevision)
+          ? { commandCatalogueRevision: payload!.commandRevision as number }
+          : {}),
         ...(contextUsage ? { contextUsage } : {}),
         ...(policy ? { policy } : {}),
         ...(runtime ? { runtime } : {}),
@@ -900,6 +871,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           : {}),
         ...(Number.isSafeInteger(payload.engineGeneration)
           ? { providerGeneration: payload.engineGeneration as number }
+          : {}),
+        ...(Number.isSafeInteger(payload.commandRevision)
+          ? { commandCatalogueRevision: payload.commandRevision as number }
           : {}),
         ...(codexContextUsage ? { contextUsage: codexContextUsage } : {}),
         ...(isNativeAgentExecutionPolicy(config?.policy) ? { policy: config.policy } : {}),
@@ -1155,6 +1129,14 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
 
   slashCommands(sessionId?: string) {
     return this.catalogAdapter.slashCommands(sessionId);
+  }
+
+  commandCatalogue(sessionId?: string) {
+    return this.catalogAdapter.commandCatalogue(sessionId);
+  }
+
+  refreshCommands(sessionId?: string) {
+    return this.catalogAdapter.refreshCommands(sessionId);
   }
 
   mcpServers(sessionId: string) {

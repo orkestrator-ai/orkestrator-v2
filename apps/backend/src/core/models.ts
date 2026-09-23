@@ -500,6 +500,11 @@ export interface PersistedNativeAgentPendingDispatch {
   promptSuggestions?: boolean;
   model?: string;
   reasoningEffort?: string;
+  /**
+   * The resolved command intent. A retry reuses it verbatim, so a command
+   * that was selected (or typed and resolved) can never come back as text.
+   */
+  command?: import("@orkestrator/protocol/native-agent").NativeAgentCommandIntent;
   createdAt: string;
 }
 

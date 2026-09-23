@@ -2861,20 +2861,38 @@ describe("NativeAgentService", () => {
         };
         await service.ensureSession(identity);
         const first = await service.getProjection(identity);
+        // A legacy provider list gets a synthetic, clearly-legacy identity; the
+        // runtime actions are merged beside it with their own descriptors.
         expect(first?.slashCommands).toEqual([
           {
             name: "/review",
             description: "Review the current changes",
             argumentHint: "[focus]",
             source: "builtin",
+            id: "legacy:/review",
+            executionKind: "provider-prompt",
+            bindingRevision: "legacy",
           },
-          {
+          expect.objectContaining({
+            name: "/compact",
+            source: "orkestrator",
+            id: "orkestrator:compact",
+            executionKind: "session-action",
+          }),
+          expect.objectContaining({
             name: "/steer",
             description: "Send instructions to the turn that is already running",
             argumentHint: "<instructions>",
             source: "orkestrator",
-          },
+            id: "orkestrator:steer",
+            executionKind: "session-action",
+          }),
         ]);
+        expect(first?.slashCommandCatalogue).toMatchObject({
+          status: "ready",
+          enhanced: false,
+          revision: 1,
+        });
         await service.getProjection(identity);
         expect(stub.slashCommands).toHaveBeenCalledTimes(1);
 
@@ -2970,6 +2988,7 @@ describe("NativeAgentService", () => {
         expect(projection?.composer?.models).toEqual([expect.objectContaining({ id: "gpt-old" })]);
         expect(projection?.slashCommands?.map((command) => command.name)).toEqual([
           "/old",
+          "/compact",
           "/steer",
         ]);
 
@@ -2978,7 +2997,11 @@ describe("NativeAgentService", () => {
         await waitForCondition(() => catalogRefreshFinished && commandRefreshFinished);
         const updated = await service.getProjection(identity);
         expect(updated?.composer?.models).toEqual([expect.objectContaining({ id: "gpt-new" })]);
-        expect(updated?.slashCommands?.map((command) => command.name)).toEqual(["/new", "/steer"]);
+        expect(updated?.slashCommands?.map((command) => command.name)).toEqual([
+          "/new",
+          "/compact",
+          "/steer",
+        ]);
       },
     );
   });
@@ -3045,6 +3068,7 @@ describe("NativeAgentService", () => {
           expect(initial?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
           expect(initial?.slashCommands?.map((command) => command.name)).toEqual([
             "/old",
+            "/compact",
             "/steer",
           ]);
 
@@ -3069,6 +3093,7 @@ describe("NativeAgentService", () => {
           expect(refreshed?.composer?.models.map((model) => model.id)).toEqual(["gpt-new"]);
           expect(refreshed?.slashCommands?.map((command) => command.name)).toEqual([
             "/new",
+            "/compact",
             "/steer",
           ]);
 
@@ -3083,6 +3108,7 @@ describe("NativeAgentService", () => {
           expect(settled?.composer?.models.map((model) => model.id)).toEqual(["gpt-new"]);
           expect(settled?.slashCommands?.map((command) => command.name)).toEqual([
             "/new",
+            "/compact",
             "/steer",
           ]);
         } finally {
@@ -3141,7 +3167,11 @@ describe("NativeAgentService", () => {
         await service.ensureSession(identity);
         const initial = await service.getProjection(identity);
         expect(initial?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
-        expect(initial?.slashCommands?.map((command) => command.name)).toEqual(["/old", "/steer"]);
+        expect(initial?.slashCommands?.map((command) => command.name)).toEqual([
+          "/old",
+          "/compact",
+          "/steer",
+        ]);
 
         const refreshed = await service.refreshProjectionModels(identity);
 
@@ -3151,6 +3181,7 @@ describe("NativeAgentService", () => {
         expect(refreshed?.composer?.models.map((model) => model.id)).toEqual(["gpt-new"]);
         expect(refreshed?.slashCommands?.map((command) => command.name)).toEqual([
           "/new",
+          "/compact",
           "/steer",
         ]);
       },
@@ -3198,22 +3229,33 @@ describe("NativeAgentService", () => {
         now += 30_001;
         const stale = await service.getProjection(identity);
         expect(stale?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
-        expect(stale?.slashCommands?.map((command) => command.name)).toEqual(["/old", "/steer"]);
+        expect(stale?.slashCommands?.map((command) => command.name)).toEqual([
+          "/old",
+          "/compact",
+          "/steer",
+        ]);
 
         // A failed optional endpoint must not be re-probed on every 500ms
         // projection poll, so the retained entry carries an explicit back-off.
         const caches = service as unknown as {
           modelCatalogCache: Map<string, { expiresAt: number }>;
-          slashCommandCache: Map<string, { expiresAt: number }>;
+          commandCatalogues: { expiresAt(key: string): number | undefined };
         };
         await waitForCondition(
           () =>
             caches.modelCatalogCache.get("env-1")?.expiresAt === now + 5_000 &&
-            caches.slashCommandCache.get("env-1\0codex\0provider-session")?.expiresAt ===
-              now + 5_000,
+            caches.commandCatalogues.expiresAt("env-1\0codex\0provider-session") === now + 5_000,
         );
         expect(catalogReads).toBe(2);
         expect(commandReads).toBe(2);
+
+        // A failed refresh retains the old list for display, marked stale with
+        // a bounded reason, rather than an authoritative empty catalogue.
+        const failed = await service.getProjection(identity);
+        expect(failed?.slashCommandCatalogue).toMatchObject({
+          status: "stale",
+          error: { code: "provider-error" },
+        });
 
         now += 4_999;
         const withinBackoff = await service.getProjection(identity);
@@ -3222,6 +3264,7 @@ describe("NativeAgentService", () => {
         expect(withinBackoff?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
         expect(withinBackoff?.slashCommands?.map((command) => command.name)).toEqual([
           "/old",
+          "/compact",
           "/steer",
         ]);
 
@@ -3256,6 +3299,7 @@ describe("NativeAgentService", () => {
         // to be advertised by whoever knows the capability — not by a tab.
         expect(projection?.slashCommands?.map((command) => command.name)).toEqual([
           "/review",
+          "/compact",
           "/steer",
         ]);
         expect(projection?.capabilities.attachments).toEqual({

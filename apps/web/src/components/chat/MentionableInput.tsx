@@ -11,6 +11,18 @@ import {
 import { cn } from "@/lib/utils";
 import type { FileMention } from "@/types";
 
+/**
+ * Popup-completion semantics for an input that owns a listbox (the `/` menu).
+ * Focus never leaves the input; the highlighted row is announced through
+ * `aria-activedescendant`.
+ */
+export interface MentionableInputComboboxAria {
+  expanded: boolean;
+  /** Id of the listbox, present only while it is rendered. */
+  controls?: string;
+  activeDescendant?: string;
+}
+
 interface MentionableInputProps {
   value: string;
   mentions: FileMention[];
@@ -22,6 +34,7 @@ interface MentionableInputProps {
   className?: string;
   minHeight?: number;
   maxHeight?: number;
+  comboboxAria?: MentionableInputComboboxAria;
 }
 
 export interface MentionableInputRef {
@@ -236,6 +249,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
       className,
       minHeight = 28,
       maxHeight = 216,
+      comboboxAria,
     },
     ref,
   ) {
@@ -487,6 +501,17 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
           aria-multiline="true"
           aria-placeholder={placeholder}
           aria-disabled={disabled}
+          {...(comboboxAria
+            ? {
+                "aria-autocomplete": "list" as const,
+                "aria-haspopup": "listbox" as const,
+                "aria-expanded": comboboxAria.expanded,
+                ...(comboboxAria.controls ? { "aria-controls": comboboxAria.controls } : {}),
+                ...(comboboxAria.activeDescendant
+                  ? { "aria-activedescendant": comboboxAria.activeDescendant }
+                  : {}),
+              }
+            : {})}
           className={cn(
             "native-compose-input w-full resize-none overflow-y-auto border-none bg-transparent px-1 py-1 text-sm text-foreground outline-none transition-colors",
             disabled && "cursor-not-allowed opacity-50",

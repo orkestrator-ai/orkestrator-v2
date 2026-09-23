@@ -294,6 +294,29 @@ export interface ClaudeQueryControl {
   close?: () => void | Promise<void>;
 }
 
+/**
+ * Provenance of a session's command inventory.
+ *
+ * - `live`: `supportedCommands()` on the session's own turn query.
+ * - `replacement`: a `system/commands_changed` push, a full replacement.
+ * - `probe`: a zero-turn discovery CLI configured like the session's turns.
+ *   Provisional: it cannot see MCP-prompt commands or per-turn options.
+ * - `init`: names from the turn's `init` frame only (no descriptions, hints
+ *   or aliases). A cold fallback that any later read supersedes.
+ */
+export interface ClaudeCommandInventoryState {
+  authority: "live" | "replacement" | "probe" | "init";
+  /** Bounded SDK rows the catalogue was derived from; absent for init names. */
+  sdkCommands?: import("@anthropic-ai/claude-agent-sdk").SlashCommand[];
+  /** Advances whenever the inventory is replaced with different content. */
+  revision: number;
+  truncated: boolean;
+  /** The last attempt to refresh this inventory failed; it is retained only. */
+  refreshFailed?: boolean;
+  /** Discovery configuration a probe answer was computed for. */
+  probeFingerprint?: string;
+}
+
 /** Session state */
 export interface SessionState {
   id: string;
@@ -325,6 +348,20 @@ export interface SessionState {
    * question whose answer almost never changes.
    */
   commandInventory?: import("@orkestrator/protocol/native-agent").NativeAgentSlashCommand[];
+  /**
+   * Where {@link commandInventory} came from and how fresh it is. Owned by
+   * `session-manager-commands.ts`; updated by live reads, `commands_changed`
+   * pushes and init frames whether or not anybody is subscribed.
+   */
+  commandInventoryState?: ClaudeCommandInventoryState;
+  /**
+   * The per-turn inputs of the last real query that change which commands the
+   * CLI can see, so a cold discovery probe reproduces them rather than a
+   * default configuration.
+   */
+  commandDiscoveryInputs?: { readOnly: boolean; includeLocalSettings: boolean };
+  /** Skill names the last explicit `reloadSkills()` reported. */
+  commandSkillNames?: string[];
   /** Last completed schema-constrained turn, authoritative across UI remounts. */
   structuredOutput?: StructuredOutputResult;
   /** Request id of the structured turn currently running or last completed. */
@@ -720,6 +757,11 @@ export interface SessionInitData {
   mcpServers: McpServerRuntimeStatus[];
   plugins: PluginRuntimeStatus[];
   slashCommands?: string[];
+  /**
+   * Subset of `slashCommands` the SDK tags as bound to the local terminal
+   * (`SDKSystemMessage.terminal_slash_commands`). Absent on older CLIs.
+   */
+  terminalSlashCommands?: string[];
   skills?: string[];
   apiKeySource?: string;
   agents?: Array<{
@@ -806,6 +848,12 @@ export interface PromptOptions {
     dataUrl?: string;
     filename?: string;
   }>;
+  /**
+   * Text sent to the SDK in place of the display prompt. Set only for a
+   * selected command, whose canonical spelling may differ from what was typed
+   * (an alias, a different case); the transcript keeps the typed text.
+   */
+  providerPrompt?: string;
   /** Internal flag: set when sendPrompt is called as an automatic re-prompt
    *  (e.g. after plan rejection). Prevents infinite recursion and marks the
    *  message as system-generated so it doesn't appear as user-typed. */

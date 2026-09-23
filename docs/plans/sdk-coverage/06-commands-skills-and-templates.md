@@ -1,6 +1,15 @@
 # 06 — Commands, skills and prompt templates
 
-**Status:** 🟨 In progress · ~80% · Depends on: 02
+**Status:** 🟨 Superseded for command work · Depends on: 02
+
+> **Superseded 2026-09-23.** Remaining command, skill and template work is owned
+> by the [slash-command plan](../../improvements/slash-commands/plan/00-index.md)
+> and the living contract in
+> [`architecture/native-agent-commands.md`](../../architecture/native-agent-commands.md).
+> That work added execution descriptors, explicit command intent, the
+> catalogue lifecycle and per-provider executors. The retirement of
+> `/plugins/commands` and the Claude filesystem scanner stays open there (the
+> backend still reads it when no session exists). This file is kept as history.
 
 Refreshed 2026-09-11. Normalized `source` tags, `/session/:id/commands`, and
 picker grouping are live on the major bridges. Still open: retire

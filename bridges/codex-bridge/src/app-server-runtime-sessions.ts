@@ -105,17 +105,7 @@ import {
   type NormalizedPart,
 } from "./messages/types.js";
 import { appendAttachmentTags } from "./messages/attachment-tags.js";
-import {
-  buildPromptInput,
-  expandPromptTemplate,
-  getAvailableSlashCommandDefinitions,
-  isCodexCliNativeSlashCommand,
-  parseCodexSteerCommand,
-  parseSlashCommandPrompt,
-  wrapPromptForConversationMode,
-  type ConversationMode,
-  type PromptSlashCommand,
-} from "./prompts/slash-commands.js";
+import type { ConversationMode } from "./prompts/slash-commands.js";
 import {
   getWorkingDirectory,
   hydrateMessagesFromPersistedSession,
@@ -1215,6 +1205,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     engineGeneration: number;
     messageRevision: number;
     contentEpoch: number;
+    commandRevision?: number;
   } | null {
     const session = this.registry.getSession(sessionId);
     if (!session) return null;
@@ -1252,6 +1243,12 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       engineGeneration: this.options.engine.info().generation,
       messageRevision: session.messageRevision,
       contentEpoch: session.contentEpoch,
+      // The command inventory revision `/session/:id/commands` reports. An
+      // in-memory counter: reading it scans nothing and lists no skills. The
+      // backend revalidates its cached catalogue when it moves.
+      ...(this.commandCatalogue.revision > 0
+        ? { commandRevision: this.commandCatalogue.revision }
+        : {}),
     };
   }
 

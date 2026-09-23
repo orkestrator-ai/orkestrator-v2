@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { openCodeCommandBindingRevision } from "./opencode-commands.js";
 import {
   OPEN_CODE_MESSAGE_HISTORY_LIMIT,
   OpenCodeMessageIdCoordinator,
@@ -735,89 +736,714 @@ describe("OpenCode provider dispatch", () => {
     }
   });
 
-  test("runs a recognized OpenCode command as a command, not as prompt text", async () => {
-    const fake = openCodeFake();
-    fake.setCommandListResponse({ data: [{ name: "plan", description: "Plan work" }] });
-    const provider = openCodeProvider(fake);
-    try {
-      await provider.send("owned-session", "/plan ship the release\nwith notes", {
-        requestId: "request-1",
-        allowProviderCommands: true,
-      });
-      expect(fake.promptCalls).toHaveLength(0);
-      expect(fake.commandDispatchCalls).toHaveLength(1);
-      expect(fake.commandDispatchCalls[0]).toMatchObject({
-        sessionID: "owned-session",
-        command: "plan",
-        // Newlines survive: rebuilding arguments from split tokens flattened a
-        // pasted diff or multi-line spec into one line.
-        arguments: "ship the release\nwith notes",
-      });
-    } finally {
-      await provider.dispose?.();
-    }
-  });
+  describe("OpenCode commands", () => {
+    type CommandRequest = Record<string, unknown>;
+    type RevisionMeta = Parameters<typeof openCodeCommandBindingRevision>[1];
+    const rev = (name: string, meta: RevisionMeta = { source: "command" }) =>
+      openCodeCommandBindingRevision(name, meta);
+    const selected = (
+      name: string,
+      args = "",
+      bindingRevision: string | undefined = rev(name),
+    ) => ({
+      id: `opencode:${name}`,
+      name: `/${name}`,
+      executionKind: "provider-command" as const,
+      ...(bindingRevision === undefined ? {} : { bindingRevision }),
+      arguments: args,
+    });
+    // The shared fake answers one fixed command list and records dispatches;
+    // these tests need per-call list behaviour and control over the answer.
+    const patchClient = (fake: ReturnType<typeof openCodeFake>) =>
+      fake.client as unknown as {
+        command: {
+          list: (parameters?: unknown, options?: unknown) => Promise<unknown>;
+        };
+        session: {
+          command: (
+            parameters: CommandRequest,
+            options?: { signal?: AbortSignal },
+          ) => Promise<unknown>;
+        };
+      };
+    // Caller-owned ids end in a stable request marker after a time-based prefix.
+    const messageIdFor = (requestId: string) =>
+      expect.stringMatching(
+        new RegExp(`_ork_${expectedOpenCodeMessageId(requestId).split("_ork_")[1]}$`),
+      );
+    const materialized = (requestId: string) => ({
+      data: [
+        {
+          info: { id: expectedOpenCodeMessageId(requestId), role: "user" },
+          parts: [],
+        },
+      ],
+    });
+    const providerWithTimeout = (fake: ReturnType<typeof openCodeFake>, requestTimeoutMs: number) =>
+      createNativeAgentProvider(
+        {
+          agent: "opencode",
+          baseUrl: "http://opencode.test",
+          authToken: "test-token",
+          directory: "/workspace",
+          requestTimeoutMs,
+        },
+        {
+          openCodeClient: fake.client,
+          openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
+          monitorRetryMs: 1,
+          autoAnswerRequests: true,
+        },
+      );
 
-  test("dispatches OpenCode's built-in commands without provider discovery", async () => {
-    const fake = openCodeFake();
-    const provider = openCodeProvider(fake);
-    try {
-      // `/command` only lists configurable commands, so `/init` is known from
-      // the built-in table rather than from discovery.
-      await provider.send("owned-session", "/init", {
-        requestId: "request-1",
-        allowProviderCommands: true,
+    test("reads one directory-scoped catalogue and labels only what OpenCode reports", async () => {
+      const fake = openCodeFake();
+      fake.setCommandListResponse({
+        data: [
+          {
+            name: "init",
+            source: "command",
+            description: "guided AGENTS.md setup",
+            template: "BODY-1",
+            hints: ["$ARGUMENTS"],
+          },
+          {
+            name: "review",
+            source: "command",
+            subtask: true,
+            template: "BODY-2",
+            hints: [],
+          },
+          {
+            name: "Deploy",
+            source: "command",
+            agent: "secret-agent",
+            model: "hidden/model",
+            template: "BODY-3",
+            hints: ["$1", "$2"],
+          },
+          {
+            name: "docs",
+            source: "skill",
+            description: "Docs skill",
+            template: "BODY-4",
+            hints: [],
+          },
+          {
+            name: "mcp-prompt",
+            source: "mcp",
+            template: "BODY-5",
+            hints: ["$1"],
+          },
+          { name: "inherited", template: "BODY-6", hints: [] },
+        ],
       });
-      expect(fake.commandDispatchCalls[0]).toMatchObject({
-        command: "init",
-        // Required by the server: dropping the key answers 400.
-        arguments: "",
+      const provider = openCodeProvider(fake);
+      try {
+        const catalogue = await provider.commandCatalogue!("owned-session");
+        expect(fake.commandListCalls).toEqual([{ directory: "/workspace" }]);
+        expect(catalogue).toEqual({
+          enhanced: true,
+          status: "ready",
+          truncated: false,
+          freshness: "ttl",
+          commands: [
+            {
+              name: "/init",
+              id: "opencode:init",
+              executionKind: "provider-command",
+              source: "template",
+              description: "guided AGENTS.md setup",
+              argumentHint: "$ARGUMENTS",
+              bindingRevision: rev("init"),
+              caseSensitive: true,
+            },
+            {
+              name: "/review",
+              id: "opencode:review",
+              executionKind: "provider-command",
+              source: "template",
+              bindingRevision: rev("review", { source: "command", subtask: true }),
+              caseSensitive: true,
+            },
+            {
+              name: "/Deploy",
+              id: "opencode:Deploy",
+              executionKind: "provider-command",
+              source: "template",
+              argumentHint: "$1 $2",
+              bindingRevision: rev("Deploy", {
+                source: "command",
+                agent: "secret-agent",
+                model: "hidden/model",
+              }),
+              caseSensitive: true,
+            },
+            {
+              name: "/docs",
+              id: "opencode:docs",
+              executionKind: "provider-command",
+              source: "skill",
+              description: "Docs skill",
+              bindingRevision: rev("docs", { source: "skill" }),
+              caseSensitive: true,
+            },
+            {
+              name: "/mcp-prompt",
+              id: "opencode:mcp-prompt",
+              executionKind: "provider-command",
+              source: "unknown",
+              argumentHint: "$1",
+              bindingRevision: rev("mcp-prompt", { source: "mcp" }),
+              caseSensitive: true,
+            },
+            {
+              name: "/inherited",
+              id: "opencode:inherited",
+              executionKind: "provider-command",
+              source: "unknown",
+              bindingRevision: rev("inherited", {}),
+              caseSensitive: true,
+            },
+          ],
+        });
+        // Directory scope is not ownership, and command defaults stay private.
+        const serialized = JSON.stringify(catalogue);
+        for (const hidden of [
+          "project",
+          "user",
+          "BODY-",
+          "secret-agent",
+          "hidden/model",
+          "subtask",
+        ]) {
+          expect(serialized).not.toContain(hidden);
+        }
+        // The picker and the executor share this read.
+        await provider.slashCommands!();
+        await provider.send("owned-session", "/Deploy prod", {
+          requestId: "r1",
+          allowProviderCommands: true,
+        });
+        expect(fake.commandListCalls).toHaveLength(1);
+      } finally {
+        await provider.dispose?.();
+      }
+    });
+
+    test("distinguishes an empty inventory from a failed, thrown or malformed read", async () => {
+      const outcomes: Array<[string, () => Promise<unknown>]> = [
+        [
+          "error envelope",
+          async () => ({
+            error: { name: "BadRequest" },
+            response: { status: 400 },
+          }),
+        ],
+        [
+          "thrown",
+          async () => {
+            throw new Error("offline");
+          },
+        ],
+        ["malformed", async () => ({ data: { commands: [] } })],
+      ];
+      for (const [label, list] of outcomes) {
+        const fake = openCodeFake();
+        patchClient(fake).command.list = list;
+        const provider = openCodeProvider(fake);
+        try {
+          const read = provider.commandCatalogue!();
+          await expect(read, label).rejects.toBeInstanceOf(ProviderUnavailableError);
+          if (label === "malformed") {
+            await expect(read).rejects.toMatchObject({
+              catalogueErrorCode: "malformed",
+            });
+          }
+          await expect(provider.refreshCommands!()).resolves.toMatchObject({
+            outcome: "failed",
+          });
+        } finally {
+          await provider.dispose?.();
+        }
+      }
+
+      const fake = openCodeFake();
+      const provider = openCodeProvider(fake);
+      try {
+        await expect(provider.commandCatalogue!()).resolves.toEqual({
+          enhanced: true,
+          status: "ready",
+          commands: [],
+          truncated: false,
+          freshness: "ttl",
+        });
+        // Rows that cannot be addressed exactly are dropped, and the list says so.
+        fake.setCommandListResponse({
+          data: [
+            null,
+            { name: "" },
+            { name: "two words" },
+            { name: "/slashed" },
+            { name: "ok", hints: [] },
+            { name: "ok" },
+          ],
+        });
+        await expect(provider.refreshCommands!()).resolves.toEqual({
+          outcome: "reread",
+        });
+        const catalogue = await provider.commandCatalogue!();
+        expect(catalogue.commands.map((command) => command.name)).toEqual(["/ok"]);
+        expect(catalogue.truncated).toBe(true);
+      } finally {
+        await provider.dispose?.();
+      }
+    });
+
+    test("never sends TUI controls to session.command unless the server advertises them", async () => {
+      const fake = openCodeFake();
+      const provider = openCodeProvider(fake);
+      try {
+        // Known terminal controls are explained and refused; nothing reaches
+        // either endpoint, so the model is never handed "/exit" as a question.
+        for (const [index, text] of ["/exit", "/themes", "/editor"].entries()) {
+          await expect(
+            provider.send("owned-session", text, {
+              requestId: `tui-${index}`,
+              allowProviderCommands: true,
+            }),
+          ).rejects.toThrow("OpenCode terminal command");
+        }
+        // Anything else unknown stays the documented literal path.
+        await provider.send("owned-session", "/compact", {
+          requestId: "tui-unknown",
+          allowProviderCommands: true,
+        });
+        expect(fake.commandDispatchCalls).toHaveLength(0);
+        expect(fake.promptCalls).toHaveLength(1);
+        expect((await provider.slashCommands!()).map((command) => command.name)).toEqual([]);
+
+        fake.setCommandListResponse({
+          data: [{ name: "themes", source: "command", hints: [] }],
+        });
+        provider.refreshCatalog?.();
+        await provider.send("owned-session", "/themes", {
+          requestId: "advertised",
+          allowProviderCommands: true,
+        });
+        expect(fake.commandDispatchCalls).toHaveLength(1);
+        expect(fake.commandDispatchCalls[0]).toMatchObject({
+          command: "themes",
+          arguments: "",
+        });
+      } finally {
+        await provider.dispose?.();
+      }
+    });
+
+    test("dispatches the canonical spelling and keeps other casings as text", async () => {
+      const fake = openCodeFake();
+      fake.setCommandListResponse({
+        data: [{ name: "Deploy", source: "command", hints: [] }],
       });
-    } finally {
-      await provider.dispose?.();
-    }
-  });
+      const provider = openCodeProvider(fake);
+      try {
+        await provider.send("owned-session", "/Deploy prod", {
+          requestId: "exact",
+          allowProviderCommands: true,
+        });
+        expect(fake.commandDispatchCalls[0]).toMatchObject({
+          command: "Deploy",
+          arguments: "prod",
+        });
+        // OpenCode looks commands up by exact key; `/deploy` would not run it.
+        await provider.send("owned-session", "/deploy prod", {
+          requestId: "folded",
+          allowProviderCommands: true,
+        });
+        expect(fake.commandDispatchCalls).toHaveLength(1);
+        expect(fake.promptCalls).toHaveLength(1);
+      } finally {
+        await provider.dispose?.();
+      }
+    });
 
-  test("keeps a slash-prefixed workflow prompt literal", async () => {
-    const fake = openCodeFake();
-    const provider = openCodeProvider(fake);
-    try {
-      await provider.send("owned-session", "/init", { requestId: "request-1" });
-      expect(fake.commandDispatchCalls).toHaveLength(0);
-      expect(fake.promptCalls).toHaveLength(1);
-    } finally {
-      await provider.dispose?.();
-    }
-  });
-
-  test("sends an unrecognized slash prompt to the model", async () => {
-    const fake = openCodeFake();
-    const provider = openCodeProvider(fake);
-    try {
-      await provider.send("owned-session", "/not-a-command do the thing", {
-        requestId: "request-1",
-        allowProviderCommands: true,
+    test("builds exact SDK requests for bare, multiline, attachment and defaulted commands", async () => {
+      const fake = openCodeFake();
+      fake.setCommandListResponse({
+        data: [
+          { name: "plan", source: "command", hints: ["$ARGUMENTS"] },
+          {
+            name: "ship",
+            source: "command",
+            agent: "build",
+            model: "vendor/model",
+            subtask: true,
+            hints: [],
+          },
+        ],
       });
-      expect(fake.commandDispatchCalls).toHaveLength(0);
-      expect(fake.promptCalls).toHaveLength(1);
-    } finally {
-      await provider.dispose?.();
-    }
-  });
+      const provider = openCodeProvider(fake);
+      const png =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+      try {
+        await provider.send("owned-session", "/plan", {
+          requestId: "bare",
+          allowProviderCommands: true,
+          command: selected("plan"),
+        });
+        await provider.send("owned-session", "/plan  line one\n\n  line two  ", {
+          requestId: "multiline",
+          allowProviderCommands: true,
+          command: selected("plan", " line one\n\n  line two  "),
+          images: [{ filename: "shot.png", data: png }],
+          model: "anthropic/claude",
+          mode: "plan",
+          effort: "high",
+        });
+        await provider.send("owned-session", "/ship now", {
+          requestId: "defaults",
+          allowProviderCommands: true,
+          command: selected(
+            "ship",
+            "now",
+            rev("ship", {
+              source: "command",
+              agent: "build",
+              model: "vendor/model",
+              subtask: true,
+            }),
+          ),
+        });
+        expect(fake.promptCalls).toHaveLength(0);
+        expect(fake.commandDispatchCalls).toEqual([
+          {
+            sessionID: "owned-session",
+            directory: "/workspace",
+            messageID: messageIdFor("bare"),
+            command: "plan",
+            arguments: "",
+            model: undefined,
+            agent: undefined,
+            variant: undefined,
+            parts: [],
+          },
+          {
+            sessionID: "owned-session",
+            directory: "/workspace",
+            messageID: messageIdFor("multiline"),
+            command: "plan",
+            // Verbatim: leading space, blank line and trailing spaces survive.
+            arguments: " line one\n\n  line two  ",
+            model: "anthropic/claude",
+            agent: "plan",
+            variant: "high",
+            // Files only: the command replaces the text, never duplicated.
+            parts: [
+              {
+                type: "file",
+                mime: "image/png",
+                filename: "shot.png",
+                url: `data:image/png;base64,${png}`,
+              },
+            ],
+          },
+          {
+            sessionID: "owned-session",
+            directory: "/workspace",
+            messageID: messageIdFor("defaults"),
+            command: "ship",
+            arguments: "now",
+            // The command's own agent/model/subtask are OpenCode's to apply;
+            // nothing here names a request default that could outrank them.
+            model: undefined,
+            agent: undefined,
+            variant: undefined,
+            parts: [],
+          },
+        ]);
+      } finally {
+        await provider.dispose?.();
+      }
+    });
 
-  test("merges OpenCode built-in commands with discovered ones", async () => {
-    const fake = openCodeFake();
-    fake.setCommandListResponse({ data: [{ name: "deploy", description: "Ship it" }] });
-    const provider = openCodeProvider(fake);
-    try {
-      const commands = (await provider.slashCommands?.()) ?? [];
-      const names = commands.map((command) => command.name);
-      expect(names).toContain("/deploy");
-      expect(names).toContain("/init");
-      expect(names).toContain("/undo");
-    } finally {
-      await provider.dispose?.();
-    }
+    test("refuses a removed selection, an old revision or an unreadable list without sending", async () => {
+      const fake = openCodeFake();
+      fake.setCommandListResponse({
+        data: [{ name: "plan", source: "command", hints: [] }],
+      });
+      const provider = openCodeProvider(fake);
+      const attempt = (command: ReturnType<typeof selected>, requestId: string) =>
+        provider.send("owned-session", `${command.name} x`, {
+          requestId,
+          allowProviderCommands: true,
+          command,
+        });
+      try {
+        // Removed: one forced re-read, then a command-specific refusal.
+        await expect(attempt(selected("gone", "x"), "gone")).rejects.toThrow(
+          /\/gone is no longer available/,
+        );
+        expect(fake.commandListCalls).toHaveLength(2);
+        await expect(attempt(selected("plan", "x", "0000000000000000"), "old")).rejects.toThrow(
+          /changed since it was selected/,
+        );
+        await expect(
+          provider.send("owned-session", "/plan x", {
+            requestId: "literal",
+            allowProviderCommands: false,
+            command: selected("plan", "x"),
+          }),
+        ).rejects.toBeInstanceOf(PromptRejectedError);
+        await expect(
+          provider.send("owned-session", "/plan x", {
+            requestId: "ro",
+            allowProviderCommands: true,
+            readOnly: true,
+            command: selected("plan", "x"),
+          }),
+        ).rejects.toThrow(/read-only turn/);
+
+        patchClient(fake).command.list = async () => {
+          throw new Error("offline");
+        };
+        provider.refreshCatalog?.();
+        await expect(attempt(selected("plan", "x"), "offline")).rejects.toThrow(
+          /could not be verified/,
+        );
+        expect(fake.messageCalls).toHaveLength(0);
+        expect(fake.promptCalls).toHaveLength(0);
+        expect(fake.commandDispatchCalls).toHaveLength(0);
+      } finally {
+        await provider.dispose?.();
+      }
+    });
+
+    test("an invalidated in-flight read cannot restore a removed command", async () => {
+      const fake = openCodeFake();
+      const gate = deferred();
+      let listed: unknown[] = [{ name: "plan", source: "command", hints: [] }];
+      patchClient(fake).command.list = async () => {
+        const snapshot = listed;
+        await gate.promise;
+        return { data: snapshot };
+      };
+      const provider = openCodeProvider(fake);
+      try {
+        const stale = provider.commandCatalogue!();
+        listed = [];
+        provider.refreshCatalog?.();
+        gate.resolve();
+        expect((await stale).commands).toHaveLength(1);
+        await expect(
+          provider.send("owned-session", "/plan", {
+            requestId: "race",
+            allowProviderCommands: true,
+            command: selected("plan"),
+          }),
+        ).rejects.toBeInstanceOf(PromptRejectedError);
+        expect(fake.commandDispatchCalls).toHaveLength(0);
+        expect(fake.promptCalls).toHaveLength(0);
+      } finally {
+        gate.resolve();
+        await provider.dispose?.();
+      }
+    });
+
+    test("keeps a coordinator inside its agent when a command names another", async () => {
+      const fake = openCodeFake();
+      fake.setCommandListResponse({
+        data: [
+          { name: "ship", source: "command", agent: "build", hints: [] },
+          { name: "plan", source: "command", hints: [] },
+        ],
+      });
+      fake.setCreateResponse({ data: { id: "coordinator-session" } });
+      const provider = openCodeProvider(fake);
+      try {
+        const sessionId = await provider.createSession("chat", "Coordinator", {
+          policy: resolveNativeAgentExecutionPolicy(
+            { environmentType: "local", networkAccessMode: "full" },
+            "coordinator",
+          ),
+        });
+        await expect(
+          provider.send(sessionId, "/ship", {
+            requestId: "c1",
+            allowProviderCommands: true,
+            command: selected("ship", "", rev("ship", { source: "command", agent: "build" })),
+          }),
+        ).rejects.toThrow(/read-only coordinator/);
+        await provider.send(sessionId, "/plan", {
+          requestId: "c2",
+          allowProviderCommands: true,
+          command: selected("plan"),
+        });
+        expect(fake.commandDispatchCalls).toEqual([
+          expect.objectContaining({ command: "plan", agent: "plan" }),
+        ]);
+      } finally {
+        await provider.dispose?.();
+      }
+    });
+
+    test("keeps literal and undiscoverable slash text on the prompt path", async () => {
+      const fake = openCodeFake();
+      fake.setCommandListResponse({
+        data: [{ name: "plan", source: "command", hints: [] }],
+      });
+      const provider = openCodeProvider(fake);
+      try {
+        // Workflow default (no flag) and explicit literal intent.
+        await provider.send("owned-session", "/plan x", {
+          requestId: "workflow",
+        });
+        await provider.send("owned-session", "/plan x", {
+          requestId: "literal",
+          allowProviderCommands: false,
+        });
+        expect(fake.commandListCalls).toHaveLength(0);
+        // Typed text whose catalogue cannot be read is the documented literal path.
+        patchClient(fake).command.list = async () => ({
+          error: { name: "Unavailable" },
+        });
+        await provider.send("owned-session", "/plan x", {
+          requestId: "typed",
+          allowProviderCommands: true,
+        });
+        expect(fake.commandDispatchCalls).toHaveLength(0);
+        expect(
+          fake.promptCalls.map((call) => (call.parts as Array<{ text?: string }>)[0]?.text),
+        ).toEqual(["/plan x", "/plan x", "/plan x"]);
+      } finally {
+        await provider.dispose?.();
+      }
+    });
+
+    test("a dropped acknowledgement stays ambiguous and retries with the same message id", async () => {
+      const fake = openCodeFake();
+      fake.setCommandListResponse({
+        data: [{ name: "plan", source: "command", hints: [] }],
+      });
+      patchClient(fake).session.command = async (parameters) => {
+        fake.commandDispatchCalls.push(parameters);
+        throw new Error("socket hang up");
+      };
+      const provider = openCodeProvider(fake);
+      try {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          await expect(
+            provider.send("owned-session", "/plan", {
+              requestId: "lost",
+              allowProviderCommands: true,
+              command: selected("plan"),
+            }),
+          ).rejects.toBeInstanceOf(AmbiguousPromptDispatchError);
+        }
+        expect(fake.promptCalls).toHaveLength(0);
+        const [first, retry] = fake.commandDispatchCalls.map((call) => call.messageID);
+        expect(first).toEqual(messageIdFor("lost"));
+        expect(retry).toBe(first);
+      } finally {
+        await provider.dispose?.();
+      }
+    });
+
+    test("a slow command is proven by its transcript, and never aborted by the timeout", async () => {
+      const fake = openCodeFake();
+      fake.setCommandListResponse({
+        data: [{ name: "plan", source: "command", hints: [] }],
+      });
+      const answer = deferred();
+      const signals: AbortSignal[] = [];
+      const userMessages: string[] = [];
+      let startsTurn = true;
+      // `session.command` answers only when the command's turn is over; its
+      // user message (our reserved id) exists long before that.
+      patchClient(fake).session.command = async (parameters, options) => {
+        fake.commandDispatchCalls.push(parameters);
+        if (options?.signal) signals.push(options.signal);
+        if (startsTurn) userMessages.push(String(parameters.messageID));
+        await answer.promise;
+        return { data: true };
+      };
+      fake.setMessagesHandler(async () => ({
+        data: userMessages.map((id) => ({
+          info: { id, role: "user" },
+          parts: [],
+        })),
+      }));
+      const provider = providerWithTimeout(fake, 20);
+      try {
+        await expect(
+          provider.send("owned-session", "/plan", {
+            requestId: "slow",
+            allowProviderCommands: true,
+            command: selected("plan"),
+          }),
+        ).resolves.toBeUndefined();
+
+        // No answer and no transcript evidence: ambiguous, retried under the
+        // same id, and never re-sent as a prompt.
+        startsTurn = false;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          await expect(
+            provider.send("owned-session", "/plan", {
+              requestId: "unseen",
+              allowProviderCommands: true,
+              command: selected("plan"),
+            }),
+          ).rejects.toBeInstanceOf(AmbiguousPromptDispatchError);
+        }
+        expect(fake.commandDispatchCalls).toHaveLength(3);
+        expect(fake.commandDispatchCalls[2]?.messageID).toBe(
+          fake.commandDispatchCalls[1]?.messageID,
+        );
+        expect(fake.promptCalls).toHaveLength(0);
+        expect(signals).toHaveLength(3);
+        expect(signals.every((signal) => !signal.aborted)).toBe(true);
+      } finally {
+        answer.resolve();
+        await provider.dispose?.();
+      }
+    });
+
+    test("a command error is a rejection only when the command never started", async () => {
+      const fake = openCodeFake();
+      fake.setCommandListResponse({
+        data: [{ name: "plan", source: "command", hints: [] }],
+      });
+      patchClient(fake).session.command = async (parameters) => {
+        fake.commandDispatchCalls.push(parameters);
+        return { error: { name: "BadRequest" }, response: { status: 400 } };
+      };
+      fake.setMessagesResponse({ data: [] });
+      const provider = openCodeProvider(fake);
+      try {
+        await expect(
+          provider.send("owned-session", "/plan", {
+            requestId: "refused",
+            allowProviderCommands: true,
+            command: selected("plan"),
+          }),
+        ).rejects.toThrow("OpenCode could not run /plan");
+
+        // The server also answers 400 for a turn that failed after it began;
+        // the reserved message in the transcript proves that one ran.
+        let reads = 0;
+        fake.setMessagesHandler(async () => (reads++ === 0 ? { data: [] } : materialized("ran")));
+        await expect(
+          provider.send("owned-session", "/plan", {
+            requestId: "ran",
+            allowProviderCommands: true,
+            command: selected("plan"),
+          }),
+        ).resolves.toBeUndefined();
+        expect(fake.promptCalls).toHaveLength(0);
+      } finally {
+        await provider.dispose?.();
+      }
+    });
   });
 
   test("treats a thrown promptAsync as retryable rather than a rejection", async () => {

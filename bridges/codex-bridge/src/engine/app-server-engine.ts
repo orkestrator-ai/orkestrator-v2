@@ -39,6 +39,7 @@ import type {
   InteractionResolution,
 } from "../app-server/interactions.js";
 import { reduceHistoricalTurns, reduceNotification } from "../app-server/event-reducer.js";
+import type { SkillsListParams, UserInput } from "../app-server/generated/typescript/v2/index.js";
 import { redactSecrets } from "../app-server/redaction.js";
 import {
   AppServerRpcError,
@@ -1174,6 +1175,29 @@ export class AppServerEngine implements CodexEngine {
     return { reviewThreadId: response.reviewThreadId, turnId: response.turn.id };
   }
 
+  /**
+   * The executable skill inventory, straight from `skills/list`.
+   *
+   * Deliberately separate from {@link getRuntimeHealth}: that snapshot strips
+   * private paths for diagnostics, while invocation needs the exact path
+   * app-server reported. The result is untrusted JSON; the caller normalizes
+   * and bounds it (`commands/skill-inventory.ts`). Reports the generation that
+   * answered so bindings can be withdrawn when that child dies.
+   *
+   * `forceReload` bypasses app-server's skills cache and rescans disk. Only an
+   * explicit refresh sets it; ordinary catalogue reads use the cache.
+   */
+  async listSkills(options: { cwd: string; forceReload?: boolean }): Promise<{
+    result: unknown;
+    generation: EngineGeneration;
+  }> {
+    const params: SkillsListParams = {
+      cwds: [options.cwd],
+      ...(options.forceReload ? { forceReload: true } : {}),
+    };
+    return this.supervisor.requestWithGeneration("skills/list", params);
+  }
+
   /** One authenticated, allowlisted snapshot of the running child. */
   async getRuntimeHealth(threadId?: string | null): Promise<{
     engine: {
@@ -1766,12 +1790,27 @@ export class AppServerEngine implements CodexEngine {
   }
 }
 
-function toAppServerInput(input: EngineUserInput): Record<string, unknown> {
-  if (input.type === "text") {
-    // `text_elements` is required by the protocol even when empty.
-    return { type: "text", text: input.text, text_elements: [] };
+/**
+ * Engine input → the pinned v2 `UserInput` wire shape.
+ *
+ * Exhaustive on purpose: the old fallthrough treated every non-text item as an
+ * image, so a new union member would have been sent as a `localImage` with
+ * whatever `path` it happened to carry.
+ */
+export function toAppServerInput(input: EngineUserInput): UserInput {
+  switch (input.type) {
+    case "text":
+      // `text_elements` is required by the protocol even when empty.
+      return { type: "text", text: input.text, text_elements: [] };
+    case "local_image":
+      return { type: "localImage", path: input.path };
+    case "skill":
+      return { type: "skill", name: input.name, path: input.path };
+    default: {
+      const unreachable: never = input;
+      throw new Error(`Unsupported engine input: ${JSON.stringify(unreachable)}`);
+    }
   }
-  return { type: "localImage", path: input.path };
 }
 
 /** turn/start takes a resolved `SandboxPolicy` object, not the mode shorthand. */

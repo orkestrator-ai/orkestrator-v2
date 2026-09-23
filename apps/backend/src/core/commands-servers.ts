@@ -1503,6 +1503,7 @@ export async function deleteEnvironment(
             error instanceof Error ? error.message : error,
           );
         });
+      context.nativeAgents?.forgetEnvironmentCommandCatalogues?.(environmentId);
       await storage.deleteComposeDraftsByEnvironment(environmentId);
       await storage.deleteFileDraftsByEnvironment(environmentId);
       await storage.deleteAgentHandoffsByEnvironment(environmentId);

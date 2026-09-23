@@ -6,7 +6,11 @@ import {
   COMPOSE_MAX_INPUT_HEIGHT,
   COMPOSE_MIN_INPUT_HEIGHT,
 } from "@/components/chat/compose-metrics";
-import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
+import {
+  MentionableInput,
+  type MentionableInputComboboxAria,
+  type MentionableInputRef,
+} from "@/components/chat/MentionableInput";
 import { cn } from "@/lib/utils";
 import type { FileMention } from "@/types";
 import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
@@ -39,6 +43,8 @@ export interface NativeComposeBarProps {
   onTextAndMentionsChange: (text: string, mentions: FileMention[]) => void;
   onCursorPositionChange: (position: number, text: string) => void;
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
+  /** Completion-popup semantics while a menu such as `/` owns the input. */
+  inputComboboxAria?: MentionableInputComboboxAria;
   placeholder: string;
   disabled?: boolean;
   isSending?: boolean;
@@ -76,6 +82,7 @@ export function NativeComposeBar({
   onTextAndMentionsChange,
   onCursorPositionChange,
   onKeyDown,
+  inputComboboxAria,
   placeholder,
   disabled = false,
   isSending = false,
@@ -204,6 +211,7 @@ export function NativeComposeBar({
             onChange={onTextAndMentionsChange}
             onCursorChange={onCursorPositionChange}
             onKeyDown={onKeyDown}
+            comboboxAria={inputComboboxAria}
             placeholder={placeholder}
             disabled={disabled || isSending}
             minHeight={COMPOSE_MIN_INPUT_HEIGHT}

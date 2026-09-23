@@ -15,6 +15,7 @@
 import { randomBytes } from "node:crypto";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { toolResultImagePartId } from "@orkestrator/protocol/transcript-part-ids";
+import { noteCommandOutput } from "./commands.js";
 import { MAX_TOOL_TITLE_BYTES } from "./config.js";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
 import {
@@ -122,6 +123,7 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
   switch (event.type) {
     case "message_start":
       if (!turnFramesWelcome(state)) break;
+      applyCommandOutput(state, event.message);
       applySteerDelivery(state, event.message);
       break;
     case "message_update":
@@ -234,6 +236,20 @@ function applySteerDelivery(state: SessionState, value: unknown): void {
   state.messages.push(message);
   chargeTranscript(state, Buffer.byteLength(JSON.stringify(message)));
   state.revision += 1;
+}
+
+/**
+ * Display output from an extension command running without a model turn.
+ *
+ * `pi.sendMessage({ display: true, ... })` appends a `custom` role message and
+ * emits it as `message_start`; nothing else here renders that role. While an
+ * extension command owns the turn, its display text becomes the command's
+ * outcome instead of vanishing.
+ */
+function applyCommandOutput(state: SessionState, value: unknown): void {
+  if (!state.commandRun || !isObject(value) || value.role !== "custom") return;
+  if (value.display !== true) return;
+  noteCommandOutput(state, messageText(value.content));
 }
 
 function messageText(content: unknown): string {

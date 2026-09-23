@@ -958,3 +958,123 @@ describe("ACP bridge", () => {
     expect(raw).not.toContain("attachedMcpKey");
   });
 });
+
+describe("ACP command inventory across a bridge restart", () => {
+  type Catalogue = {
+    status: string;
+    revision?: number;
+    generation?: string;
+    commands: Array<{ name: string; id?: string; argumentHint?: string; bindingRevision?: string }>;
+  };
+
+  test("restored commands are shown stale and never run until the live agent re-reports", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const workspace = await temporaryDirectory();
+    const commandsFile = resolve(workspace, "commands.json");
+    const blocksFile = resolve(workspace, "prompt-blocks.log");
+    const lifecycleFile = resolve(workspace, "lifecycle.log");
+    const env = {
+      ACP_PROVIDER: "grok",
+      ACP_AGENT_PATH: resolve(here, "testing/fake-agent.ts"),
+      CWD: workspace,
+      FAKE_ACP_COMMANDS_FILE: commandsFile,
+      FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+    };
+    const starts = async () =>
+      ((await fs.readFile(lifecycleFile, "utf8").catch(() => "")).match(/^start:/gm) ?? []).length;
+    await fs.writeFile(
+      commandsFile,
+      JSON.stringify([
+        { name: "review", description: "Review", input: { hint: "<path>" } },
+        { name: "commit", description: "Commit" },
+      ]),
+    );
+
+    const first = await spawnBridge({ stateDirectory, env });
+    const created = (await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+    }).then((response) => response.json())) as { id: string };
+    const catalogue = (base: string, headers: Record<string, string>) =>
+      nativeFetch(`${base}/session/${created.id}/commands`, { headers }).then(
+        (response) => response.json() as Promise<Catalogue>,
+      );
+    const live = await waitFor(
+      () => catalogue(first.base, first.headers),
+      (value) => value.status === "ready",
+    );
+    await waitFor(
+      () => fs.readFile(resolve(stateDirectory, "state.json"), "utf8").catch(() => ""),
+      (value) => value.includes('"argumentHint":"<path>"'),
+    );
+    await stopChild(first.child);
+    // The agent drops `/review` while the bridge is down.
+    await fs.writeFile(commandsFile, JSON.stringify([{ name: "commit", description: "Commit" }]));
+
+    const second = await spawnBridge({ stateDirectory, env });
+    const startsBefore = await starts();
+    const restored = await catalogue(second.base, second.headers);
+    expect(restored.status).toBe("stale");
+    expect(restored.revision).toBe(live.revision);
+    expect(restored.generation).not.toBe(live.generation);
+    // The standard hint survived normalization and the state file.
+    expect(restored.commands).toEqual([
+      expect.objectContaining({ name: "/review", id: "grok:review", argumentHint: "<path>" }),
+      expect.objectContaining({ name: "/commit", id: "grok:commit" }),
+    ]);
+    // A metadata read never spawns or reattaches the agent.
+    expect(await starts()).toBe(startsBefore);
+
+    const send = (requestId: string, name: string, args = "") =>
+      nativeFetch(`${second.base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers: second.headers,
+        body: JSON.stringify({
+          prompt: `/${name}`,
+          requestId,
+          command: {
+            id: `grok:${name}`,
+            name: `/${name}`,
+            executionKind: "provider-prompt",
+            bindingRevision: restored.commands.find((command) => command.name === `/${name}`)
+              ?.bindingRevision,
+            arguments: args,
+          },
+        }),
+      });
+    // Even a command the agent still offers: the restored list is not authority.
+    const stale = await send("stale-1", "commit");
+    expect(stale.status).toBe(422);
+    expect(await stale.json()).toMatchObject({ kind: "command-unavailable" });
+
+    expect(
+      (
+        await nativeFetch(`${second.base}/session/${created.id}/attach`, {
+          method: "POST",
+          headers: second.headers,
+        })
+      ).status,
+    ).toBe(200);
+    const reported = await waitFor(
+      () => catalogue(second.base, second.headers),
+      (value) => value.status === "ready",
+    );
+    // Replaced, not merged: the removed command does not come back from disk.
+    expect(reported.commands.map((command) => command.name)).toEqual(["/commit"]);
+    expect(reported.revision).toBeGreaterThan(restored.revision!);
+
+    const removed = await send("removed-1", "review");
+    expect(removed.status).toBe(422);
+    expect((await send("commit-1", "commit", "fix\nthe build")).status).toBe(202);
+    await waitFor(
+      () => fs.readFile(blocksFile, "utf8").catch(() => ""),
+      (value) => value.trim().length > 0,
+    );
+    const sent = (await fs.readFile(blocksFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as unknown);
+    expect(sent).toEqual([[{ type: "text", text: "/commit fix\nthe build" }]]);
+  });
+});

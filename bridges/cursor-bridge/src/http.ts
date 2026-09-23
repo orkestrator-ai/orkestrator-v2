@@ -49,6 +49,12 @@ import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
+import {
+  NATIVE_AGENT_COMMAND_CATALOGUE_VERSION,
+  commandUnavailableResponse,
+  readBridgePromptCommandFields,
+  type BridgeCommandCatalogueResponse,
+} from "@orkestrator/protocol/agent-command-catalogue";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
   applyComposerPatch,
@@ -166,7 +172,7 @@ async function routeGlobal(
   // with an empty list rather than a 404, which the backend would read as a
   // bridge that predates the route.
   if (url.pathname === "/global/slash-commands" && request.method === "GET") {
-    json(response, 200, { commands: [] });
+    json(response, 200, unsupportedCommandCatalogue());
     return true;
   }
   if (url.pathname === "/global/auth" && request.method === "GET") {
@@ -287,16 +293,28 @@ async function routeSession(
     // route" and fail the environment. Health is optional metadata, so an
     // unknown session answers empty rather than failing.
     if (action === "runtime-health") return json(response, 200, emptyRuntimeHealth());
+    // An enhanced catalogue answers an unknown session in band, like
+    // `/activity`: 404 means "this bridge predates the route".
+    if (action === "commands" && !subject && request.method === "GET") {
+      return json(response, 200, missingCommandCatalogue());
+    }
+    // There is nothing to refresh for any session, held or not.
+    if (action === "commands" && subject === "refresh" && request.method === "POST") {
+      return json(response, 200, unsupportedCommandRefresh());
+    }
     return json(response, 404, { error: "Session not found" });
   }
 
   // Liveness only. `/activity` and `/dispatch` deliberately do not touch it:
   // the backend sweeps every persisted session every couple of seconds, so
   // refreshing on those would put idle detaching permanently out of reach.
+  // Command catalogue reads and refreshes are metadata: the backend polls them
+  // for every session, so they must not keep an idle agent attached either.
   if (
     action !== "activity" &&
     action !== "dispatch" &&
     action !== "runtime-health" &&
+    action !== "commands" &&
     !(action === "steer" && subject === "dispatch")
   ) {
     state.lastAccessed = Date.now();
@@ -372,8 +390,11 @@ async function routeSession(
             : "unknown",
     });
   }
-  if (action === "commands" && request.method === "GET") {
-    return json(response, 200, { commands: [] });
+  if (action === "commands" && !subject && request.method === "GET") {
+    return json(response, 200, unsupportedCommandCatalogue());
+  }
+  if (action === "commands" && subject === "refresh" && request.method === "POST") {
+    return json(response, 200, unsupportedCommandRefresh());
   }
   if (action === "mcp" && request.method === "GET" && !subject) {
     return json(response, 200, { servers: publicCursorMcpServers(state) });
@@ -605,6 +626,33 @@ async function handleCancel(response: ServerResponse, state: SessionState): Prom
   return json(response, 200, { cancelled: false });
 }
 
+/**
+ * Cursor's SDK (`@cursor/sdk` 1.0.31) has no command discovery or invocation
+ * API: `SDKAgent` offers `send`, `reload`, artifacts and usage only. Editor
+ * commands under `.cursor/commands` are not read, so the enhanced catalogue
+ * says `unsupported` — never an empty `ready`, which would claim the provider
+ * has been asked and has none. `commands: []` keeps older backends working.
+ */
+function unsupportedCommandCatalogue(): BridgeCommandCatalogueResponse {
+  return {
+    catalogueVersion: NATIVE_AGENT_COMMAND_CATALOGUE_VERSION,
+    status: "unsupported",
+    commands: [],
+  };
+}
+
+function missingCommandCatalogue(): BridgeCommandCatalogueResponse {
+  return {
+    catalogueVersion: NATIVE_AGENT_COMMAND_CATALOGUE_VERSION,
+    status: "missing",
+    commands: [],
+  };
+}
+
+function unsupportedCommandRefresh(): { outcome: "unsupported"; message: string } {
+  return { outcome: "unsupported", message: "Cursor exposes no provider command catalogue" };
+}
+
 async function handlePrompt(
   request: IncomingMessage,
   response: ServerResponse,
@@ -618,6 +666,14 @@ async function handlePrompt(
   const readOnly = body.readOnly;
   if (readOnly !== undefined && typeof readOnly !== "boolean") {
     throw new HttpError(400, "readOnly must be a boolean");
+  }
+  const commandFields = readBridgePromptCommandFields(body);
+  if (!commandFields.ok) throw new HttpError(400, commandFields.error);
+  // This bridge lists no provider commands, so no selection can have come from
+  // its catalogue. Refuse it before anything is journaled rather than hand
+  // the command's name to `agent.send` as if the SDK would execute it.
+  if (commandFields.command) {
+    return json(response, 422, commandUnavailableResponse("Cursor exposes no provider commands"));
   }
 
   // Shape validation happens before the turn is claimed: a malformed
@@ -645,7 +701,12 @@ async function handlePrompt(
       throw new HttpError(409, "Prompt dispatch is still preparing");
     return json(response, 202, { accepted: true, duplicate: true });
   }
-  const idleSteer = idleSteerPromptReply(prompt, "Cursor");
+  // `/steer` answered locally is this bridge's own resolver, which literal
+  // intent (`allowProviderCommands: false`) skips: the text goes to the agent
+  // unchanged. The SDK has no command grammar of its own to suppress.
+  const idleSteer = commandFields.allowProviderCommands
+    ? idleSteerPromptReply(prompt, "Cursor")
+    : null;
   if (idleSteer) {
     if (state.status === "running" || state.dispatching) {
       throw new HttpError(409, "Use POST /session/:id/steer to steer the active turn");

@@ -852,6 +852,31 @@ describe("turn dispatch", () => {
     ]);
   });
 
+  test("serializes a skill binding as its own input item next to the text", async () => {
+    const h = harness({
+      "thread/start": () => ({ thread: thread("t1") }),
+      "turn/start": () => ({ turn: { id: "turn-1" } }),
+    });
+    await h.engine.start();
+    const started = await h.engine.startThread({ config: BUILD });
+    await h.engine.startTurn({
+      handle: started.handle,
+      input: [
+        { type: "text", text: "$deploy to staging" },
+        { type: "skill", name: "deploy", path: "/repo/.codex/skills/deploy/SKILL.md" },
+        { type: "local_image", path: "/tmp/shot.png" },
+      ],
+      config: BUILD,
+    });
+
+    // A skill must never fall through to the image branch.
+    expect(h.child().requests.find((r) => r.method === "turn/start")!.params.input).toEqual([
+      { type: "text", text: "$deploy to staging", text_elements: [] },
+      { type: "skill", name: "deploy", path: "/repo/.codex/skills/deploy/SKILL.md" },
+      { type: "localImage", path: "/tmp/shot.png" },
+    ]);
+  });
+
   test("an overload rejection is the only immediately retryable failure", async () => {
     const h = harness({
       "thread/start": () => ({ thread: thread("t1") }),
@@ -1524,6 +1549,50 @@ describe("thread operations behind the new session routes", () => {
     expect(h.child().requests.at(-1)?.params).toMatchObject({
       target: { type: "custom", instructions: "check the auth path" },
     });
+  });
+});
+
+describe("skill inventory", () => {
+  test("lists skills for the workspace, reloading from disk only when asked", async () => {
+    const response = {
+      data: [
+        {
+          cwd: "/tmp/workspace",
+          skills: [
+            {
+              name: "review",
+              description: "Review changes",
+              path: "/tmp/workspace/.codex/skills/review/SKILL.md",
+              scope: "repo",
+              enabled: true,
+              pluginId: null,
+            },
+          ],
+          errors: [],
+        },
+      ],
+    };
+    const h = harness({ "skills/list": () => response });
+    await h.engine.start();
+
+    const listed = await h.engine.listSkills({ cwd: "/tmp/workspace" });
+    // Unlike the health projection, the executable inventory keeps the path.
+    expect(listed).toEqual({ result: response, generation: h.engine.info().generation });
+    await h.engine.listSkills({ cwd: "/tmp/workspace", forceReload: true });
+    const calls = h.child().requests.filter((request) => request.method === "skills/list");
+    expect(calls.map((call) => call.params)).toEqual([
+      { cwds: ["/tmp/workspace"] },
+      { cwds: ["/tmp/workspace"], forceReload: true },
+    ]);
+  });
+
+  test("skills/changed becomes an invalidation event instead of being ignored", async () => {
+    const h = harness();
+    await h.engine.start();
+    h.child().notify("skills/changed", {});
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+    expect(h.events.filter((event) => event.kind === "skills.changed")).toHaveLength(1);
+    expect(h.engine.getHealth().unknownNotifications).toBe(0);
   });
 });
 

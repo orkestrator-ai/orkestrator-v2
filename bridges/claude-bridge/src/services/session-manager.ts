@@ -7,3 +7,4 @@ export * from "./session-manager-persistence.js";
 export * from "./session-manager-prompt.js";
 export * from "./session-manager-interactions.js";
 export * from "./session-manager-catalog.js";
+export * from "./session-manager-commands.js";

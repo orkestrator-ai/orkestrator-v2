@@ -58,6 +58,8 @@ import type {
   NativeAgentSessionStateUpdate,
   NativeAgentDiscoveryUpdate,
   NativeAgentDiscoverySection,
+  NativeAgentCommandIntent,
+  NativeAgentCommandRefreshOutcome,
 } from "@orkestrator/protocol/native-agent";
 
 export async function getReviewValidationOutput(
@@ -527,6 +529,21 @@ export async function refreshNativeAgentModels<TMessage = unknown>(input: {
   return invoke("refresh_native_agent_models", input);
 }
 
+/** What an explicit command-list refresh did, with the projection it produced. */
+export interface NativeAgentCommandRefreshResult<TMessage = unknown> {
+  outcome: NativeAgentCommandRefreshOutcome;
+  message?: string;
+  projection: NativeAgentSessionProjection<TMessage> | null;
+}
+
+export async function refreshNativeAgentCommands<TMessage = unknown>(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+}): Promise<NativeAgentCommandRefreshResult<TMessage>> {
+  return invoke("refresh_native_agent_commands", input);
+}
+
 export async function stopNativeAgentSession<TMessage = unknown>(input: {
   environmentId: string;
   agent: NativeAgentClientPlatform;
@@ -649,6 +666,8 @@ export async function dispatchNativeAgentPrompt(input: {
   schema?: Record<string, unknown>;
   mode?: "plan" | "build";
   fastMode?: boolean;
+  /** Absent is legacy behaviour: the backend treats the text as typed. */
+  command?: NativeAgentCommandIntent;
 }): Promise<PersistedNativeAgentSession> {
   return invoke<PersistedNativeAgentSession>("dispatch_native_agent_prompt", input);
 }
@@ -682,6 +701,12 @@ export async function dispatchNativeAgentIntent(input: {
   sessionMode?: "plan" | "build";
   executionProfileId?: string;
   parameterValues?: Record<string, string | boolean>;
+  /**
+   * How to interpret the prompt. Absent is legacy behaviour (typed). For a
+   * non-literal intent the backend keeps the prompt bytes, trimming only
+   * leading whitespace, so a command's arguments arrive exactly as typed.
+   */
+  command?: NativeAgentCommandIntent;
 }): Promise<NativeAgentDispatchOutcome> {
   return invoke<NativeAgentDispatchOutcome>("dispatch_native_agent_intent", input);
 }

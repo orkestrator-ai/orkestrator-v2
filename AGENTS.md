@@ -724,6 +724,23 @@ child registry is deliberately not persisted, so a card restored at `active`
 would spin forever with nothing left that could settle it, and `loadPersistedState`
 closes those out on the way in.
 
+### Native slash commands
+
+The contract is [`docs/architecture/native-agent-commands.md`](docs/architecture/native-agent-commands.md).
+When touching command discovery or dispatch:
+
+- **Never seed or guess rows.** A catalogue lists only what the provider
+  reported and what its executor can run. A successful empty list stays
+  empty; a failed read is `stale` or `unavailable`, never `ready: []`.
+- **A selected command never becomes a prompt.** Removed, changed, forged or
+  unverifiable selections are refused before journaling (bridges answer 422
+  `command-unavailable`). Retries and queued items carry the resolved intent.
+- **Private bindings stay private.** Skill paths, template bodies and
+  provider command defaults never appear in a public descriptor.
+- **Catalogue reads are metadata.** They must not touch `lastAccessed`,
+  hydrate a transcript or re-attach an idle session; push freshness rides on
+  `commandRevision` in the snapshot the backend already reads.
+
 ### Coordinator qualification
 
 `apps/backend/src/core/coordinator-providers.ts` is the single table deciding

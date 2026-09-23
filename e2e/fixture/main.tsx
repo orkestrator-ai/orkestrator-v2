@@ -1,4 +1,5 @@
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
+import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { StrictMode, createRef, useEffect, useRef, useState } from "react";
@@ -1473,6 +1474,7 @@ function fixtureForPath() {
   }
   if (window.location.pathname === "/diff-viewer") return <DiffViewerFixture />;
   if (window.location.pathname === "/native-compose") return <NativeComposeFixture />;
+  if (window.location.pathname === "/menu-placement") return <MenuPlacementFixture />;
   if (window.location.pathname === "/agent-model-picker") return <AgentModelPickerFixture />;
   if (window.location.pathname === "/mobile-shell") return <MobileAppShellFixture />;
   if (window.location.pathname === "/path-truncation") return <PathTruncationFixture />;

@@ -289,6 +289,13 @@ export class BackendHttpClient {
     return payload.result as T;
   }
 
+  /** WebSocket URL of this backend's desktop preview tunnel. Carries no credential. */
+  previewTunnelUrl(): string {
+    const url = new URL("/__orkestrator/preview/tunnel", this.baseUrl);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url.toString();
+  }
+
   async probe(timeoutMs: number): Promise<boolean> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);

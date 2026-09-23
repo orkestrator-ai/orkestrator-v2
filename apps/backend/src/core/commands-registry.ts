@@ -1,4 +1,5 @@
 import { registerDesignCommands } from "./commands-registry-design.js";
+import { registerPreviewCommands } from "./commands-registry-previews.js";
 import type {
   AwaitBridgeReadyResult,
   ClaudeModelCatalogSnapshot,
@@ -240,6 +241,7 @@ export function createCommandRegistry(
   };
 
   registerDesignCommands(register, dependencies);
+  registerPreviewCommands(register);
   registerProjectCommands(register, dependencies);
   registerControlCommands(register, dependencies);
   registerCoordinatorCommands(register, dependencies);

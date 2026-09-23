@@ -1,3 +1,5 @@
+import { environmentBrowserTarget } from "@/lib/preview-service-entry";
+import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
 import {
   agentSettingsTiers,
   resolvedActionDefault,
@@ -500,7 +502,16 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       (!isLocalEnvironment && !!selectedEnvironment?.containerId));
   const environmentPortAddress = getEnvironmentPortAddress(selectedEnvironment);
   const environmentBrowserUrl = getEnvironmentBrowserUrl(selectedEnvironment);
-  const browserPreviewSupported = isGatewayBrowserPreviewSupported();
+  // Web and iOS clients can preview registered services through private
+  // preview origins (opened top-level), even though they have no native view.
+  const previewPublicationAvailable = usePreviewServiceStore(
+    (state) => state.capabilities?.surfaces.browserTopLevel.available === true,
+  );
+  useEffect(() => {
+    ensurePreviewServiceSync();
+    void usePreviewServiceStore.getState().loadCapabilities();
+  }, []);
+  const browserPreviewSupported = isGatewayBrowserPreviewSupported() || previewPublicationAvailable;
   const canCopyEnvironmentUrl = !!environmentPortAddress;
 
   // The object test only narrows the type: no environment means no
@@ -1379,8 +1390,16 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   const handleCreateBrowserTab = useCallback(() => {
     if (!createTab || !canCreateTab) return;
-    createTab("browser", { initialUrl: environmentBrowserUrl ?? undefined });
-  }, [canCreateTab, createTab, environmentBrowserUrl]);
+    if (!selectedEnvironment) {
+      createTab("browser", { initialUrl: environmentBrowserUrl ?? undefined });
+      return;
+    }
+    // Prefer the registered entry service: the tab then follows the service
+    // across container recreation instead of pinning today's host port.
+    void environmentBrowserTarget(selectedEnvironment, environmentBrowserUrl)
+      .catch(() => environmentBrowserUrl ?? undefined)
+      .then((initialUrl) => createTab("browser", { initialUrl }));
+  }, [canCreateTab, createTab, environmentBrowserUrl, selectedEnvironment]);
 
   const hasRunCommands = runCommands && runCommands.length > 0;
   const canRunCommands =

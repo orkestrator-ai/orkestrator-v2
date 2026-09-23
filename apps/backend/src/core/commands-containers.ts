@@ -76,6 +76,29 @@ import type { CommandContext } from "./commands-context.js";
 
 const AGENT_TEST_LOCAL_GIT_REMOTE_PATH = "/orkestrator-agent-test-origin.git";
 
+/**
+ * `-p` arguments for user mappings and the entry port. Everything binds to
+ * host loopback. Automatic mappings let Docker choose the host port. When a
+ * TCP mapping already publishes the entry port, that explicit mapping wins and
+ * the entry port is not published a second time.
+ */
+export function publishedPortArguments(
+  mappings: readonly import("./models.js").PortMapping[],
+  entryPort: number | undefined,
+): string[] {
+  const args: string[] = [];
+  for (const mapping of mappings) {
+    const protocol = mapping.protocol ?? "tcp";
+    const host = mapping.hostPortMode === "auto" ? "" : String(mapping.hostPort);
+    args.push("-p", `127.0.0.1:${host}:${mapping.containerPort}/${protocol}`);
+  }
+  const entryMapped = mappings.some(
+    (mapping) => mapping.containerPort === entryPort && (mapping.protocol ?? "tcp") === "tcp",
+  );
+  if (entryPort && !entryMapped) args.push("-p", `127.0.0.1::${entryPort}/tcp`);
+  return args;
+}
+
 export async function createDockerContainer(
   environment: Environment,
   context: CommandContext,
@@ -275,19 +298,13 @@ export async function createDockerContainer(
     await bindIfExists(path.join(project.localPath, "opencode.json"), "/opencode-project-json");
   }
 
-  for (const mapping of environment.portMappings ?? []) {
-    args.push(
-      "-p",
-      `127.0.0.1:${mapping.hostPort}:${mapping.containerPort}/${mapping.protocol ?? "tcp"}`,
-    );
-  }
+  args.push(...publishedPortArguments(environment.portMappings ?? [], repoConfig.entryPort));
   args.push("-p", `127.0.0.1::${OPENCODE_SERVER_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${CLAUDE_BRIDGE_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${CODEX_BRIDGE_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${CURSOR_BRIDGE_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${GROK_ACP_BRIDGE_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${PI_BRIDGE_PORT}/tcp`);
-  if (repoConfig.entryPort) args.push("-p", `127.0.0.1::${repoConfig.entryPort}/tcp`);
   args.push(context.dockerImage ?? DOCKER_IMAGE);
 
   const { stdout } = await runCommand("docker", args, {

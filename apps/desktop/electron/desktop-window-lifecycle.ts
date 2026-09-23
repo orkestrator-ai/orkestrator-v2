@@ -87,3 +87,20 @@ export function cleanupFailedDesktopWindow(options: {
     options.releaseSlot();
   }
 }
+
+/**
+ * Per-service preview partition within a window slot and connection. Tabs of
+ * one service share it deliberately (one login); different services never do.
+ * The suffix is a stable non-sensitive hash of backend identity and service.
+ */
+export function browserPreviewServicePartition(
+  slot: number,
+  connectionId: string,
+  target: { backendInstanceId: string; serviceId: string },
+): string {
+  const service = createHash("sha256")
+    .update(`${target.backendInstanceId}:${target.serviceId}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `persist:orkestrator-preview-svc-${slot}-${connectionPartitionKey(connectionId)}-${service}`;
+}

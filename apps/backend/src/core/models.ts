@@ -50,8 +50,15 @@ export type PortProtocol = "tcp" | "udp";
 
 export interface PortMapping {
   containerPort: number;
+  /** A fixed host port (1-65535), or 0 when `hostPortMode` is "auto". */
   hostPort: number;
   protocol: PortProtocol;
+  /**
+   * "auto": Docker assigns an ephemeral loopback host port at creation, so
+   * environments never compete for 3000/5173. Preview services follow the
+   * actual binding. Absent means a fixed `hostPort`.
+   */
+  hostPortMode?: "auto";
 }
 
 export type DefaultAgent = AgentPlatform;

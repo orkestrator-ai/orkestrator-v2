@@ -107,6 +107,32 @@ mise run test:logged -- --name codex-bridge-example -- \
   --parallel=1 --only-failures
 ```
 
+### Opt-in preview checks
+
+Service preview checks that need Docker, a pinned framework, or a real
+browser are skipped unless their variable is set. They use throwaway data
+directories, CAs, and owner labels. Install the Vite fixture into an isolated
+copy first (see `test-fixtures/preview-vite/README.md`).
+
+```bash
+# Real Docker: same-port containers, host decoy, recreation, docker exec relay
+ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE=orkestrator-v2:latest \
+ORKESTRATOR_TEST_DOCKER_RELAY_IMAGE=orkestrator-v2:latest \
+  mise run test:logged -- --name preview-docker -- bun test --cwd apps/backend \
+  ./src/core/preview-docker.test.ts ./src/preview-relay-supervisor.test.ts --parallel=1
+
+# Real Chromium against private preview origins (add the Vite variable for HMR)
+ORKESTRATOR_TEST_PREVIEW_VITE_DIR=/tmp/preview-vite \
+  mise run test:logged -- --name preview-browser -- \
+  bunx playwright test --config e2e/preview/playwright.preview.config.ts
+
+# Loopback route latency for the evidence log
+ORKESTRATOR_PREVIEW_BENCH=1 mise run test:logged -- --name preview-bench -- \
+  bun test --cwd apps/backend ./src/preview-bench.test.ts --parallel=1
+```
+
+Record results in `docs/improvements/browser/plan/evidence.md`.
+
 For an intentionally unlogged interactive invocation, use `mise exec -- bun`
 rather than an ambient Bun installation. Agent-operated validation should use
 the logged form above.

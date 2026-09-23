@@ -2,6 +2,7 @@ import type {
   BrowserPreviewAnnotationStatus,
   BrowserPreviewAttachInput,
   BrowserPreviewBounds,
+  BrowserPreviewServiceTarget,
   BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
 
@@ -92,4 +93,13 @@ export function cancelBrowserPreviewAnnotation(tabId: string): Promise<void> {
 
 export function destroyBrowserPreview(tabId: string): Promise<void> {
   return api()?.destroy(tabId) ?? Promise.resolve();
+}
+
+/** Clear one service preview's cookies and storage (its own partition only). */
+export function resetBrowserPreviewServiceSiteData(
+  target: BrowserPreviewServiceTarget,
+): Promise<void> {
+  const reset = api()?.resetServiceSiteData;
+  if (!reset) return Promise.reject(new Error("Resetting preview site data needs the desktop app"));
+  return reset(target);
 }

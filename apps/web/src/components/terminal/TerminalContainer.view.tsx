@@ -1,3 +1,4 @@
+import { linkBrowserTarget, serviceLinkTarget } from "@/lib/preview-service-entry";
 import { useEffect, useMemo, useRef, useCallback, useState, type MouseEvent } from "react";
 import type { BrowserPreviewOpenLinkEvent } from "@orkestrator/protocol/browser-preview";
 import { isMultiReviewTerminalPhase } from "@orkestrator/protocol/multi-review";
@@ -1206,7 +1207,13 @@ export function TerminalContainer({
           .findPaneWithTab(request.sourceTabId, environmentId);
         if (!pane) return;
 
-        if (createBrowserTab(request.url, pane.id)) {
+        // Loopback links are interpreted in this environment (a container's
+        // localhost:3000 is its own port 3000), not as a backend host port.
+        const target = linkBrowserTarget(
+          useEnvironmentStore.getState().getEnvironmentById(environmentId),
+          request.url,
+        );
+        if (createBrowserTab(target, pane.id)) {
           usePaneLayoutStore.getState().setActivePane(pane.id, environmentId);
         }
       }),
@@ -1564,11 +1571,12 @@ export function TerminalContainer({
 
     return window.orkestrator.listen<BrowserPreviewOpenLinkEvent>(
       "browser-preview-open-link",
-      ({ tabId, url }) => {
+      ({ tabId, url, service }) => {
         const sourcePane = usePaneLayoutStore.getState().findPaneWithTab(tabId, environmentId);
         const sourceTab = sourcePane?.tabs.find((tab) => tab.id === tabId);
         if (!sourcePane || sourceTab?.type !== "browser") return;
-        if (createBrowserTab(url, sourcePane.id)) {
+        // Same-service links from a service preview keep the service identity.
+        if (createBrowserTab(service ? serviceLinkTarget(service) : url, sourcePane.id)) {
           usePaneLayoutStore.getState().setActivePane(sourcePane.id, environmentId);
         }
       },

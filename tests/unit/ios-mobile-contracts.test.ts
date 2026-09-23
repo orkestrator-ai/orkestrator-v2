@@ -255,3 +255,18 @@ describe("iOS UI and WebKit security contracts", () => {
     expect(source).toContain(".preferredColorScheme(.dark)");
   });
 });
+
+describe("iOS preview isolation", () => {
+  test("preview origins open outside the control WebView that exposes the connection bridge", () => {
+    const source = read("apps/ios/OrkestratorMobile/Views/RemoteWebView.swift");
+    // New windows (window.open, target=_blank) never load inside the control view.
+    expect(source).toContain("guard targetFrameExists else { return .openExternally }");
+    // A main-frame navigation to any other origin (such as a private preview
+    // host or a one-use preview handoff URL) is handed to Safari.
+    expect(source).toContain(
+      "return sameOrigin(url, connection.address) ? .allow : .openExternally",
+    );
+    // The bridge only trusts the connection's own main-frame origin.
+    expect(source).toContain("guard isMainFrame, let connection else { return false }");
+  });
+});

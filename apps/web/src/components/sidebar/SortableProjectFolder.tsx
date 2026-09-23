@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronRight, Folder, FolderOpen, FolderMinus, Pencil } from "lucide-react";
+import { ArrowDownAZ, ChevronRight, Folder, FolderOpen, FolderMinus, Pencil } from "lucide-react";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -30,6 +30,7 @@ interface SortableProjectFolderProps {
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   onRename: (nextName: string) => void | Promise<void>;
+  onSort: () => void | Promise<void>;
   onUngroup: () => void | Promise<void>;
   children: ReactNode;
 }
@@ -47,6 +48,7 @@ export function SortableProjectFolder({
   isCollapsed,
   onToggleCollapse,
   onRename,
+  onSort,
   onUngroup,
   children,
 }: SortableProjectFolderProps) {
@@ -121,6 +123,10 @@ export function SortableProjectFolder({
             <ContextMenuItem onClick={() => setIsRenaming(true)}>
               <Pencil className="mr-2 h-4 w-4" />
               Rename Folder
+            </ContextMenuItem>
+            <ContextMenuItem onClick={() => void onSort()}>
+              <ArrowDownAZ className="mr-2 h-4 w-4" />
+              Sort
             </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem onClick={() => void onUngroup()}>

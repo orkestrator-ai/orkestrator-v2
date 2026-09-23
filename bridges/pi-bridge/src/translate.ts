@@ -27,6 +27,7 @@ import {
 import {
   isObject,
   nonBlank,
+  piRunId,
   setSteerJournal,
   toolSourceStates,
   type BridgeMessage,
@@ -207,8 +208,9 @@ function applySteerDelivery(state: SessionState, value: unknown): void {
   if (!isObject(value) || value.role !== "user") return;
   const pending = state.pendingSteerDeliveries[0];
   if (!pending) return;
+  if (piRunId(state) !== pending.expectedRunId) return;
   const text = messageText(value.content);
-  if (!text || text !== pending.text) return;
+  if (!text) return;
 
   state.pendingSteerDeliveries.shift();
   const entry = state.steerJournal.get(pending.requestId);

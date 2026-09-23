@@ -2234,7 +2234,7 @@ describe("ClaudeTmuxChatTab", () => {
     });
 
     await waitFor(() => {
-      expect(switchModelMock).toHaveBeenCalledWith("tab-1", "claude-fable-5[1m]", "env-1");
+      expect(switchModelMock).toHaveBeenCalledWith("tab-1", "claude-fable-5-1[1m]", "env-1");
     });
     expect(screen.getByRole("button", { name: /Fable/ })).toBeTruthy();
   });
@@ -2646,7 +2646,7 @@ describe("ClaudeTmuxChatTab", () => {
     });
 
     await waitFor(() => {
-      expect(switchModelMock).toHaveBeenCalledWith("tab-1", "claude-fable-5[1m]", "env-1");
+      expect(switchModelMock).toHaveBeenCalledWith("tab-1", "claude-fable-5-1[1m]", "env-1");
       expect(textarea.disabled).toBe(true);
       expect(screen.getByRole("button", { name: /Sonnet/ })).toHaveProperty("disabled", true);
     });
@@ -2733,13 +2733,13 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("consumes one-shot model and effort without replaying them after remount", async () => {
-    seedPane(undefined, "claude-fable-5[1m]", "max");
+    seedPane(undefined, "claude-fable-5-1[1m]", "max");
     const firstMount = render(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
         isActive
-        initialAgentModel="claude-fable-5[1m]"
+        initialAgentModel="claude-fable-5-1[1m]"
         initialReasoningEffort="max"
       />,
     );
@@ -2849,14 +2849,14 @@ describe("ClaudeTmuxChatTab", () => {
     // bundled list can honour the choice, otherwise every offline tmux launch
     // would hold its options forever.
     useClaudeStore.setState({ models: [], modelCatalogs: new Map() });
-    seedPane(undefined, "claude-fable-5[1m]", "max");
+    seedPane(undefined, "claude-fable-5-1[1m]", "max");
 
     render(
       <ClaudeTmuxChatTab
         tabId="tab-1"
         data={{ environmentId: "env-1", containerId: "container-1" }}
         isActive
-        initialAgentModel="claude-fable-5[1m]"
+        initialAgentModel="claude-fable-5-1[1m]"
         initialReasoningEffort="max"
       />,
     );

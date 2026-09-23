@@ -280,6 +280,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   canvasId={tab.designCanvasData.canvasId}
                   environmentId={environmentId}
                   isActive={isTabActive && isActive}
+                  ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
                 />
               </LazyLoadBoundary>
             );

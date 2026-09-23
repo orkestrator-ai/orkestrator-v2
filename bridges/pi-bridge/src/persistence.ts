@@ -411,7 +411,7 @@ function readCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
 }
 
-function readJournalState(value: unknown): "completed" | "failed" | "ambiguous" {
-  if (value === "completed" || value === "failed") return value;
+function readJournalState(value: unknown): "completed" | "failed" | "dropped" | "ambiguous" {
+  if (value === "completed" || value === "failed" || value === "dropped") return value;
   return "ambiguous";
 }

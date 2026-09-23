@@ -2070,6 +2070,9 @@ describe("NativeAgentService", () => {
           agentActivityState: "working",
           hasUnreadWork: true,
         });
+        expect(Date.parse(completed.agentSessionCompletedAt!)).toBeGreaterThan(
+          Date.parse(beforeCompletion.lastActivityAt!),
+        );
         expect(Date.parse(completed.lastActivityAt!)).toBeGreaterThan(
           Date.parse(beforeCompletion.lastActivityAt!),
         );

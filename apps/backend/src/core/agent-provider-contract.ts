@@ -355,6 +355,8 @@ export interface ProviderTranscriptSnapshot {
   messages: unknown[];
   /** Absolute position of the first message within the current history epoch. */
   historyStartIndex?: number;
+  /** Parts omitted from the first retained message by the provider's byte bound. */
+  omittedParts?: number;
   /** False when the provider supplied only a bounded retained tail. */
   complete?: boolean;
   title?: string;

@@ -3,6 +3,9 @@
   "tasks": {
     "build": {
       "outputs": []
+    },
+    "test:workspace": {
+      "dependsOn": []
     }
   }
 }

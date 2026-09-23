@@ -868,7 +868,7 @@ export class AcpProcess {
       clientCapabilities: {
         fs: { readTextFile: true, writeTextFile: true },
         terminal: true,
-        session: { configOptions: { boolean: {} } },
+        session: { configOptions: { boolean: {} }, notices: {} },
         _meta: { parameterizedModelPicker: true },
       },
       clientInfo: { name: "orkestrator", title: "Orkestrator", version: "1.0.0" },

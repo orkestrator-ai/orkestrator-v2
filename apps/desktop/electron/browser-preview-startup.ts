@@ -112,6 +112,8 @@ export function registerBrowserPreviewWindowCleanup({
 
 export interface BrowserPreviewWindowActivationOptions {
   onActivate: (listener: () => void) => void;
+  /** Runs before window-count and in-flight checks; true consumes the reopen. */
+  handleActivate?: () => boolean;
   getWindowCount: () => number;
   createWindow: () => Promise<void>;
   onCreateError: (error: unknown) => void;
@@ -119,12 +121,14 @@ export interface BrowserPreviewWindowActivationOptions {
 
 export function registerBrowserPreviewWindowActivation({
   onActivate,
+  handleActivate,
   getWindowCount,
   createWindow,
   onCreateError,
 }: BrowserPreviewWindowActivationOptions): void {
   let windowCreation: Promise<void> | null = null;
   onActivate(() => {
+    if (handleActivate?.()) return;
     if (getWindowCount() !== 0 || windowCreation) return;
     const attempt = Promise.resolve().then(createWindow);
     windowCreation = attempt;

@@ -20,7 +20,12 @@ export function DesignCanvasFixture() {
     <div className="h-screen bg-background text-foreground">
       <button onClick={() => setActive((value) => !value)}>Switch tab</button>
       <div className="absolute inset-x-0 bottom-0 top-8">
-        <DesignCanvasTab canvasId={canvasId} environmentId="design-fixture" isActive={active} />
+        <DesignCanvasTab
+          canvasId={canvasId}
+          environmentId="design-fixture"
+          isActive={active}
+          ownsGlobalShortcuts={active}
+        />
       </div>
     </div>
   );

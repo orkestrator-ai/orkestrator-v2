@@ -180,6 +180,7 @@ describe("scripts/test-all.ts", () => {
     expect(rootGroup.args).toContain("--parallel=3");
     expect(rootGroup.args.slice(0, 2)).toEqual(["test", "./tests"]);
     expect(rootGroup.args).toContain("./e2e/agent-testing/artifact-sanitizer.test.ts");
+    expect(rootGroup.args).toContain("./scripts/opencode-live-compatibility-probe.test.ts");
     expect(rootGroup.args).toContain("./test-fixtures/agent-project/server.test.ts");
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/desktop");
     expect(bridgeGroup.command).toBe("bunx");
@@ -330,7 +331,7 @@ describe("scripts/test-all.ts", () => {
     const workspaceGroup = buildConcurrentGroups(8).find((group) => group.name === WORKSPACE)!;
 
     expect(workspaceGroup.command).toBe("bunx");
-    expect(workspaceGroup.args.slice(0, 3)).toEqual(["turbo", "run", "test:workspace"]);
+    expect(workspaceGroup.args.slice(0, 4)).toEqual(["turbo", "run", "build", "test:workspace"]);
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/web");
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/backend");
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/web-public");

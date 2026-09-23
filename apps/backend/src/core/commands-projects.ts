@@ -6,6 +6,7 @@ import {
   runCommand,
 } from "./commands-dependencies.js";
 import { conciseError } from "./commands-error-text.js";
+import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
 import type {
   ClaudeModelCatalogSnapshot,
   Project,
@@ -192,10 +193,6 @@ export function duplicateLocalPathGuard(
  * raw configured value instead, and strip any userinfo the remote itself
  * carries: a bare `https://TOKEN@host/…` is as much a secret as `user:TOKEN@`.
  */
-export function withoutUrlCredentials(gitUrl: string): string {
-  return gitUrl.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/?#]*@/, "$1");
-}
-
 export async function readOriginUrl(projectPath: string, run: typeof runCommand): Promise<string> {
   const { stdout } = await run("git", ["-C", projectPath, "config", "--get", "remote.origin.url"], {
     timeoutMs: 10_000,

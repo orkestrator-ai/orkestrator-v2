@@ -365,3 +365,51 @@ describe("SlashCommandMenu", () => {
     expect(screen.queryByRole("button", { name: "Send as text" }) === null).toBe(true);
   });
 });
+
+describe("SlashCommandMenu placement", () => {
+  const originalVisualViewport = Object.getOwnPropertyDescriptor(window, "visualViewport");
+
+  afterEach(() => {
+    cleanup();
+    if (originalVisualViewport) {
+      Object.defineProperty(window, "visualViewport", originalVisualViewport);
+    } else {
+      delete (window as { visualViewport?: unknown }).visualViewport;
+    }
+  });
+
+  function renderAt(top: number, bottom: number) {
+    Object.defineProperty(window, "visualViewport", {
+      configurable: true,
+      value: Object.assign(new EventTarget(), { offsetTop: 0, height: 400 }),
+    });
+    const { container } = render(
+      <div
+        ref={(node) => {
+          if (node) node.getBoundingClientRect = () => ({ top, bottom }) as DOMRect;
+        }}
+      >
+        <SlashCommandMenu
+          commands={[{ name: "/help", description: "Show help", source: "builtin" }]}
+          selectedIndex={0}
+          onSelect={() => {}}
+          onClose={() => {}}
+        />
+      </div>,
+    );
+    return container.querySelector<HTMLElement>("[data-side]")!;
+  }
+
+  test("bounds the list above the composer", () => {
+    const menu = renderAt(250, 300);
+    expect(menu.dataset.side).toBe("top");
+    expect(menu.style.maxHeight).toBe("238px");
+  });
+
+  test("flips below with its 256px preferred height", () => {
+    const menu = renderAt(30, 80);
+    expect(menu.dataset.side).toBe("bottom");
+    expect(menu.style.top).toBe("100%");
+    expect(menu.style.maxHeight).toBe("256px");
+  });
+});

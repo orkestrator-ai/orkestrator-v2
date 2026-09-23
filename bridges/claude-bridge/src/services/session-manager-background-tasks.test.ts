@@ -873,6 +873,98 @@ describe("background task reducer", () => {
     expect(created.status).toBe("idle");
   });
 
+  test("does not let a released result move the successor's usage baseline or control", async () => {
+    const firstContextUsage = mock(async () => ({
+      totalTokens: 100,
+      maxTokens: 1_000,
+      percentage: 10,
+    }));
+    const secondContextUsage = mock(async () => ({
+      totalTokens: 100,
+      maxTokens: 1_000,
+      percentage: 10,
+    }));
+    queryControlOverrides.getContextUsage = firstContextUsage;
+
+    const created = createSession("released usage ownership");
+    track(created.id);
+    const firstPrompt = sendPrompt(created.id, "delegate first");
+    const firstCall = await nextQueryCall();
+    firstCall.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-older-usage",
+      description: "Older task",
+    });
+    firstCall.push({
+      type: "result",
+      subtype: "success",
+      modelUsage: {
+        "claude-mock": {
+          inputTokens: 10,
+          outputTokens: 20,
+          cacheReadInputTokens: 70,
+          contextWindow: 1_000,
+        },
+      },
+      total_cost_usd: 0.5,
+    });
+    await waitFor(() => created.status === "idle");
+    firstCall.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-older-usage",
+      status: "completed",
+    });
+    await waitFor(() => created.backgroundTasks?.["agent-older-usage"]?.status === "completed");
+    expect(firstContextUsage).toHaveBeenCalledTimes(1);
+
+    queryControlOverrides.getContextUsage = secondContextUsage;
+    const secondPrompt = sendPrompt(created.id, "foreground successor");
+    const secondCall = await nextQueryCall();
+
+    // The old query's continuation result arrives while the successor owns the
+    // session. It must be discarded before differencing or querying context.
+    firstCall.push({
+      type: "result",
+      subtype: "success",
+      modelUsage: {
+        "claude-mock": {
+          inputTokens: 30,
+          outputTokens: 60,
+          cacheReadInputTokens: 210,
+          contextWindow: 1_000,
+        },
+      },
+      total_cost_usd: 1.5,
+    });
+    await Bun.sleep(20);
+    expect(secondContextUsage).not.toHaveBeenCalled();
+    expect(created.claudeUsageBaseline).toMatchObject({ input: 10, cost: 0.5 });
+    expect(created.usage).toMatchObject({ inputTokens: 10, sessionTokens: 100, costUsd: 0.5 });
+    firstCall.finish();
+    await firstPrompt;
+
+    secondCall.push({
+      type: "result",
+      subtype: "success",
+      modelUsage: {
+        "claude-mock": {
+          inputTokens: 20,
+          outputTokens: 40,
+          cacheReadInputTokens: 140,
+          contextWindow: 1_000,
+        },
+      },
+      total_cost_usd: 1,
+    });
+    secondCall.finish();
+    await secondPrompt;
+
+    expect(secondContextUsage).toHaveBeenCalledTimes(1);
+    expect(created.usage).toMatchObject({ inputTokens: 20, sessionTokens: 200, costUsd: 1 });
+  });
+
   test("does not let an aborted result handler reassert a hold or clobber a restart", async () => {
     let resolveUsage!: (value: unknown) => void;
     let usageRequestStarted = false;

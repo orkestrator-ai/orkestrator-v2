@@ -276,7 +276,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
       timeout: 15_000,
     });
     await expect(
-      page.getByRole("button", { name: "1 unseen agent messages; open inbox", exact: true }),
+      page.getByRole("button", { name: "Agent inbox, 1 unseen", exact: true }),
     ).toBeVisible();
 
     await page.reload();
@@ -290,7 +290,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
       timeout: 15_000,
     });
     await expect(
-      page.getByRole("button", { name: "1 unseen agent messages; open inbox", exact: true }),
+      page.getByRole("button", { name: "Agent inbox, 1 unseen", exact: true }),
     ).toBeVisible();
   } finally {
     await invoke("update_agent_messaging_settings", { settings: previousSettings }).catch(

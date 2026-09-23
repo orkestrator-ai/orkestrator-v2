@@ -2,6 +2,10 @@ import { useEffect, useId, useRef, type ReactNode } from "react";
 import { AlertCircle, Ban, Command, Loader2, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { groupSlashCommandRuns } from "@/lib/chat/slash-command-search";
+import { useViewportBoundedMenu } from "@/hooks/useViewportBoundedMenu";
+
+/** Tallest the menu grows when the viewport has room. */
+const PREFERRED_MAX_HEIGHT_PX = 256;
 
 /**
  * Minimal shape the menu renders. Every agent's command type structurally
@@ -105,7 +109,10 @@ export function SlashCommandMenu<TCommand extends SlashCommandOption>({
   blockedMessage,
   literalEscape,
 }: SlashCommandMenuProps<TCommand>) {
-  const menuRef = useRef<HTMLDivElement>(null);
+  // Bound the height by the visible viewport so the list scrolls instead of
+  // running off-screen on mobile, where the keyboard leaves little room.
+  const { menuRef, setMenuRef, style, side } =
+    useViewportBoundedMenu<HTMLDivElement>(PREFERRED_MAX_HEIGHT_PX);
   const selectedRef = useRef<HTMLDivElement>(null);
   const fallbackId = useId();
   const baseId = listboxId ?? `slash-menu-${fallbackId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
@@ -124,7 +131,7 @@ export function SlashCommandMenu<TCommand extends SlashCommandOption>({
 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [onClose]);
+  }, [menuRef, onClose]);
 
   // Escape is handled by `useSlashCommandMenu` alongside the other keys.
 
@@ -189,14 +196,15 @@ export function SlashCommandMenu<TCommand extends SlashCommandOption>({
 
   return (
     <div
-      ref={menuRef}
+      ref={setMenuRef}
       data-slash-command-menu
+      data-side={side}
       className={cn(
-        "absolute z-50 max-h-72 w-full max-w-[36rem] overflow-y-auto",
+        "absolute z-50 w-full max-w-[36rem] overflow-y-auto overscroll-contain",
         "rounded-xl border border-zinc-700/70 bg-zinc-900/95 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm",
         "animate-in fade-in-0 zoom-in-95",
       )}
-      style={{ bottom: "100%", left: 0, marginBottom: "4px" }}
+      style={style}
       // Keep focus (and the caret) in the composer while the pointer is used.
       onMouseDown={(event) => event.preventDefault()}
     >

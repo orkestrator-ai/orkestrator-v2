@@ -807,3 +807,72 @@ export function emptyPreviewReadiness(): PreviewReadiness {
     observedAt: null,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Durable browser-tab targets
+//
+// Browser tabs persist one string (`browserData.url`) in layout version 3.
+// Service tabs encode their reference as an `orkestrator-preview:` URI rather
+// than adding a field: every v3 reader keeps the string verbatim through
+// restore, merge, and save, so an older client can never strip the service
+// identity by rewriting the tab. Older clients show it as an unsupported
+// address (safe, read-only); nothing is silently downgraded to a stale port.
+
+export const PREVIEW_TAB_URI_PREFIX = "orkestrator-preview://";
+
+export type PreviewTabTarget =
+  | { kind: "service"; ref: PreviewServiceRef }
+  | { kind: "intent"; environmentId: string; source: PreviewUrlSource; url: string }
+  | { kind: "url"; url: string };
+
+export function formatPreviewServiceUri(ref: PreviewServiceRef): string {
+  const path = normalizePreviewPath(ref.path);
+  return `${PREVIEW_TAB_URI_PREFIX}service/${ref.backendInstanceId}/${encodeURIComponent(ref.environmentId)}/${ref.serviceId}${path}`;
+}
+
+/** An unresolved terminal/agent link awaiting a service choice or registration. */
+export function formatPreviewIntentUri(intent: {
+  environmentId: string;
+  source: PreviewUrlSource;
+  url: string;
+}): string {
+  return `${PREVIEW_TAB_URI_PREFIX}intent/${encodeURIComponent(intent.environmentId)}/${intent.source}?url=${encodeURIComponent(intent.url)}`;
+}
+
+const SERVICE_URI =
+  /^orkestrator-preview:\/\/service\/([A-Za-z0-9_-]{8,128})\/([^/?#]+)\/([A-Za-z0-9_-]{8,128})([/?#].*)?$/;
+const INTENT_URI = /^orkestrator-preview:\/\/intent\/([^/?#]+)\/([a-z-]+)\?url=([^#]*)$/;
+
+export function parsePreviewTabTarget(value: string | undefined | null): PreviewTabTarget {
+  const text = value ?? "";
+  if (!text.startsWith(PREVIEW_TAB_URI_PREFIX)) return { kind: "url", url: text };
+  try {
+    const service = SERVICE_URI.exec(text);
+    if (service) {
+      const ref: PreviewServiceRef = {
+        backendInstanceId: service[1]!,
+        environmentId: decodeURIComponent(service[2]!),
+        serviceId: service[3]!,
+        path: normalizePreviewPath(service[4] ?? "/"),
+      };
+      if (isPreviewServiceRef(ref)) return { kind: "service", ref };
+    }
+    const intent = INTENT_URI.exec(text);
+    if (
+      intent &&
+      (["container-terminal", "worktree-terminal", "address-bar", "agent-link"] as const).includes(
+        intent[2] as PreviewUrlSource,
+      )
+    ) {
+      return {
+        kind: "intent",
+        environmentId: decodeURIComponent(intent[1]!),
+        source: intent[2] as PreviewUrlSource,
+        url: decodeURIComponent(intent[3]!),
+      };
+    }
+  } catch {
+    // Malformed encodings fall through to an unsupported plain address.
+  }
+  return { kind: "url", url: text };
+}

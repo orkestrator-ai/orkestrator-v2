@@ -1,3 +1,4 @@
+import { environmentBrowserTarget } from "@/lib/preview-service-entry";
 import {
   agentSettingsTiers,
   resolvedActionDefault,
@@ -1338,8 +1339,16 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   const handleCreateBrowserTab = useCallback(() => {
     if (!createTab || !canCreateTab) return;
-    createTab("browser", { initialUrl: environmentBrowserUrl ?? undefined });
-  }, [canCreateTab, createTab, environmentBrowserUrl]);
+    if (!selectedEnvironment) {
+      createTab("browser", { initialUrl: environmentBrowserUrl ?? undefined });
+      return;
+    }
+    // Prefer the registered entry service: the tab then follows the service
+    // across container recreation instead of pinning today's host port.
+    void environmentBrowserTarget(selectedEnvironment, environmentBrowserUrl)
+      .catch(() => environmentBrowserUrl ?? undefined)
+      .then((initialUrl) => createTab("browser", { initialUrl }));
+  }, [canCreateTab, createTab, environmentBrowserUrl, selectedEnvironment]);
 
   const hasRunCommands = runCommands && runCommands.length > 0;
   const canRunCommands =

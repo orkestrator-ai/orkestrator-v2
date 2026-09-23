@@ -1556,7 +1556,7 @@ describe("ActionBar copy URL", () => {
 });
 
 describe("ActionBar browser tabs", () => {
-  test("opens a browser tab at the selected environment's mapped backend port", () => {
+  test("opens a browser tab at the selected environment's mapped backend port", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       entryPort: 3000,
@@ -1566,16 +1566,21 @@ describe("ActionBar browser tabs", () => {
     render(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
 
-    expect(createTabMock).toHaveBeenCalledWith("browser", {
-      initialUrl: "http://localhost:49152/",
-    });
+    // Without preview-service support the entry button keeps its legacy target.
+    await waitFor(() =>
+      expect(createTabMock).toHaveBeenCalledWith("browser", {
+        initialUrl: "http://localhost:49152/",
+      }),
+    );
   });
 
-  test("opens an empty browser tab when the environment has no mapped port", () => {
+  test("opens an empty browser tab when the environment has no mapped port", async () => {
     render(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
 
-    expect(createTabMock).toHaveBeenCalledWith("browser", { initialUrl: undefined });
+    await waitFor(() =>
+      expect(createTabMock).toHaveBeenCalledWith("browser", { initialUrl: undefined }),
+    );
   });
 
   test("keeps the browser tab button visible but disabled without an environment", () => {

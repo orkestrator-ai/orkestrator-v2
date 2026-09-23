@@ -270,3 +270,44 @@ describe("tunnel frames", () => {
     expect(isReservedPreviewCookieName("__Host-session")).toBe(false);
   });
 });
+
+describe("browser tab targets", () => {
+  test("service references round-trip through the durable URI", async () => {
+    const { formatPreviewServiceUri, parsePreviewTabTarget } =
+      await import("./preview-services.js");
+    const ref = {
+      backendInstanceId: FIXTURE_BACKEND_INSTANCE_ID,
+      environmentId: "env with/slash",
+      serviceId: FIXTURE_SERVICE_ID,
+      path: "/a?b=1#c",
+    };
+    const uri = formatPreviewServiceUri(ref);
+    expect(uri).toStartWith("orkestrator-preview://service/");
+    expect(parsePreviewTabTarget(uri)).toEqual({ kind: "service", ref });
+  });
+
+  test("intents and plain addresses are distinguished; malformed URIs stay unsupported addresses", async () => {
+    const { formatPreviewIntentUri, parsePreviewTabTarget } = await import("./preview-services.js");
+    const intent = formatPreviewIntentUri({
+      environmentId: "env",
+      source: "container-terminal",
+      url: "http://localhost:3000/x?y=1",
+    });
+    expect(parsePreviewTabTarget(intent)).toEqual({
+      kind: "intent",
+      environmentId: "env",
+      source: "container-terminal",
+      url: "http://localhost:3000/x?y=1",
+    });
+    expect(parsePreviewTabTarget("http://localhost:3000/")).toEqual({
+      kind: "url",
+      url: "http://localhost:3000/",
+    });
+    expect(parsePreviewTabTarget("")).toEqual({ kind: "url", url: "" });
+    expect(parsePreviewTabTarget("orkestrator-preview://service/x/y/z")).toEqual({
+      kind: "url",
+      url: "orkestrator-preview://service/x/y/z",
+    });
+    expect(parsePreviewTabTarget("orkestrator-preview://intent/env/rm-rf?url=x").kind).toBe("url");
+  });
+});

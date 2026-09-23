@@ -311,7 +311,7 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
     expect(harness.runtime.capabilities().access.available).toBe(true);
   });
 
-  test("renewed certificates are hot-swapped without restarting the listener", async () => {
+  test("renewed certificates are picked up by re-binding on the same port", async () => {
     const before = manager.status().certificate!.validTo;
     await Bun.sleep(1_100);
     certificates(dir);

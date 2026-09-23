@@ -52,8 +52,12 @@ The first `test:changed` run failed in three groups:
 - **Workspace:** one backend test file was edited while the run was reading
   it. The test passed 6 of 6 times in isolation afterwards.
 - **Bridges:** the watchdog killed `cursor-bridge` after 300 s with no output.
-  This branch changes no files under `bridges/`. The isolated rerun result is
-  in the handoff notes.
+  An isolated rerun (`bun run test:bridge` in `bridges/cursor-bridge`, 2
+  workers) also hung and was killed after 600 s. This branch changes no files
+  under `bridges/`. It changes none of the protocol modules `cursor-bridge`
+  imports; the only overlap is new export entries in
+  `packages/protocol/package.json`. The hang has not been diagnosed, and it
+  still needs a flake-registry entry or a check against `main`.
 
 ## Journeys (step 14)
 

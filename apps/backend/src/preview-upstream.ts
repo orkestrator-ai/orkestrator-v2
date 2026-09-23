@@ -1,6 +1,6 @@
 import { connect as netConnect } from "node:net";
 import type { Duplex } from "node:stream";
-import { connect as tlsConnect } from "node:tls";
+import { connect as tlsConnect, rootCertificates } from "node:tls";
 
 import { previewFailure, type PreviewErrorCategory } from "@orkestrator/protocol/preview-services";
 
@@ -14,17 +14,22 @@ export interface PreviewUpstreamOptions {
   relayConnect?: (target: ResolvedPreviewTarget, signal: AbortSignal) => Promise<Duplex>;
 }
 
-function category(error: unknown): PreviewErrorCategory {
+/**
+ * Node's `ca` option replaces the default roots. An operator CA must extend
+ * them, so a development CA never removes trust in public certificates.
+ */
+export function upstreamTrust(extra: string | undefined): string[] | undefined {
+  return extra ? [...rootCertificates, extra] : undefined;
+}
+
+function category(error: unknown, tls: boolean): PreviewErrorCategory {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  if (code === "ECONNREFUSED" || code === "ECONNRESET") return "connection-refused";
+  if (code === "ECONNREFUSED") return "connection-refused";
   if (code === "ENOTFOUND" || code === "EAI_AGAIN") return "dns-failed";
   if (code === "ETIMEDOUT") return "connect-timeout";
-  if (
-    typeof code === "string" &&
-    (code.startsWith("ERR_TLS") || code.includes("CERT") || code === "DEPTH_ZERO_SELF_SIGNED_CERT")
-  ) {
-    return "tls-failed";
-  }
+  // Anything else on a TLS socket failed the handshake or verification
+  // (unknown issuer, wrong name, expiry); runtimes name these differently.
+  if (tls) return "tls-failed";
   return "connection-refused";
 }
 
@@ -55,7 +60,7 @@ export function connectPreviewUpstream(
           port: target.port,
           servername: target.tls.servername,
           rejectUnauthorized: true,
-          ca: options.ca?.(),
+          ca: upstreamTrust(options.ca?.()),
           ALPNProtocols: ["http/1.1"],
         })
       : netConnect({ host: target.host, port: target.port, family });
@@ -74,7 +79,7 @@ export function connectPreviewUpstream(
     const onError = (error: Error) => {
       cleanup();
       socket.destroy();
-      reject(previewFailure(category(error)));
+      reject(previewFailure(category(error, Boolean(target.tls))));
     };
     const onAbort = () => {
       cleanup();

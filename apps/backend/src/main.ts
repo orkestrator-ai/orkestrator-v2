@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import process from "node:process";
 import { OrkestratorBackend } from "./core/index.js";
 import { fixPath } from "./core/fix-path.js";
+import { PreviewPublicationManager } from "./preview-publication.js";
 import { OrkestratorGateway } from "./gateway.js";
 import { createManagedWebClient } from "./managed-web-client.js";
 import { assertSupportedPlatform, parseOptions } from "./options.js";
@@ -141,10 +142,24 @@ if (managedWebClient) {
   }
 }
 
+// Private preview origins are optional: a missing domain or certificate only
+// disables browser publication and never blocks the backend from serving.
+const previewPublication = backend.previews
+  ? new PreviewPublicationManager({ runtime: backend.previews, logger: console })
+  : null;
+await previewPublication?.start().catch((error: unknown) => {
+  console.warn(
+    `[previews] Private preview publication did not start: ${error instanceof Error ? error.message : String(error)}`,
+  );
+});
+
 const stop = createBackendShutdownHandler({
   stopTailscaleServe: tailscaleServe ? () => tailscaleServe!.stop() : undefined,
   stopManagedWebClient: managedWebClient ? () => managedWebClient!.shutdown() : undefined,
-  stopGateway: () => gateway.stop(),
+  stopGateway: async () => {
+    await previewPublication?.dispose().catch(() => undefined);
+    await gateway.stop();
+  },
   stopBackend: () => backend.shutdown(),
   warn: (message) => console.warn(message),
   exit: (code) => process.exit(code),

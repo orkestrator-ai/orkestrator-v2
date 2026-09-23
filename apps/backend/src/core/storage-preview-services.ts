@@ -61,7 +61,13 @@ export interface PreviewSettings {
     /** Extra CA bundle for verifying HTTPS *upstreams*. */
     upstreamCaFile: string | null;
     listenAddress: string | null;
+    /** Listen port; 0 selects an ephemeral port (tests). Defaults to 8443. */
     port: number | null;
+    /**
+     * Port browsers use when a TCP forwarder (for example Tailscale Serve on
+     * 443) fronts the listener. Defaults to the bound port.
+     */
+    publicPort: number | null;
   };
 }
 
@@ -77,6 +83,7 @@ export const DEFAULT_PREVIEW_SETTINGS: PreviewSettings = {
     upstreamCaFile: null,
     listenAddress: null,
     port: null,
+    publicPort: null,
   },
 };
 
@@ -142,6 +149,7 @@ function sanitizeSettings(value: unknown): PreviewSettings {
   const text = (field: unknown) =>
     typeof field === "string" && field.trim() ? field.trim() : null;
   const port = publication.port;
+  const publicPort = publication.publicPort;
   return {
     version: 1,
     transport: value.transport === true,
@@ -154,8 +162,15 @@ function sanitizeSettings(value: unknown): PreviewSettings {
       upstreamCaFile: text(publication.upstreamCaFile),
       listenAddress: text(publication.listenAddress),
       port:
-        typeof port === "number" && Number.isInteger(port) && port >= 1 && port <= 65_535
+        typeof port === "number" && Number.isInteger(port) && port >= 0 && port <= 65_535
           ? port
+          : null,
+      publicPort:
+        typeof publicPort === "number" &&
+        Number.isInteger(publicPort) &&
+        publicPort >= 1 &&
+        publicPort <= 65_535
+          ? publicPort
           : null,
     },
   };

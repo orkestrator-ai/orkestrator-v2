@@ -82,7 +82,7 @@ export abstract class GatewayBase {
   protected readonly terminalWebSocket: TerminalWebSocketGateway;
   /** Backend-owned preview services, when this gateway fronts a full backend. */
   protected readonly previews?: PreviewRuntime;
-  protected readonly previewMetrics = new PreviewMetrics();
+  protected readonly previewMetrics: PreviewMetrics;
   protected readonly previewTunnel?: PreviewTunnelServer;
   /** Legacy `/__orkestrator/browser/loopback/<port>/` concurrency (per port, overall). */
   protected readonly legacyPreviewAdmission = new PreviewAdmission("http", {
@@ -189,6 +189,7 @@ export abstract class GatewayBase {
       options.proxyBodyIdleTimeoutMs ?? BUFFERED_PROXY_BODY_IDLE_TIMEOUT_MS;
     this.browserPreviewHeadersTimeoutMs = options.browserPreviewHeadersTimeoutMs ?? 30_000;
     this.previews = options.previews;
+    this.previewMetrics = this.previews?.metrics ?? new PreviewMetrics();
     if (this.previews) {
       this.previewTunnel = new PreviewTunnelServer({
         runtime: this.previews,

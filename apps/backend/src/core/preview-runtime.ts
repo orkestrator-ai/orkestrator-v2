@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import {
   PREVIEW_LIMITS,
   PREVIEW_PROTOCOL_VERSION,
@@ -8,6 +10,7 @@ import {
 import { runCommand } from "./commands-dependencies.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import type { Environment } from "./models.js";
+import { PreviewMetrics } from "../preview-metrics.js";
 import { PreviewAccessService, type PreviewPublicationPort } from "./preview-access.js";
 import { PreviewReadinessProber } from "./preview-readiness.js";
 import { PreviewServiceRegistry, type PreviewRegistryStorage } from "./preview-service-registry.js";
@@ -59,6 +62,8 @@ export class PreviewRuntime {
   readonly readiness: PreviewReadinessProber;
   readonly access: PreviewAccessService;
   readonly limits: PreviewLimits;
+  /** Bounded transport metrics shared by the tunnel and the publication listener. */
+  readonly metrics = new PreviewMetrics();
   /** Set by the private-origin publication manager when it is running. */
   publication: PreviewPublicationPort | null = null;
   private settings: PreviewSettings = structuredClone(DEFAULT_PREVIEW_SETTINGS);
@@ -77,7 +82,7 @@ export class PreviewRuntime {
       reservedPorts: () => this.reservedPorts(),
       probeFamily: options.probeFamily,
     });
-    this.readiness = new PreviewReadinessProber();
+    this.readiness = new PreviewReadinessProber({ ca: () => this.upstreamCa() });
     this.registry = new PreviewServiceRegistry({
       storage: options.storage,
       emit: options.emit,
@@ -97,9 +102,33 @@ export class PreviewRuntime {
   init(): Promise<void> {
     this.initialized ??= (async () => {
       this.settings = await this.options.storage.loadPreviewSettings();
+      await this.loadUpstreamCa();
       await this.registry.init();
     })();
     return this.initialized;
+  }
+
+  private upstreamCaPem: string | undefined;
+
+  /**
+   * Extra trust for HTTPS upstreams (for example a local development CA). It is
+   * added to, never replaces, the system roots, and verification stays on.
+   */
+  upstreamCa(): string | undefined {
+    return this.upstreamCaPem;
+  }
+
+  private async loadUpstreamCa(): Promise<void> {
+    const file = this.settings.publication.upstreamCaFile;
+    this.upstreamCaPem = undefined;
+    if (!file) return;
+    try {
+      this.upstreamCaPem = await readFile(file, "utf8");
+    } catch (error) {
+      console.warn(
+        `[previews] Could not read the upstream CA bundle: ${error instanceof Error ? error.message : "error"}`,
+      );
+    }
   }
 
   dispose(): void {
@@ -147,6 +176,7 @@ export class PreviewRuntime {
     update: (current: PreviewSettings) => PreviewSettings,
   ): Promise<PreviewSettings> {
     this.settings = await this.options.storage.updatePreviewSettings(update);
+    await this.loadUpstreamCa();
     const effective = this.effectiveSettings();
     for (const listener of Array.from(this.settingsListeners)) listener(effective);
     return this.storedSettings();

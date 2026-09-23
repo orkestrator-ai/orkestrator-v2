@@ -43,6 +43,7 @@ export interface PreviewSettingsShape {
     upstreamCaFile: string | null;
     listenAddress: string | null;
     port: number | null;
+    publicPort: number | null;
   };
 }
 

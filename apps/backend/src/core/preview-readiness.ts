@@ -10,6 +10,7 @@ import {
   type PreviewServiceDefinition,
 } from "@orkestrator/protocol/preview-services";
 
+import { upstreamTrust } from "../preview-upstream.js";
 import type { PreviewReadinessPort, ResolvedPreviewTarget } from "./preview-service-registry.js";
 
 export interface PreviewReadinessOptions {
@@ -206,7 +207,7 @@ export class PreviewReadinessProber implements PreviewReadinessPort {
         port: target.port,
         servername: target.tls?.servername,
         rejectUnauthorized: true,
-        ca: this.options.ca?.(),
+        ca: upstreamTrust(this.options.ca?.()),
       });
       const finish = (error?: unknown) => {
         clearTimeout(timer);
@@ -248,7 +249,7 @@ export class PreviewReadinessProber implements PreviewReadinessPort {
           ? {
               servername: target.tls?.servername,
               rejectUnauthorized: true,
-              ca: this.options.ca?.(),
+              ca: upstreamTrust(this.options.ca?.()),
             }
           : {}),
       });

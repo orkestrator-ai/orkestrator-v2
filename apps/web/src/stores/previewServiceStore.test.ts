@@ -103,6 +103,48 @@ describe("previewServiceStore", () => {
     ).toBe(5);
   });
 
+  test("same-tick refreshes share one request", async () => {
+    const invoke = install({
+      get_preview_capabilities: () => fixturePreviewCapabilities(),
+      get_preview_services: () => fixturePreviewSnapshot(),
+    });
+    const store = usePreviewServiceStore.getState();
+    const first = store.refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+    const second = store.refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+    const [a, b] = await Promise.all([first, second]);
+    await Bun.sleep(5);
+    expect(a).not.toBeNull();
+    expect(b).toBe(a);
+    expect(
+      invoke.mock.calls.filter(([command]) => command === "get_preview_services"),
+    ).toHaveLength(1);
+  });
+
+  test("an older snapshot arriving late does not replace a newer one", async () => {
+    let resolveServices: (snapshot: unknown) => void = () => undefined;
+    install({
+      get_preview_capabilities: () => fixturePreviewCapabilities(),
+      get_preview_services: () =>
+        new Promise((resolve) => {
+          resolveServices = resolve;
+        }),
+    });
+    const pending = usePreviewServiceStore.getState().refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+    await Bun.sleep(5);
+    // A newer snapshot lands while the first request is still in flight.
+    const newer = fixturePreviewSnapshot([], { registryRevision: 5 });
+    usePreviewServiceStore.setState({
+      environments: {
+        [FIXTURE_ENVIRONMENT_ID]: { snapshot: newer, loading: false, error: null },
+      },
+    });
+    resolveServices(fixturePreviewSnapshot(undefined, { registryRevision: 3 }));
+    expect(await pending).toBe(newer);
+    const stored = usePreviewServiceStore.getState().environments[FIXTURE_ENVIRONMENT_ID];
+    expect(stored?.snapshot).toBe(newer);
+    expect(stored?.loading).toBe(false);
+  });
+
   test("a new backend identity discards cached snapshots from the old one", async () => {
     let identity = FIXTURE_BACKEND_INSTANCE_ID;
     install({

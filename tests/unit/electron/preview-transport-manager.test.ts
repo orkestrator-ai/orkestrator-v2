@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createServer, request as httpRequest, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { connect as netConnect, type AddressInfo } from "node:net";
 
-import { PREVIEW_INGRESS_HEADER } from "@orkestrator/protocol/preview-access";
+import {
+  PREVIEW_INGRESS_HEADER,
+  type PreviewAttachmentDescriptor,
+} from "@orkestrator/protocol/preview-access";
+import { previewFailure } from "@orkestrator/protocol/preview-services";
 import { WebSocket as WsClient } from "ws";
 
 import { createCommandRegistry } from "../../../apps/backend/src/core/commands";
@@ -67,6 +71,7 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
   let serviceId: string;
   let backendInstanceId: string;
   let remote: boolean;
+  let failAttach: Error | null;
   const sessions = new Map<string, FakeSession>();
   const invoked: string[] = [];
 
@@ -102,11 +107,13 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
       previews: harness.runtime,
     } as unknown as CommandContext;
     remote = true;
+    failAttach = null;
     invoked.length = 0;
     sessions.clear();
     manager = new PreviewTransportManager({
       invoke: async <T>(command: string, args: Record<string, unknown>) => {
         invoked.push(command);
+        if (failAttach && command === "create_preview_attachment") throw failAttach;
         return (await commands.get(command)!(args, context)) as T;
       },
       tunnelUrl: () => `ws://127.0.0.1:${gatewayPort}/__orkestrator/preview/tunnel`,
@@ -122,6 +129,8 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
       },
       clientKey: "window-test",
       retirementMs: 50,
+      // Hermetic: public names resolve to a public address.
+      lookupHost: async () => ["93.184.216.34"],
     });
   });
 
@@ -242,6 +251,25 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     expect(invoked.filter((command) => command === "create_preview_attachment").length).toBe(2);
   });
 
+  test("a failed reattach during a connection retry reports the transport unavailable until one succeeds", async () => {
+    const descriptor = await manager.acquire(target(), "tab-1");
+    const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
+    expect((await get(`${descriptor.origin}/health`, headers)).status).toBe(200);
+    harness.runtime.access.revokeServices([serviceId], "operator-revoked");
+    failAttach = previewFailure("capacity-exceeded");
+    expect((await get(`${descriptor.origin}/health`, headers)).status).not.toBe(200);
+    expect(manager.transportState(descriptor.serviceKey)).toMatchObject({
+      state: "unavailable",
+      failure: "capacity-exceeded",
+    });
+    failAttach = null;
+    expect((await get(`${descriptor.origin}/health`, headers)).status).toBe(200);
+    expect(manager.transportState(descriptor.serviceKey)).toEqual({
+      mode: "desktop-tunnel",
+      state: "ready",
+    });
+  });
+
   test("an unmapped or stopped service fails acquire with a stable category", async () => {
     await harness.storage.updateEnvironment("local", { status: "stopped" });
     await harness.runtime.registry.settle();
@@ -308,5 +336,206 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     const descriptor = await manager.acquire(target(), "tab-1");
     await manager.resetSiteData(target());
     expect(sessions.get(descriptor.partition)!.cleared).toBe(1);
+  });
+});
+
+describe("PreviewTransportManager lifecycle and local-network policy", () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((settle) => (resolve = settle));
+    return { promise, resolve };
+  }
+
+  const target = {
+    backendInstanceId: "bk_backend_1",
+    environmentId: "env",
+    serviceId: "svc_aaaaaaaa",
+    path: "/",
+  };
+  const attachment = (attachmentId = "att_1"): PreviewAttachmentDescriptor =>
+    ({
+      attachmentId,
+      serviceId: target.serviceId,
+      environmentId: target.environmentId,
+      backendInstanceId: target.backendInstanceId,
+      applicationPort: 3000,
+      tunnel: { credential: "secret" },
+    }) as unknown as PreviewAttachmentDescriptor;
+
+  function setup(
+    options: {
+      attach?: () => Promise<PreviewAttachmentDescriptor>;
+      onListen?: () => void;
+      lookupHost?: (hostname: string) => Promise<string[]>;
+    } = {},
+  ) {
+    const invoked: Array<{ command: string; args: Record<string, unknown> }> = [];
+    const sessions = new Map<string, FakeSession>();
+    const ports: number[] = [];
+    let remote = true;
+    const manager = new PreviewTransportManager({
+      invoke: async <T>(command: string, args: Record<string, unknown>) => {
+        invoked.push({ command, args });
+        if (command === "create_preview_attachment") {
+          return (await (options.attach?.() ?? attachment())) as T;
+        }
+        return undefined as T;
+      },
+      tunnelUrl: () => null,
+      isRemote: () => remote,
+      partitionFor: (service) => `persist:test-${service.serviceId}`,
+      sessionFor: (partition) => {
+        let session = sessions.get(partition);
+        if (!session) {
+          session = new FakeSession();
+          sessions.set(partition, session);
+        }
+        return session;
+      },
+      clientKey: "window-test",
+      renewIntervalMs: 5,
+      portHints: {
+        get: () => {
+          options.onListen?.();
+          return undefined;
+        },
+        set: (_key, port) => ports.push(port),
+      },
+      ...(options.lookupHost ? { lookupHost: options.lookupHost } : {}),
+    });
+    return {
+      manager,
+      invoked,
+      sessions,
+      ports,
+      setRemote: (value: boolean) => (remote = value),
+    };
+  }
+
+  const refused = (port: number) =>
+    new Promise<boolean>((resolve) => {
+      const socket = netConnect(port, "127.0.0.1");
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve(false);
+      });
+      socket.once("error", () => resolve(true));
+    });
+
+  test("disposal while attaching releases the late attachment and binds nothing", async () => {
+    const pending = deferred<PreviewAttachmentDescriptor>();
+    const { manager, invoked, sessions, ports } = setup({ attach: () => pending.promise });
+    const acquired = manager.acquire(target, "tab-1").catch((error: unknown) => error);
+    await Bun.sleep(0);
+    await manager.disposeAll();
+    pending.resolve(attachment());
+    expect(String(await acquired)).toContain("backend-unavailable");
+    await Bun.sleep(30);
+    expect(ports).toEqual([]);
+    expect(invoked.map((entry) => entry.command)).toEqual([
+      "create_preview_attachment",
+      "release_preview_attachment",
+    ]);
+    expect(invoked[1]!.args).toEqual({ attachmentId: "att_1" });
+    expect(sessions.size).toBe(0);
+    expect(manager.stats().services).toBe(0);
+  });
+
+  test("disposal while binding closes the listener and never starts renewal", async () => {
+    let manager!: PreviewTransportManager;
+    const context = setup({ onListen: () => void manager.disposeAll() });
+    manager = context.manager;
+    const error = await manager.acquire(target, "tab-1").catch((failure: unknown) => failure);
+    expect(String(error)).toContain("backend-unavailable");
+    await Bun.sleep(30);
+    expect(context.ports).toHaveLength(1);
+    expect(await refused(context.ports[0]!)).toBe(true);
+    const commands = context.invoked.map((entry) => entry.command);
+    expect(commands.filter((command) => command === "release_preview_attachment")).toHaveLength(1);
+    expect(commands).not.toContain("renew_preview_attachment");
+    expect(context.sessions.size).toBe(0);
+  });
+
+  describe("remote previews", () => {
+    async function hooked(lookupHost?: (hostname: string) => Promise<string[]>) {
+      const context = setup(lookupHost ? { lookupHost } : {});
+      const descriptor = await context.manager.acquire(target, "tab-1");
+      const session = context.sessions.get(descriptor.partition)!;
+      return { ...context, descriptor, session };
+    }
+
+    test("local-network IP literals are blocked however they are spelled", async () => {
+      const { manager, session, descriptor } = await hooked(async () => ["93.184.216.34"]);
+      for (const url of [
+        "http://[::ffff:127.0.0.1]:3000/",
+        "http://[::ffff:7f00:1]/",
+        "http://[0:0:0:0:0:ffff:c0a8:0101]/",
+        "http://[::]:8080/",
+        "http://[::1]/",
+        "http://0.0.0.0:3000/",
+        "http://0.1.2.3/",
+        "http://2130706433/",
+        "http://100.64.0.1/",
+        "http://100.127.255.254/",
+        "http://10.1.2.3/",
+        "http://172.20.0.1/",
+        "http://169.254.169.254/",
+        "http://[fd12:3456::1]/",
+        "http://[fe80::1]/",
+        "ws://localhost./",
+        "http://app.localhost/",
+      ]) {
+        expect({ url, cancelled: await session.cancels(url) }).toEqual({ url, cancelled: true });
+      }
+      for (const url of [
+        "http://93.184.216.34/",
+        "http://100.128.0.1/",
+        "http://[2606:4700::1111]/",
+        "http://[::ffff:5db8:d822]/",
+      ]) {
+        expect({ url, cancelled: await session.cancels(url) }).toEqual({ url, cancelled: false });
+      }
+      expect(await session.cancels(`${descriptor.origin}/app`)).toBe(false);
+      await manager.disposeAll();
+    });
+
+    test("names that resolve to this machine or its network are blocked", async () => {
+      const lookups: string[] = [];
+      const answers: Record<string, string[]> = {
+        "127.0.0.1.nip.io": ["127.0.0.1"],
+        "localtest.me": ["::1"],
+        "mixed.example": ["93.184.216.34", "::ffff:192.168.1.10"],
+        "cdn.example.com": ["93.184.216.34"],
+      };
+      const { manager, session } = await hooked(async (hostname) => {
+        lookups.push(hostname);
+        const answer = answers[hostname];
+        if (!answer) throw new Error("ENOTFOUND");
+        return answer;
+      });
+      expect(await session.cancels("http://127.0.0.1.nip.io:3000/")).toBe(true);
+      expect(await session.cancels("ws://localtest.me/socket")).toBe(true);
+      expect(await session.cancels("https://mixed.example/")).toBe(true);
+      expect(await session.cancels("https://cdn.example.com/lib.js")).toBe(false);
+      expect(await session.cancels("https://cdn.example.com/other.js")).toBe(false);
+      // Resolution failures fail open: Chromium's own lookup fails too.
+      expect(await session.cancels("https://unresolvable.example/")).toBe(false);
+      expect(lookups.filter((host) => host === "cdn.example.com")).toHaveLength(1);
+      await manager.disposeAll();
+    });
+
+    test("local previews are unaffected and never resolve names", async () => {
+      const lookups: string[] = [];
+      const { manager, session, setRemote } = await hooked(async (hostname) => {
+        lookups.push(hostname);
+        return ["127.0.0.1"];
+      });
+      setRemote(false);
+      expect(await session.cancels("http://localhost:3000/")).toBe(false);
+      expect(await session.cancels("http://[::ffff:127.0.0.1]/")).toBe(false);
+      expect(await session.cancels("http://127.0.0.1.nip.io/")).toBe(false);
+      expect(lookups).toEqual([]);
+      await manager.disposeAll();
+    });
   });
 });

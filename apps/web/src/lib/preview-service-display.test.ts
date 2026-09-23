@@ -33,6 +33,23 @@ describe("service address input", () => {
     expect(parseServiceAddressInput("", definition)).toEqual({ kind: "path", path: "/" });
   });
 
+  test("typed spaces and non-ASCII are percent-encoded like a browser address bar", () => {
+    expect(parseServiceAddressInput("/search?q=a b", definition)).toEqual({
+      kind: "path",
+      path: "/search?q=a%20b",
+    });
+    expect(parseServiceAddressInput("/föo#ü", definition)).toEqual({
+      kind: "path",
+      path: "/f%C3%B6o#%C3%BC",
+    });
+    expect(parseServiceAddressInput("http://localhost:3000/föo?q=a b", definition)).toEqual({
+      kind: "path",
+      path: "/f%C3%B6o?q=a%20b",
+    });
+    // Encoding never smuggles an authority or a backslash past validation.
+    expect(parseServiceAddressInput("/\\evil", definition).kind).toBe("invalid");
+  });
+
   test("another loopback port asks for a different service; remote hosts are refused", () => {
     expect(parseServiceAddressInput("http://localhost:8080/api", definition)).toEqual({
       kind: "other-port",

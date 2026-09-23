@@ -34,7 +34,12 @@ export function parseServiceAddressInput(
   if (!value) return { kind: "path", path: "/" };
   try {
     if (value.startsWith("/") || value.startsWith("?") || value.startsWith("#")) {
-      return { kind: "path", path: normalizePreviewPath(value) };
+      // Typed paths may contain spaces or non-ASCII; encode them the way a
+      // browser would, since service paths travel as visible ASCII only.
+      return {
+        kind: "path",
+        path: normalizePreviewPath(value.replace(/[^\x21-\x7e]/gu, encodeURIComponent)),
+      };
     }
     const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `http://${value}`;
     const url = new URL(withScheme);

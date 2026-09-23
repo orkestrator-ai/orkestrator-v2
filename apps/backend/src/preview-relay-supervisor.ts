@@ -185,9 +185,11 @@ class EnvironmentRelay {
   ) {
     const nonce = randomBytes(16).toString("hex");
     this.readyPromise = new Promise<void>((resolve, reject) => {
+      // A relay that never becomes ready is a crash: stop the process so the
+      // supervisor forgets it and backs off instead of reusing it.
       const timer = setTimeout(
         () =>
-          reject(
+          this.shutdown(
             previewFailure("backend-unavailable", {
               message: "The container relay did not start.",
             }),
@@ -198,7 +200,7 @@ class EnvironmentRelay {
         clearTimeout(timer);
         if (value === nonce) resolve();
         else
-          reject(
+          this.shutdown(
             previewFailure("backend-unavailable", {
               message: "The container relay answered unexpectedly.",
             }),
@@ -225,6 +227,16 @@ class EnvironmentRelay {
         }),
       ),
     );
+    // A dead docker exec surfaces as EPIPE on stdin (or a stdout error) before
+    // or instead of exit; an unhandled stream error would crash the backend.
+    const streamFailed = () =>
+      this.shutdown(
+        previewFailure("backend-unavailable", {
+          message: "The container relay stopped.",
+        }),
+      );
+    process.stdin.on("error", streamFailed);
+    process.stdout.on("error", streamFailed);
     this.allowed = JSON.stringify([...allowed].sort((a, b) => a - b));
     this.write(
       frame(
@@ -492,7 +504,8 @@ export class PreviewRelaySupervisor {
           }
         },
       );
-      this.relays.set(target.environmentId, relay);
+      // A relay that already failed has run its exit bookkeeping; never keep it.
+      if (relay.isAlive) this.relays.set(target.environmentId, relay);
     }
     relay.updateAllowed(this.options.allowedPorts(target.environmentId));
     const channel = await relay.open(target.port, signal);

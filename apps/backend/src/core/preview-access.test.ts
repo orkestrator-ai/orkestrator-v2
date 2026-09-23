@@ -148,6 +148,42 @@ describe("PreviewAccessService", () => {
     expect(fresh.endpointGeneration).toBeGreaterThan(attachment.endpointGeneration);
   });
 
+  test("a rebind on the same container closes live access once; an unchanged binding does not", async () => {
+    const registry = harness.runtime.registry;
+    const attachment = await access.createAttachment({ serviceId, surface: "desktop-tunnel" });
+    const authenticated = access.authenticateTunnel(
+      attachment.attachmentId,
+      attachment.tunnel!.credential,
+    );
+    const closed: string[] = [];
+    access.track(authenticated, { close: (reason) => closed.push(reason) });
+    const revoked: string[] = [];
+    registry.onRevoked((_ids, reason) => revoked.push(reason));
+    const generation = attachment.endpointGeneration;
+
+    harness.runtime.resolver.invalidate("a");
+    await registry.refresh(serviceId);
+    expect(closed).toEqual([]);
+    expect(revoked).toEqual([]);
+    expect(registry.serviceSnapshot(serviceId)!.endpoint.endpointGeneration).toBe(generation);
+
+    // Same container, new host port: the old binding's resources close at once.
+    publish("container-a", "a", 49160);
+    harness.runtime.resolver.invalidate("a");
+    await registry.refresh(serviceId);
+    expect(closed).toEqual(["binding-changed"]);
+    expect(revoked).toEqual(["binding-changed"]);
+    const endpoint = registry.serviceSnapshot(serviceId)!.endpoint;
+    expect(endpoint.hostPort).toBe(49160);
+    expect(endpoint.endpointGeneration).toBe(generation + 1);
+    expect(endpoint.readiness.tcp.state).toBe("unknown");
+    expect(
+      await category(() =>
+        access.authenticateTunnel(attachment.attachmentId, attachment.tunnel!.credential),
+      ),
+    ).toBe("access-expired");
+  });
+
   test("idle expiry, bounded renewal, and absolute lifetime", async () => {
     const attachment = await access.createAttachment({ serviceId, surface: "desktop-tunnel" });
     clock += PREVIEW_LIMITS.sessionIdleMs - 1_000;

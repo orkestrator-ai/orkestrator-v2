@@ -242,6 +242,8 @@ export class PreviewWebSocket extends EventEmitter<PreviewWebSocketEvents> {
         this.emit("pong");
         return;
       case WS_OPCODE.close: {
+        // RFC 6455 §5.5.1: a close body is empty or starts with a 2-byte code.
+        if (payload.length === 1) return this.fail(1002, "close payload");
         const code = payload.length >= 2 ? payload.readUInt16BE(0) : 1005;
         const reason = payload.length > 2 ? payload.subarray(2).toString("utf8") : "";
         if (!this.closing) {

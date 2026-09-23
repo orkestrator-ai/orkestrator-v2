@@ -245,6 +245,52 @@ describe("service browser tabs", () => {
     expect(tabUrl()).not.toContain("127.0.0.1");
   });
 
+  test("a late state from the previous service's view is not persisted for the new one", async () => {
+    const api = fixturePreviewService({
+      definition: { serviceId: API_SERVICE_ID, applicationPort: 8000, label: "api", entry: false },
+    });
+    const { browserPreview, emitState } = installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [fixturePreviewService(), api],
+    });
+    seedTab(serviceUri("/start"));
+    renderTab();
+    await waitFor(() => expect(browserPreview.attach).toHaveBeenCalled());
+    act(() =>
+      usePaneLayoutStore
+        .getState()
+        .updateTabBrowserUrl(
+          "browser-1",
+          serviceUri("/", API_SERVICE_ID),
+          FIXTURE_ENVIRONMENT_ID,
+          [],
+          -1,
+        ),
+    );
+    await waitFor(() =>
+      expect(browserPreview.attach.mock.calls.at(-1)![0].service?.serviceId).toBe(API_SERVICE_ID),
+    );
+
+    emitState({
+      tabId: "browser-1",
+      url: "http://127.0.0.1:41000/stale",
+      loading: false,
+      canGoBack: true,
+      canGoForward: false,
+      error: null,
+      service: {
+        serviceId: FIXTURE_SERVICE_ID,
+        path: "/stale",
+        displayUrl: "http://localhost:3000/stale",
+      },
+    });
+    await Bun.sleep(5);
+    expect(tabUrl()).toBe(serviceUri("/", API_SERVICE_ID));
+    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).not.toContain(
+      "/stale",
+    );
+  });
+
   test("compatibility mode follows the service's current host port", async () => {
     const service = fixturePreviewService();
     service.endpoint.hostPort = 49999;

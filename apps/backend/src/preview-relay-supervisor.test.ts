@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { createServer, type AddressInfo } from "node:net";
-import { Readable, type Duplex } from "node:stream";
+import { PassThrough, Readable, Writable, type Duplex } from "node:stream";
 
 import { http1Request } from "@orkestrator/protocol/preview-http1";
 import { previewErrorFromUnknown } from "@orkestrator/protocol/preview-services";
@@ -12,8 +13,8 @@ import {
   type PreviewFixture,
 } from "../../../test-fixtures/preview-app/server.ts";
 import { createPreviewHarness, type PreviewHarness } from "./core/preview-test-support.js";
-import { PREVIEW_RELAY_SCRIPT } from "./preview-relay-script.js";
-import { PreviewRelaySupervisor, type RelayProcess } from "./preview-relay-supervisor.js";
+import { PREVIEW_RELAY_SCRIPT, RELAY_FRAME } from "./preview-relay-script.js";
+import { frame, PreviewRelaySupervisor, type RelayProcess } from "./preview-relay-supervisor.js";
 
 /** Run the relay as a local process: same script, same stdio protocol, no Docker. */
 function localSpawn(spawned: RelayProcess[]) {
@@ -24,6 +25,56 @@ function localSpawn(spawned: RelayProcess[]) {
     spawned.push(child);
     return child;
   };
+}
+
+/**
+ * A scripted relay process: answers hello (or not) and opens every channel.
+ * Once `broken`, stdin fails writes with EPIPE like a dead `docker exec`.
+ */
+class FakeRelayProcess extends EventEmitter {
+  broken = false;
+  killed: NodeJS.Signals | null = null;
+  readonly stdout = new PassThrough();
+  readonly stdin: Writable;
+  private buffer = Buffer.alloc(0);
+
+  constructor(private readonly hello: "answer" | "silent" | "wrong-nonce") {
+    super();
+    this.stdin = new Writable({
+      write: (chunk: Buffer, _encoding, callback) => {
+        if (this.broken) {
+          callback(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+          return;
+        }
+        this.receive(chunk);
+        callback();
+      },
+    });
+  }
+
+  kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
+    this.killed = signal;
+    return true;
+  }
+
+  private receive(chunk: Buffer): void {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    while (this.buffer.length >= 9) {
+      const length = this.buffer.readUInt32BE(5);
+      if (this.buffer.length < 9 + length) return;
+      const type = this.buffer.readUInt8(0);
+      const id = this.buffer.readUInt32BE(1);
+      const payload = this.buffer.subarray(9, 9 + length);
+      this.buffer = this.buffer.subarray(9 + length);
+      if (type === RELAY_FRAME.hello && this.hello !== "silent") {
+        const { nonce } = JSON.parse(payload.toString("utf8")) as { nonce: string };
+        const answer = this.hello === "answer" ? nonce : "0".repeat(nonce.length);
+        this.stdout.write(frame(RELAY_FRAME.ready, 0, Buffer.from(answer)));
+      } else if (type === RELAY_FRAME.open) {
+        this.stdout.write(frame(RELAY_FRAME.opened, id));
+      }
+    }
+  }
 }
 
 async function readAll(body: NodeJS.ReadableStream): Promise<Buffer> {
@@ -207,6 +258,78 @@ describe("PreviewRelaySupervisor (local relay process)", () => {
       bounded.dispose();
     }
   });
+});
+
+describe("PreviewRelaySupervisor (scripted relay process)", () => {
+  let processes: FakeRelayProcess[];
+  let behaviours: Array<"answer" | "silent" | "wrong-nonce">;
+  let supervisor: PreviewRelaySupervisor;
+  let now: number;
+  const signal = new AbortController().signal;
+  const target = { environmentId: "env-a", containerId: "container-a", port: 3000 };
+
+  beforeEach(() => {
+    processes = [];
+    behaviours = [];
+    now = 1_000;
+    supervisor = new PreviewRelaySupervisor({
+      spawn: () => {
+        const fake = new FakeRelayProcess(behaviours.shift() ?? "answer");
+        processes.push(fake);
+        return fake;
+      },
+      allowedPorts: () => [3000],
+      helloTimeoutMs: 20,
+      now: () => now,
+    });
+  });
+
+  afterEach(() => {
+    supervisor.dispose();
+  });
+
+  test("a dead relay's stdin error shuts the relay down instead of crashing", async () => {
+    const channel = await supervisor.connect(target, signal);
+    const closed = new Promise<void>((resolve) => channel.once("close", () => resolve()));
+    processes[0]!.broken = true;
+    channel.write(Buffer.from("after the relay died"));
+    await closed;
+    expect(channel.destroyed).toBe(true);
+    expect(processes[0]!.killed).toBe("SIGTERM");
+    expect(supervisor.stats()).toMatchObject({ relays: 0, channels: 0, crashes: 1 });
+    expect(supervisor.healthy("env-a")).toBe(false);
+
+    now += 1_001;
+    const again = await supervisor.connect(target, signal);
+    expect(processes).toHaveLength(2);
+    again.destroy();
+  });
+
+  for (const [behaviour, message] of [
+    ["silent", "The container relay did not start."],
+    ["wrong-nonce", "The container relay answered unexpectedly."],
+  ] as const) {
+    test(`a relay that is ${behaviour} is stopped, forgotten, and restarted after backoff`, async () => {
+      behaviours.push(behaviour);
+      const error = await rejection(supervisor.connect(target, signal));
+      expect(previewErrorFromUnknown(error)).toMatchObject({
+        category: "backend-unavailable",
+        message,
+      });
+      expect(processes[0]!.killed).toBe("SIGTERM");
+      expect(supervisor.stats()).toMatchObject({ relays: 0, crashes: 1 });
+      expect(category(await rejection(supervisor.connect(target, signal)))).toBe(
+        "backend-unavailable",
+      );
+      expect(processes).toHaveLength(1);
+
+      now += 1_001;
+      const channel = await supervisor.connect(target, signal);
+      expect(processes).toHaveLength(2);
+      expect(supervisor.stats()).toMatchObject({ relays: 1, crashes: 0 });
+      channel.destroy();
+    });
+  }
 });
 
 describe("relay-backed preview services", () => {

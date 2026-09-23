@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, mock, test } from "bun:test";
 import { BrowserPreviewManager } from "../../../apps/desktop/electron/browser-preview-manager";
 import {
+  configurePreviewServiceSession,
   createBrowserPreviewAddressFocusHandler,
   initializeBrowserPreviews,
   registerBrowserPreviewWindowActivation,
@@ -440,5 +441,45 @@ describe("browser preview startup wiring", () => {
     activate?.();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onCreateError).toHaveBeenCalledWith(failure);
+  });
+});
+
+describe("configurePreviewServiceSession", () => {
+  test("reconfiguring a reused service session consults the latest manager", () => {
+    type RequestHandler = (
+      webContents: unknown,
+      permission: string,
+      callback: (granted: boolean) => void,
+      details: { isMainFrame: boolean; requestingUrl: string },
+    ) => void;
+    let requestHandler: RequestHandler | null = null;
+    let checkHandler: (() => boolean) | null = null;
+    const serviceSession = {
+      setPermissionCheckHandler: mock((handler: () => boolean) => {
+        checkHandler = handler;
+      }),
+      setPermissionRequestHandler: mock((handler: RequestHandler) => {
+        requestHandler = handler;
+      }),
+    };
+    const destroyed = { consumeClipboardWriteUserActivation: mock(() => false) };
+    const current = { consumeClipboardWriteUserActivation: mock(() => true) };
+    configurePreviewServiceSession(serviceSession as never, () => destroyed);
+    // A connection switch back, or a reopened window in the same slot, reuses the partition.
+    configurePreviewServiceSession(serviceSession as never, () => current);
+
+    const request = (permission: string) => {
+      let granted: boolean | null = null;
+      requestHandler!({}, permission, (value) => (granted = value), {
+        isMainFrame: true,
+        requestingUrl: "http://127.0.0.1:41001/",
+      });
+      return granted;
+    };
+    expect(request("clipboard-sanitized-write")).toBe(true);
+    expect(current.consumeClipboardWriteUserActivation).toHaveBeenCalledTimes(1);
+    expect(destroyed.consumeClipboardWriteUserActivation).not.toHaveBeenCalled();
+    expect(request("camera")).toBe(false);
+    expect(checkHandler!()).toBe(false);
   });
 });

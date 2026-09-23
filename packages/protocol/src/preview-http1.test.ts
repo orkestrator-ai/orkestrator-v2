@@ -12,6 +12,7 @@ import { Readable } from "node:stream";
 
 import {
   http1Request,
+  isValidRequestTarget,
   PreviewHttp1Error,
   serializeRequestHead,
   type Http1RequestOptions,
@@ -237,6 +238,196 @@ describe("http1Request", () => {
     expect(() =>
       serializeRequestHead("GET", "http://x/", [], { length: null, chunked: false }, "close"),
     ).toThrow(PreviewHttp1Error);
+  });
+
+  test("refuses characters the latin1 wire encoding would truncate into CR/LF", () => {
+    const framing = { length: null, chunked: false };
+    // U+010D U+010A encode to 0x0D 0x0A; U+0120 to a space.
+    for (const path of ["/a\u010d\u010aX-Evil: 1", "/a\u0120b", "/caf\u00e9", "/a\u200bb"]) {
+      expect(isValidRequestTarget(path)).toBe(false);
+      expect(() => serializeRequestHead("GET", path, [], framing, "close")).toThrow(
+        expect.objectContaining({ code: "invalid-request" }),
+      );
+    }
+    for (const value of ["b\u010d\u010ax-evil: 1", "a\u0120b"]) {
+      expect(() => serializeRequestHead("GET", "/", [["x-a", value]], framing, "close")).toThrow(
+        expect.objectContaining({ code: "invalid-request" }),
+      );
+    }
+    // Percent-encoded targets and obs-text / tab in values stay allowed.
+    expect(isValidRequestTarget("/caf%C3%A9?q=%20#x")).toBe(true);
+    const head = serializeRequestHead("GET", "/", [["x-a", "caf\u00e9\tok"]], framing, "close");
+    expect(head.includes(Buffer.from("x-a: caf\xe9\tok\r\n", "latin1"))).toBe(true);
+  });
+
+  test("a slow upload does not count against the headers timeout", async () => {
+    const port = await listen(
+      createHttpServer((request, response) => {
+        let bytes = 0;
+        request.on("data", (chunk: Buffer) => (bytes += chunk.length));
+        request.on("end", () => response.end(String(bytes)));
+      }),
+    );
+    async function* slow() {
+      for (let index = 0; index < 4; index += 1) {
+        await Bun.sleep(40);
+        yield Buffer.alloc(10, index);
+      }
+    }
+    const result = await http1Request(
+      await socketTo(port),
+      options({
+        method: "POST",
+        body: Readable.from(slow()),
+        bodyLength: null,
+        headersTimeoutMs: 60,
+        bodyIdleTimeoutMs: 1_000,
+      }),
+    );
+    expect(result.statusCode).toBe(200);
+    expect(String(await readAll(result.body))).toBe("40");
+  });
+
+  test("the headers timeout still fires once the body is sent", async () => {
+    let received = 0;
+    const port = await listen(
+      createNetServer((socket) => socket.on("data", (chunk) => (received += chunk.length))),
+    );
+    const socket = await socketTo(port);
+    const started = Date.now();
+    await expect(
+      http1Request(
+        socket,
+        options({
+          method: "POST",
+          body: Readable.from([Buffer.from("payload")]),
+          bodyLength: 7,
+          headersTimeoutMs: 50,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "headers-timeout" });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(received).toBeGreaterThan(0);
+    expect(socket.destroyed).toBe(true);
+  });
+
+  test("a stalled upload is bounded by the body idle timeout", async () => {
+    const port = await listen(createNetServer(() => undefined));
+    const socket = await socketTo(port);
+    const body = new Readable({ read() {} });
+    body.push(Buffer.from("start"));
+    await expect(
+      http1Request(
+        socket,
+        options({
+          method: "POST",
+          body,
+          bodyLength: null,
+          headersTimeoutMs: 5_000,
+          bodyIdleTimeoutMs: 50,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "body-timeout" });
+    expect(socket.destroyed).toBe(true);
+  });
+
+  describe("connection reuse", () => {
+    async function exchange(response: string): Promise<{ reused: boolean; socket: Socket }> {
+      const port = await listen(
+        createNetServer((socket) => socket.once("data", () => socket.write(response))),
+      );
+      const socket = await socketTo(port);
+      let reused = false;
+      const result = await http1Request(
+        socket,
+        options({ keepAlive: true, onReusable: () => (reused = true) }),
+      );
+      expect(String(await readAll(result.body))).toBe("ok");
+      return { reused, socket };
+    }
+
+    test("a cleanly framed HTTP/1.1 response hands the socket back", async () => {
+      const port = await listen(
+        createNetServer((socket) =>
+          socket.on("data", () => socket.write("HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")),
+        ),
+      );
+      const socket = await socketTo(port);
+      const reusable: Socket[] = [];
+      const first = await http1Request(
+        socket,
+        options({ keepAlive: true, onReusable: (reused) => reusable.push(reused as Socket) }),
+      );
+      expect(String(await readAll(first.body))).toBe("ok");
+      expect(reusable).toEqual([socket]);
+      expect(socket.destroyed).toBe(false);
+      // The returned connection carries a second exchange.
+      const second = await http1Request(reusable[0]!, options());
+      expect(String(await readAll(second.body))).toBe("ok");
+    });
+
+    test("an HTTP/1.1 response asking to close is not reused", async () => {
+      const outcome = await exchange(
+        "HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok",
+      );
+      expect(outcome.reused).toBe(false);
+      expect(outcome.socket.destroyed).toBe(true);
+    });
+
+    test("HTTP/1.0 is reused only with an explicit keep-alive", async () => {
+      const plain = await exchange("HTTP/1.0 200 OK\r\ncontent-length: 2\r\n\r\nok");
+      expect(plain.reused).toBe(false);
+      expect(plain.socket.destroyed).toBe(true);
+      const kept = await exchange(
+        "HTTP/1.0 200 OK\r\ncontent-length: 2\r\nconnection: keep-alive\r\n\r\nok",
+      );
+      expect(kept.reused).toBe(true);
+      expect(kept.socket.destroyed).toBe(false);
+      kept.socket.destroy();
+    });
+  });
+
+  describe("malformed chunked responses", () => {
+    async function chunkedBody(payload: string): Promise<{ error: unknown; socket: Socket }> {
+      const port = await listen(
+        createNetServer((socket) =>
+          socket.once("data", () =>
+            socket.write(`HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n${payload}`),
+          ),
+        ),
+      );
+      const socket = await socketTo(port);
+      const result = await http1Request(socket, options());
+      const error = await readAll(result.body).then(
+        () => null,
+        (failure: unknown) => failure,
+      );
+      return { error, socket };
+    }
+
+    test("an invalid chunk size errors the body and closes the connection", async () => {
+      const { error, socket } = await chunkedBody("zz\r\nabc\r\n0\r\n\r\n");
+      expect(error).toMatchObject({ code: "malformed-response", message: "Invalid chunk size" });
+      expect(socket.destroyed).toBe(true);
+    });
+
+    test("chunk data without its CRLF terminator is refused", async () => {
+      const { error, socket } = await chunkedBody("3\r\nabcX\r\n0\r\n\r\n");
+      expect(error).toMatchObject({
+        code: "malformed-response",
+        message: "Missing chunk terminator",
+      });
+      expect(socket.destroyed).toBe(true);
+    });
+
+    test("bytes after the terminal chunk are refused", async () => {
+      const { error, socket } = await chunkedBody("2\r\nok\r\n0\r\n\r\nEXTRA");
+      expect(error).toMatchObject({
+        code: "malformed-response",
+        message: "Data after final chunk",
+      });
+      expect(socket.destroyed).toBe(true);
+    });
   });
 
   test("abort cancels the exchange", async () => {

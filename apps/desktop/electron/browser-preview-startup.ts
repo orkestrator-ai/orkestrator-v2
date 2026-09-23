@@ -33,19 +33,19 @@ export interface BrowserPreviewRuntime {
   browserSession: Session;
 }
 
-const configuredServiceSessions = new WeakSet<Session>();
-
 /**
  * Apply the preview permission policy to a service partition: deny every
  * permission except a user-activated clipboard write inside the preview's own
  * scope. Request hooks are installed separately by the transport manager.
+ *
+ * Partitions outlive a window runtime (the same slot, connection, and service
+ * map to the same session after a connection switch or window reopen), so the
+ * handlers are replaced on every call and always consult the latest manager.
  */
 export function configurePreviewServiceSession(
   serviceSession: Session,
   getManager: () => Pick<BrowserPreviewManager, "consumeClipboardWriteUserActivation"> | null,
 ): Session {
-  if (configuredServiceSessions.has(serviceSession)) return serviceSession;
-  configuredServiceSessions.add(serviceSession);
   serviceSession.setPermissionCheckHandler(() => false);
   serviceSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
     const manager = getManager();

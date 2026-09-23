@@ -122,6 +122,23 @@ function useRetarget(tabId: string, environmentId: string) {
   );
 }
 
+/**
+ * A late event from the view of a previously selected service must not be
+ * mistaken for navigation within the current one.
+ */
+function isCurrentService(
+  service: NonNullable<BrowserPreviewState["service"]>,
+  ref: PreviewServiceRef,
+): boolean {
+  const identity = service as Partial<PreviewServiceRef>;
+  return (
+    identity.serviceId === ref.serviceId &&
+    (identity.backendInstanceId === undefined ||
+      identity.backendInstanceId === ref.backendInstanceId) &&
+    (identity.environmentId === undefined || identity.environmentId === ref.environmentId)
+  );
+}
+
 function ServicePreview({
   tabId,
   environmentId,
@@ -202,6 +219,7 @@ function ServicePreview({
   const applyNativeState = useCallback(
     (state: BrowserPreviewState | null) => {
       if (!state || state.tabId !== tabId) return;
+      if (state.service && !isCurrentService(state.service, serviceRef)) return;
       setNativeState(state);
       if (state.transport) setTransport(state.transport);
       if (state.service && state.service.path !== path) {
@@ -209,7 +227,7 @@ function ServicePreview({
         persistPath(state.service.path);
       }
     },
-    [path, persistPath, tabId],
+    [path, persistPath, serviceRef, tabId],
   );
 
   useEffect(() => {

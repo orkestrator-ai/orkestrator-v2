@@ -561,8 +561,9 @@ export function parsePreviewPort(value: unknown): number | null {
 
 /**
  * Canonical app-relative navigation: "/" + path, optional query and fragment.
- * Rejects authority-changing forms ("//host", "/\\host"), backslashes, control
- * characters, and oversize input. Decoding is left to the application.
+ * Rejects authority-changing forms ("//host", "/\\host"), backslashes,
+ * whitespace, control or non-ASCII characters (they must arrive
+ * percent-encoded), and oversize input. Decoding is left to the application.
  */
 export function normalizePreviewPath(value: unknown): string {
   if (value === undefined || value === null || value === "") return "/";
@@ -571,7 +572,7 @@ export function normalizePreviewPath(value: unknown): string {
   if (utf8ByteLength(value) > PREVIEW_LIMITS.navigationMaxBytes) {
     throw previewFailure("invalid-request", { message: "Path is too long." });
   }
-  if (CONTROL_CHARS.test(value) || value.includes("\\")) {
+  if (!/^[\x21-\x7e]*$/.test(value) || value.includes("\\")) {
     throw previewFailure("invalid-request", { message: "Path contains invalid characters." });
   }
   const path = value.startsWith("/")

@@ -14,6 +14,7 @@ import { Readable, type Duplex } from "node:stream";
 
 export type PreviewHttp1ErrorCode =
   | "headers-timeout"
+  | "body-timeout"
   | "malformed-response"
   | "header-too-large"
   | "connection-closed"
@@ -40,7 +41,10 @@ export interface Http1RequestOptions {
   body?: Readable | null;
   /** Known length; `null` with a body means chunked. */
   bodyLength?: number | null;
+  /** Starts once the request body has been fully written. */
   headersTimeoutMs: number;
+  /** Longest pause while uploading the request body; unbounded (besides `signal`) when absent. */
+  bodyIdleTimeoutMs?: number;
   maxHeaderBytes: number;
   maxHeaderFields: number;
   signal?: AbortSignal;
@@ -49,7 +53,8 @@ export interface Http1RequestOptions {
   /**
    * Reuse the connection after a cleanly framed response. `onReusable` receives
    * the socket (paused, detached) only when the request body was fully sent,
-   * the response was length- or chunk-framed, and neither side asked to close.
+   * the response was length- or chunk-framed, and neither side asked to close
+   * (an HTTP/1.0 response must opt in with `Connection: keep-alive`).
    */
   keepAlive?: boolean;
   onReusable?: (socket: Duplex) => void;
@@ -67,7 +72,11 @@ export interface Http1Response {
 
 const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 // oxlint-disable-next-line no-control-regex
-const INVALID_VALUE = /[\u0000-\u0008\u000a-\u001f\u007f]/;
+// Anything above U+00FF would be truncated to its low byte by the latin1 encoding
+// on the wire (U+010D U+010A becomes CR LF), so it is refused, not re-encoded.
+const INVALID_VALUE = /[\u0000-\u0008\u000a-\u001f\u007f\u0100-\uffff]/;
+// Origin-form request target: visible ASCII only, for the same reason.
+const REQUEST_TARGET = /^\/[\x21-\x7e]*$/;
 const FRAMING_HEADERS = new Set([
   "content-length",
   "transfer-encoding",
@@ -83,6 +92,11 @@ export function isValidHeaderValue(value: string): boolean {
   return !INVALID_VALUE.test(value);
 }
 
+/** An origin-form target (`/path?query`) made only of visible ASCII. */
+export function isValidRequestTarget(path: string): boolean {
+  return REQUEST_TARGET.test(path);
+}
+
 /** Serialize a request head. Throws on header injection attempts. */
 export function serializeRequestHead(
   method: string,
@@ -92,7 +106,7 @@ export function serializeRequestHead(
   connection: "close" | "upgrade" | "keep-alive",
 ): Buffer {
   if (!TOKEN.test(method)) throw new PreviewHttp1Error("invalid-request", "Invalid method");
-  if (!path.startsWith("/") || /[\s\u0000-\u001f\u007f]/.test(path)) {
+  if (!isValidRequestTarget(path)) {
     throw new PreviewHttp1Error("invalid-request", "Invalid request target");
   }
   const lines = [`${method} ${path} HTTP/1.1`];
@@ -115,6 +129,8 @@ export function serializeRequestHead(
 }
 
 interface ParsedHead {
+  /** 0 for HTTP/1.0, 1 for HTTP/1.1. */
+  httpMinor: number;
   statusCode: number;
   statusMessage: string;
   headers: HeaderList;
@@ -122,7 +138,7 @@ interface ParsedHead {
 
 export function parseResponseHead(text: string, maxHeaderFields: number): ParsedHead {
   const lines = text.split("\r\n");
-  const status = /^HTTP\/1\.[01] (\d{3})(?: (.*))?$/.exec(lines[0] ?? "");
+  const status = /^HTTP\/1\.([01]) (\d{3})(?: (.*))?$/.exec(lines[0] ?? "");
   if (!status) throw new PreviewHttp1Error("malformed-response", "Invalid status line");
   const headers: HeaderList = [];
   for (const line of lines.slice(1)) {
@@ -140,7 +156,12 @@ export function parseResponseHead(text: string, maxHeaderFields: number): Parsed
     if (headers.length > maxHeaderFields)
       throw new PreviewHttp1Error("header-too-large", "Too many response headers");
   }
-  return { statusCode: Number(status[1]), statusMessage: status[2] ?? "", headers };
+  return {
+    httpMinor: Number(status[1]),
+    statusCode: Number(status[2]),
+    statusMessage: status[3] ?? "",
+    headers,
+  };
 }
 
 export function headerValues(headers: HeaderList, name: string): string[] {
@@ -263,17 +284,27 @@ const LAST_CHUNK = Buffer.from("0\r\n\r\n");
 
 /**
  * Stream a request body into the socket with backpressure. Resolves when the
- * body is fully written; rejects if the body errors.
+ * body is fully written; rejects if the body errors. `onProgress` fires
+ * whenever bytes move in either direction of the backpressure loop.
  */
-function writeBody(socket: Duplex, body: Readable, chunked: boolean): Promise<void> {
+function writeBody(
+  socket: Duplex,
+  body: Readable,
+  chunked: boolean,
+  onProgress: () => void,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const onData = (data: Buffer | string) => {
+      onProgress();
       const buffer = typeof data === "string" ? Buffer.from(data) : data;
       if (buffer.length === 0) return;
       const ok = socket.write(chunked ? encodeChunk(buffer) : buffer);
       if (!ok) {
         body.pause();
-        socket.once("drain", () => body.resume());
+        socket.once("drain", () => {
+          onProgress();
+          body.resume();
+        });
       }
     };
     const cleanup = () => {
@@ -314,8 +345,13 @@ export function http1Request(socket: Duplex, options: Http1RequestOptions): Prom
     let settled = false;
     let requestSent = false;
     let head: Buffer = Buffer.alloc(0);
+    // The headers timer covers the upstream's think time only, so it starts once
+    // the request body is fully written; the upload has its own idle bound.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let uploadIdle: ReturnType<typeof setTimeout> | undefined;
     const cleanupHead = () => {
       clearTimeout(timer);
+      clearTimeout(uploadIdle);
       socket.off("data", onHeadData);
       socket.off("end", onHeadEnd);
       socket.off("close", onHeadEnd);
@@ -333,10 +369,22 @@ export function http1Request(socket: Duplex, options: Http1RequestOptions): Prom
     const onHeadEnd = () =>
       fail(new PreviewHttp1Error("connection-closed", "Upstream closed before responding"));
     const onHeadError = (error: Error) => fail(error);
-    const timer = setTimeout(
-      () => fail(new PreviewHttp1Error("headers-timeout", "Upstream response headers timed out")),
-      options.headersTimeoutMs,
-    );
+    const startHeadersTimer = () => {
+      clearTimeout(uploadIdle);
+      if (settled) return;
+      timer = setTimeout(
+        () => fail(new PreviewHttp1Error("headers-timeout", "Upstream response headers timed out")),
+        options.headersTimeoutMs,
+      );
+    };
+    const resetUploadIdle = () => {
+      if (settled || options.bodyIdleTimeoutMs === undefined) return;
+      clearTimeout(uploadIdle);
+      uploadIdle = setTimeout(
+        () => fail(new PreviewHttp1Error("body-timeout", "Request body upload stalled")),
+        options.bodyIdleTimeoutMs,
+      );
+    };
 
     const onHeadData = (chunk: Buffer) => {
       head = head.length ? Buffer.concat([head, chunk]) : chunk;
@@ -374,22 +422,38 @@ export function http1Request(socket: Duplex, options: Http1RequestOptions): Prom
             return;
           }
           socket.pause();
-          resolve({ ...parsed, body: Readable.from([]), upgradeHead: Buffer.from(rest) });
+          resolve({
+            statusCode: parsed.statusCode,
+            statusMessage: parsed.statusMessage,
+            headers: parsed.headers,
+            body: Readable.from([]),
+            upgradeHead: Buffer.from(rest),
+          });
           return;
         }
         try {
           const framing = responseFraming(method, parsed);
-          const upstreamCloses = headerValues(parsed.headers, "connection").some((value) =>
-            /(^|,)\s*close\s*(,|$)/i.test(value),
-          );
+          const connection = headerValues(parsed.headers, "connection");
+          const upstreamCloses = connection.some((value) => /(^|,)\s*close\s*(,|$)/i.test(value));
+          // HTTP/1.0 closes by default; only an explicit keep-alive makes it persistent.
+          const persistent =
+            parsed.httpMinor >= 1
+              ? !upstreamCloses
+              : !upstreamCloses &&
+                connection.some((value) => /(^|,)\s*keep-alive\s*(,|$)/i.test(value));
           const reuse =
-            options.keepAlive && options.onReusable && framing.kind !== "close" && !upstreamCloses
+            options.keepAlive && options.onReusable && framing.kind !== "close" && persistent
               ? (reusable: Duplex) => {
                   if (requestSent) options.onReusable!(reusable);
                   else reusable.destroy();
                 }
               : null;
-          resolve({ ...parsed, body: bodyStream(socket, framing, rest, reuse) });
+          resolve({
+            statusCode: parsed.statusCode,
+            statusMessage: parsed.statusMessage,
+            headers: parsed.headers,
+            body: bodyStream(socket, framing, rest, reuse),
+          });
         } catch (error) {
           socket.destroy();
           reject(error);
@@ -429,13 +493,16 @@ export function http1Request(socket: Duplex, options: Http1RequestOptions): Prom
     }
     socket.write(requestHead);
     if (options.body) {
-      writeBody(socket, options.body, length === null)
+      resetUploadIdle();
+      writeBody(socket, options.body, length === null, resetUploadIdle)
         .then(() => {
           requestSent = true;
+          startHeadersTimer();
         })
         .catch((error: Error) => fail(error));
     } else {
       requestSent = true;
+      startHeadersTimer();
     }
   });
 }
@@ -450,6 +517,7 @@ function bodyStream(
   let remaining = framing.kind === "length" ? framing.remaining : Number.POSITIVE_INFINITY;
   let finished = false;
   let overflow = false;
+  let decodingInitial = false;
   const body = new Readable({
     read() {
       if (!finished) socket.resume();
@@ -496,7 +564,11 @@ function bodyStream(
       finished = true;
       detach();
       socket.destroy();
-      body.destroy(error as Error);
+      // Bytes that arrived with the head are decoded before the caller has the
+      // body; defer the error so it reaches the caller's listener instead of
+      // surfacing as an unhandled stream error.
+      if (decodingInitial) setImmediate(() => body.destroy(error as Error));
+      else body.destroy(error as Error);
     }
   };
   const onEnd = () => {
@@ -535,7 +607,9 @@ function bodyStream(
   socket.once("end", onEnd);
   socket.once("close", onEnd);
   socket.on("error", onError);
+  decodingInitial = true;
   if (initial.length) consume(initial);
+  decodingInitial = false;
   socket.resume();
   return body;
 }

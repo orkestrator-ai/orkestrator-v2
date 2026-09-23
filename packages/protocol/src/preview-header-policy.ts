@@ -131,6 +131,25 @@ export function readCookie(headers: HeaderList, name: string): string | null {
   return found.length === 1 ? found[0]! : null;
 }
 
+/** Serialized origin as browsers and `URL#origin` produce it (default ports dropped). */
+function canonicalOrigin(value: string): string | null {
+  try {
+    const origin = new URL(value).origin;
+    return origin === "null" ? null : origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Callers build private origins as `<scheme>://localhost:<port>`; compare and
+ * emit them canonically so apps on 80/443 match `http://localhost`.
+ */
+function privateOriginSet(policy: PreviewHeaderPolicy): string[] {
+  const origins = policy.privateOrigins.map(canonicalOrigin).filter((origin) => origin !== null);
+  return origins.length ? origins : [canonicalOrigin(`http://${policy.privateAuthority}`)!];
+}
+
 function mapOrigin(value: string, from: string, to: string): string | null {
   if (value === from) return to;
   if (value.startsWith(`${from}/`)) return `${to}${value.slice(from.length)}`;
@@ -144,7 +163,7 @@ export function upstreamRequestHeaders(
 ): HeaderList {
   const drop = nominated(incoming);
   const strip = new Set((policy.stripRequestHeaders ?? []).map((name) => name.toLowerCase()));
-  const privateOrigin = policy.privateOrigins[0] ?? `http://${policy.privateAuthority}`;
+  const privateOrigin = privateOriginSet(policy)[0]!;
   const publicUrl = new URL(policy.publicOrigin);
   const out: HeaderList = [["host", policy.privateAuthority]];
   for (const [name, value] of incoming) {
@@ -198,7 +217,7 @@ export function mapLocation(value: string, policy: PreviewHeaderPolicy): string 
   } catch {
     return value; // relative: passes unchanged
   }
-  if (!policy.privateOrigins.includes(target.origin)) return value;
+  if (!privateOriginSet(policy).includes(target.origin)) return value;
   return `${policy.publicOrigin}${target.pathname}${target.search}${target.hash}`;
 }
 

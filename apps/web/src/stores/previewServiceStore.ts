@@ -49,6 +49,8 @@ export const usePreviewServiceStore = create<PreviewServiceStoreState>((set, get
   let capabilitiesRequest: Promise<PreviewCapabilities | null> | null = null;
   const inflight = new Map<string, Promise<PreviewRegistrySnapshot | null>>();
   const stale = new Set<string>();
+  /** Environments whose in-flight request has already been sent to the backend. */
+  const sent = new Set<string>();
 
   const setEnvironment = (environmentId: string, patch: Partial<EnvironmentPreviewState>) =>
     set((state) => {
@@ -98,6 +100,7 @@ export const usePreviewServiceStore = create<PreviewServiceStoreState>((set, get
           ) {
             generation += 1;
             inflight.clear();
+            sent.clear();
             set({ environments: {} });
           }
           set({ status: "ready", capabilities, error: null });
@@ -122,26 +125,28 @@ export const usePreviewServiceStore = create<PreviewServiceStoreState>((set, get
       return request;
     },
 
-    refreshEnvironment: async (environmentId, { force = false } = {}) => {
+    refreshEnvironment: (environmentId, { force = false } = {}) => {
       const pending = inflight.get(environmentId);
       if (pending) {
-        // Coalesce, but remember that a change arrived during the fetch.
-        stale.add(environmentId);
+        // Coalesce, but remember that a change arrived during the fetch. A
+        // caller that arrives before the fetch is sent is already covered.
+        if (sent.has(environmentId)) stale.add(environmentId);
         return pending;
       }
-      const capabilities = await get().loadCapabilities();
-      if (!capabilities) return null;
-      const requestGeneration = generation;
-      const current = get().environments[environmentId]?.snapshot ?? null;
-      setEnvironment(environmentId, { loading: current === null });
-      const request = backend
-        .getPreviewServices(
-          environmentId,
-          !force && current
-            ? { backendEpoch: current.backendEpoch, registryRevision: current.registryRevision }
-            : undefined,
-        )
-        .then((snapshot) => {
+      const fetchSnapshot = async (): Promise<PreviewRegistrySnapshot | null> => {
+        const capabilities = await get().loadCapabilities();
+        if (!capabilities) return null;
+        const requestGeneration = generation;
+        const current = get().environments[environmentId]?.snapshot ?? null;
+        setEnvironment(environmentId, { loading: current === null });
+        if (inflight.get(environmentId) === request) sent.add(environmentId);
+        try {
+          const snapshot = await backend.getPreviewServices(
+            environmentId,
+            !force && current
+              ? { backendEpoch: current.backendEpoch, registryRevision: current.registryRevision }
+              : undefined,
+          );
           if (requestGeneration !== generation) return null;
           if (
             snapshot.backendInstanceId !== capabilities.backendInstanceId ||
@@ -154,10 +159,21 @@ export const usePreviewServiceStore = create<PreviewServiceStoreState>((set, get
             snapshot.notModified && current
               ? { ...current, registryRevision: snapshot.registryRevision }
               : snapshot;
+          // Never let an older answer from the same backend epoch replace a
+          // newer snapshot that was stored while this one was in flight.
+          const latest = get().environments[environmentId]?.snapshot ?? null;
+          if (
+            latest &&
+            latest.backendInstanceId === next.backendInstanceId &&
+            latest.backendEpoch === next.backendEpoch &&
+            latest.registryRevision > next.registryRevision
+          ) {
+            setEnvironment(environmentId, { loading: false, error: null });
+            return latest;
+          }
           setEnvironment(environmentId, { snapshot: next, loading: false, error: null });
           return next;
-        })
-        .catch((error: unknown) => {
+        } catch (error: unknown) {
           if (requestGeneration === generation) {
             setEnvironment(environmentId, {
               loading: false,
@@ -165,11 +181,16 @@ export const usePreviewServiceStore = create<PreviewServiceStoreState>((set, get
             });
           }
           return null;
-        })
-        .finally(() => {
-          inflight.delete(environmentId);
-          if (stale.delete(environmentId)) void get().refreshEnvironment(environmentId);
-        });
+        }
+      };
+      // Registered before the first await so same-tick callers coalesce onto it.
+      const request: Promise<PreviewRegistrySnapshot | null> = fetchSnapshot().finally(() => {
+        // A backend switch may have replaced this entry; the newer request owns it.
+        if (inflight.get(environmentId) !== request) return;
+        inflight.delete(environmentId);
+        sent.delete(environmentId);
+        if (stale.delete(environmentId)) void get().refreshEnvironment(environmentId);
+      });
       inflight.set(environmentId, request);
       return request;
     },
@@ -203,6 +224,7 @@ export const usePreviewServiceStore = create<PreviewServiceStoreState>((set, get
     reset: () => {
       generation += 1;
       inflight.clear();
+      sent.clear();
       stale.clear();
       capabilitiesRequest = null;
       set({ status: "idle", capabilities: null, error: null, environments: {} });

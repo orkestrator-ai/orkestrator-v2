@@ -73,28 +73,36 @@ export function PreviewSettings() {
   const [capabilities, setCapabilities] = useState<PreviewCapabilities | null>(null);
   const [unsupported, setUnsupported] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
+  // Failures become visible, retryable state; a capabilities failure resolves
+  // null rather than throwing, so it is read back from the store.
   const load = useCallback(async () => {
     ensurePreviewServiceSync();
+    setLoadError(null);
     const loaded = await usePreviewServiceStore.getState().loadCapabilities({ force: true });
     if (!loaded) {
-      setUnsupported(usePreviewServiceStore.getState().status === "unsupported");
+      const { status, error } = usePreviewServiceStore.getState();
+      setUnsupported(status === "unsupported");
+      if (status === "error") setLoadError(error ?? "Preview services are unavailable.");
       return;
     }
     setCapabilities(loaded);
-    const [nextSettings, nextDiagnostics] = await Promise.all([
-      backend.getPreviewSettings(),
-      backend.getPreviewDiagnostics(),
-    ]);
-    setSettings(nextSettings);
-    setPublication(nextSettings.stored.publication);
-    setDiagnostics(nextDiagnostics);
+    try {
+      const [nextSettings, nextDiagnostics] = await Promise.all([
+        backend.getPreviewSettings(),
+        backend.getPreviewDiagnostics(),
+      ]);
+      setSettings(nextSettings);
+      setPublication(nextSettings.stored.publication);
+      setDiagnostics(nextDiagnostics);
+    } catch (error) {
+      setLoadError(message(error));
+    }
   }, []);
 
   useEffect(() => {
-    void load().catch((error: unknown) =>
-      toast.error("Could not load preview settings", { description: message(error) }),
-    );
+    void load();
   }, [load]);
 
   const save = async (update: Parameters<typeof backend.updatePreviewSettings>[0]) => {
@@ -116,7 +124,24 @@ export function PreviewSettings() {
       </p>
     );
   }
+  const loadFailure =
+    loadError === null ? null : (
+      <div role="alert" className="flex items-center gap-2 text-sm text-destructive">
+        <AlertTriangle className="h-4 w-4 shrink-0" />
+        <span className="min-w-0">Could not load preview settings: {loadError}</span>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="shrink-0 gap-1.5"
+          onClick={() => void load()}
+        >
+          <RefreshCw className="h-3.5 w-3.5" /> Retry
+        </Button>
+      </div>
+    );
   if (!settings || !publication) {
+    if (loadFailure) return loadFailure;
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" /> Loading preview settings…
@@ -134,6 +159,7 @@ export function PreviewSettings() {
 
   return (
     <div className="max-w-2xl space-y-8">
+      {loadFailure}
       <section className="space-y-3">
         <h2 className="text-base font-semibold">Service previews</h2>
         <ul className="space-y-2">

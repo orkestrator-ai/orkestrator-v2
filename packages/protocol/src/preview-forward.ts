@@ -5,7 +5,7 @@
  * time bounds, cancellation, and safe failure reporting. It never retries.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { Transform, type Duplex } from "node:stream";
+import { Transform, type Duplex, type Readable } from "node:stream";
 
 import {
   downstreamResponseHeaders,
@@ -14,7 +14,13 @@ import {
   upstreamRequestHeaders,
   type PreviewHeaderPolicy,
 } from "./preview-header-policy.js";
-import { headerValues, http1Request, PreviewHttp1Error, type HeaderList } from "./preview-http1.js";
+import {
+  headerValues,
+  http1Request,
+  isValidRequestTarget,
+  PreviewHttp1Error,
+  type HeaderList,
+} from "./preview-http1.js";
 import {
   PREVIEW_LIMITS,
   previewError,
@@ -89,7 +95,7 @@ export const PREVIEW_ERROR_HEADER = "x-orkestrator-preview-error";
 
 function categoryOf(error: unknown): PreviewErrorCategory {
   if (error instanceof PreviewHttp1Error) {
-    if (error.code === "headers-timeout") return "headers-timeout";
+    if (error.code === "headers-timeout" || error.code === "body-timeout") return "headers-timeout";
     if (error.code === "invalid-request") return "invalid-request";
     return "internal";
   }
@@ -173,7 +179,7 @@ export async function forwardPreviewRequest(
     headerMaxFields: limits.headerMaxFields,
   });
   const path = request.url ?? "/";
-  if (violation || !path.startsWith("/") || path.startsWith("//")) {
+  if (violation || !isValidRequestTarget(path) || path.startsWith("//")) {
     writePreviewError(response, "invalid-request");
     return { ...result, outcome: "rejected", category: "invalid-request", status: 400 };
   }
@@ -231,6 +237,7 @@ export async function forwardPreviewRequest(
       body,
       bodyLength: length,
       headersTimeoutMs: limits.headersTimeoutMs,
+      bodyIdleTimeoutMs: limits.bodyIdleTimeoutMs,
       maxHeaderBytes: limits.headerMaxBytes,
       maxHeaderFields: limits.headerMaxFields,
       signal: controller.signal,
@@ -341,6 +348,62 @@ export function rejectPreviewUpgrade(
   setTimeout(() => socket.destroy(), 1_000).unref?.();
 }
 
+const UPGRADE_REFUSAL_MAX_BYTES = 64 * 1024;
+
+/**
+ * Collect a non-101 upgrade answer's body (truncated at 64 KiB) for relaying.
+ * The whole read is bounded by `timeoutMs` and ends when `signal` aborts, so a
+ * stalled upstream cannot pin the caller's admission slot.
+ */
+function readUpgradeRefusal(
+  body: Readable,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const settle = (error: Error | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      body.off("data", onData);
+      body.off("end", onEnd);
+      if (error) {
+        body.destroy();
+        reject(error);
+      } else {
+        resolve(Buffer.concat(chunks));
+      }
+    };
+    const onData = (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > UPGRADE_REFUSAL_MAX_BYTES) {
+        body.destroy();
+        settle(null);
+        return;
+      }
+      chunks.push(chunk);
+    };
+    const onEnd = () => settle(null);
+    const onAbort = () => settle(new PreviewHttp1Error("aborted", "Client closed"));
+    const timer = setTimeout(
+      () => settle(new PreviewHttp1Error("body-timeout", "Upstream refusal body stalled")),
+      timeoutMs,
+    );
+    body.on("error", (error: Error) => settle(error));
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    body.on("data", onData);
+    body.once("end", onEnd);
+  });
+}
+
 export interface PreviewUpgradeResult {
   outcome: "open" | "rejected" | "failed";
   category?: PreviewErrorCategory;
@@ -368,7 +431,7 @@ export async function forwardPreviewUpgrade(
   if (
     request.method !== "GET" ||
     upgrade !== "websocket" ||
-    !path.startsWith("/") ||
+    !isValidRequestTarget(path) ||
     path.startsWith("//") ||
     requestHeaderViolation(request.rawHeaders, limits)
   ) {
@@ -398,17 +461,15 @@ export async function forwardPreviewUpgrade(
       signal: controller.signal,
       upgrade: true,
     });
-    client.off("close", clientClosed);
     if (answer.statusCode !== 101) {
       const { headers } = downstreamResponseHeaders(answer.headers, policy);
-      const chunks: Buffer[] = [];
-      let size = 0;
-      for await (const chunk of answer.body) {
-        size += (chunk as Buffer).length;
-        if (size > 64 * 1024) break;
-        chunks.push(chunk as Buffer);
-      }
-      const body = Buffer.concat(chunks);
+      // The client-close abort stays armed until the refusal body has been read.
+      const body = await readUpgradeRefusal(
+        answer.body,
+        limits.bodyIdleTimeoutMs,
+        controller.signal,
+      );
+      client.off("close", clientClosed);
       const lines = [`HTTP/1.1 ${answer.statusCode} ${answer.statusMessage}`];
       for (const [name, value] of Object.entries(headers)) {
         if (name === "content-length") continue;
@@ -419,6 +480,7 @@ export async function forwardPreviewUpgrade(
       upstream.destroy();
       return { outcome: "rejected", closed: done };
     }
+    client.off("close", clientClosed);
     const selected = headerValues(answer.headers, "sec-websocket-protocol")[0];
     if (selected !== undefined && !offered.includes(selected)) {
       upstream.destroy();

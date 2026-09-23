@@ -1060,16 +1060,19 @@ export class PreviewServiceRegistry {
           : "other";
     if (resolution.ok) {
       const target = resolution.target;
-      let generation = entry.endpoint.endpointGeneration;
-      if (entry.generationBindingKey !== null && entry.generationBindingKey !== target.bindingKey) {
-        generation += 1;
+      const rebound =
+        entry.generationBindingKey !== null && entry.generationBindingKey !== target.bindingKey;
+      const sameBinding = !rebound && entry.endpoint.hostPort === target.port;
+      const generation = entry.endpoint.endpointGeneration + (rebound ? 1 : 0);
+      entry.generationBindingKey = target.bindingKey;
+      entry.target = target;
+      if (rebound) {
+        // Commit the new generation before notifying: revocation keeps
+        // attachments whose generation is still current.
+        this.setEndpoint(serviceId, { endpointGeneration: generation });
         this.notifyRevoked([serviceId], "binding-changed");
         this.queueEvent(definition.environmentId, serviceId);
       }
-      entry.generationBindingKey = target.bindingKey;
-      entry.target = target;
-      const sameBinding =
-        entry.endpoint.hostPort === target.port && entry.endpoint.endpointGeneration === generation;
       this.setEndpoint(serviceId, {
         state: "available",
         endpointGeneration: generation,

@@ -41,8 +41,12 @@ interface ManagedPreview {
   loading: boolean;
   error: string | null;
   annotationSessionId?: string;
-  /** Service previews: transport key and the partition the view was created with. */
-  service?: { key: string; partition: string };
+  /**
+   * Service previews: transport key, the partition the view was created with,
+   * and the transport holder the view keeps (unique per attach, so a stale
+   * attach can release its own hold without dropping a newer one).
+   */
+  service?: { key: string; partition: string; holderId: string };
 }
 
 /**
@@ -343,6 +347,15 @@ function validateBounds(bounds: BrowserPreviewBounds, zoomFactor: number): Recta
 export class BrowserPreviewManager {
   private readonly previews = new Map<string, ManagedPreview>();
   private readonly clipboardUserActivations = new WeakMap<WebContents, number>();
+  /**
+   * The latest attach per tab. An attach whose token is no longer current was
+   * superseded by a newer attach or cancelled by `destroy`, and must not
+   * create, replace, or show a view once its awaits resume.
+   */
+  private readonly attachTokens = new Map<string, number>();
+  private readonly pendingAttaches = new Map<string, Promise<BrowserPreviewState>>();
+  private attachSequence = 0;
+  private disposed = false;
 
   constructor(private readonly options: BrowserPreviewManagerOptions) {}
 
@@ -370,9 +383,55 @@ export class BrowserPreviewManager {
     return this.scopeFor(url) === scope;
   }
 
-  async attach(input: BrowserPreviewAttachInput): Promise<BrowserPreviewState> {
-    assertTabId(input.tabId);
-    if (input.service) return this.attachService(input, input.service);
+  attach(input: BrowserPreviewAttachInput): Promise<BrowserPreviewState> {
+    try {
+      assertTabId(input.tabId);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    if (this.disposed) return Promise.reject(this.attachCancelled());
+    const tabId = input.tabId;
+    const token = ++this.attachSequence;
+    this.attachTokens.set(tabId, token);
+    const attempt = input.service
+      ? this.attachService(input, input.service, token)
+      : this.attachUrl(input, token);
+    this.pendingAttaches.set(tabId, attempt);
+    const settle = () => {
+      if (this.pendingAttaches.get(tabId) === attempt) this.pendingAttaches.delete(tabId);
+    };
+    attempt.then(settle, settle);
+    return attempt;
+  }
+
+  private isCurrentAttach(tabId: string, token: number): boolean {
+    return !this.disposed && this.attachTokens.get(tabId) === token;
+  }
+
+  private attachCancelled(): Error {
+    return previewFailure("backend-unavailable", {
+      message: "The browser preview closed before it attached.",
+    });
+  }
+
+  /**
+   * Result for an attach that lost its turn. The renderer re-attaches on every
+   * resize, so a superseded attach resolves with the newest attach's outcome
+   * instead of failing (a failure would hide the view the newer attach shows).
+   */
+  private supersededAttach(tabId: string): Promise<BrowserPreviewState> | BrowserPreviewState {
+    if (this.disposed) throw this.attachCancelled();
+    const latest = this.pendingAttaches.get(tabId);
+    if (latest) return latest;
+    const preview = this.previews.get(tabId);
+    if (preview) return this.snapshot(tabId, preview);
+    throw this.attachCancelled();
+  }
+
+  private async attachUrl(
+    input: BrowserPreviewAttachInput,
+    token: number,
+  ): Promise<BrowserPreviewState> {
     const url = input.url;
     const navigationScope = typeof url === "string" ? previewNavigationScope(url) : null;
     if (!url || !navigationScope)
@@ -381,7 +440,7 @@ export class BrowserPreviewManager {
     let preview = this.previews.get(input.tabId);
     if (preview?.service) {
       // A tab switching from a service to a manual URL needs the shared legacy session.
-      this.destroy(input.tabId);
+      this.removePreview(input.tabId);
       preview = undefined;
     }
 
@@ -393,6 +452,7 @@ export class BrowserPreviewManager {
       preview.navigationScope = navigationScope;
       preview.error = null;
       await this.load(input.tabId, preview, url);
+      if (!this.isCurrentAttach(input.tabId, token)) return this.supersededAttach(input.tabId);
     }
 
     preview.view.setBounds(bounds);
@@ -405,29 +465,36 @@ export class BrowserPreviewManager {
   private async attachService(
     input: BrowserPreviewAttachInput,
     target: BrowserPreviewServiceTarget,
+    token: number,
   ): Promise<BrowserPreviewState> {
     const transport = this.options.transport;
     if (!transport) {
       throw previewFailure("unsupported", { message: "Service previews are not available." });
     }
     const bounds = validateBounds(input.bounds, this.hostZoomFactor());
-    const descriptor = await transport.acquire(target, input.tabId);
+    const holderId = `${input.tabId}#${token}`;
+    const descriptor = await transport.acquire(target, holderId);
+    if (!this.isCurrentAttach(input.tabId, token)) {
+      transport.release(descriptor.serviceKey, holderId);
+      return this.supersededAttach(input.tabId);
+    }
     let preview = this.previews.get(input.tabId);
     // A session cannot change after a view exists: another service (or a
     // legacy tab) needs a fresh view on this service's partition.
     // Partitions derive from the service key, so an equal partition is the same service.
     if (preview && preview.service?.partition !== descriptor.partition) {
-      this.destroy(input.tabId);
+      this.removePreview(input.tabId);
       preview = undefined;
     }
     const scope = `service:${descriptor.serviceKey}`;
     if (!preview) {
       preview = this.createPreview(input.tabId, descriptor.url, scope, {
         session: transport.sessionFor(descriptor.partition),
-        service: { key: descriptor.serviceKey, partition: descriptor.partition },
+        service: { key: descriptor.serviceKey, partition: descriptor.partition, holderId },
       });
     } else {
-      preview.service = { key: descriptor.serviceKey, partition: descriptor.partition };
+      // The view already holds this service; this attach's hold is a duplicate.
+      transport.release(descriptor.serviceKey, holderId);
       const current = transport.describe(preview.requestedUrl);
       if (current?.serviceKey !== descriptor.serviceKey || current.path !== target.path) {
         this.clipboardUserActivations.delete(preview.view.webContents);
@@ -435,6 +502,7 @@ export class BrowserPreviewManager {
         preview.navigationScope = scope;
         preview.error = null;
         await this.load(input.tabId, preview, descriptor.url);
+        if (!this.isCurrentAttach(input.tabId, token)) return this.supersededAttach(input.tabId);
       }
     }
     preview.view.setBounds(bounds);
@@ -613,11 +681,26 @@ export class BrowserPreviewManager {
 
   destroy(tabId: string): void {
     assertTabId(tabId);
+    // Cancel any attach still awaiting transport or a load for this tab.
+    this.attachTokens.delete(tabId);
+    this.pendingAttaches.delete(tabId);
+    this.removePreview(tabId);
+  }
+
+  /** Close the manager for good: in-flight attaches settle without creating views. */
+  destroyAll(): void {
+    this.disposed = true;
+    const tabIds = new Set([...this.previews.keys(), ...this.attachTokens.keys()]);
+    for (const tabId of tabIds) this.destroy(tabId);
+  }
+
+  private removePreview(tabId: string): void {
     const preview = this.previews.get(tabId);
     if (!preview) return;
     this.previews.delete(tabId);
     this.clipboardUserActivations.delete(preview.view.webContents);
-    if (preview.service) this.options.transport?.release(preview.service.key, tabId);
+    if (preview.service)
+      this.options.transport?.release(preview.service.key, preview.service.holderId);
     const window = this.options.getWindow();
     if (window && !window.isDestroyed()) {
       window.contentView.removeChildView(preview.view);
@@ -625,10 +708,6 @@ export class BrowserPreviewManager {
     if (!preview.view.webContents.isDestroyed()) {
       preview.view.webContents.close({ waitForBeforeUnload: false });
     }
-  }
-
-  destroyAll(): void {
-    for (const tabId of Array.from(this.previews.keys())) this.destroy(tabId);
   }
 
   private createPreview(

@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { createServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
-import { connect, type AddressInfo, type Socket } from "node:net";
+import {
+  connect,
+  createServer as createNetServer,
+  type AddressInfo,
+  type Server as NetServer,
+  type Socket,
+} from "node:net";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 
 import {
@@ -124,6 +130,45 @@ describe("preview header policy", () => {
     );
   });
 
+  test("apps on default ports: private origins compare and emit canonically", () => {
+    for (const [scheme, port] of [
+      ["http", 80],
+      ["https", 443],
+    ] as const) {
+      const defaultPort: PreviewHeaderPolicy = {
+        privateAuthority: `localhost:${port}`,
+        privateOrigins: [`${scheme}://localhost:${port}`, `${scheme}://127.0.0.1:${port}`],
+        publicOrigin: "https://s-abc.preview.test",
+      };
+      expect(mapLocation(`${scheme}://localhost/next?x=1`, defaultPort)).toBe(
+        "https://s-abc.preview.test/next?x=1",
+      );
+      expect(mapLocation(`${scheme}://localhost:${port}/a`, defaultPort)).toBe(
+        "https://s-abc.preview.test/a",
+      );
+      expect(mapLocation(`${scheme}://127.0.0.1/b`, defaultPort)).toBe(
+        "https://s-abc.preview.test/b",
+      );
+      expect(mapLocation(`${scheme}://localhost:8080/c`, defaultPort)).toBe(
+        `${scheme}://localhost:8080/c`,
+      );
+      expect(
+        downstreamResponseHeaders([["Location", `${scheme}://localhost/d`]], defaultPort).headers
+          .location,
+      ).toBe("https://s-abc.preview.test/d");
+      const headers = upstreamRequestHeaders(
+        [
+          ["Origin", "https://s-abc.preview.test"],
+          ["Referer", "https://s-abc.preview.test/page"],
+        ],
+        defaultPort,
+      );
+      // The Origin a browser would send for this app: no explicit default port.
+      expect(headers).toContainEqual(["Origin", `${scheme}://localhost`]);
+      expect(headers).toContainEqual(["Referer", `${scheme}://localhost/page`]);
+    }
+  });
+
   test("response policy keeps CSP and framing headers", () => {
     const { headers, droppedCookies } = downstreamResponseHeaders(
       [
@@ -164,14 +209,17 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
   let ingressPort: number;
   let limits: PreviewForwardLimits;
   let connectFailure: Error | null;
+  let connects: number;
   const openUpstreams = new Set<Socket>();
 
   beforeEach(async () => {
     fixture = await startPreviewFixture({ marker: "fixture-a" });
     limits = { ...DEFAULT_PREVIEW_FORWARD_LIMITS };
     connectFailure = null;
+    connects = 0;
     const hooks = {
       connect: async () => {
+        connects += 1;
         if (connectFailure) throw connectFailure;
         const socket = connect(fixture.port, "127.0.0.1");
         openUpstreams.add(socket);
@@ -370,6 +418,60 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
     expect(trace.status).toBe(400);
   });
 
+  /** Send raw bytes to the ingress and collect everything until it closes. */
+  async function rawExchange(bytes: Buffer): Promise<string> {
+    const socket = connect(ingressPort, "127.0.0.1");
+    let received = "";
+    socket.on("data", (chunk: Buffer) => (received += chunk.toString("latin1")));
+    await new Promise((resolve) => socket.once("connect", resolve));
+    socket.write(bytes);
+    await new Promise<void>((resolve) => {
+      socket.once("close", () => resolve());
+      setTimeout(resolve, 2_000);
+    });
+    socket.destroy();
+    return received;
+  }
+
+  // "/a" + U+010D U+010A + "X-Evil:" + U+0120 + "1" as raw UTF-8. Latin1 truncation
+  // would turn it into "/a\r\nX-Evil: 1" on the upstream wire.
+  const smuggledTarget = Buffer.concat([
+    Buffer.from("/a"),
+    Buffer.from([0xc4, 0x8d, 0xc4, 0x8a]),
+    Buffer.from("X-Evil:"),
+    Buffer.from([0xc4, 0xa0]),
+    Buffer.from("1"),
+  ]);
+
+  test("non-ASCII request targets are refused before any upstream I/O", async () => {
+    const answer = await rawExchange(
+      Buffer.concat([
+        Buffer.from("GET "),
+        smuggledTarget,
+        Buffer.from(" HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"),
+      ]),
+    );
+    expect(answer).toStartWith("HTTP/1.1 400");
+    expect(answer.toLowerCase()).toContain("x-orkestrator-preview-error: invalid-request");
+    expect(connects).toBe(0);
+    expect(fixture.requests).toHaveLength(0);
+  });
+
+  test("non-ASCII upgrade targets are refused before any upstream I/O", async () => {
+    const answer = await rawExchange(
+      Buffer.concat([
+        Buffer.from("GET "),
+        smuggledTarget,
+        Buffer.from(
+          " HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+        ),
+      ]),
+    );
+    expect(answer).toStartWith("HTTP/1.1 400");
+    expect(answer).toContain("x-orkestrator-preview-error: invalid-request");
+    expect(connects).toBe(0);
+  });
+
   test("websocket upgrade is transparent: subprotocol, text and binary echo", async () => {
     const socket = new WebSocket(`ws://127.0.0.1:${ingressPort}/ws`, ["fixture.v1"]);
     socket.binaryType = "arraybuffer";
@@ -408,5 +510,118 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
       socket.onopen = () => resolve("open");
     });
     expect(error).toBe("error");
+  });
+});
+
+describe("forwardPreviewUpgrade refusal bodies", () => {
+  const cleanups: Array<() => void> = [];
+
+  afterEach(() => {
+    for (const cleanup of cleanups.splice(0)) cleanup();
+  });
+
+  async function tcpServer(onSocket: (socket: Socket) => void): Promise<number> {
+    const server: NetServer = createNetServer(onSocket);
+    const sockets = new Set<Socket>();
+    server.on("connection", (socket: Socket) => sockets.add(socket));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => {
+      for (const socket of sockets) socket.destroy();
+      server.close();
+    });
+    return (server.address() as AddressInfo).port;
+  }
+
+  /** The ingress side of a real client connection, plus the browser end. */
+  async function clientPair(): Promise<{
+    browser: Socket;
+    client: Socket;
+    received: () => string;
+  }> {
+    let accept!: (socket: Socket) => void;
+    const accepted = new Promise<Socket>((resolve) => (accept = resolve));
+    const port = await tcpServer((socket) => accept(socket));
+    const browser = connect(port, "127.0.0.1");
+    cleanups.push(() => browser.destroy());
+    let received = "";
+    browser.on("data", (chunk: Buffer) => (received += chunk.toString("latin1")));
+    browser.on("error", () => undefined);
+    return { browser, client: await accepted, received: () => received };
+  }
+
+  /** An upstream that answers the handshake with a 200 declaring 100 bytes, sends 7, and stalls. */
+  async function stallingUpstream(): Promise<{ port: number; answered: () => boolean }> {
+    let answered = false;
+    const port = await tcpServer((socket) =>
+      socket.once("data", () => {
+        socket.write("HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\npartial");
+        answered = true;
+      }),
+    );
+    return { port, answered: () => answered };
+  }
+
+  function forward(upstreamPort: number, client: Socket, limits: PreviewForwardLimits) {
+    const request = {
+      method: "GET",
+      url: "/ws",
+      rawHeaders: [
+        "Host",
+        "x",
+        "Upgrade",
+        "websocket",
+        "Connection",
+        "Upgrade",
+        "Sec-WebSocket-Key",
+        "dGhlIHNhbXBsZSBub25jZQ==",
+        "Sec-WebSocket-Version",
+        "13",
+      ],
+    } as unknown as IncomingMessage;
+    return forwardPreviewUpgrade(
+      request,
+      client,
+      Buffer.alloc(0),
+      policyFor(upstreamPort, "http://127.0.0.1:1"),
+      limits,
+      {
+        connect: async () => {
+          const socket = connect(upstreamPort, "127.0.0.1");
+          cleanups.push(() => socket.destroy());
+          await new Promise((resolve) => socket.once("connect", resolve));
+          return socket;
+        },
+      },
+    );
+  }
+
+  test("a stalled refusal body settles within the body idle limit", async () => {
+    const upstream = await stallingUpstream();
+    const { client, received } = await clientPair();
+    const started = Date.now();
+    const result = await forward(upstream.port, client, {
+      ...DEFAULT_PREVIEW_FORWARD_LIMITS,
+      bodyIdleTimeoutMs: 100,
+    });
+    expect(Date.now() - started).toBeLessThan(1_500);
+    expect(result).toMatchObject({ outcome: "failed", category: "headers-timeout" });
+    for (let attempt = 0; attempt < 100 && !received().includes("\r\n\r\n"); attempt += 1)
+      await Bun.sleep(5);
+    expect(received()).toStartWith("HTTP/1.1 504");
+  });
+
+  test("a client disconnect ends the refusal read", async () => {
+    const upstream = await stallingUpstream();
+    const { browser, client } = await clientPair();
+    const pending = forward(upstream.port, client, {
+      ...DEFAULT_PREVIEW_FORWARD_LIMITS,
+      bodyIdleTimeoutMs: 30_000,
+    });
+    for (let attempt = 0; attempt < 200 && !upstream.answered(); attempt += 1) await Bun.sleep(5);
+    expect(upstream.answered()).toBe(true);
+    await Bun.sleep(30);
+    browser.destroy();
+    const result = await Promise.race([pending, Bun.sleep(2_000).then(() => "still pending")]);
+    expect(result).toMatchObject({ outcome: "failed" });
   });
 });

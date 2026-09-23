@@ -49,6 +49,24 @@ describe("preview ports and paths", () => {
     ).toThrow();
   });
 
+  test("paths must be visible ASCII; anything else arrives percent-encoded", () => {
+    for (const value of [
+      "/a b",
+      "/a\tb",
+      "?q=a b",
+      "/caf\u00e9",
+      "/a\u010d\u010aX-Evil:\u01201",
+      "/a\u0120b",
+      "/a\u00a0b",
+      "/\u{1f600}",
+    ]) {
+      expect(() => normalizePreviewPath(value)).toThrow("PreviewError:invalid-request");
+    }
+    expect(normalizePreviewPath("/caf%C3%A9?q=a%20b#%E2%9C%93")).toBe(
+      "/caf%C3%A9?q=a%20b#%E2%9C%93",
+    );
+  });
+
   test("readiness paths exclude fragments", () => {
     expect(normalizeReadinessPath("/health")).toBe("/health");
     expect(normalizeReadinessPath("")).toBeUndefined();

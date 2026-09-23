@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { lookup as dnsLookup } from "node:dns/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
+import { BlockList, isIP, type AddressInfo, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 
 import type {
@@ -73,6 +74,8 @@ export interface PreviewTransportManagerOptions {
   poolMax?: number;
   onStateChange?: (serviceKey: string) => void;
   logger?: Pick<Console, "warn">;
+  /** Resolve a host name to its addresses (injectable in tests). */
+  lookupHost?: (hostname: string) => Promise<string[]>;
 }
 
 export interface PreviewTransportDescriptor {
@@ -103,22 +106,72 @@ interface ServiceGroup {
   disposed: boolean;
 }
 
-const LOOPBACK_OR_PRIVATE = [
-  /^localhost$/i,
-  /^127\./,
-  /^0\.0\.0\.0$/,
-  /^\[?::1\]?$/,
-  /^10\./,
-  /^192\.168\./,
-  /^172\.(1[6-9]|2\d|3[01])\./,
-  /^169\.254\./,
-  /^\[?f[cd][0-9a-f]{2}:/i,
-  /^\[?fe80:/i,
-  /\.localhost$/i,
-];
+/** This machine, its local networks, and carrier-grade NAT (tailnets). */
+const LOCAL_NETWORK = new BlockList();
+for (const [network, prefix] of [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.168.0.0", 16],
+] as const) {
+  LOCAL_NETWORK.addSubnet(network, prefix, "ipv4");
+}
+for (const [network, prefix] of [
+  ["::", 128],
+  ["::1", 128],
+  ["fc00::", 7],
+  ["fe80::", 10],
+] as const) {
+  LOCAL_NETWORK.addSubnet(network, prefix, "ipv6");
+}
 
-function isLocalNetworkHost(hostname: string): boolean {
-  return LOOPBACK_OR_PRIVATE.some((pattern) => pattern.test(hostname));
+const IPV4_MAPPED = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/;
+const DNS_CACHE_MS = 30_000;
+const DNS_CACHE_MAX = 256;
+
+/** The IPv4 address an IPv4-mapped IPv6 literal (`::ffff:a.b.c.d`) reaches. */
+function embeddedIpv4(ipv6: string): string | null {
+  let canonical: string;
+  try {
+    // The URL serializer canonicalizes both hex and dotted mapped forms.
+    canonical = new URL(`http://[${ipv6}]/`).hostname.slice(1, -1).toLowerCase();
+  } catch {
+    return null;
+  }
+  const match = IPV4_MAPPED.exec(canonical);
+  if (!match) return null;
+  const high = Number.parseInt(match[1]!, 16);
+  const low = Number.parseInt(match[2]!, 16);
+  return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+}
+
+/** Whether an IP address (never a name) is on this machine or a local network. */
+function isLocalNetworkAddress(address: string): boolean {
+  const family = isIP(address);
+  if (family === 4) return LOCAL_NETWORK.check(address, "ipv4");
+  if (family !== 6) return false;
+  const mapped = embeddedIpv4(address);
+  return mapped ? LOCAL_NETWORK.check(mapped, "ipv4") : LOCAL_NETWORK.check(address, "ipv6");
+}
+
+/** A URL host (bracketed IPv6 included) that is an IP literal, or null for a name. */
+function ipLiteral(hostname: string): string | null {
+  const bare =
+    hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+  return isIP(bare) ? bare : null;
+}
+
+function isLocalHostName(hostname: string): boolean {
+  const name = hostname.toLowerCase().replace(/\.$/, "");
+  return name === "localhost" || name.endsWith(".localhost");
+}
+
+async function lookupAddresses(hostname: string): Promise<string[]> {
+  const results = await dnsLookup(hostname, { all: true, verbatim: true });
+  return results.map((result) => result.address);
 }
 
 function sameSecret(expected: string, candidate: string | undefined): boolean {
@@ -144,6 +197,7 @@ export class PreviewTransportManager {
   private readonly groups = new Map<string, ServiceGroup>();
   private readonly partitions = new Map<string, ServiceGroup>();
   private readonly hookedSessions = new WeakSet<object>();
+  private readonly resolvedHosts = new Map<string, { expires: number; local: Promise<boolean> }>();
   private disposed = false;
 
   constructor(private readonly options: PreviewTransportManagerOptions) {}
@@ -178,6 +232,8 @@ export class PreviewTransportManager {
     }
     try {
       await group.ready;
+      // Retired or disposed while starting: its listener and attachment are gone.
+      if (group.disposed) throw previewFailure("backend-unavailable");
     } catch (error) {
       group.holders.delete(holderId);
       if (group.holders.size === 0) void this.retire(group);
@@ -316,7 +372,11 @@ export class PreviewTransportManager {
   private async start(group: ServiceGroup): Promise<void> {
     try {
       await this.attach(group);
+      // `retire` may close the group while it starts; nothing it has not seen
+      // (listener, hooks, renew timer) may outlive it.
+      if (group.disposed) throw previewFailure("backend-unavailable");
       await this.listen(group);
+      if (group.disposed) throw previewFailure("backend-unavailable");
       this.installSessionHooks(group);
       group.renewTimer = setInterval(
         () => void this.renew(group),
@@ -332,8 +392,9 @@ export class PreviewTransportManager {
         failure: failure?.category ?? "internal",
         message: failure?.message,
       });
-      this.groups.delete(group.key);
+      if (this.groups.get(group.key) === group) this.groups.delete(group.key);
       await this.closeGroup(group);
+      await this.releaseAttachment(group);
       throw error;
     }
   }
@@ -358,6 +419,13 @@ export class PreviewTransportManager {
           message: "The service belongs to a different backend.",
         });
       }
+      if (group.disposed) {
+        // Closed while attaching: `retire` could not see this attachment.
+        void this.options
+          .invoke("release_preview_attachment", { attachmentId: attachment.attachmentId })
+          .catch(() => undefined);
+        throw previewFailure("backend-unavailable");
+      }
       group.attachment = attachment;
       // Pooled connections belong to the old attachment and generation.
       this.drainPool(group);
@@ -380,6 +448,7 @@ export class PreviewTransportManager {
       await this.options.invoke("renew_preview_attachment", {
         attachmentId: attachment.attachmentId,
       });
+      this.restoreReady(group);
     } catch (error) {
       const category = previewErrorFromUnknown(error)?.category;
       if (
@@ -390,15 +459,7 @@ export class PreviewTransportManager {
         this.setState(group, { mode: "desktop-tunnel", state: "reconnecting" });
         await this.attach(group)
           .then(() => this.setState(group, { mode: "desktop-tunnel", state: "ready" }))
-          .catch((failure: unknown) => {
-            const preview = previewErrorFromUnknown(failure);
-            this.setState(group, {
-              mode: "desktop-tunnel",
-              state: "unavailable",
-              failure: preview?.category ?? "internal",
-              message: preview?.message,
-            });
-          });
+          .catch((failure: unknown) => this.setUnavailable(group, failure));
       }
     }
   }
@@ -406,6 +467,22 @@ export class PreviewTransportManager {
   private setState(group: ServiceGroup, state: BrowserPreviewTransportState): void {
     group.state = state;
     this.options.onStateChange?.(group.key);
+  }
+
+  private setUnavailable(group: ServiceGroup, failure: unknown): void {
+    const preview = previewErrorFromUnknown(failure);
+    this.setState(group, {
+      mode: "desktop-tunnel",
+      state: "unavailable",
+      failure: preview?.category ?? "internal",
+      message: preview?.message,
+    });
+  }
+
+  /** A later successful renewal or connection clears an earlier reattach failure. */
+  private restoreReady(group: ServiceGroup): void {
+    if (group.disposed || group.state.state !== "unavailable") return;
+    this.setState(group, { mode: "desktop-tunnel", state: "ready" });
   }
 
   private async listen(group: ServiceGroup): Promise<void> {
@@ -566,13 +643,20 @@ export class PreviewTransportManager {
       });
     };
     try {
-      return await open();
+      const socket = await open();
+      this.restoreReady(group);
+      return socket;
     } catch (error) {
       const category = previewErrorFromUnknown(error)?.category;
       if (signal.aborted || (category !== "access-expired" && category !== "generation-changed"))
         throw error;
       this.setState(group, { mode: "desktop-tunnel", state: "reconnecting" });
-      await this.attach(group);
+      try {
+        await this.attach(group);
+      } catch (failure) {
+        this.setUnavailable(group, failure);
+        throw failure;
+      }
       this.setState(group, { mode: "desktop-tunnel", state: "ready" });
       return open();
     }
@@ -651,12 +735,54 @@ export class PreviewTransportManager {
       // A remote service must never silently reach a service on this machine
       // or its local network: that would bypass the remote transport.
       const network = /^(https?|wss?):$/.test(url.protocol);
-      if (network && this.options.isRemote() && isLocalNetworkHost(url.hostname)) {
-        callback({ cancel: true });
+      if (!network || !this.options.isRemote()) {
+        callback({});
         return;
       }
-      callback({});
+      const local = this.reachesLocalNetwork(url.hostname);
+      if (typeof local === "boolean") {
+        callback(local ? { cancel: true } : {});
+        return;
+      }
+      // The lookup never rejects: resolution failures resolve to "not local".
+      void (async () => callback((await local) ? { cancel: true } : {}))();
     });
+  }
+
+  /**
+   * IP literals are checked as addresses; names are resolved first, because a
+   * public name can point at loopback (`127.0.0.1.nip.io`, `localtest.me`).
+   * No cancelable webRequest hook exposes the address Chromium connected to,
+   * so this pre-resolution is defence in depth, not a rebinding-proof check.
+   * A failed lookup allows the request: Chromium's own resolution fails too,
+   * and failing closed would break remote pages on a flaky resolver.
+   */
+  private reachesLocalNetwork(hostname: string): boolean | Promise<boolean> {
+    const literal = ipLiteral(hostname);
+    if (literal) return isLocalNetworkAddress(literal);
+    if (isLocalHostName(hostname)) return true;
+    const name = hostname.toLowerCase();
+    const now = Date.now();
+    const cached = this.resolvedHosts.get(name);
+    if (cached && cached.expires > now) return cached.local;
+    this.resolvedHosts.delete(name);
+    if (this.resolvedHosts.size >= DNS_CACHE_MAX) {
+      const oldest = this.resolvedHosts.keys().next().value;
+      if (oldest !== undefined) this.resolvedHosts.delete(oldest);
+    }
+    const lookup = this.options.lookupHost ?? lookupAddresses;
+    const entry = {
+      expires: now + DNS_CACHE_MS,
+      local: lookup(name).then(
+        (addresses) => addresses.some(isLocalNetworkAddress),
+        () => {
+          if (this.resolvedHosts.get(name) === entry) this.resolvedHosts.delete(name);
+          return false;
+        },
+      ),
+    };
+    this.resolvedHosts.set(name, entry);
+    return entry.local;
   }
 
   private async retire(group: ServiceGroup): Promise<void> {
@@ -664,12 +790,17 @@ export class PreviewTransportManager {
     this.groups.delete(group.key);
     if (this.partitions.get(group.partition) === group) this.partitions.delete(group.partition);
     await this.closeGroup(group);
+    await this.releaseAttachment(group);
+  }
+
+  /** Release the group's backend attachment once, whichever teardown path gets there first. */
+  private async releaseAttachment(group: ServiceGroup): Promise<void> {
     const attachment = group.attachment;
-    if (attachment) {
-      await this.options
-        .invoke("release_preview_attachment", { attachmentId: attachment.attachmentId })
-        .catch(() => undefined);
-    }
+    if (!attachment) return;
+    group.attachment = null;
+    await this.options
+      .invoke("release_preview_attachment", { attachmentId: attachment.attachmentId })
+      .catch(() => undefined);
   }
 
   private async closeGroup(group: ServiceGroup): Promise<void> {

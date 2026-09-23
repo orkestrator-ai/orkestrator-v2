@@ -62,10 +62,19 @@ function frame(
   options: { fin?: boolean; mask?: boolean } = {},
 ): Buffer {
   const mask = options.mask ?? true;
-  const header = Buffer.from([
-    ((options.fin ?? true) ? 0x80 : 0) | opcode,
-    (mask ? 0x80 : 0) | payload.length,
-  ]);
+  const first = ((options.fin ?? true) ? 0x80 : 0) | opcode;
+  const maskBit = mask ? 0x80 : 0;
+  let header: Buffer;
+  if (payload.length < 126) header = Buffer.from([first, maskBit | payload.length]);
+  else if (payload.length < 65_536) {
+    header = Buffer.from([first, maskBit | 126, 0, 0]);
+    header.writeUInt16BE(payload.length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = first;
+    header[1] = maskBit | 127;
+    header.writeBigUInt64BE(BigInt(payload.length), 2);
+  }
   if (!mask) return Buffer.concat([header, payload]);
   const key = Buffer.from([1, 2, 3, 4]);
   const masked = Buffer.from(payload.map((byte, index) => byte ^ key[index % 4]!));
@@ -141,6 +150,46 @@ describe("preview websocket", () => {
     expect(big.received().readUInt16BE(2)).toBe(1009);
     unmasked.socket.destroy();
     big.socket.destroy();
+  });
+
+  test("64-bit payload lengths round-trip in both directions", async () => {
+    const { port } = await echoServer(200_000);
+    const payload = Buffer.alloc(70_000);
+    for (let index = 0; index < payload.length; index += 1) payload[index] = index % 251;
+    // Raw frame with the 127 length form decodes on the server; the echo is
+    // encoded with the same form.
+    const raw = await rawClient(port);
+    raw.socket.write(frame(0x2, payload));
+    for (
+      let attempt = 0;
+      attempt < 500 && raw.received().length < 10 + payload.length;
+      attempt += 1
+    )
+      await Bun.sleep(2);
+    const bytes = raw.received();
+    expect(bytes[0]).toBe(0x82);
+    expect(bytes[1]).toBe(127);
+    expect(bytes.readBigUInt64BE(2)).toBe(BigInt(payload.length));
+    expect(bytes.subarray(10).equals(payload)).toBe(true);
+    raw.socket.destroy();
+    // Endpoint to endpoint (client frames are masked).
+    const ws = await client(port, 200_000);
+    const echoed = new Promise<Buffer>((resolve) => ws.on("message", (data) => resolve(data)));
+    ws.start();
+    ws.send(payload);
+    expect((await echoed).equals(payload)).toBe(true);
+  });
+
+  test("a close frame with a one-byte payload is a protocol error", async () => {
+    const { port } = await echoServer();
+    const raw = await rawClient(port);
+    raw.socket.write(frame(0x8, Buffer.from([0x03])));
+    for (let attempt = 0; attempt < 100 && raw.received().length < 4; attempt += 1)
+      await Bun.sleep(2);
+    const bytes = raw.received();
+    expect(bytes[0]).toBe(0x88);
+    expect(bytes.readUInt16BE(2)).toBe(1002);
+    raw.socket.destroy();
   });
 
   test("close handshake reports the peer's code", async () => {

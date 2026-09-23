@@ -56,11 +56,13 @@ describe("computeViewportBoundedPlacement", () => {
     });
   });
 
-  test("never collapses below a minimum usable height", () => {
+  test("does not force a row beyond the available space", () => {
     expect(
-      computeViewportBoundedPlacement({ top: 10, bottom: 390 }, { top: 0, bottom: 400 }, 384)
-        .maxHeight,
-    ).toBe(48);
+      computeViewportBoundedPlacement({ top: 42, bottom: 390 }, { top: 0, bottom: 400 }, 384),
+    ).toEqual({ side: "top", maxHeight: 30 });
+    expect(
+      computeViewportBoundedPlacement({ top: 10, bottom: 390 }, { top: 0, bottom: 400 }, 384),
+    ).toEqual({ side: "top", maxHeight: 0 });
   });
 });
 
@@ -78,15 +80,49 @@ function Probe() {
   return <div ref={setMenuRef} data-testid="menu" data-side={side} style={style} />;
 }
 
+class FakeResizeObserver implements ResizeObserver {
+  static instances: FakeResizeObserver[] = [];
+  observed: Element[] = [];
+  disconnected = false;
+
+  constructor(private callback: ResizeObserverCallback) {
+    FakeResizeObserver.instances.push(this);
+  }
+
+  observe(element: Element) {
+    this.observed.push(element);
+  }
+
+  unobserve(element: Element) {
+    this.observed = this.observed.filter((observed) => observed !== element);
+  }
+
+  disconnect() {
+    this.disconnected = true;
+  }
+
+  notify() {
+    this.callback([], this);
+  }
+}
+
 describe("useViewportBoundedMenu", () => {
   const originalVisualViewport = Object.getOwnPropertyDescriptor(window, "visualViewport");
+  const originalResizeObserver = Object.getOwnPropertyDescriptor(globalThis, "ResizeObserver");
   let anchorTop = 700;
+  let anchorHeight = 50;
   let viewport: FakeVisualViewport;
 
   beforeEach(() => {
     anchorTop = 700;
+    anchorHeight = 50;
+    FakeResizeObserver.instances = [];
     viewport = new FakeVisualViewport(0, 800);
     Object.defineProperty(window, "visualViewport", { configurable: true, value: viewport });
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      value: FakeResizeObserver,
+    });
   });
 
   afterEach(() => {
@@ -96,6 +132,11 @@ describe("useViewportBoundedMenu", () => {
     } else {
       delete (window as { visualViewport?: unknown }).visualViewport;
     }
+    if (originalResizeObserver) {
+      Object.defineProperty(globalThis, "ResizeObserver", originalResizeObserver);
+    } else {
+      delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+    }
   });
 
   function renderAnchored() {
@@ -104,7 +145,7 @@ describe("useViewportBoundedMenu", () => {
         ref={(node) => {
           if (!node) return;
           node.getBoundingClientRect = () =>
-            ({ top: anchorTop, bottom: anchorTop + 50 }) as DOMRect;
+            ({ top: anchorTop, bottom: anchorTop + anchorHeight }) as DOMRect;
         }}
       >
         <Probe />
@@ -141,5 +182,86 @@ describe("useViewportBoundedMenu", () => {
     expect(menu.style.top).toBe("100%");
     expect(menu.style.bottom).toBe("");
     expect(menu.style.maxHeight).toBe("384px");
+  });
+
+  test("hides a menu when neither side fits a row", () => {
+    anchorTop = 10;
+    anchorHeight = 380;
+    viewport.height = 400;
+    renderAnchored();
+
+    const menu = screen.getByTestId("menu");
+    expect(menu.style.maxHeight).toBe("0");
+    expect(menu.style.visibility).toBe("hidden");
+
+    act(() => {
+      anchorTop = 120;
+      anchorHeight = 50;
+      FakeResizeObserver.instances[0]!.notify();
+    });
+    expect(menu.style.visibility).toBe("");
+    expect(menu.dataset.side).toBe("bottom");
+    expect(menu.style.maxHeight).toBe("218px");
+  });
+
+  test("recomputes on scroll and composer resize", () => {
+    renderAnchored();
+    const menu = screen.getByTestId("menu");
+
+    act(() => {
+      anchorTop = 300;
+      window.dispatchEvent(new Event("scroll"));
+    });
+    expect(menu.style.maxHeight).toBe("288px");
+
+    act(() => {
+      anchorTop = 250;
+      FakeResizeObserver.instances[0]!.notify();
+    });
+    expect(menu.style.maxHeight).toBe("238px");
+
+    act(() => {
+      viewport.offsetTop = 100;
+      viewport.height = 300;
+      viewport.dispatchEvent(new Event("scroll"));
+    });
+    expect(menu.style.maxHeight).toBe("138px");
+  });
+
+  test("uses and observes the nearest clipping ancestor", () => {
+    let clippingTop = 200;
+    const { unmount } = render(
+      <div
+        style={{ overflowY: "hidden" }}
+        ref={(node) => {
+          if (node) {
+            node.getBoundingClientRect = () => ({ top: clippingTop, bottom: 405 }) as DOMRect;
+          }
+        }}
+      >
+        <div
+          ref={(node) => {
+            if (node) {
+              node.getBoundingClientRect = () => ({ top: 350, bottom: 400 }) as DOMRect;
+            }
+          }}
+        >
+          <Probe />
+        </div>
+      </div>,
+    );
+    const menu = screen.getByTestId("menu");
+    expect(menu.style.maxHeight).toBe("138px");
+    expect(FakeResizeObserver.instances[0]!.observed).toContain(menu.parentElement!.parentElement!);
+
+    act(() => {
+      clippingTop = 330;
+      FakeResizeObserver.instances[0]!.notify();
+    });
+    expect(menu.style.maxHeight).toBe("8px");
+    expect(menu.style.visibility).toBe("hidden");
+
+    unmount();
+    expect(FakeResizeObserver.instances[0]!.disconnected).toBe(true);
   });
 });

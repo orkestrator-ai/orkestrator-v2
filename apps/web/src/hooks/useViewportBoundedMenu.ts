@@ -6,7 +6,7 @@ const MENU_GAP_PX = 4;
 const VIEWPORT_EDGE_PADDING_PX = 8;
 /** Below this much room above the anchor, prefer opening downwards if roomier. */
 const FLIP_THRESHOLD_PX = 160;
-/** Never collapse the menu entirely; keep at least a row visible. */
+/** Hide the menu when even one usable row cannot fit. */
 const MIN_MENU_HEIGHT_PX = 48;
 
 export interface VerticalBounds {
@@ -37,8 +37,29 @@ export function computeViewportBoundedPlacement(
 
   return {
     side,
-    maxHeight: Math.max(MIN_MENU_HEIGHT_PX, Math.min(preferredMaxHeight, Math.floor(available))),
+    maxHeight: Math.max(0, Math.min(preferredMaxHeight, Math.floor(available))),
   };
+}
+
+/** An overflow container clips an anchored menu even when the viewport has room. */
+function clippingAncestors(element: HTMLElement): HTMLElement[] {
+  const ancestors: HTMLElement[] = [];
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    if (/^(auto|clip|hidden|scroll)$/.test(window.getComputedStyle(node).overflowY)) {
+      ancestors.push(node);
+    }
+  }
+  return ancestors;
+}
+
+function visibleBounds(ancestors: readonly HTMLElement[]): VerticalBounds {
+  const viewport = readViewportBounds();
+  for (const ancestor of ancestors) {
+    const rect = ancestor.getBoundingClientRect();
+    viewport.top = Math.max(viewport.top, rect.top);
+    viewport.bottom = Math.min(viewport.bottom, rect.bottom);
+  }
+  return viewport;
 }
 
 /**
@@ -77,12 +98,13 @@ export function useViewportBoundedMenu<TElement extends HTMLElement>(preferredMa
     if (!menuElement) return;
     const anchor = menuElement.offsetParent ?? menuElement.parentElement;
     if (!anchor) return;
+    const ancestors = clippingAncestors(menuElement);
 
     const update = () => {
       const rect = anchor.getBoundingClientRect();
       const next = computeViewportBoundedPlacement(
         { top: rect.top, bottom: rect.bottom },
-        readViewportBounds(),
+        visibleBounds(ancestors),
         preferredMaxHeight,
       );
       setPlacement((current) =>
@@ -103,6 +125,9 @@ export function useViewportBoundedMenu<TElement extends HTMLElement>(preferredMa
     const resizeObserver =
       typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
     resizeObserver?.observe(anchor);
+    for (const ancestor of ancestors) {
+      if (ancestor !== anchor) resizeObserver?.observe(ancestor);
+    }
 
     return () => {
       window.removeEventListener("resize", update);
@@ -120,12 +145,14 @@ export function useViewportBoundedMenu<TElement extends HTMLElement>(preferredMa
           left: 0,
           marginTop: MENU_GAP_PX,
           maxHeight: placement.maxHeight,
+          visibility: placement.maxHeight < MIN_MENU_HEIGHT_PX ? "hidden" : undefined,
         }
       : {
           bottom: "100%",
           left: 0,
           marginBottom: MENU_GAP_PX,
           maxHeight: placement?.maxHeight ?? preferredMaxHeight,
+          visibility: placement && placement.maxHeight < MIN_MENU_HEIGHT_PX ? "hidden" : undefined,
         };
 
   return { menuRef, setMenuRef, style, side: placement?.side ?? "top" };

@@ -129,4 +129,35 @@ describe("FileMentionMenu", () => {
       }
     }
   });
+
+  test("flips below the composer when the top edge is cramped", () => {
+    const originalVisualViewport = Object.getOwnPropertyDescriptor(window, "visualViewport");
+    Object.defineProperty(window, "visualViewport", {
+      configurable: true,
+      value: Object.assign(new EventTarget(), { offsetTop: 0, height: 400 }),
+    });
+
+    try {
+      render(
+        <div
+          ref={(node) => {
+            if (node) node.getBoundingClientRect = () => ({ top: 30, bottom: 80 }) as DOMRect;
+          }}
+        >
+          <FileMentionMenu files={files} selectedIndex={0} onSelect={() => {}} onClose={() => {}} />
+        </div>,
+      );
+
+      const menu = screen.getByRole("listbox", { name: "File and folder suggestions" });
+      expect(menu.dataset.side).toBe("bottom");
+      expect(menu.style.top).toBe("100%");
+      expect(menu.style.maxHeight).toBe("308px");
+    } finally {
+      if (originalVisualViewport) {
+        Object.defineProperty(window, "visualViewport", originalVisualViewport);
+      } else {
+        delete (window as { visualViewport?: unknown }).visualViewport;
+      }
+    }
+  });
 });

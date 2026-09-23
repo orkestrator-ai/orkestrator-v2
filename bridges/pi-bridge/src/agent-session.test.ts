@@ -28,11 +28,13 @@ import {
   projectResourceDiscoveryOptions,
   reconcileAgentMcp,
   recordExtensionLoadDiagnostics,
+  refreshSessionCommands,
   resumeSession,
   sessionManagerFor,
   setAgentSessionTestHooks,
   type AgentSessionTestHooks,
 } from "./agent-session.js";
+import { commandBindingRevision } from "@orkestrator/protocol/agent-command-catalogue";
 import { workingDirectory } from "./config.js";
 import { catalogReadFailed, refreshModels } from "./models.js";
 import { dispatchPrompt } from "./prompt.js";
@@ -644,7 +646,13 @@ describe("Pi SDK lifecycle", () => {
 
     await ensureSession(state);
     expect(state.slashCommands).toEqual([
-      { name: "/review", description: "Review files", source: "template" },
+      expect.objectContaining({
+        name: "/review",
+        description: "Review files",
+        source: "template",
+        id: "pi:template:review",
+        executionKind: "provider-prompt",
+      }),
     ]);
     state.status = "running";
     fake.emit({
@@ -715,7 +723,7 @@ describe("extension binding", () => {
     await ensureSession(state);
 
     expect(state.slashCommands).toEqual([
-      { name: "/deploy", description: "Ship it", source: "template" },
+      expect.objectContaining({ name: "/deploy", description: "Ship it", source: "template" }),
     ]);
   });
 
@@ -1074,3 +1082,342 @@ describe("MCP lifecycle", () => {
     }
   });
 });
+
+/**
+ * A session carrying all three of Pi's command sources, shaped like the SDK's.
+ *
+ * `reload()` swaps in whatever `nextTemplates` holds at that moment, the way
+ * Pi's resource loader re-reads the prompt directory.
+ */
+function commandSession(
+  options: {
+    templates?: Array<Record<string, unknown>>;
+    skills?: Array<Record<string, unknown>>;
+    extensions?: Array<Record<string, unknown>>;
+    overrides?: Record<string, unknown>;
+  } = {},
+) {
+  const templates = [...(options.templates ?? [])];
+  const skills = [...(options.skills ?? [])];
+  const extensions = [...(options.extensions ?? [])];
+  let nextTemplates: Array<Record<string, unknown>> | undefined;
+  let reloads = 0;
+  const activeToolCalls: string[][] = [];
+  const fake = fakeSession({
+    promptTemplates: templates,
+    resourceLoader: { getSkills: () => ({ skills, diagnostics: [] }) },
+    extensionRunner: {
+      getRegisteredCommands: () => extensions,
+      getCommand: (name: string) =>
+        extensions.find((command) => (command.invocationName ?? command.name) === name),
+    },
+    isIdle: true,
+    reload: async () => {
+      reloads += 1;
+      if (nextTemplates) templates.splice(0, templates.length, ...nextTemplates);
+    },
+    getAllTools: () => [{ name: "read" }, { name: "bash" }],
+    setActiveToolsByName: (names: string[]) => {
+      activeToolCalls.push(names);
+    },
+    ...options.overrides,
+  });
+  return {
+    ...fake,
+    reloads: () => reloads,
+    activeToolCalls,
+    setNextTemplates: (next: Array<Record<string, unknown>>) => {
+      nextTemplates = next;
+    },
+  };
+}
+
+const USER_TEMPLATE_PATH = "/home/someone/.pi/agent/prompts/review.md";
+const PROJECT_SKILL_PATH = "/work/repo/.pi/skills/lint/SKILL.md";
+const PACKAGE_EXTENSION_PATH = "/work/repo/.pi/packages/deploy/index.ts";
+
+function reviewTemplate(overrides: Record<string, unknown> = {}) {
+  return {
+    name: "review",
+    description: "Review files",
+    argumentHint: "<path>",
+    content: "Review $@",
+    filePath: USER_TEMPLATE_PATH,
+    sourceInfo: { path: USER_TEMPLATE_PATH, source: "local", scope: "user", origin: "top-level" },
+    ...overrides,
+  };
+}
+
+describe("command catalogue", () => {
+  test("attach and refresh produce identical descriptors and provenance", async () => {
+    const fake = commandSession({
+      templates: [reviewTemplate()],
+      skills: [
+        {
+          name: "lint",
+          description: "Lint the tree",
+          filePath: PROJECT_SKILL_PATH,
+          baseDir: "/work/repo/.pi/skills/lint",
+          sourceInfo: {
+            path: PROJECT_SKILL_PATH,
+            source: "local",
+            scope: "project",
+            origin: "top-level",
+          },
+          disableModelInvocation: false,
+        },
+      ],
+      extensions: [
+        {
+          name: "deploy",
+          // Pi's own disambiguation for a second extension named `deploy`.
+          invocationName: "deploy:2",
+          description: "Deploy the branch",
+          sourceInfo: {
+            path: PACKAGE_EXTENSION_PATH,
+            source: "npm:deploy",
+            scope: "project",
+            origin: "package",
+          },
+        },
+      ],
+    });
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState();
+
+    await ensureSession(state);
+    const attached = structuredClone(state.slashCommands);
+    const revisionAfterAttach = state.commandCatalogue.revision;
+    expect(state.commandCatalogue.status).toBe("ready");
+
+    expect(await refreshSessionCommands(state)).toEqual({ outcome: "reloaded" });
+    expect(fake.reloads()).toBe(1);
+    expect(state.slashCommands).toEqual(attached);
+    // Nothing changed, so a consumer polling the revision sees no churn.
+    expect(state.commandCatalogue.revision).toBe(revisionAfterAttach);
+
+    expect(attached).toEqual([
+      {
+        name: "/review",
+        id: "pi:template:review",
+        executionKind: "provider-prompt",
+        source: "template",
+        description: "Review files",
+        argumentHint: "<path>",
+        scope: "global",
+        origin: "user",
+        inputPolicy: { busy: "queue" },
+        bindingRevision: commandBindingRevision(["pi", "template", "review", USER_TEMPLATE_PATH]),
+        caseSensitive: true,
+      },
+      expect.objectContaining({
+        name: "/skill:lint",
+        id: "pi:skill:skill:lint",
+        source: "skill",
+        scope: "session",
+        origin: "project",
+        inputPolicy: { busy: "queue" },
+      }),
+      expect.objectContaining({
+        name: "/deploy:2",
+        id: "pi:extension:deploy:2",
+        source: "extension",
+        origin: "plugin",
+        inputPolicy: { busy: "idle", attachments: "none" },
+      }),
+    ]);
+    // Paths identify the binding through its fingerprint only.
+    const wire = JSON.stringify(attached);
+    expect(wire).not.toContain("/home/someone");
+    expect(wire).not.toContain("/work/repo");
+  });
+
+  test("lists only the SDK's effective winner when an extension shadows a template", async () => {
+    const fake = commandSession({
+      templates: [reviewTemplate()],
+      extensions: [{ name: "review", description: "Extension review", sourceInfo: {} }],
+    });
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState();
+
+    await ensureSession(state);
+
+    // `AgentSession.prompt` tries extension commands before template expansion,
+    // so `/review` can only ever reach the extension.
+    expect(state.slashCommands.map((command) => command.id)).toEqual(["pi:extension:review"]);
+  });
+
+  test("a binding change moves the revision; a description edit does not", async () => {
+    const fake = commandSession({ templates: [reviewTemplate()] });
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState();
+    await ensureSession(state);
+    const original = state.slashCommands[0]!.bindingRevision;
+
+    fake.setNextTemplates([reviewTemplate({ description: "Reworded" })]);
+    await refreshSessionCommands(state);
+    expect(state.slashCommands[0]!.description).toBe("Reworded");
+    expect(state.slashCommands[0]!.bindingRevision).toBe(original);
+
+    const moved = "/home/someone/.pi/agent/prompts/other/review.md";
+    fake.setNextTemplates([reviewTemplate({ filePath: moved, sourceInfo: { path: moved } })]);
+    await refreshSessionCommands(state);
+    expect(state.slashCommands[0]!.bindingRevision).not.toBe(original);
+  });
+
+  test("defers a refresh while a turn runs and reloads once it settles", async () => {
+    let finish: (() => void) | undefined;
+    const fake = commandSession({
+      templates: [reviewTemplate()],
+      overrides: {
+        prompt: async (_text: string, options: { preflightResult?: (ok: boolean) => void }) => {
+          options.preflightResult?.(true);
+          await new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+        },
+        abort: async () => {
+          throw new Error("a refresh must never abort the turn");
+        },
+      },
+    });
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState();
+    const session = await ensureSession(state);
+    const retained = structuredClone(state.slashCommands);
+
+    state.status = "running";
+    state.promptSequence = 1;
+    state.currentTurnUsage = {};
+    const handle = await dispatchPrompt(state, session, { prompt: "work", images: [] });
+
+    const refresh = await refreshSessionCommands(state);
+    expect(refresh.outcome).toBe("deferred");
+    expect(fake.reloads()).toBe(0);
+    // The old list stays usable, marked as not authoritative.
+    expect(state.commandCatalogue.status).toBe("stale");
+    expect(state.slashCommands).toEqual(retained);
+
+    fake.setNextTemplates([reviewTemplate(), reviewTemplate({ name: "deploy" })]);
+    finish!();
+    await handle.completion;
+    await waitUntil(() => state.commandCatalogue.status === "ready");
+
+    expect(fake.reloads()).toBe(1);
+    expect(state.slashCommands.map((command) => command.name)).toEqual(["/review", "/deploy"]);
+    expect(state.status).toBe("idle");
+  });
+
+  test("a reload keeps the session's tool policy", async () => {
+    const fake = commandSession();
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState(undefined, {
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "full",
+      toolPolicy: { deny: ["bash"] },
+    });
+    await ensureSession(state);
+    const beforeReload = fake.activeToolCalls.length;
+
+    await refreshSessionCommands(state);
+
+    expect(fake.activeToolCalls.length).toBe(beforeReload + 1);
+    expect(fake.activeToolCalls.at(-1)).toEqual(["read"]);
+  });
+
+  test("a failed reload keeps the previous list as stale", async () => {
+    const fake = commandSession({
+      templates: [reviewTemplate()],
+      overrides: {
+        reload: async () => {
+          throw new Error("extension failed to load");
+        },
+      },
+    });
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState();
+    await ensureSession(state);
+
+    const result = await refreshSessionCommands(state);
+
+    expect(result.outcome).toBe("failed");
+    expect(state.commandCatalogue.status).toBe("stale");
+    expect(state.slashCommands.map((command) => command.name)).toEqual(["/review"]);
+  });
+
+  test("the list survives a detach, and the next attach reads it afresh", async () => {
+    const fake = commandSession({ templates: [reviewTemplate()] });
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState();
+    await ensureSession(state);
+    await detachSession(state);
+
+    expect(state.slashCommands.map((command) => command.name)).toEqual(["/review"]);
+
+    state.commandReloadPending = true;
+    await ensureSession(state);
+    expect(state.commandReloadPending).toBe(false);
+    expect(state.commandCatalogue.status).toBe("ready");
+  });
+
+  test("a headless extension command's refusal is an explicit failure, not a hang", async () => {
+    // With no UI context bound, `ctx.hasUI` is false and every dialog method
+    // resolves empty. An extension that refuses on that throws; Pi catches it
+    // and reports it only to the bound error listener, then resolves prompt().
+    let fake: ReturnType<typeof commandSession>;
+    fake = commandSession({
+      extensions: [{ name: "wizard", description: "Interactive setup", sourceInfo: {} }],
+      overrides: {
+        prompt: async (text: string) => {
+          expect(text).toBe("/wizard");
+          fake.bindings()?.onError?.({
+            extensionPath: "command:wizard",
+            event: "command",
+            error: "wizard requires the interactive UI",
+          });
+        },
+        abort: async () => undefined,
+      },
+    });
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState();
+    const session = await ensureSession(state);
+    state.status = "running";
+    state.promptSequence = 1;
+    state.currentTurnUsage = {};
+    state.promptJournal.set("req-wizard", {
+      requestId: "req-wizard",
+      state: "accepted",
+      acceptedAt: 1,
+    });
+
+    const handle = await dispatchPrompt(state, session, {
+      prompt: "/wizard",
+      images: [],
+      requestId: "req-wizard",
+      extensionCommand: "wizard",
+    });
+    await handle.completion;
+
+    expect(state.status).toBe("error");
+    expect(state.error).toContain("requires the interactive UI");
+    expect(state.promptJournal.get("req-wizard")?.state).toBe("failed");
+    expect(state.approvals.size).toBe(0);
+    expect(state.commandRun).toBeUndefined();
+    expect(state.cancelTurn).toBeUndefined();
+    const outcome = state.messages.at(-1);
+    expect(outcome?.id).toBe("command-outcome:req-wizard");
+    expect(outcome?.parts[0]).toMatchObject({ type: "status", severity: "error" });
+  });
+});
+
+async function waitUntil(condition: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("Timed out waiting for the expected condition");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}

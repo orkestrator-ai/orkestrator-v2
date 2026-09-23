@@ -7,6 +7,15 @@ import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import {
+  commandUnavailableResponse,
+  readBridgePromptCommandFields,
+} from "@orkestrator/protocol/agent-command-catalogue";
+import {
+  commandCatalogue,
+  refreshCommandCatalogue,
+  resolveSelectedCommand,
+} from "./acp-commands.js";
 import { effectiveExecutionPolicy } from "./acp-policy.js";
 import {
   parsePromptAttachments,
@@ -60,6 +69,7 @@ import {
   parseFromIndex,
   publicApprovals,
   publicInteractions,
+  publicCommandRevision,
   publicContextUsage,
   publicSession,
   publicSessionReference,
@@ -78,6 +88,9 @@ import { schedulePersist } from "./acp-persist-writer.js";
 import { structuredPromptInstruction } from "./acp-prompt.js";
 
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
+
+/** A selected command stopped matching the live inventory before dispatch. */
+class CommandUnavailableError extends Error {}
 
 export async function route(
   request: IncomingMessage,
@@ -117,8 +130,16 @@ export async function route(
   ) {
     return json(response, 405, { error: "Authentication is managed by the agent CLI" });
   }
+  // Nothing here is refreshable on demand: the model catalogue is merged from
+  // live sessions and each agent pushes its own commands per session. Answer
+  // 200 so the backend's cache-only refresh proceeds, but do not claim a
+  // refresh that did not happen. `POST /session/:id/commands/refresh` is the
+  // per-session command answer.
   if (url.pathname === "/global/refresh-catalog" && request.method === "POST") {
-    return json(response, 200, { refreshed: true });
+    return json(response, 200, {
+      refreshed: false,
+      commands: { outcome: "unsupported", message: `${provider} pushes commands per session` },
+    });
   }
   if (url.pathname === "/global/models" && request.method === "GET") {
     const models = await listNormalizedModels(clientSignal);
@@ -178,7 +199,7 @@ export async function route(
     return json(response, 201, publicSession(state));
   }
   const match =
-    /^\/session\/([^/]+)(?:\/(messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+)?|config|commands|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
+    /^\/session\/([^/]+)(?:\/(messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
       url.pathname,
     );
   if (!match) return json(response, 404, { error: "Not found" });
@@ -189,6 +210,13 @@ export async function route(
     // route" and fail the environment. Health is optional metadata, so an
     // unknown session answers empty rather than failing.
     if (match[2] === "runtime-health") return json(response, 200, emptyRuntimeHealth());
+    // The enhanced catalogue contract: an unknown session is answered in band.
+    if (match[2] === "commands" && request.method === "GET") {
+      return json(response, 200, commandCatalogue(undefined));
+    }
+    if (match[2] === "commands/refresh" && request.method === "POST") {
+      return json(response, 200, refreshCommandCatalogue(undefined));
+    }
     return json(response, 404, { error: "Session not found" });
   }
   const action = match[2];
@@ -233,6 +261,7 @@ export async function route(
         : {}),
       ...(state.policy ? { policy: state.policy } : {}),
       ...(contextUsage ? { contextUsage } : {}),
+      ...publicCommandRevision(state),
       runtime: publicRuntime(state),
     });
   }
@@ -258,8 +287,15 @@ export async function route(
     }
     return json(response, 200, state.sessionConfig.composer);
   }
+  // Metadata, like `/activity`: never attaches, spawns or reloads anything.
+  // Old clients read `commands` only and still get the same rows.
   if (action === "commands" && request.method === "GET") {
-    return json(response, 200, { commands: state.availableCommands ?? [] });
+    return json(response, 200, commandCatalogue(state));
+  }
+  // Honest by construction: re-reads the pushed list or says it cannot. It
+  // never restarts an agent to make it announce again.
+  if (action === "commands/refresh" && request.method === "POST") {
+    return json(response, 200, refreshCommandCatalogue(state));
   }
   if (action === "mcp" && request.method === "GET") {
     configuredAcpMcpServers();
@@ -386,13 +422,29 @@ export async function route(
   }
   if (action === "prompt" && request.method === "POST") {
     const body = await readJson(request);
-    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
     const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
     const schema = isObject(body.outputSchema) ? body.outputSchema : undefined;
     const readOnly = body.readOnly;
     if (readOnly !== undefined && typeof readOnly !== "boolean") {
       return json(response, 400, { error: "readOnly must be a boolean" });
     }
+    // `allowProviderCommands: false` (literal intent) changes nothing here:
+    // ACP has no way to tell an agent not to interpret a leading `/name`, and
+    // this bridge has no resolver of its own to skip. The backend refuses a
+    // literal prompt whose leading token names a known command before it gets
+    // here (`literalCommandSuppression`), so the text is passed unchanged.
+    const commandFields = readBridgePromptCommandFields(body);
+    if (!commandFields.ok) return json(response, 400, { error: commandFields.error });
+    const selectedCommand = commandFields.command;
+    if (selectedCommand && schema) {
+      return json(response, 400, {
+        error: "A structured-output prompt cannot carry a command selection",
+      });
+    }
+    // A selected command is sent as its canonical text with the arguments
+    // exactly as typed; the typed `prompt` is display text only.
+    const displayPrompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    let prompt = selectedCommand ? "" : displayPrompt;
     // Shape validation happens before the turn is claimed: a malformed
     // attachment list is a caller error, not a turn that half-started.
     let attachments;
@@ -402,7 +454,7 @@ export async function route(
       if (!(error instanceof PromptAttachmentError)) throw error;
       return json(response, 400, { error: error.message });
     }
-    if (!prompt && attachments.length === 0) {
+    if (!selectedCommand && !prompt && attachments.length === 0) {
       return json(response, 400, { error: "prompt or image attachment is required" });
     }
     if (state.subagentLimitExceeded) {
@@ -429,6 +481,16 @@ export async function route(
     }
     if (state.status === "running" || state.dispatching) {
       return json(response, 409, { error: "Session is already running" });
+    }
+    // After the duplicate check — a retry of an accepted command must still
+    // read as a duplicate even if the inventory changed since — and before
+    // anything is journaled. A command the live agent no longer offers, or a
+    // list only restored from disk, is refused outright: sending the text as
+    // an ordinary prompt is exactly what a selection must never become.
+    if (selectedCommand && state.commandsLive) {
+      const resolved = resolveSelectedCommand(state, selectedCommand);
+      if (!resolved.ok) return json(response, 422, commandUnavailableResponse(resolved.message));
+      prompt = resolved.text;
     }
     // Claim the turn synchronously. `ensureSessionProcess` yields even on its
     // attached fast path, so a second request would otherwise pass both the
@@ -471,6 +533,13 @@ export async function route(
       }
       const promptPatch = parseComposerPatch(body);
       if (promptPatch) await applyComposerPatch(state, promptPatch, clientSignal);
+      // Attaching can reload the session, and the agent re-announces its
+      // inventory when it does. Check the selection against that list too.
+      if (selectedCommand) {
+        const resolved = resolveSelectedCommand(state, selectedCommand);
+        if (!resolved.ok) throw new CommandUnavailableError(resolved.message);
+        prompt = resolved.text;
+      }
     } catch (error) {
       // The turn definitely did not run, so release the claim and let the
       // caller retry with the same requestId.
@@ -485,19 +554,23 @@ export async function route(
       if (error instanceof PromptAttachmentError) {
         return json(response, 400, { error: error.message });
       }
+      if (error instanceof CommandUnavailableError) {
+        return json(response, 422, commandUnavailableResponse(error.message));
+      }
       throw error;
     }
     const userMessageId = randomBytes(12).toString("hex");
+    const userVisiblePrompt = selectedCommand ? displayPrompt || prompt : prompt;
     state.messages.push({
       id: userMessageId,
       role: "user",
-      content: prompt,
+      content: userVisiblePrompt,
       parts: [
-        ...(prompt
+        ...(userVisiblePrompt
           ? [
               {
                 type: "text" as const,
-                content: prompt,
+                content: userVisiblePrompt,
                 sourcePartId: `${userMessageId}:0`,
                 sourceMessageId: userMessageId,
               },

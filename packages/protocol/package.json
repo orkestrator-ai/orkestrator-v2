@@ -8,6 +8,7 @@
     "./agent-activity": "./src/agent-activity.ts",
     "./agent-platforms": "./src/agent-platforms.ts",
     "./agent-settings": "./src/agent-settings.ts",
+    "./agent-command-catalogue": "./src/agent-command-catalogue.ts",
     "./agent-interactions": "./src/agent-interactions.ts",
     "./agent-mail": "./src/agent-mail.ts",
     "./agent-slash-commands": "./src/agent-slash-commands.ts",

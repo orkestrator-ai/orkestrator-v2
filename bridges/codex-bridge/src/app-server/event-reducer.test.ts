@@ -838,6 +838,13 @@ describe("unknown and ignored notifications", () => {
     }
   });
 
+  test("skills/changed is reduced to a payload-free invalidation mark", () => {
+    const result = reduceNotification(notify("skills/changed", {}), 3);
+    expect(result.events).toEqual([{ kind: "skills.changed", engineGeneration: 3 }]);
+    expect(result.unknownMethod).toBeUndefined();
+    expect(isIgnoredNotification("skills/changed")).toBe(false);
+  });
+
   test("the ignore list does not swallow methods the reducer handles", () => {
     for (const method of [
       "turn/started",

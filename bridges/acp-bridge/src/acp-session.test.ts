@@ -300,11 +300,21 @@ describe("ACP bridge", () => {
     });
     const commands = await nativeFetch(`${first.base}/session/${created.id}/commands`, {
       headers: first.headers,
-    }).then((response) => response.json() as Promise<{ commands: unknown[] }>);
+    }).then((response) => response.json() as Promise<{ status: string; commands: unknown[] }>);
+    expect(commands.status).toBe("ready");
+    // ACP says how a command arrived, not who owns it: provenance is unknown.
     expect(commands.commands).toEqual([
-      { name: "/review", description: "Review changes", source: "builtin", scope: "session" },
-      { name: "/commit", description: "Commit changes", source: "builtin", scope: "session" },
-      { name: "/test", description: "Run tests", source: "builtin", scope: "session" },
+      expect.objectContaining({
+        name: "/review",
+        description: "Review changes",
+        source: "unknown",
+      }),
+      expect.objectContaining({
+        name: "/commit",
+        description: "Commit changes",
+        source: "unknown",
+      }),
+      expect.objectContaining({ name: "/test", description: "Run tests", source: "unknown" }),
     ]);
     const mcp = await nativeFetch(`${first.base}/session/${created.id}/mcp`, {
       headers: first.headers,
@@ -377,8 +387,10 @@ describe("ACP bridge", () => {
     expect(restored.runtime).toMatchObject({ commands: 3 });
     const restoredCommands = await nativeFetch(`${second.base}/session/${created.id}/commands`, {
       headers: second.headers,
-    }).then((response) => response.json() as Promise<{ commands: unknown[] }>);
+    }).then((response) => response.json() as Promise<{ status: string; commands: unknown[] }>);
     expect(restoredCommands.commands).toHaveLength(3);
+    // Shown, but no longer authoritative: this process's agent has not spoken.
+    expect(restoredCommands.status).toBe("stale");
   });
 
   test("merges a usage carrier that arrives after its turn already resolved", async () => {

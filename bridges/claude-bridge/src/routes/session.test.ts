@@ -92,7 +92,20 @@ const mockGracefulInterruptClaudeSession = mock(async () => ({
   interrupted: true,
   stillQueued: [] as string[],
 }));
-const mockReadSessionCommands = mock(async () => []);
+const mockReadClaudeCommandCatalogue = mock<typeof realSessionManager.readClaudeCommandCatalogue>(
+  async () => ({ catalogueVersion: 1, status: "missing", commands: [] }),
+);
+const mockRefreshClaudeCommandCatalogue = mock<
+  typeof realSessionManager.refreshClaudeCommandCatalogue
+>(async () => ({ outcome: "reread" }));
+const mockTypedCommandUnavailableMessage = mock<
+  typeof realSessionManager.typedCommandUnavailableMessage
+>((_session, prompt) =>
+  prompt.startsWith("/clear") ? "/clear starts a new Claude conversation." : undefined,
+);
+const mockResolveClaudeCommandInvocation = mock<
+  typeof realSessionManager.resolveClaudeCommandInvocation
+>(async () => ({ ok: false, message: "unset" }));
 const mockReadSessionMcpServers = mock(async () => []);
 const mockPerformSessionMcpAction = mock(async () => ({ ok: true }));
 const mockSteerClaudeSession = mock(async () => "applied" as const);
@@ -198,7 +211,10 @@ mock.module("../services/session-manager.js", () => ({
   claimPromptDispatch: mockClaimPromptDispatch,
   getPromptDispatchState: mockGetPromptDispatchState,
   gracefulInterruptClaudeSession: mockGracefulInterruptClaudeSession,
-  readSessionCommands: mockReadSessionCommands,
+  readClaudeCommandCatalogue: mockReadClaudeCommandCatalogue,
+  refreshClaudeCommandCatalogue: mockRefreshClaudeCommandCatalogue,
+  resolveClaudeCommandInvocation: mockResolveClaudeCommandInvocation,
+  typedCommandUnavailableMessage: mockTypedCommandUnavailableMessage,
   readSessionMcpServers: mockReadSessionMcpServers,
   performSessionMcpAction: mockPerformSessionMcpAction,
   steerClaudeSession: mockSteerClaudeSession,
@@ -439,6 +455,28 @@ describe("session routes", () => {
       expect(data.id).toBe("s-1");
       expect(data.turnStartedAt).toBe(turnStartedAt);
       expect(Object.hasOwn(data, "planMode")).toBe(false);
+    });
+
+    test("publishes the command inventory revision only when an inventory exists", async () => {
+      const base = {
+        id: "s-1",
+        title: "Test",
+        status: "idle" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+      };
+      mockGetSession.mockImplementationOnce(() => ({
+        ...base,
+        commandInventoryState: { authority: "replacement", revision: 7, truncated: false },
+      }));
+      const withInventory = await jsonBody(await app.request("/session/s-1"));
+      expect(withInventory.commandRevision).toBe(7);
+      // Served from memory: the catalogue read path is never involved.
+      expect(mockReadClaudeCommandCatalogue).not.toHaveBeenCalled();
+
+      mockGetSession.mockImplementationOnce(() => base);
+      const withoutInventory = await jsonBody(await app.request("/session/s-1"));
+      expect(Object.hasOwn(withoutInventory, "commandRevision")).toBe(false);
     });
 
     test("prefers the in-progress token lower bound while a turn is running", async () => {
@@ -1541,6 +1579,193 @@ describe("session routes", () => {
         const callArgs = mockSendPrompt.mock.calls[0];
         expect(callArgs[2].permissionMode).toBe(mode);
       }
+    });
+  });
+
+  describe("command catalogue and selected commands", () => {
+    const reviewCommand = {
+      name: "/review",
+      id: "claude:/review",
+      executionKind: "provider-prompt" as const,
+      source: "unknown" as const,
+      bindingRevision: "0123456789abcdef",
+    };
+
+    beforeEach(() => {
+      mockReadClaudeCommandCatalogue.mockReset();
+      mockReadClaudeCommandCatalogue.mockImplementation(async () => ({
+        catalogueVersion: 1,
+        status: "missing",
+        commands: [],
+      }));
+      mockRefreshClaudeCommandCatalogue.mockReset();
+      mockRefreshClaudeCommandCatalogue.mockImplementation(async () => ({ outcome: "reread" }));
+      mockResolveClaudeCommandInvocation.mockReset();
+      mockClaimPromptDispatch.mockClear();
+    });
+
+    test("serves the enhanced catalogue without resolving, touching or hydrating", async () => {
+      mockReadClaudeCommandCatalogue.mockImplementationOnce(async () => ({
+        catalogueVersion: 1,
+        status: "ready",
+        revision: 2,
+        commands: [reviewCommand],
+      }));
+      const response = await app.request("/session/s-1/commands");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        catalogueVersion: 1,
+        status: "ready",
+        commands: [{ id: "claude:/review", executionKind: "provider-prompt" }],
+      });
+      expect(mockReadClaudeCommandCatalogue).toHaveBeenCalledWith("s-1");
+      expect(mockGetSession).not.toHaveBeenCalled();
+      expect(mockEnsurePersistedSession).not.toHaveBeenCalled();
+      expect(mockHydratePersistedSessionMessages).not.toHaveBeenCalled();
+    });
+
+    test("answers an unknown session in band, not with a 404", async () => {
+      const response = await app.request("/session/never-seen/commands");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        catalogueVersion: 1,
+        status: "missing",
+        commands: [],
+      });
+    });
+
+    test("a failed discovery is an error, never an empty ready list", async () => {
+      mockReadClaudeCommandCatalogue.mockImplementationOnce(async () => {
+        throw new Error("inventory exploded");
+      });
+      const response = await app.request("/session/s-1/commands");
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: "inventory exploded" });
+    });
+
+    test("refresh reports the outcome the session manager observed", async () => {
+      mockRefreshClaudeCommandCatalogue.mockImplementationOnce(async () => ({
+        outcome: "failed",
+        message: "Claude could not reload every command resource (plugins: boom).",
+      }));
+      const response = await jsonRequest("POST", "/session/s-1/commands/refresh");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        outcome: "failed",
+        message: "Claude could not reload every command resource (plugins: boom).",
+      });
+    });
+
+    test("sends the canonical spelling while the transcript keeps the typed text", async () => {
+      const args = "src/app.ts\n  and the tests\t";
+      mockResolveClaudeCommandInvocation.mockImplementationOnce(async () => ({
+        ok: true,
+        command: reviewCommand,
+        providerPrompt: `/review ${args}`,
+      }));
+      const response = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: `/Review ${args}`,
+        requestId: "command-1",
+        command: {
+          id: "claude:/review",
+          name: "/review",
+          executionKind: "provider-prompt",
+          bindingRevision: "0123456789abcdef",
+          arguments: args,
+        },
+      });
+      expect(response.status).toBe(202);
+      expect(mockResolveClaudeCommandInvocation.mock.calls[0]?.[1]).toEqual({
+        id: "claude:/review",
+        name: "/review",
+        executionKind: "provider-prompt",
+        bindingRevision: "0123456789abcdef",
+        arguments: args,
+      });
+      const [, prompt, options] = mockSendPrompt.mock.calls[0]!;
+      expect(prompt).toBe(`/Review ${args}`);
+      expect(options?.providerPrompt).toBe(`/review ${args}`);
+    });
+
+    test("a removed, forged or changed command is refused before any dispatch", async () => {
+      mockResolveClaudeCommandInvocation.mockImplementationOnce(async () => ({
+        ok: false,
+        message: "/review changed since it was selected. Choose it again from the menu.",
+      }));
+      const response = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "/review",
+        requestId: "command-stale",
+        command: {
+          id: "claude:/review",
+          name: "/review",
+          executionKind: "provider-prompt",
+          bindingRevision: "ffffffffffffffff",
+          arguments: "",
+        },
+      });
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({
+        error: "/review changed since it was selected. Choose it again from the menu.",
+        kind: "command-unavailable",
+      });
+      // Nothing journaled, nothing sent: the backend reports a rejection.
+      expect(mockClaimPromptDispatch).not.toHaveBeenCalled();
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("rejects malformed command fields and literal intent with a selection", async () => {
+      const malformed = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "/review",
+        command: { id: "claude:/review", name: "/review", executionKind: "provider-prompt" },
+      });
+      expect(malformed.status).toBe(400);
+      const contradictory = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "/review",
+        allowProviderCommands: false,
+        command: { ...reviewCommand, arguments: "" },
+      });
+      expect(contradictory.status).toBe(400);
+      const badFlag = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "hello",
+        allowProviderCommands: "no",
+      });
+      expect(badFlag.status).toBe(400);
+      expect(mockResolveClaudeCommandInvocation).not.toHaveBeenCalled();
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("typed text naming an unavailable command is refused before dispatch", async () => {
+      const refused = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "/clear",
+        requestId: "typed-clear",
+      });
+      expect(refused.status).toBe(422);
+      expect(await refused.json()).toEqual({
+        error: "/clear starts a new Claude conversation.",
+        kind: "command-unavailable",
+      });
+      expect(mockClaimPromptDispatch).not.toHaveBeenCalled();
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+
+      const passed = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "/review src/a.ts",
+        requestId: "typed-review",
+      });
+      expect(passed.status).toBe(202);
+      expect(mockSendPrompt.mock.calls[0]?.[1]).toBe("/review src/a.ts");
+      expect(mockSendPrompt.mock.calls[0]?.[2]?.providerPrompt).toBeUndefined();
+    });
+
+    test("literal intent passes the text through unchanged", async () => {
+      const response = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "/tmp/output.log looks wrong",
+        allowProviderCommands: false,
+      });
+      expect(response.status).toBe(202);
+      const [, prompt, options] = mockSendPrompt.mock.calls[0]!;
+      expect(prompt).toBe("/tmp/output.log looks wrong");
+      expect(options?.providerPrompt).toBeUndefined();
+      expect(mockResolveClaudeCommandInvocation).not.toHaveBeenCalled();
     });
   });
 

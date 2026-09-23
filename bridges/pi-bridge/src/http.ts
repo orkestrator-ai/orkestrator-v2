@@ -13,6 +13,7 @@ import { gzip } from "node:zlib";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
   authenticate,
+  CATALOG_TIMEOUT_MS,
   COMPOSER_HYDRATION_WAIT_MS,
   MAX_BODY_BYTES,
   PROVIDER,
@@ -55,6 +56,18 @@ import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
+import {
+  commandUnavailableResponse,
+  readBridgePromptCommandFields,
+} from "@orkestrator/protocol/agent-command-catalogue";
+import {
+  commandCatalogueResponse,
+  effectiveCommandKind,
+  legacyCompactReply,
+  missingCommandCatalogueResponse,
+  resolveCommandSelection,
+  type CommandSelection,
+} from "./commands.js";
 import { refreshRuntimeCatalog } from "./runtime.js";
 import { withTimeout } from "./timeout.js";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
@@ -70,7 +83,9 @@ import {
   navigateSessionHistory,
   parseComposerPatch,
   reconcileAgentMcp,
+  refreshSessionCommands,
   resumeSession,
+  runDeferredCommandReload,
   setSessionReadOnly,
   setSessionTitle,
 } from "./agent-session.js";
@@ -95,6 +110,17 @@ class HttpError extends Error {
     this.name = "HttpError";
   }
 }
+
+/** A selected command that no longer matches this session's registry. */
+class CommandUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CommandUnavailableError";
+  }
+}
+
+/** Sessions a global refresh reloads at once. */
+const GLOBAL_REFRESH_CONCURRENCY = 4;
 
 const DEFAULT_DELETE_CANCEL_TIMEOUT_MS = 5_000;
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
@@ -173,31 +199,37 @@ async function routeGlobal(
     // layer's generation guard stops that probe publishing, and this ordering
     // ensures even a result that landed just before settlement is discarded.
     refreshModels();
-    await Promise.all(
-      Array.from(sessions.values()).map(async (state) => {
-        const session = state.session;
-        if (!session) return;
-        await session.reload();
-        state.slashCommands = readSessionCommands(session);
-        state.revision += 1;
-      }),
+    // Bounded, and only for sessions that are attached: a detached one reads
+    // a fresh list on its next attach, and attaching every idle session here
+    // would cold-start them all at once. A busy session is never reloaded
+    // underneath its turn; its reload is deferred until it is idle.
+    await forEachBounded(
+      Array.from(sessions.values()).filter((state) => state.session),
+      GLOBAL_REFRESH_CONCURRENCY,
+      async (state) => {
+        if (state.session) await refreshSessionCommands(state);
+      },
     );
     // Restored sessions intentionally hold no persisted model rows. A manual
     // refresh must repair those session snapshots too, otherwise the global
     // catalogue changes while the open tab keeps saying no models are
     // available until its ordinary retry deadline passes.
-    await Promise.all(
-      Array.from(sessions.values()).map((state) => hydrateSessionComposer(state, { force: true })),
+    await forEachBounded(Array.from(sessions.values()), GLOBAL_REFRESH_CONCURRENCY, (state) =>
+      hydrateSessionComposer(state, { force: true }),
     );
+    schedulePersist();
     json(response, 200, { ok: true });
     return true;
   }
-  // Pi's slash commands are prompt templates and skills, which are discovered
-  // per session because a workspace can contribute its own. There is no global
-  // list, so this answers empty rather than 404 — the backend reads a 404 as a
-  // bridge that predates the route.
+  // Pi's slash commands are prompt templates, skills and extension commands,
+  // all discovered per session because a workspace can contribute its own.
+  // There is no global list, so this answers empty rather than 404 — the
+  // backend reads a 404 as a bridge that predates the route. `/compact` used
+  // to be advertised here, but `session.prompt` does not implement Pi's
+  // interactive builtins; compaction is the backend's session action over
+  // `/session/:id/compact`.
   if (url.pathname === "/plugins/commands" && request.method === "GET") {
-    json(response, 200, { commands: globalSlashCommands() });
+    json(response, 200, { commands: [] });
     return true;
   }
   if (url.pathname === "/global/auth" && request.method === "GET") {
@@ -291,39 +323,6 @@ async function routeGlobal(
   return false;
 }
 
-function readSessionCommands(session: NonNullable<SessionState["session"]>) {
-  const commands = [
-    ...session.promptTemplates.map((template) => ({
-      name: `/${template.name}`,
-      description: template.description,
-      source: "template" as const,
-      ...(template.argumentHint ? { argumentHint: template.argumentHint } : {}),
-    })),
-    ...session.resourceLoader.getSkills().skills.map((skill) => ({
-      name: `/skill:${skill.name}`,
-      description: skill.description,
-      source: "skill" as const,
-    })),
-    ...session.extensionRunner.getRegisteredCommands().map((command) => ({
-      name: `/${command.invocationName || command.name}`,
-      description: command.description,
-      source: "extension" as const,
-    })),
-  ];
-  return commands.slice(0, 512);
-}
-
-/**
- * Slash commands available before a session exists.
- *
- * Only the ones this bridge implements itself. Pi's own file-backed commands
- * are per-session and reported through the session config instead, because a
- * workspace can contribute prompt templates the global list has never seen.
- */
-function globalSlashCommands(): Array<{ name: string; description: string }> {
-  return [{ name: "/compact", description: "Summarize the conversation to free context" }];
-}
-
 const SESSION_ROUTE =
   /^\/session\/([^/]+)(?:\/(messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|structured-output|interactions|config|approvals|compact|fork|steer|queue|runtime-health|commands|mcp|rewind-messages|branches|title))?(?:\/([^/]+))?$/;
 
@@ -339,6 +338,17 @@ async function routeSession(
   const action = match[2];
   const subject = match[3];
   if (!state) {
+    // An enhanced catalogue read answers an unknown session in band too; the
+    // backend must never fall back from a missing session to a global list.
+    if (action === "commands" && !subject && request.method === "GET") {
+      return json(response, 200, missingCommandCatalogueResponse());
+    }
+    if (action === "commands" && subject === "refresh" && request.method === "POST") {
+      return json(response, 200, {
+        outcome: "failed",
+        message: "This Pi session is not held by the bridge.",
+      });
+    }
     // Answered in band so the backend can tell "this session is gone" from
     // "this bridge predates the route" — a 404 here would have it delete a
     // live session mapping against an older bridge.
@@ -357,7 +367,9 @@ async function routeSession(
     action !== "activity" &&
     action !== "runtime-health" &&
     action !== "dispatch" &&
-    !(action === "steer" && subject === "dispatch")
+    !(action === "steer" && subject === "dispatch") &&
+    // A catalogue read is metadata; it must not keep an idle session warm.
+    !(action === "commands" && request.method === "GET")
   ) {
     state.lastAccessed = Date.now();
   }
@@ -441,8 +453,14 @@ async function routeSession(
   if (action === "queue" && request.method === "GET") {
     return json(response, 200, publicQueue(state));
   }
-  if (action === "commands" && request.method === "GET") {
-    return json(response, 200, { commands: state.slashCommands });
+  if (action === "commands" && !subject && request.method === "GET") {
+    // Metadata only: never attaches, hydrates or reloads.
+    return json(response, 200, commandCatalogueResponse(state));
+  }
+  if (action === "commands" && subject === "refresh" && request.method === "POST") {
+    const result = await refreshSessionCommands(state);
+    schedulePersist();
+    return json(response, 200, result);
   }
   if (action === "mcp" && request.method === "GET") {
     return json(response, 200, { servers: publicPiMcpServers(state) });
@@ -592,7 +610,7 @@ async function handleConfig(
   // Claimed before the first await, exactly as the prompt route does: applying
   // a patch reaches the live session, and a prompt admitted in that window
   // would plan against a composer that is about to change under it.
-  if (state.status === "running" || state.dispatching) {
+  if (state.status === "running" || state.dispatching || state.commandReload) {
     throw new HttpError(409, "Session is already running");
   }
   const patch = parseComposerPatch(body);
@@ -633,7 +651,7 @@ async function handleCancel(response: ServerResponse, state: SessionState): Prom
  * user is watching in order to shrink its context.
  */
 async function handleCompact(response: ServerResponse, state: SessionState): Promise<void> {
-  if (state.status === "running" || state.dispatching || state.compacting) {
+  if (state.status === "running" || state.dispatching || state.compacting || state.commandReload) {
     throw new HttpError(409, "Session is already running");
   }
   // Claimed synchronously, before the first await, exactly as the prompt route
@@ -652,6 +670,9 @@ async function handleCompact(response: ServerResponse, state: SessionState): Pro
     state.dispatching = false;
     state.revision += 1;
     schedulePersist();
+    void runDeferredCommandReload(state)
+      .then(() => schedulePersist())
+      .catch(() => undefined);
   }
   return json(response, 200, { compacted: true });
 }
@@ -874,6 +895,9 @@ async function handlePrompt(
   clientSignal: AbortSignal,
 ): Promise<void> {
   const body = await readJson(request);
+  const commandFields = readBridgePromptCommandFields(body);
+  if (!commandFields.ok) throw new HttpError(400, commandFields.error);
+  const { allowProviderCommands, command } = commandFields;
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const requestId = readBoundedString(body.requestId, 512, "requestId");
   const schema = isObject(body.outputSchema) ? body.outputSchema : undefined;
@@ -881,8 +905,22 @@ async function handlePrompt(
   // Shape validation happens before the turn is claimed: a malformed
   // attachment list is a caller error, not a turn that half-started.
   const attachments = parsePromptAttachments(body.attachments);
-  if (!prompt && attachments.length === 0) {
+  if (!prompt && attachments.length === 0 && !command) {
     throw new HttpError(400, "prompt or attachment is required");
+  }
+  // The structured-output instruction is appended to the prompt text, which
+  // for a command would become part of its arguments.
+  if (command && schema) {
+    throw new HttpError(400, "A command selection cannot request structured output");
+  }
+  // A resource reload rebuilds the extension runtime underneath the session.
+  // Wait it out, bounded, rather than dispatch into a half-built one.
+  if (state.commandReload) {
+    await withTimeout(
+      state.commandReload,
+      CATALOG_TIMEOUT_MS,
+      "Pi is still reloading its commands",
+    ).catch(() => undefined);
   }
   if (requestId && state.promptJournal.has(requestId)) {
     const journaled = state.promptJournal.get(requestId)!;
@@ -906,24 +944,42 @@ async function handlePrompt(
     }
     return json(response, 202, { accepted: true, duplicate: true });
   }
-  const idleSteer = idleSteerPromptReply(prompt, "Pi");
-  if (idleSteer) {
-    if (state.status === "running" || state.dispatching || state.compacting) {
-      throw new HttpError(409, "Use POST /session/:id/steer to steer the active turn");
+
+  // A selected command is checked against this session's own registry before
+  // anything is journaled. A mismatch is refused (422), never sent on as text.
+  let selection: Extract<CommandSelection, { ok: true }> | undefined;
+  if (command) {
+    const resolved = resolveCommandSelection(state, command);
+    if (!resolved.ok) return json(response, 422, commandUnavailableResponse(resolved.message));
+    if (resolved.kind === "extension" && attachments.length > 0) {
+      throw new HttpError(400, "Pi extension commands take no attachments");
     }
-    if (schema) throw new HttpError(400, "/steer cannot be used with structured output");
-    appendLocalExchange(state, prompt, idleSteer, requestId);
-    if (requestId) {
-      setPromptJournal(state, {
-        requestId,
-        state: "completed",
-        acceptedAt: Date.now(),
-        local: true,
-      });
+    selection = resolved;
+  }
+  // What Pi receives: the canonical invocation for a selection, otherwise the
+  // text as typed. The transcript shows what the user typed.
+  const providerPrompt = selection ? selection.text : prompt;
+  const displayPrompt = prompt || providerPrompt;
+
+  // Local answers exist only for interpreted text. Literal intent means the
+  // text is never matched against a command, local or provider.
+  if (!command && allowProviderCommands) {
+    const idleSteer = idleSteerPromptReply(prompt, "Pi");
+    if (idleSteer) {
+      if (state.status === "running" || state.dispatching || state.compacting) {
+        throw new HttpError(409, "Use POST /session/:id/steer to steer the active turn");
+      }
+      if (schema) throw new HttpError(400, "/steer cannot be used with structured output");
+      return answerLocally(response, state, prompt, idleSteer, requestId, "idle-steer");
     }
-    state.revision += 1;
-    schedulePersist();
-    return json(response, 200, { accepted: true, local: true });
+    const compactReply = legacyCompactReply(prompt, state.slashCommands);
+    if (compactReply) {
+      if (state.status === "running" || state.dispatching || state.compacting) {
+        throw new HttpError(409, "Session is already running");
+      }
+      if (schema) throw new HttpError(400, "/compact cannot be used with structured output");
+      return answerLocally(response, state, prompt, compactReply, requestId, "compact");
+    }
   }
   // A second ordinary prompt is a provider-owned follow-up. Pi keeps this
   // queue with the live run, and its state events rehydrate `/queue` even when
@@ -931,13 +987,39 @@ async function handlePrompt(
   if (state.status === "running" && !state.dispatching && !state.compacting && state.session) {
     const session = state.session;
     const expectedRunId = piRunId(state);
+    if (selection?.kind === "extension") {
+      // Pi refuses to queue an extension command, and running one mid-turn is
+      // not qualified; its descriptor says `busy: idle`.
+      throw new HttpError(409, "Pi extension commands run only while the session is idle");
+    }
+    if (selection) {
+      const live = effectiveCommandKind(session, selection.text);
+      if (live?.kind !== selection.kind || live.invocation !== selection.invocation) {
+        return json(
+          response,
+          422,
+          commandUnavailableResponse(
+            `${command!.name} no longer resolves to the same Pi command. Choose it again.`,
+          ),
+        );
+      }
+    }
+    if (!allowProviderCommands && effectiveCommandKind(session, providerPrompt)) {
+      // `followUp` always expands skills and templates and refuses extension
+      // commands, and Pi has no literal queue. Queuing this would run it as a
+      // command; refusing keeps the literal promise.
+      throw new HttpError(
+        409,
+        "Pi would read this literal prompt as a command, so it cannot be queued behind the running turn; send it when the session is idle",
+      );
+    }
     const images = await readPromptImages(
       attachments,
       workingDirectory,
       session.model?.inputLimits?.images?.resize,
     );
     const files = await resolvePromptFiles(attachments, workingDirectory);
-    const text = prompt + promptFileReferences(files);
+    const text = providerPrompt + promptFileReferences(files);
     if (requestId) {
       setPromptJournal(state, { requestId, state: "prepared", acceptedAt: Date.now() });
       await persistBarrier();
@@ -983,9 +1065,13 @@ async function handlePrompt(
   }
   // `compacting` counts as busy: Pi's compaction aborts whatever is running,
   // so a prompt admitted alongside one is a turn that gets cancelled out from
-  // under the user.
+  // under the user. A reload still in flight after the bounded wait above is
+  // busy too.
   if (state.status === "running" || state.dispatching || state.compacting) {
     throw new HttpError(409, "Session is already running");
+  }
+  if (state.commandReload) {
+    throw new HttpError(409, "Pi is reloading its commands; retry shortly");
   }
 
   if (body.readOnly !== undefined && typeof body.readOnly !== "boolean")
@@ -1016,6 +1102,19 @@ async function handlePrompt(
     await reconcileAgentMcp(state);
     session = await ensureSession(state);
     await applyComposerToSession(state);
+    if (command) {
+      // A cold attach re-read the list from a fresh runtime. Hold the
+      // selection to that list *and* to Pi's own dispatch order, so it runs
+      // exactly the binding it was chosen as or nothing at all.
+      const again = resolveCommandSelection(state, command);
+      if (!again.ok) throw new CommandUnavailableError(again.message);
+      const live = effectiveCommandKind(session, again.text);
+      if (live?.kind !== again.kind || live.invocation !== again.invocation) {
+        throw new CommandUnavailableError(
+          `${command.name} no longer resolves to the same Pi command. Choose it again.`,
+        );
+      }
+    }
     // The prepared record must be on disk before Pi can possibly accept the
     // prompt. After this point a crash is ambiguous, so restart must refuse to
     // dispatch the same request id rather than infer that it never ran.
@@ -1026,13 +1125,20 @@ async function handlePrompt(
     state.dispatching = false;
     if (requestId) state.promptJournal.delete(requestId);
     schedulePersist();
+    if (error instanceof CommandUnavailableError) {
+      return json(response, 422, commandUnavailableResponse(error.message));
+    }
     throw error;
   }
 
-  const text = prompt + promptFileReferences(files);
+  const text = providerPrompt + promptFileReferences(files);
+  // Pi runs an extension command's handler inside `prompt()`; the dispatcher
+  // needs to know so it can accept it at once and give it an outcome.
+  const live = allowProviderCommands ? effectiveCommandKind(session, text) : undefined;
+  const extensionCommand = live?.kind === "extension" ? live.invocation : undefined;
   const messageStart = state.messages.length;
   const uncheckedBeforePrompt = state.uncheckedTranscriptBytes;
-  appendUserMessage(state, prompt, images, files);
+  appendUserMessage(state, displayPrompt, images, files);
   state.status = "running";
   state.error = undefined;
   state.promptSequence += 1;
@@ -1048,6 +1154,8 @@ async function handlePrompt(
       images: images.map((image) => ({ mimeType: image.mimeType, data: image.data })),
       ...(schema ? { schema } : {}),
       ...(requestId ? { requestId } : {}),
+      expandCommands: allowProviderCommands,
+      ...(extensionCommand ? { extensionCommand } : {}),
     });
   } catch (error) {
     // Pi refused the prompt before the run started, so nothing ran. Roll the
@@ -1067,6 +1175,7 @@ async function handlePrompt(
     if (requestId) state.promptJournal.delete(requestId);
     state.revision += 1;
     schedulePersist();
+    void runDeferredCommandReload(state).catch(() => undefined);
     throw error;
   }
 
@@ -1081,6 +1190,35 @@ async function handlePrompt(
   void handle.completion;
   void clientSignal;
   return json(response, 202, { accepted: true });
+}
+
+/**
+ * Answer a prompt without starting a turn, durably and idempotently.
+ *
+ * Used for the texts that name something Pi's prompt path cannot run — `/steer`
+ * with no turn to steer, Pi's terminal-only `/compact` — so they never reach
+ * the model as prose.
+ */
+function answerLocally(
+  response: ServerResponse,
+  state: SessionState,
+  prompt: string,
+  reply: string,
+  requestId: string | undefined,
+  kind: "idle-steer" | "compact",
+): void {
+  appendLocalExchange(state, prompt, reply, requestId, kind);
+  if (requestId) {
+    setPromptJournal(state, {
+      requestId,
+      state: "completed",
+      acceptedAt: Date.now(),
+      local: true,
+    });
+  }
+  state.revision += 1;
+  schedulePersist();
+  return json(response, 200, { accepted: true, local: true });
 }
 
 /** Remove a follow-up that Pi enqueued after the run it targeted had ended. */
@@ -1100,12 +1238,13 @@ function appendLocalExchange(
   state: SessionState,
   prompt: string,
   reply: string,
-  requestId?: string,
+  requestId: string | undefined,
+  kind: "idle-steer" | "compact",
 ): void {
-  const userId = requestId ? `idle-steer:${requestId}` : undefined;
+  const userId = requestId ? `${kind}:${requestId}` : undefined;
   if (userId && state.messages.some((message) => message.id === userId)) return;
   appendUserMessage(state, prompt, [], [], userId);
-  const messageId = requestId ? `idle-steer-reply:${requestId}` : randomBytes(12).toString("hex");
+  const messageId = requestId ? `${kind}-reply:${requestId}` : randomBytes(12).toString("hex");
   state.messages.push({
     id: messageId,
     role: "assistant",
@@ -1157,6 +1296,28 @@ function appendUserMessage(
     createdAt: new Date().toISOString(),
   });
   chargeTranscript(state, Buffer.byteLength(prompt) + 256 * (attachments.length + 1));
+}
+
+/**
+ * Run `task` over `items` with at most `limit` in flight.
+ *
+ * Replaces an unbounded `Promise.all` fan-out: a global refresh used to reload
+ * every attached session at once, each rebuilding its extension runtime.
+ */
+async function forEachBounded<T>(
+  items: readonly T[],
+  limit: number,
+  task: (item: T) => Promise<unknown>,
+): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const item = items[next]!;
+      next += 1;
+      await task(item);
+    }
+  });
+  await Promise.all(workers);
 }
 
 function storeAgentMcp(state: SessionState, value: unknown): void {

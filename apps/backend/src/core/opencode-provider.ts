@@ -25,10 +25,6 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
 import {
-  parseLeadingSlashCommand,
-  type ParsedSlashCommand,
-} from "@orkestrator/protocol/agent-slash-commands";
-import {
   AmbiguousPromptDispatchError,
   type AgentInteractionProviderCapability,
   type BridgeConnection,
@@ -43,6 +39,8 @@ import {
   type ProviderInteractionObservationEvent,
   type ProviderPrepareDispatchOptions,
   type ProviderSendOptions,
+  type ProviderCommandCatalogue,
+  type ProviderCommandRefreshResult,
   type ProviderSessionRegistration,
   type ProviderStatus,
   ProviderUnavailableError,
@@ -88,6 +86,11 @@ import {
 import { OpenCodeInteractionAdapter } from "./opencode-interactions.js";
 import { OpenCodeSessionLifecycle } from "./opencode-session-lifecycle.js";
 import { OpenCodeCapabilities } from "./opencode-capabilities.js";
+import {
+  dispatchOpenCodeCommand,
+  OpenCodeCommandRegistry,
+  resolveOpenCodeCommandDispatch,
+} from "./opencode-commands.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
 import { OpenCodeStreamState } from "./opencode-stream-state.js";
 import {
@@ -97,7 +100,8 @@ import {
   openCodeAgentFor,
   listOpenCodeResumableSessions,
   type OpenCodeProviderDependencies,
-  OPENCODE_COMMAND_NAME_TTL_MS,
+  openCodeCoordinatorAgent,
+  openCodeRequestTimeoutMs,
   OPENCODE_SUBAGENT_FETCH_CONCURRENCY,
   OPENCODE_SUBAGENT_MAX_SESSIONS,
   OPENCODE_SUBAGENT_MESSAGE_LIMIT,
@@ -167,7 +171,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     providersKey: string;
     catalog: ReturnType<typeof normalizeOpenCodeComposerCatalog>;
   } | null = null;
-  private commandNames: { names: Set<string>; expiresAt: number } | null = null;
+  private readonly commands: OpenCodeCommandRegistry;
   private readonly blockedSessions = new Set<string>();
   private readonly failedQuestionSessions = new Set<string>();
   private readonly sessionPolicies = new Map<string, NativeAgentExecutionPolicy>();
@@ -242,6 +246,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     );
     this.monitorRetryMs = Math.max(1, dependencies.monitorRetryMs ?? DEFAULT_MONITOR_RETRY_MS);
     this.now = dependencies.now ?? Date.now;
+    this.commands = new OpenCodeCommandRegistry(
+      () => this.capabilitiesAdapter.readCommands(),
+      () => this.now(),
+    );
     this.lifecycle = new OpenCodeSessionLifecycle(
       this.client,
       connection.directory,
@@ -713,13 +721,14 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     const variant = openCodeReasoningVariant(options, this.connection.effort);
     openCodeRequestMarker(options.requestId);
     await this.assertSelectedModelAvailable(selectedModel);
-    // A submission that names one of OpenCode's commands runs as that command
-    // rather than as prompt text the model has to interpret. Only interactive
-    // dispatch opts in: a workflow prompt that happens to start with a slash
-    // must keep reaching the model verbatim.
-    const command = options.allowProviderCommands
-      ? await this.resolveProviderCommand(shapedPrompt)
-      : null;
+    // A selected or typed OpenCode command runs through `session.command`.
+    // Anything literal — workflow prompts included — keeps reaching the model.
+    const command = await resolveOpenCodeCommandDispatch(
+      this.commands,
+      prompt,
+      options,
+      openCodeCoordinatorAgent(this.sessionPolicies.get(sessionId)),
+    );
     const scope = openCodeMessageIdScope(this.connection, sessionId);
     await this.messageIds.runExclusive(scope, async () => {
       // The bounded newest transcript recovers an accepted ambiguous dispatch
@@ -747,47 +756,51 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       this.streamState.beginTurn(sessionId, dispatchStartedAt);
       let response;
       try {
-        response = command
-          ? await this.client.session.command(
-              {
-                sessionID: sessionId,
-                directory: this.connection.directory,
-                messageID,
-                command: command.name.replace(/^\//, ""),
-                // `arguments` is a *required* field on the server's command request
-                // body, so a bare `/init` must still send an empty string. Passing
-                // `undefined` drops the key in `JSON.stringify` and the server
-                // answers 400, which the caller reads as a failed dispatch.
-                arguments: command.arguments ?? "",
-                model: options.model ?? this.connection.model,
-                agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options),
-                variant,
-                // Text became the command name and its arguments; only the files
-                // survive as parts.
-                parts: openCodeFileParts(parts),
-              },
-              this.requestOptions(),
-            )
-          : await this.client.session.promptAsync(
-              {
-                sessionID: sessionId,
-                directory: this.connection.directory,
-                messageID,
-                parts,
-                model,
-                agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options, "build"),
-                variant,
-                ...(options.readOnly && !reviewEnabled
-                  ? {
-                      tools: {
-                        ...OPENCODE_READ_ONLY_TURN_TOOLS,
-                        ...openCodeWorkflowResultTurnTools(workflowTool),
-                      },
-                    }
-                  : {}),
-              },
-              this.requestOptions(),
-            );
+        if (command) {
+          const outcome = await dispatchOpenCodeCommand({
+            client: this.client,
+            command,
+            request: {
+              sessionID: sessionId,
+              directory: this.connection.directory,
+              messageID,
+              model: selectedModel,
+              agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options),
+              variant,
+              parts: openCodeFileParts(parts),
+            },
+            signal: this.monitorController.signal,
+            timeoutMs: openCodeRequestTimeoutMs(this.connection),
+            dispatched: async () =>
+              (await this.dispatchStatus(sessionId, options.requestId)) === "dispatched",
+          });
+          if (outcome.materialized) {
+            this.messageIds.markAccepted(scope, options.requestId);
+            return;
+          }
+          response = outcome.response;
+        } else {
+          response = await this.client.session.promptAsync(
+            {
+              sessionID: sessionId,
+              directory: this.connection.directory,
+              messageID,
+              parts,
+              model,
+              agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options, "build"),
+              variant,
+              ...(options.readOnly && !reviewEnabled
+                ? {
+                    tools: {
+                      ...OPENCODE_READ_ONLY_TURN_TOOLS,
+                      ...openCodeWorkflowResultTurnTools(workflowTool),
+                    },
+                  }
+                : {}),
+            },
+            this.requestOptions(),
+          );
+        }
       } catch (error) {
         // The request may have reached OpenCode before the response was lost.
         // The reservation keeps the same ID until transcript reconciliation.
@@ -812,7 +825,11 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         await this.workflowResults.settle(sessionId, options.requestId, () =>
           this.reviewPermissions.restoreIfNeeded(sessionId),
         );
-        throw new PromptRejectedError("OpenCode rejected the prompt");
+        throw new PromptRejectedError(
+          command
+            ? `OpenCode could not run /${command.binding.name}`
+            : "OpenCode rejected the prompt",
+        );
       }
       this.messageIds.markAccepted(scope, options.requestId);
     });
@@ -1285,41 +1302,21 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
 
   refreshCatalog(): void {
     this.catalogMetadata = null;
-    this.commandNames = null;
+    this.commands.invalidate();
     this.invalidateInteractiveMetadata();
   }
 
-  /**
-   * Match a submission against the commands this runtime can execute.
-   *
-   * Discovery is only attempted for text that actually starts with a slash, and
-   * the result is cached, so an ordinary prompt never pays for a command list.
-   * A discovery failure resolves to "not a command": sending the text to the
-   * model is recoverable, refusing the user's prompt is not.
-   */
-  private async resolveProviderCommand(prompt: string): Promise<ParsedSlashCommand | null> {
-    const parsed = parseLeadingSlashCommand(prompt);
-    if (!parsed) return null;
-    let names =
-      this.commandNames && this.commandNames.expiresAt > this.now()
-        ? this.commandNames.names
-        : null;
-    if (!names) {
-      try {
-        names = new Set((await this.slashCommands()).map((command) => command.name.toLowerCase()));
-        this.commandNames = {
-          names,
-          expiresAt: this.now() + OPENCODE_COMMAND_NAME_TTL_MS,
-        };
-      } catch {
-        return null;
-      }
-    }
-    return names.has(parsed.name) ? parsed : null;
+  /** Directory-scoped: the same list serves every session of this runtime. */
+  commandCatalogue(): Promise<ProviderCommandCatalogue> {
+    return this.commands.catalogue();
   }
 
-  slashCommands() {
-    return this.capabilitiesAdapter.slashCommands();
+  refreshCommands(): Promise<ProviderCommandRefreshResult> {
+    return this.commands.refreshCommands();
+  }
+
+  async slashCommands() {
+    return (await this.commands.catalogue()).commands;
   }
 
   mcpServers() {

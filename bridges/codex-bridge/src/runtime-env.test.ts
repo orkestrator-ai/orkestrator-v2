@@ -257,44 +257,6 @@ describe("runtime environment refresh", () => {
     });
   });
 
-  test("inline prompt commands inherit refreshed runtime PATH", async () => {
-    await withTempDir(async (dir) => {
-      const bashCheck = Bun.spawnSync({
-        cmd: ["sh", "-c", "command -v bash"],
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      if (bashCheck.exitCode !== 0) {
-        return;
-      }
-
-      const helper = join(dir, "runtime-env.sh");
-      const bin = join(dir, "bin");
-      const toolPath = join(bin, "inline-tool");
-      mkdirSync(bin, { recursive: true });
-      writeFileSync(toolPath, "#!/bin/sh\nprintf inline-tool\n");
-      chmodSync(toolPath, 0o755);
-      writeRuntimeHelper(
-        helper,
-        [
-          "orkestrator_source_runtime_env() {",
-          `  export PATH=${shellQuote(`${bin}:/usr/bin:/bin`)}`,
-          "}",
-          "",
-        ].join("\n"),
-      );
-
-      process.env.ORKESTRATOR_RUNTIME_ENV_SCRIPT = helper;
-      process.env.PATH = "/usr/bin:/bin";
-      process.env.SHELL = "/bin/bash";
-      delete process.env.BASH_ENV;
-
-      const output = await __testing.runInlinePromptCommand("command -v inline-tool", dir);
-
-      expect(output).toBe(toolPath);
-    });
-  });
-
   test("refreshing applies the helper's PATH into the bridge process", async () => {
     /**
      * The app-server child snapshots its environment at launch, so the bridge

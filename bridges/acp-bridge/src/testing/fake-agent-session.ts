@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import {
   cursorConfig,
   grokConfig,
@@ -9,6 +9,27 @@ import {
   write,
   type JsonObject,
 } from "./fake-agent-context.js";
+
+/**
+ * Announce the command inventory in `FAKE_ACP_COMMANDS_FILE` (a JSON array of
+ * raw ACP rows), when that file exists. Re-read on every call so a test can
+ * change what the agent offers between announcements.
+ */
+export function announceCommands(sessionId: string): void {
+  const path = process.env.FAKE_ACP_COMMANDS_FILE;
+  if (!path || !existsSync(path)) return;
+  write({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId,
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: JSON.parse(readFileSync(path, "utf8")) as unknown,
+      },
+    },
+  });
+}
 
 export function handleSessionMessage(message: JsonObject): boolean {
   if (message.method === "initialize" && typeof message.id === "number") {
@@ -54,6 +75,9 @@ export function handleSessionMessage(message: JsonObject): boolean {
   if (message.method === "session/new" && typeof message.id === "number") {
     recordSessionRequest(message);
     write({ jsonrpc: "2.0", id: message.id, result: sessionPayload() });
+    // Straight after the answer, as agents do: this lands before the bridge
+    // has attached a handler for the session it has only just learned about.
+    announceCommands("fake-session");
     if (process.env.FAKE_ACP_VENDOR_REQUEST_FILE) {
       write({
         jsonrpc: "2.0",
@@ -224,6 +248,7 @@ export function handleSessionMessage(message: JsonObject): boolean {
         method: "session/update",
         params: { sessionId: replaySessionId, update },
       });
+    announceCommands(replaySessionId);
     if (process.env.FAKE_ACP_REPLAY_HISTORY === "1") {
       replay({
         sessionUpdate: "user_message_chunk",

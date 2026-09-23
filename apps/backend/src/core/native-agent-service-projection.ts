@@ -54,8 +54,6 @@ import {
   NATIVE_SYNC_MAX_REVISION_BYTES,
   NATIVE_SYNC_MAX_TOTAL_REVISION_BYTES,
   NATIVE_SYNC_REVISION_TTL_MS,
-  NATIVE_SLASH_COMMAND_CACHE_LIMIT,
-  NATIVE_SLASH_COMMAND_TTL_MS,
   NATIVE_FILE_DETAIL_MAX_BYTES,
   NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES,
   NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES,
@@ -87,6 +85,11 @@ import {
   type ProgressiveReadOutcome,
 } from "./native-agent-progressive-metrics.js";
 import { readReadableHostFile } from "./path-safety.js";
+import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
+import {
+  commandCatalogueKey,
+  type CommandCatalogueSnapshot,
+} from "./native-agent-command-catalogue.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
 type PipelineSessionPhase = shared.PipelineSessionPhase;
 type TaskSnapshotImage = shared.TaskSnapshotImage;
@@ -2190,6 +2193,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         : Promise.resolve(false),
     ]);
     if (snapshot.status === "missing") return null;
+    const commandRevision = (snapshot as ProviderSessionStateSnapshot).commandCatalogueRevision;
+    if (commandRevision !== undefined) {
+      this.commandCatalogues.observeProviderRevision(
+        commandCatalogueKey(input.environmentId, input.agent, resolved.session.providerSessionId),
+        input.environmentId,
+        resolved.provider,
+        resolved.session.providerSessionId,
+        commandRevision,
+      );
+    }
     const liveInteractionKinds = normalizeInteractionKinds(
       (snapshot as ProviderSessionStateSnapshot).interactionKinds,
     );
@@ -2661,6 +2674,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
             ...(cached.error ? { error: cached.error } : {}),
           }
         : { availability: "loading", revision: 0 };
+      if (section === "commands") {
+        // The richer catalogue state rides beside the generic availability so a
+        // composer can tell ready-empty, unsupported and stale apart.
+        const catalogue = this.commandCatalogues.peek(
+          commandCatalogueKey(input.environmentId, input.agent, resolved.session.providerSessionId),
+        )?.state;
+        const unsupported = !nativeCapabilities(input.agent).slashCommands;
+        const detail = unsupported ? unsupportedCommandCatalogueState() : catalogue;
+        if (detail) Object.assign(state, { catalogue: detail });
+      }
       Object.assign(sections, { [section]: state });
     }
     const value: NativeAgentDiscoveryView = { identity, sections };
@@ -3167,84 +3190,37 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     });
   }
 
-  protected refreshProjectionSlashCommands(
-    key: string,
+  /**
+   * Provider command rows plus their catalogue state, without session actions.
+   *
+   * Session actions are merged by the caller *after* runtime qualification, so
+   * an unqualified `/steer` never shadows (or deletes) a provider command.
+   */
+  protected async projectionCommandCatalogue(
+    input: NativeAgentProjectionInput,
     provider: NativeAgentRuntimeProvider,
     sessionId?: string,
-  ): Promise<NativeAgentSlashCommand[]> {
-    const pending = this.slashCommandRefreshes.get(key);
-    if (pending) return pending.operation;
-    const validity = { current: true };
-    const operation = (async () => {
-      const commands = (await provider.slashCommands!(sessionId)).slice(0, 512);
-      if (!validity.current) {
-        throw new ProviderUnavailableError("Slash command refresh was invalidated");
-      }
-      if (
-        !this.slashCommandCache.has(key) &&
-        this.slashCommandCache.size >= NATIVE_SLASH_COMMAND_CACHE_LIMIT
-      ) {
-        const oldest = this.slashCommandCache.keys().next().value as string | undefined;
-        if (oldest) this.slashCommandCache.delete(oldest);
-      }
-      this.slashCommandCache.set(key, {
-        commands,
-        expiresAt: this.now() + NATIVE_SLASH_COMMAND_TTL_MS,
-      });
-      return commands;
-    })();
-    const entry = { operation, validity };
-    this.slashCommandRefreshes.set(key, entry);
-    return operation.finally(() => {
-      if (this.slashCommandRefreshes.get(key) === entry) {
-        this.slashCommandRefreshes.delete(key);
-      }
-    });
+  ): Promise<CommandCatalogueSnapshot> {
+    const capabilities = nativeCapabilities(input.agent);
+    if (!capabilities.slashCommands || (!provider.slashCommands && !provider.commandCatalogue)) {
+      return { commands: [], state: unsupportedCommandCatalogueState() };
+    }
+    return this.commandCatalogues.read(
+      commandCatalogueKey(input.environmentId, input.agent, sessionId),
+      input.environmentId,
+      provider,
+      sessionId,
+    );
   }
 
+  /** Command rows as a composer sees them: provider commands plus runtime actions. */
   protected async projectionSlashCommands(
     input: NativeAgentProjectionInput,
     provider: NativeAgentRuntimeProvider,
     sessionId?: string,
   ): Promise<NativeAgentSlashCommand[]> {
-    const capabilities = nativeCapabilities(input.agent);
-    // Runtime-performed commands exist even for a provider that advertises no
-    // command discovery of its own, so they are merged outside the early exit.
-    const withActions = (commands: NativeAgentSlashCommand[]) =>
-      withSessionActionSlashCommands(commands, capabilities);
-    if (!capabilities.slashCommands || !provider.slashCommands) {
-      return withActions([]);
-    }
-    const key = `${input.environmentId}\0${input.agent}\0${sessionId ?? "global"}`;
-    const cached = this.slashCommandCache.get(key);
-    if (cached) {
-      if (cached.expiresAt <= this.now()) {
-        // Command discovery is optional UI metadata. Keep the expired list
-        // visible and update it asynchronously so a transcript refresh never
-        // waits on /global/slash-commands or a provider SDK request.
-        void this.refreshProjectionSlashCommands(key, provider, sessionId)
-          .then(() => {
-            if (!this.stopped) {
-              this.storage.announceNativeAgentSessionProjection(input.environmentId);
-            }
-          })
-          .catch(() => {
-            const retained = this.slashCommandCache.get(key);
-            if (retained === cached) {
-              retained.expiresAt = this.now() + NATIVE_DISCOVERY_RETRY_MS;
-            }
-          });
-      }
-      return withActions(cached.commands);
-    }
-    try {
-      const commands = await this.refreshProjectionSlashCommands(key, provider, sessionId);
-      return withActions(commands);
-    } catch {
-      // Discovery metadata is optional. Keep the transcript usable when a
-      // provider temporarily cannot enumerate commands.
-      return withActions([]);
-    }
+    const snapshot = await this.projectionCommandCatalogue(input, provider, sessionId);
+    return withSessionActionSlashCommands(snapshot.commands, nativeCapabilities(input.agent));
   }
 
   protected async projectionAuthStatus(
@@ -3497,11 +3473,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       const queuePromise = advertisedCapabilities.queue
         ? this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`)
         : Promise.resolve(null);
-      const slashCommandsPromise = this.projectionSlashCommands(
+      const slashCommandsPromise = this.projectionCommandCatalogue(
         input,
         resolved.provider,
         resolved.session.providerSessionId,
-      );
+      ).catch((): CommandCatalogueSnapshot => ({
+        commands: [],
+        state: { status: "unavailable", revision: 0, enhanced: false },
+      }));
       const steerSupportedPromise = advertisedCapabilities.actions?.steer
         ? (resolved.provider
             .steerSupported?.(resolved.session.providerSessionId)
@@ -3515,7 +3494,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         snapshot,
         interactionSnapshot,
         queue,
-        discoveredSlashCommands,
+        commandCatalogue,
         steerSupported,
         mcpServers,
         auth,
@@ -3547,12 +3526,19 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         liveInteractionKinds === undefined
           ? steerQualified
           : { ...steerQualified, interactions: { kinds: liveInteractionKinds } };
-      // Runtime action commands are merged from the static table before the
-      // bridge qualification finishes. Never leave `/steer` behind when this
-      // exact bridge cannot prove the reliable steering surface.
-      const slashCommands = capabilities.actions?.steer
-        ? discoveredSlashCommands
-        : discoveredSlashCommands.filter((command) => command.name !== "/steer");
+      if (snapshot.commandCatalogueRevision !== undefined) {
+        this.commandCatalogues.observeProviderRevision(
+          commandCatalogueKey(input.environmentId, input.agent, resolved.session.providerSessionId),
+          input.environmentId,
+          resolved.provider,
+          resolved.session.providerSessionId,
+          snapshot.commandCatalogueRevision,
+        );
+      }
+      // Runtime actions are merged only after this exact bridge has qualified
+      // them: an unproven steering surface never advertises `/steer`, and a
+      // provider's own same-named command is kept rather than deleted.
+      const slashCommands = withSessionActionSlashCommands(commandCatalogue.commands, capabilities);
       if (snapshot.providerGeneration !== undefined) {
         generation = `${generation}:${String(snapshot.providerGeneration)}`;
       }
@@ -3884,6 +3870,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ...(auth ? { auth } : {}),
         capabilities,
         ...(slashCommands.length > 0 ? { slashCommands } : {}),
+        slashCommandCatalogue: commandCatalogue.state,
         ...(queue
           ? {
               queue: {

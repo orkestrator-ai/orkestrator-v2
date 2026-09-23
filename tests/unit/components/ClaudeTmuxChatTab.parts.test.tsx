@@ -1823,11 +1823,15 @@ describe("ClaudeTmuxChatTab", () => {
     await screen.findByText("Slash Commands");
     fireEvent.keyDown(textarea, { key: "ArrowDown" });
     await waitFor(() => {
-      expect(screen.getByText("/clear").closest("button")?.className).toContain("bg-zinc-800/80");
+      expect(
+        screen.getByText("/clear").closest('[role="option"]')?.getAttribute("aria-selected"),
+      ).toBe("true");
     });
     fireEvent.keyDown(textarea, { key: "ArrowUp" });
     await waitFor(() => {
-      expect(screen.getByText("/bug").closest("button")?.className).toContain("bg-zinc-800/80");
+      expect(
+        screen.getByText("/bug").closest('[role="option"]')?.getAttribute("aria-selected"),
+      ).toBe("true");
     });
     fireEvent.keyDown(textarea, { key: "Tab" });
 

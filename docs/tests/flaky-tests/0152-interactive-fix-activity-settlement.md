@@ -21,3 +21,9 @@
 - **Failure artifacts:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.g2MjVi/workspace-web-backend-desktop-web-public-cli-protocol.log.gz`
 
 Observed while validating design-pane dividers; no multi-review code changed.
+
+The same test recurred on 2026-09-23 in a second full `mise run test` on
+`slash-commands-support-3b13a4bc3b08-r1`: the backend suite had 3,536 passes
+and one failure. Five isolated runs of `multi-review-service.test.ts` passed
+with 176 tests each. The environment activity write still lagged the idle Fix
+snapshot; the case remains open.

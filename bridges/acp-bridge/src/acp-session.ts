@@ -87,6 +87,7 @@ import { persistState, schedulePersist } from "./acp-persist-writer.js";
 import { applyGrokInterjectionBroadcast } from "./grok-interjection.js";
 import { effectiveTurnExecutionPolicy } from "./acp-policy.js";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
+import { applyCommandInventory } from "./acp-commands.js";
 
 export async function listResumableSessions(): Promise<JsonObject[]> {
   if (sessionListProbe) return sessionListProbe;
@@ -486,6 +487,12 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
   state.pendingLateTurnUsage = undefined;
   state.ignoreUncorrelatedVendorUsage = undefined;
   child.onUpdate = (params) => applySessionUpdate(state, params);
+  // An inventory announced before this handler existed (see
+  // `AcpProcess.earlyCommandsUpdate`) would otherwise be lost until the agent
+  // happened to announce again.
+  const earlyCommands = child.earlyCommandsUpdate;
+  child.earlyCommandsUpdate = null;
+  if (earlyCommands) applySessionUpdate(state, earlyCommands);
   child.onVendor = (method, params) => {
     // Same generation rule as `onClose` below: a superseded child can emit long
     // after a replacement attached, and letting it rewrite `sessionConfig`
@@ -957,25 +964,10 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     return;
   }
   if (kind === "available_commands_update") {
+    // A full replacement, not a merge: an empty list removes every command,
+    // and rows restored from disk are dropped rather than merged back.
     if (Array.isArray(update.availableCommands)) {
-      state.availableCommands = update.availableCommands.slice(0, 256).flatMap((candidate) => {
-        if (!isObject(candidate)) return [];
-        const rawName = boundedString(candidate.name, 256)?.trim().replace(/^\//, "");
-        if (!rawName) return [];
-        const description = boundedString(candidate.description, 2_048)?.trim();
-        const argumentHint =
-          boundedString(candidate.inputHint, 512)?.trim() ||
-          boundedString(candidate.argumentHint, 512)?.trim();
-        return [
-          {
-            name: `/${rawName}`,
-            description: description || rawName,
-            source: "builtin" as const,
-            scope: "session" as const,
-            ...(argumentHint ? { argumentHint } : {}),
-          },
-        ];
-      });
+      applyCommandInventory(state, update.availableCommands);
       state.revision += 1;
       schedulePersist();
     }

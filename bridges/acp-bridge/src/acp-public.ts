@@ -30,8 +30,19 @@ export function publicSession(state: SessionState): JsonObject {
     composer: state.sessionConfig.composer,
     ...(state.policy ? { policy: state.policy } : {}),
     ...(contextUsage ? { contextUsage } : {}),
+    ...publicCommandRevision(state),
     runtime: publicRuntime(state),
   };
+}
+
+/**
+ * The command inventory revision, identical to `revision` on
+ * `GET /session/:id/commands`. It advances on every pushed replacement, so a
+ * backend polling status can notice a push and re-read the catalogue for a
+ * tab that is not looking. Absent until any inventory is known.
+ */
+export function publicCommandRevision(state: SessionState): { commandRevision?: number } {
+  return state.commandsRevision === undefined ? {} : { commandRevision: state.commandsRevision };
 }
 
 /** Mutation acknowledgement; transcript hydration has its own bounded route. */

@@ -5,7 +5,7 @@ import type {
   NativeAgentMcpServerAction,
 } from "@orkestrator/protocol/native-agent";
 import { asRecord, assertSdkResponse, nonEmptyString } from "./agent-provider-runtime.js";
-import { listOpenCodeSlashCommands } from "./opencode-commands.js";
+import { readOpenCodeCommandInventory } from "./opencode-commands.js";
 
 /** SDK-backed discovery and account operations that are independent of session rendering. */
 export class OpenCodeCapabilities {
@@ -15,8 +15,9 @@ export class OpenCodeCapabilities {
     private readonly requestOptions: () => { signal: AbortSignal },
   ) {}
 
-  slashCommands() {
-    return listOpenCodeSlashCommands(this.client, this.directory, this.requestOptions);
+  /** The effective, directory-scoped command inventory. Throws when unreadable. */
+  readCommands() {
+    return readOpenCodeCommandInventory(this.client, this.directory, this.requestOptions);
   }
 
   async mcpServers(): Promise<NativeAgentMcpServer[]> {

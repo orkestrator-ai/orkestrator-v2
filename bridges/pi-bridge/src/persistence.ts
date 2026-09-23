@@ -26,6 +26,7 @@ import {
   type SessionState,
 } from "./state.js";
 import { newSessionState } from "./agent-session.js";
+import { restoreCommandCatalogue } from "./commands.js";
 
 let tail: Promise<void> = Promise.resolve();
 let scheduled = false;
@@ -186,6 +187,11 @@ function toPersisted(state: SessionState): PersistedSession {
     ),
     composer: state.composer,
     ...(state.usage ? { usage: state.usage } : {}),
+    // Public descriptors only — ids and fingerprints, never a path. They let a
+    // restarted bridge answer a catalogue read (as `stale`) and validate a
+    // selection before the session has re-attached.
+    ...(state.slashCommands.length > 0 ? { commands: state.slashCommands } : {}),
+    ...(state.commandCatalogue.truncated ? { commandsTruncated: true } : {}),
   };
 }
 
@@ -242,6 +248,14 @@ function restoreSession(entry: unknown): SessionState | undefined {
   state.composer = restoreComposer(entry.composer);
   const usage = restoreUsage(entry.usage);
   if (usage) state.usage = usage;
+  // Stale until this process reads the list from an attached session: the
+  // resources behind it may have changed while the bridge was down.
+  state.slashCommands = restoreCommandCatalogue(entry.commands);
+  state.commandCatalogue = {
+    status: "stale",
+    revision: 0,
+    ...(entry.commandsTruncated === true ? { truncated: true } : {}),
+  };
   // The whole transcript is unmeasured after a restore, so the first read
   // re-bounds it rather than trusting a budget this process never charged.
   state.uncheckedTranscriptBytes = Buffer.byteLength(JSON.stringify(state.messages));

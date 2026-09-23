@@ -4611,3 +4611,71 @@ describe("sendPrompt", () => {
     await prompt;
   });
 });
+
+describe("selected commands and local command results", () => {
+  test("sends the provider text while the transcript keeps the typed prompt", async () => {
+    const typed = "/Review src/a.ts\n  second line\t";
+    const canonical = "/review src/a.ts\n  second line\t";
+    const { session, call } = await runPromptWithMessages(
+      [{ type: "result", subtype: "success" }],
+      { providerPrompt: canonical },
+      typed,
+    );
+    const sdkPrompt = (await readSdkPrompt(call)) as Array<{
+      message: { content: Array<{ type: string; text?: string }> };
+    }>;
+    expect(sdkPrompt[0]?.message.content).toEqual([{ type: "text", text: canonical }]);
+    expect(session.messages[0]).toMatchObject({ role: "user", content: typed });
+  });
+
+  test("a local command's output becomes a durable assistant row and settles the turn", async () => {
+    const { session } = await runPromptWithMessages(
+      [
+        {
+          type: "system",
+          subtype: "local_command_output",
+          content: "Total cost: $0.01",
+          uuid: "local-output-1",
+          session_id: "sdk-local",
+        },
+        { type: "result", subtype: "success", result: "Total cost: $0.01" },
+      ],
+      { requestId: "local-command-request" },
+      "/cost",
+    );
+    const replies = session.messages.filter((message) => message.role === "assistant");
+    expect(replies).toEqual([
+      expect.objectContaining({ id: "local-command:local-output-1", content: "Total cost: $0.01" }),
+    ]);
+    // Kept in the overlay that survives eviction and restart.
+    expect(session.localTranscript?.map((message) => message.id)).toContain(
+      "local-command:local-output-1",
+    );
+    expect(session.status).toBe("idle");
+    expect(getPromptDispatchState(session.id, "local-command-request")).toBe("already-processed");
+  });
+
+  test("a result-only local command is shown from the SDK's own result text", async () => {
+    const { session } = await runPromptWithMessages(
+      [{ type: "result", subtype: "success", result: "Context: 12k of 200k tokens" }],
+      undefined,
+      "/context",
+    );
+    expect(session.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: "Context: 12k of 200k tokens",
+    });
+  });
+
+  test("an ordinary model reply is not duplicated from the result text", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        uuid: "assistant-1",
+        message: { content: [{ type: "text", text: "Done." }] },
+      },
+      { type: "result", subtype: "success", result: "Done." },
+    ]);
+    expect(session.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+  });
+});

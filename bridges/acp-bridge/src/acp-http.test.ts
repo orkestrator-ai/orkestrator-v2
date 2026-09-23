@@ -2,12 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 
+import { commandBindingRevision } from "@orkestrator/protocol/agent-command-catalogue";
 import {
   BRIDGE_STARTUP_TIMEOUT_MS,
   here,
   nativeFetch,
   NativeAbortController,
+  ONE_PIXEL_PNG,
   spawnBridge,
+  stopChild,
   temporaryDirectory,
   waitFor,
 } from "./acp-test-harness.js";
@@ -311,5 +314,352 @@ describe("ACP bridge", () => {
     expect(child.exitCode).toBe(null);
     expect((await nativeFetch(`${base}/global/health`)).ok).toBe(true);
     expect((await nativeFetch(`${base}/session/${created.id}`, { headers })).status).toBe(200);
+  });
+});
+
+describe("ACP provider commands", () => {
+  type Catalogue = {
+    catalogueVersion?: number;
+    status: string;
+    revision?: number;
+    generation?: string;
+    freshness?: string;
+    truncated?: boolean;
+    commands: Array<Record<string, unknown>>;
+  };
+
+  async function commandBridge(options: { commands?: unknown[] } = {}) {
+    const workspace = await temporaryDirectory();
+    const stateDirectory = await temporaryDirectory();
+    const commandsFile = resolve(workspace, "commands.json");
+    const blocksFile = resolve(workspace, "prompt-blocks.log");
+    const lifecycleFile = resolve(workspace, "lifecycle.log");
+    if (options.commands) await fs.writeFile(commandsFile, JSON.stringify(options.commands));
+    const env = {
+      ACP_PROVIDER: "grok",
+      CWD: workspace,
+      FAKE_ACP_COMMANDS_FILE: commandsFile,
+      FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+      FAKE_ACP_IMAGE_CAPABILITY: "true",
+    };
+    const bridge = await spawnBridge({ stateDirectory, env });
+    const created = (await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    }).then((response) => response.json())) as { id: string };
+    const session = `${bridge.base}/session/${created.id}`;
+    const request = (path: string, init: RequestInit = {}) =>
+      nativeFetch(`${session}${path}`, { ...init, headers: bridge.headers });
+    const catalogue = () =>
+      request("/commands").then((response) => response.json() as Promise<Catalogue>);
+    const prompt = (body: Record<string, unknown>) =>
+      request("/prompt", { method: "POST", body: JSON.stringify(body) });
+    const idle = () =>
+      waitFor(
+        () => request("").then((response) => response.json() as Promise<{ status: string }>),
+        (value) => value.status === "idle",
+      );
+    const blocks = async () =>
+      (await fs.readFile(blocksFile, "utf8").catch(() => ""))
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Array<Record<string, unknown>>);
+    const starts = async () =>
+      ((await fs.readFile(lifecycleFile, "utf8").catch(() => "")).match(/^start:/gm) ?? []).length;
+    return {
+      ...bridge,
+      workspace,
+      stateDirectory,
+      env,
+      commandsFile,
+      created,
+      request,
+      catalogue,
+      prompt,
+      idle,
+      blocks,
+      starts,
+    };
+  }
+
+  const review = {
+    name: "review",
+    description: "Review changes",
+    input: { hint: "<path>" },
+    inputHint: "legacy hint",
+  };
+
+  test("serves the pushed inventory and sends a selected command exactly once", async () => {
+    const bridge = await commandBridge({
+      commands: [review, { name: "commit", description: "Commit" }],
+    });
+    await fs.writeFile(resolve(bridge.workspace, "shot.png"), ONE_PIXEL_PNG);
+    // Announced straight after `session/new` answered, before the bridge had a
+    // handler for the session: it must not be lost.
+    const catalogue = await waitFor(bridge.catalogue, (value) => value.status === "ready");
+    expect(catalogue).toMatchObject({
+      catalogueVersion: 1,
+      freshness: "push",
+      truncated: false,
+      generation: expect.stringMatching(/^grok:/),
+    });
+    expect(catalogue.revision).toBeGreaterThanOrEqual(1);
+    expect(catalogue.commands[0]).toEqual({
+      name: "/review",
+      id: "grok:review",
+      executionKind: "provider-prompt",
+      source: "unknown",
+      scope: "session",
+      description: "Review changes",
+      argumentHint: "<path>",
+      bindingRevision: commandBindingRevision(["grok", "review"]),
+    });
+
+    const argumentsText = "src/a.ts\n\n  keep   spacing  ";
+    const body = {
+      prompt: `/REVIEW  ${argumentsText}`,
+      requestId: "command-1",
+      allowProviderCommands: true,
+      attachments: [{ type: "image", path: "shot.png", filename: "shot.png" }],
+      command: {
+        id: "grok:review",
+        name: "/review",
+        executionKind: "provider-prompt",
+        bindingRevision: catalogue.commands[0]!.bindingRevision,
+        arguments: argumentsText,
+      },
+    };
+    expect((await bridge.prompt(body)).status).toBe(202);
+    await bridge.idle();
+    // A retry under the same id is a duplicate, not a second command.
+    const retry = await bridge.prompt(body);
+    expect(retry.status).toBe(202);
+    expect(await retry.json()).toMatchObject({ duplicate: true });
+
+    expect(await bridge.blocks()).toEqual([
+      [
+        { type: "text", text: `/review ${argumentsText}` },
+        { type: "image", mimeType: "image/png", data: ONE_PIXEL_PNG.toString("base64") },
+      ],
+    ]);
+    const messages = (await bridge.request("/messages").then((response) => response.json())) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(messages.messages.find((message) => message.role === "user")?.content).toBe(
+      body.prompt.trim(),
+    );
+
+    const refresh = await bridge.request("/commands/refresh", { method: "POST" });
+    expect(refresh.status).toBe(200);
+    expect(await refresh.json()).toMatchObject({ outcome: "reread" });
+    // Refreshing never restarts the agent to make it announce again.
+    expect(await bridge.starts()).toBe(1);
+  });
+
+  test("a restored selected command attaches and revalidates before dispatch", async () => {
+    const bridge = await commandBridge({ commands: [review] });
+    const initial = await waitFor(bridge.catalogue, (value) => value.status === "ready");
+    await stopChild(bridge.child);
+    const restarted = await spawnBridge({ stateDirectory: bridge.stateDirectory, env: bridge.env });
+    const session = `${restarted.base}/session/${bridge.created.id}`;
+    const request = (path: string, init: RequestInit = {}) =>
+      nativeFetch(`${session}${path}`, { ...init, headers: restarted.headers });
+    expect(await request("/commands").then((response) => response.json())).toMatchObject({
+      status: "stale",
+    });
+    const response = await request("/prompt", {
+      method: "POST",
+      body: JSON.stringify({
+        prompt: "/review src/a.ts",
+        requestId: "restored-command-1",
+        command: {
+          id: "grok:review",
+          name: "/review",
+          executionKind: "provider-prompt",
+          bindingRevision: initial.commands[0]!.bindingRevision,
+          arguments: "src/a.ts",
+        },
+      }),
+    });
+    expect(response.status).toBe(202);
+    await waitFor(
+      () => request("").then((result) => result.json() as Promise<{ status: string }>),
+      (value) => value.status === "idle",
+    );
+    expect((await bridge.blocks()).at(-1)).toEqual([{ type: "text", text: "/review src/a.ts" }]);
+  });
+
+  test("a removed or changed command is refused before journaling, never sent as a prompt", async () => {
+    const bridge = await commandBridge({ commands: [review] });
+    const first = await waitFor(bridge.catalogue, (value) => value.status === "ready");
+    const selection = {
+      id: "grok:review",
+      name: "/review",
+      executionKind: "provider-prompt",
+      bindingRevision: first.commands[0]!.bindingRevision,
+      arguments: "",
+    };
+
+    // An empty announcement is a known empty list, not a missing one.
+    await fs.writeFile(bridge.commandsFile, "[]");
+    expect((await bridge.prompt({ prompt: "COMMANDS_UPDATE" })).status).toBe(202);
+    await bridge.idle();
+    const emptied = await bridge.catalogue();
+    expect(emptied).toMatchObject({ status: "ready", commands: [] });
+    expect(emptied.revision).toBeGreaterThan(first.revision!);
+
+    const removed = await bridge.prompt({
+      prompt: "/review",
+      requestId: "removed-1",
+      command: selection,
+    });
+    expect(removed.status).toBe(422);
+    expect(await removed.json()).toMatchObject({ kind: "command-unavailable" });
+    expect(
+      await bridge.request("/dispatch?requestId=removed-1").then((response) => response.json()),
+    ).toEqual({ dispatch: "unknown" });
+
+    await fs.writeFile(bridge.commandsFile, JSON.stringify([review]));
+    expect((await bridge.prompt({ prompt: "COMMANDS_UPDATE" })).status).toBe(202);
+    await bridge.idle();
+    const changed = await bridge.prompt({
+      prompt: "/review",
+      requestId: "changed-1",
+      command: { ...selection, bindingRevision: "0000000000000000" },
+    });
+    expect(changed.status).toBe(422);
+
+    // Only the two inventory prompts ever reached the agent.
+    expect((await bridge.blocks()).map((prompt) => prompt[0]?.text)).toEqual([
+      "COMMANDS_UPDATE",
+      "COMMANDS_UPDATE",
+    ]);
+  });
+
+  test("malformed command fields are caller errors and literal text passes unchanged", async () => {
+    const bridge = await commandBridge({ commands: [review] });
+    const ready = await waitFor(bridge.catalogue, (value) => value.status === "ready");
+    const selection = {
+      id: "grok:review",
+      name: "/review",
+      executionKind: "provider-prompt",
+      bindingRevision: ready.commands[0]!.bindingRevision,
+      arguments: "",
+    };
+    for (const body of [
+      { prompt: "hello", allowProviderCommands: "yes" },
+      { prompt: "hello", command: { id: "grok:review" } },
+      { prompt: "/review", allowProviderCommands: false, command: selection },
+      { prompt: "/review", command: selection, outputSchema: { type: "object" } },
+    ]) {
+      const response = await bridge.prompt({ ...body, requestId: "bad-1" });
+      expect(response.status).toBe(400);
+    }
+    expect(
+      await bridge.request("/dispatch?requestId=bad-1").then((response) => response.json()),
+    ).toEqual({ dispatch: "unknown" });
+
+    // ACP cannot suppress command interpretation, so literal text is sent as
+    // typed; the backend is what refuses a literal that names a command.
+    expect(
+      (
+        await bridge.prompt({
+          prompt: "/review but literally",
+          requestId: "literal-1",
+          allowProviderCommands: false,
+        })
+      ).status,
+    ).toBe(202);
+    await bridge.idle();
+    expect((await bridge.blocks()).at(-1)).toEqual([
+      { type: "text", text: "/review but literally" },
+    ]);
+  });
+
+  test("status and session reads carry the inventory revision a push advances", async () => {
+    const bridge = await commandBridge({ commands: [review] });
+    const readRevisions = async () => {
+      const status = (await bridge.request("/status").then((response) => response.json())) as {
+        commandRevision?: number;
+      };
+      const session = (await bridge.request("").then((response) => response.json())) as {
+        commandRevision?: number;
+      };
+      return { status: status.commandRevision, session: session.commandRevision };
+    };
+    const first = await waitFor(bridge.catalogue, (value) => value.status === "ready");
+    expect(await readRevisions()).toEqual({ status: first.revision, session: first.revision });
+
+    await fs.writeFile(bridge.commandsFile, "[]");
+    expect((await bridge.prompt({ prompt: "COMMANDS_UPDATE" })).status).toBe(202);
+    await bridge.idle();
+    const pushed = await bridge.catalogue();
+    expect(pushed.revision).toBe(first.revision! + 1);
+    expect(await readRevisions()).toEqual({ status: pushed.revision, session: pushed.revision });
+    // Reading it spawned nothing: still the one agent the session started with.
+    expect(await bridge.starts()).toBe(1);
+  });
+
+  test("no announcement yet is stale, not empty, and refresh says it cannot help", async () => {
+    const bridge = await commandBridge();
+    // No inventory known: no revision to compare against.
+    expect(await bridge.request("/status").then((response) => response.json())).not.toHaveProperty(
+      "commandRevision",
+    );
+    expect(await bridge.request("").then((response) => response.json())).not.toHaveProperty(
+      "commandRevision",
+    );
+    expect(await bridge.catalogue()).toMatchObject({
+      catalogueVersion: 1,
+      status: "stale",
+      revision: 0,
+      freshness: "push",
+      commands: [],
+    });
+    const refresh = await bridge.request("/commands/refresh", { method: "POST" });
+    expect(await refresh.json()).toMatchObject({ outcome: "unsupported" });
+    expect(await bridge.starts()).toBe(1);
+
+    const selected = await bridge.prompt({
+      prompt: "/review",
+      requestId: "none-1",
+      command: {
+        id: "grok:review",
+        name: "/review",
+        executionKind: "provider-prompt",
+        arguments: "",
+      },
+    });
+    expect(selected.status).toBe(422);
+    expect(await bridge.blocks()).toEqual([]);
+
+    const missing = await nativeFetch(`${bridge.base}/session/missing/commands`, {
+      headers: bridge.headers,
+    });
+    expect(missing.status).toBe(200);
+    expect(await missing.json()).toEqual({
+      catalogueVersion: 1,
+      status: "missing",
+      commands: [],
+    });
+    const missingRefresh = await nativeFetch(`${bridge.base}/session/missing/commands/refresh`, {
+      method: "POST",
+      headers: bridge.headers,
+    });
+    expect(missingRefresh.status).toBe(200);
+    expect(await missingRefresh.json()).toMatchObject({ outcome: "failed" });
+
+    // The global route no longer claims a refresh it did not perform.
+    const global = await nativeFetch(`${bridge.base}/global/refresh-catalog`, {
+      method: "POST",
+      headers: bridge.headers,
+    });
+    expect(global.status).toBe(200);
+    expect(await global.json()).toMatchObject({
+      refreshed: false,
+      commands: { outcome: "unsupported" },
+    });
   });
 });

@@ -604,3 +604,218 @@ describe("context usage", () => {
     });
   });
 });
+
+/**
+ * A session that records what `prompt()` was given, with a run the test ends.
+ *
+ * `acceptAtPreflight: false` models an extension command: Pi runs its handler
+ * inside `prompt()` and only reports preflight once the handler returns.
+ */
+function recordingSession(options: { acceptAtPreflight?: boolean; idle?: () => boolean } = {}) {
+  const prompts: Array<{ text: string; expandPromptTemplates?: boolean; source?: string }> = [];
+  let settle: () => void = () => undefined;
+  let idleWaiters: Array<() => void> = [];
+  let aborted = 0;
+  const session = {
+    prompt: (
+      text: string,
+      opts: {
+        expandPromptTemplates?: boolean;
+        source?: string;
+        preflightResult?: (ok: boolean) => void;
+      },
+    ) => {
+      prompts.push({
+        text,
+        expandPromptTemplates: opts.expandPromptTemplates,
+        source: opts.source,
+      });
+      if (options.acceptAtPreflight !== false) queueMicrotask(() => opts.preflightResult?.(true));
+      return new Promise<void>((resolve) => {
+        settle = () => {
+          if (options.acceptAtPreflight === false) opts.preflightResult?.(true);
+          resolve();
+        };
+      });
+    },
+    get isIdle() {
+      return options.idle?.() ?? true;
+    },
+    waitForIdle: () =>
+      new Promise<void>((resolve) => {
+        idleWaiters.push(resolve);
+      }),
+    abort: async () => {
+      aborted += 1;
+    },
+    clearQueue: () => ({ steering: [], followUp: [] }),
+    getContextUsage: () => undefined,
+    getSessionStats: () => ({ cost: 0 }),
+    getLastAssistantText: () => undefined,
+    sessionManager: { getBranch: () => [] },
+  } as unknown as AgentSession;
+  return {
+    session,
+    prompts,
+    finish: () => settle(),
+    becomeIdle: () => {
+      const waiters = idleWaiters;
+      idleWaiters = [];
+      for (const resolve of waiters) resolve();
+    },
+    aborted: () => aborted,
+  };
+}
+
+describe("command interpretation", () => {
+  test("literal intent turns off every Pi command path", async () => {
+    const state = runningState();
+    const stub = recordingSession();
+
+    const handle = await dispatchPrompt(
+      state,
+      stub.session,
+      input({ prompt: "/review this literally", expandCommands: false }),
+    );
+    stub.finish();
+    await handle.completion;
+
+    // `expandPromptTemplates: false` is Pi's single gate for extension command
+    // dispatch, `/skill:` expansion and template expansion.
+    expect(stub.prompts).toEqual([
+      { text: "/review this literally", expandPromptTemplates: false, source: "rpc" },
+    ]);
+  });
+
+  test.each([
+    ["template", "/review src/app.ts"],
+    ["skill", "/skill:lint --fix"],
+  ])("a %s is accepted once and completes as an ordinary turn", async (_kind, text) => {
+    const state = runningState();
+    const stub = recordingSession();
+    journal(state, "req-cmd", "accepted");
+
+    const handle = await dispatchPrompt(
+      state,
+      stub.session,
+      input({ prompt: text, requestId: "req-cmd" }),
+    );
+    applySessionEvent(state, {
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "expanded and answered" },
+    });
+    stub.finish();
+    await handle.completion;
+
+    expect(stub.prompts).toEqual([{ text, expandPromptTemplates: true, source: "rpc" }]);
+    expect(state.status).toBe("idle");
+    expect(state.promptJournal.get("req-cmd")?.state).toBe("completed");
+    expect(state.messages.at(-1)?.content).toBe("expanded and answered");
+    expect(state.messages.some((message) => message.id.startsWith("command-outcome:"))).toBe(false);
+  });
+
+  test("an extension command is accepted while its handler is still running", async () => {
+    const state = runningState();
+    const stub = recordingSession({ acceptAtPreflight: false });
+
+    // Pi reports preflight only when the handler returns; waiting for it would
+    // hold the prompt request open for the whole command.
+    const handle = await dispatchPrompt(
+      state,
+      stub.session,
+      input({ prompt: "/stats", requestId: "req-ext", extensionCommand: "stats" }),
+    );
+    expect(state.status).toBe("running");
+    expect(state.commandRun?.invocation).toBe("stats");
+
+    stub.finish();
+    await handle.completion;
+
+    expect(state.status).toBe("idle");
+    expect(state.promptJournal.get("req-ext")?.state).toBe("completed");
+    expect(state.commandRun).toBeUndefined();
+    const outcome = state.messages.at(-1);
+    expect(outcome?.id).toBe("command-outcome:req-ext");
+    expect(outcome?.parts[0]).toMatchObject({ type: "status", severity: "info" });
+    expect(outcome?.content).toContain("/stats finished without output");
+  });
+
+  test("an extension command's display messages become its durable outcome", async () => {
+    const state = runningState();
+    const stub = recordingSession({ acceptAtPreflight: false });
+
+    const handle = await dispatchPrompt(
+      state,
+      stub.session,
+      input({ prompt: "/stats", requestId: "req-out", extensionCommand: "stats" }),
+    );
+    applySessionEvent(state, {
+      type: "message_start",
+      message: { role: "custom", customType: "stats", display: true, content: "12 turns, $0.40" },
+    });
+    // A hidden custom message is context for the model, not output.
+    applySessionEvent(state, {
+      type: "message_start",
+      message: { role: "custom", customType: "stats", display: false, content: "internal" },
+    });
+    stub.finish();
+    await handle.completion;
+
+    expect(state.messages.at(-1)).toMatchObject({
+      id: "command-outcome:req-out",
+      role: "assistant",
+      content: "12 turns, $0.40",
+    });
+  });
+
+  test("an extension command that starts a turn stays busy until Pi is idle", async () => {
+    const state = runningState();
+    let idle = true;
+    const stub = recordingSession({ acceptAtPreflight: false, idle: () => idle });
+
+    const handle = await dispatchPrompt(
+      state,
+      stub.session,
+      input({ prompt: "/plan feature", requestId: "req-turn", extensionCommand: "plan" }),
+    );
+    // The handler called `pi.sendMessage(..., { triggerTurn: true })` and
+    // returned: Pi's run is active although the wrapper has finished.
+    idle = false;
+    stub.finish();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(state.status).toBe("running");
+
+    applySessionEvent(state, {
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "Here is the plan" },
+    });
+    idle = true;
+    stub.becomeIdle();
+    await handle.completion;
+
+    expect(state.status).toBe("idle");
+    expect(state.promptJournal.get("req-turn")?.state).toBe("completed");
+    expect(state.messages.at(-1)?.content).toBe("Here is the plan");
+    // The reply is the outcome; no synthetic row is added on top of it.
+    expect(state.messages.some((message) => message.id.startsWith("command-outcome:"))).toBe(false);
+  });
+
+  test("cancelling an extension command settles the turn although its handler cannot stop", async () => {
+    const state = runningState();
+    const stub = recordingSession({ acceptAtPreflight: false });
+
+    const handle = await dispatchPrompt(
+      state,
+      stub.session,
+      input({ prompt: "/watch", requestId: "req-cancel", extensionCommand: "watch" }),
+    );
+    await state.cancelTurn?.();
+    await handle.completion;
+
+    expect(stub.aborted()).toBe(1);
+    expect(state.status).toBe("idle");
+    expect(state.cancelTurn).toBeUndefined();
+    expect(state.messages.at(-1)?.content).toContain("/watch was cancelled");
+    stub.finish();
+  });
+});

@@ -6,6 +6,7 @@ import type {
   AgentInteractionResolution,
 } from "@orkestrator/protocol/agent-interactions";
 import type {
+  NativeAgentCommandIntent,
   NativeAgentControlUpdate,
   NativeAgentDispatchOutcome,
   NativeAgentMessageWindow,
@@ -44,6 +45,7 @@ import {
   discardNativeAgentDispatch,
   movePromptQueueMessage,
   performNativeAgentSessionAction,
+  refreshNativeAgentCommands,
   refreshNativeAgentModels,
   removePromptQueueMessage,
   resolveNativeAgentInteraction,
@@ -291,6 +293,30 @@ async function nativeAgentProgressiveSupported(): Promise<boolean> {
   );
 }
 
+/**
+ * Command rows and their catalogue state for a rebuilt projection.
+ *
+ * Discovery is read in parallel with transcript and state, so its snapshot can
+ * land before any projection exists to carry it; a later read then answers
+ * `unchanged`. Falling back to the held discovery view (for the same identity
+ * only) keeps that first snapshot instead of losing the menu until it changes.
+ */
+function retainedCommandFields(
+  current: Pick<NativeAgentSessionProjection, "slashCommands" | "slashCommandCatalogue"> | null,
+  discovery: NativeAgentDiscoveryView | undefined,
+  identity: NativeAgentViewIdentity,
+): Pick<NativeAgentSessionProjection, "slashCommands" | "slashCommandCatalogue"> {
+  const section = sameProgressiveIdentity(discovery?.identity, identity)
+    ? discovery?.sections.commands
+    : undefined;
+  const commands = current?.slashCommands ?? section?.value;
+  const catalogue = current?.slashCommandCatalogue ?? section?.catalogue;
+  return {
+    ...(commands ? { slashCommands: commands } : {}),
+    ...(catalogue ? { slashCommandCatalogue: catalogue } : {}),
+  };
+}
+
 function sameProgressiveIdentity(
   left: NativeAgentViewIdentity | undefined,
   right: NativeAgentViewIdentity,
@@ -432,6 +458,19 @@ export interface NativeAgentSendOptions {
     dataUrl?: string;
     filename?: string;
   }>;
+  /** Command intent; absent keeps the legacy (typed) interpretation. */
+  command?: NativeAgentCommandIntent;
+}
+
+/**
+ * Prompt text as it should travel.
+ *
+ * An ordinary prompt is trimmed as it always was. A command keeps its bytes —
+ * trailing spaces, tabs and newlines in its arguments included — with only
+ * leading whitespace removed, which is also all the backend trims.
+ */
+export function nativeSubmissionText(prompt: string, command?: NativeAgentCommandIntent): string {
+  return command && command.kind !== "literal" ? prompt.replace(/^\s+/, "") : prompt.trim();
 }
 
 /**
@@ -1362,7 +1401,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           ? { completionBlockedByBackgroundTasks: current.completionBlockedByBackgroundTasks }
           : {}),
         ...(current?.turnBoundaries ? { turnBoundaries: current.turnBoundaries } : {}),
-        ...(current?.slashCommands ? { slashCommands: current.slashCommands } : {}),
+        ...retainedCommandFields(current, progressiveDiscoveryRef.current, value.identity),
         revision: (current?.revision ?? 0) + 1,
         generation: value.identity.sourceGeneration,
       };
@@ -1483,7 +1522,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           ? {}
           : { completionBlockedByBackgroundTasks: value.completionBlockedByBackgroundTasks }),
         ...(current?.turnBoundaries ? { turnBoundaries: current.turnBoundaries } : {}),
-        ...(current?.slashCommands ? { slashCommands: current.slashCommands } : {}),
+        ...retainedCommandFields(current, progressiveDiscoveryRef.current, value.identity),
         revision: (current?.revision ?? 0) + 1,
         generation: value.identity.sourceGeneration,
       };
@@ -1529,6 +1568,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (current) {
         const models = value.sections.models?.value;
         const commands = value.sections.commands?.value;
+        const commandCatalogue = value.sections.commands?.catalogue;
         const mcp = value.sections.mcp?.value;
         const auth = value.sections.auth?.value;
         const runtime = value.sections.runtime?.value;
@@ -1547,6 +1587,7 @@ export function useNativeAgentSession<TMessage = unknown>({
               }
             : {}),
           ...(commands ? { slashCommands: commands } : {}),
+          ...(commandCatalogue ? { slashCommandCatalogue: commandCatalogue } : {}),
           ...(runtime || mcp
             ? {
                 runtime: {
@@ -2392,8 +2433,8 @@ export function useNativeAgentSession<TMessage = unknown>({
       prompt: string,
       options: NativeAgentSendOptions = {},
     ): Promise<NativeAgentDispatchOutcome> => {
-      const text = prompt.trim();
-      if (!text) return { outcome: "rejected", error: "Prompt must not be blank" };
+      const text = nativeSubmissionText(prompt, options.command);
+      if (!text.trim()) return { outcome: "rejected", error: "Prompt must not be blank" };
       const pending = pendingDispatchRef.current;
       const requestId =
         options.requestId ?? (pending?.prompt === text ? pending.requestId : crypto.randomUUID());
@@ -2422,6 +2463,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           includeLocalSettings: options.includeLocalSettings,
           promptSuggestions: options.promptSuggestions,
           attachments: options.attachments,
+          ...(options.command ? { command: options.command } : {}),
         });
         if (outcome.outcome !== "unknown") pendingDispatchRef.current = null;
         if (outcome.outcome === "accepted") {
@@ -2523,8 +2565,8 @@ export function useNativeAgentSession<TMessage = unknown>({
   const queueKey = useMemo(() => `${platform}\0${sessionKey}`, [platform, sessionKey]);
   const enqueue = useCallback(
     async (prompt: string, options: NativeAgentSendOptions = {}) => {
-      const text = prompt.trim();
-      if (!text) throw new Error("Prompt must not be blank");
+      const text = nativeSubmissionText(prompt, options.command);
+      if (!text.trim()) throw new Error("Prompt must not be blank");
       await enqueuePromptQueueMessage(queueKey, environmentId, {
         id: options.requestId ?? crypto.randomUUID(),
         text,
@@ -2541,6 +2583,8 @@ export function useNativeAgentSession<TMessage = unknown>({
           ? {}
           : { promptSuggestions: options.promptSuggestions }),
         ...(options.attachments?.length ? { attachments: options.attachments } : {}),
+        // Revalidated by the backend at dequeue, never rebound by name.
+        ...(options.command ? { command: options.command } : {}),
       });
       return refresh();
     },
@@ -2631,6 +2675,19 @@ export function useNativeAgentSession<TMessage = unknown>({
     const next = await refreshNativeAgentModels<TMessage>(identity);
     if (operationEpoch === projectionOperationEpochRef.current) applyMutationProjection(next);
     return next;
+  }, [applyMutationProjection, beginProjectionMutation, identity]);
+  /**
+   * Ask the backend to re-read (or reload) this session's command list.
+   * The outcome says what actually happened; the projection carries the
+   * resulting catalogue state, so the menu renders from authority.
+   */
+  const refreshCommands = useCallback(async () => {
+    const operationEpoch = beginProjectionMutation();
+    const result = await refreshNativeAgentCommands<TMessage>(identity);
+    if (operationEpoch === projectionOperationEpochRef.current && result.projection) {
+      applyMutationProjection(result.projection);
+    }
+    return result;
   }, [applyMutationProjection, beginProjectionMutation, identity]);
   const loadToolDetails = useCallback(
     (detailRef: string): Promise<NativeAgentToolDetails> =>
@@ -2893,6 +2950,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     fork,
     performAction,
     refreshModels,
+    refreshCommands,
     loadToolDetails,
     loadEarlierMessages,
     initialLaunchOptionsRef,

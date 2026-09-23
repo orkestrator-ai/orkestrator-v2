@@ -260,6 +260,9 @@ export async function readHttpBridgeSessionState(input: {
     ...(Number.isSafeInteger(payload.engineGeneration)
       ? { providerGeneration: payload.engineGeneration as number }
       : {}),
+    ...(Number.isSafeInteger(payload.commandRevision)
+      ? { commandCatalogueRevision: payload.commandRevision as number }
+      : {}),
     ...(contextUsage ? { contextUsage } : {}),
     ...(runtime ? { runtime } : {}),
     ...(typeof payload.runtimeHealthAuthoritative === "boolean"

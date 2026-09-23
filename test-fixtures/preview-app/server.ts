@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
+import { brotliCompressSync, gzipSync } from "node:zlib";
 
 export interface PreviewFixtureRequest {
   method: string;
@@ -206,6 +207,19 @@ export function startPreviewFixture(options: PreviewFixtureOptions = {}): Promis
       }, 10);
       response.on("close", () => clearInterval(timer));
       return;
+    }
+    if (path === "/encoded/gzip" || path === "/encoded/br") {
+      // A pre-compressed representation: previews must pass the encoded bytes
+      // and `content-encoding` through untouched, never decode or re-encode.
+      const text = Buffer.from(`${marker} `.repeat(512));
+      const gzip = path.endsWith("gzip");
+      const encoded = gzip ? gzipSync(text) : brotliCompressSync(text);
+      return send(response, 200, "text/plain; charset=utf-8", encoded, {
+        "content-encoding": gzip ? "gzip" : "br",
+        vary: "accept-encoding",
+        "x-service-marker": marker,
+        "x-sha256": createHash("sha256").update(encoded).digest("hex"),
+      });
     }
     if (path === "/binary") {
       return send(response, 200, "application/octet-stream", binary, {

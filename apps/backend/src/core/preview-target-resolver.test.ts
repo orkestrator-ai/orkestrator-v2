@@ -150,6 +150,30 @@ describe("PreviewTargetResolver", () => {
     }
   });
 
+  test("container agent servers are never preview targets, published or relayed", async () => {
+    await harness.addContainerEnvironment("a");
+    harness.docker.containers.set("container-a", {
+      id: "container-a",
+      environmentId: "a",
+      owner: harness.owner,
+      ports: { "4097/tcp": [{ HostIp: "127.0.0.1", HostPort: "51000" }] },
+    });
+    await harness.runtime.init();
+    await harness.runtime.updateSettings((current) => ({ ...current, relay: true }));
+    for (const port of [4096, 4097, 4101]) {
+      const created = await harness.runtime.registry.register({
+        environmentId: "a",
+        label: `agent ${port}`,
+        targetKind: "container",
+        applicationPort: port,
+      });
+      if (created.kind !== "definition") throw new Error("expected definition");
+      const service = await harness.runtime.registry.refresh(created.definition.serviceId);
+      expect(service.endpoint.failure?.category).toBe("forbidden");
+      expect(service.endpoint.hostPort).toBeNull();
+    }
+  });
+
   test("worktree services require a running local environment and carry their family", async () => {
     await harness.addLocalEnvironment("local");
     await harness.runtime.init();

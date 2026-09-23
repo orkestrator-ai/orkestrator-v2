@@ -51,18 +51,18 @@ export const usePreviewServiceStore = create<PreviewServiceStoreState>((set, get
   const stale = new Set<string>();
 
   const setEnvironment = (environmentId: string, patch: Partial<EnvironmentPreviewState>) =>
-    set((state) => ({
-      environments: {
-        ...state.environments,
-        [environmentId]: {
-          snapshot: null,
-          loading: false,
-          error: null,
-          ...state.environments[environmentId],
-          ...patch,
+    set((state) => {
+      const current: EnvironmentPreviewState | undefined = state.environments[environmentId];
+      return {
+        environments: {
+          ...state.environments,
+          [environmentId]: {
+            ...(current ?? { snapshot: null, loading: false, error: null }),
+            ...patch,
+          },
         },
-      },
-    }));
+      };
+    });
 
   return {
     status: "idle",

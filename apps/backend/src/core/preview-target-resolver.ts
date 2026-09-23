@@ -5,6 +5,14 @@ import {
   type PreviewServiceDefinition,
 } from "@orkestrator/protocol/preview-services";
 
+import {
+  CLAUDE_BRIDGE_PORT,
+  CODEX_BRIDGE_PORT,
+  CURSOR_BRIDGE_PORT,
+  GROK_ACP_BRIDGE_PORT,
+  OPENCODE_SERVER_PORT,
+  PI_BRIDGE_PORT,
+} from "./constants.js";
 import type { Environment } from "./models.js";
 import type {
   PreviewResolution,
@@ -47,6 +55,19 @@ export interface ContainerInspection {
 
 /** Docker's container API, CLI, and managed-bridge ports, plus well-known daemon ports. */
 const ALWAYS_RESERVED = new Set([2375, 2376]);
+
+/**
+ * Agent servers inside owned containers. They are published for the backend's
+ * own use and reachable through the relay, but are never preview targets.
+ */
+const CONTAINER_AGENT_PORTS = new Set([
+  OPENCODE_SERVER_PORT,
+  CLAUDE_BRIDGE_PORT,
+  CODEX_BRIDGE_PORT,
+  CURSOR_BRIDGE_PORT,
+  GROK_ACP_BRIDGE_PORT,
+  PI_BRIDGE_PORT,
+]);
 
 const INSPECT_FORMAT =
   '{{.Id}}\t{{.State.Status}}\t{{index .Config.Labels "orkestrator-owner"}}\t{{index .Config.Labels "environment-id"}}\t{{json .NetworkSettings.Ports}}';
@@ -208,6 +229,15 @@ export class PreviewTargetResolver implements PreviewTargetResolverPort {
         ok: false,
         error: previewError("target-unverified", {
           message: "Container services require a containerized environment.",
+        }),
+      };
+    }
+    if (CONTAINER_AGENT_PORTS.has(definition.applicationPort)) {
+      return {
+        ok: false,
+        error: previewError("forbidden", {
+          layer: "binding",
+          message: `Container port ${definition.applicationPort} is an Orkestrator agent server and cannot be previewed.`,
         }),
       };
     }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { createServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
 import { connect, type AddressInfo, type Socket } from "node:net";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 
 import {
   startPreviewFixture,
@@ -307,6 +308,20 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
     const csp = await get("/csp");
     expect(csp.headers["content-security-policy"]).toBe("default-src 'self'");
     expect(csp.headers["x-frame-options"]).toBe("DENY");
+  });
+
+  test("compressed representations pass through byte-exact, never decoded", async () => {
+    for (const [path, encoding, decode] of [
+      ["/encoded/gzip", "gzip", gunzipSync],
+      ["/encoded/br", "br", brotliDecompressSync],
+    ] as const) {
+      const result = await get(path, { "accept-encoding": "gzip, br" });
+      expect(result.headers["content-encoding"]).toBe(encoding);
+      expect(createHash("sha256").update(result.body).digest("hex")).toBe(
+        String(result.headers["x-sha256"]),
+      );
+      expect(decode(result.body).toString()).toStartWith("fixture-a ");
+    }
   });
 
   test("SSE progresses and completes", async () => {

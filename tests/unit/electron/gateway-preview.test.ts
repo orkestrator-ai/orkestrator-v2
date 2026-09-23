@@ -153,6 +153,109 @@ describe("gateway preview integration", () => {
     expect(await again.closed).toBe(4410);
   });
 
+  async function helloReady(url: string, runtime = harness.runtime) {
+    const attachment = await runtime.access.createAttachment({
+      serviceId,
+      surface: "desktop-tunnel",
+    });
+    const client = await tunnel(url);
+    client.ws.send(
+      encodePreviewTunnelFrame({
+        type: "hello",
+        version: 1,
+        attachmentId: attachment.attachmentId,
+        credential: attachment.tunnel!.credential,
+      }),
+    );
+    await until(() => client.frames.some((frame) => frame.type === "ready"));
+    return { attachment, client };
+  }
+
+  test("scoped preview credentials never authenticate legacy or control routes", async () => {
+    const { info } = await startGateway({ previews: harness.runtime });
+    const attachment = await harness.runtime.access.createAttachment({
+      serviceId,
+      surface: "desktop-tunnel",
+    });
+    const scoped = { authorization: `Bearer ${attachment.tunnel!.credential}` };
+    const legacy = await requestUrl(
+      `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
+      { headers: scoped },
+    );
+    expect(legacy.status).toBe(401);
+    const control = await requestUrl(`${info.url}__orkestrator/invoke`, {
+      method: "POST",
+      headers: { ...scoped, "content-type": "application/json" },
+      body: JSON.stringify({ command: "get_preview_diagnostics" }),
+    });
+    expect(control.status).toBe(401);
+    expect(fixture.requests).toHaveLength(0);
+    // The legacy route still works with the gateway credential (old clients).
+    const allowed = await requestUrl(
+      `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
+      { headers: { authorization: `Bearer ${info.token}` } },
+    );
+    expect(allowed.status).toBe(200);
+  });
+
+  test("rollback drill: stop issuance, revoke, preserve services, re-enable and reconnect", async () => {
+    // Driven by stored settings only: an environment override would pin the switch.
+    const runtime = harness.newRuntime({ env: {} });
+    await runtime.init();
+    await runtime.updateSettings((current) => ({ ...current, transport: true }));
+    const { info } = await startGateway({ previews: runtime });
+    // An active streaming exchange and a hidden (idle, ready) tunnel.
+    const streaming = await helloReady(info.url, runtime);
+    streaming.client.ws.send(encodePreviewTunnelFrame({ type: "open" }));
+    await until(() => streaming.client.frames.some((frame) => frame.type === "open-ok"));
+    streaming.client.ws.send(Buffer.from("GET /sse HTTP/1.1\r\nhost: localhost\r\n\r\n"));
+    await until(() => Buffer.concat(streaming.client.data).includes("data:"));
+    const hidden = await helloReady(info.url, runtime);
+
+    // 1. Stop minting new access; capabilities say why.
+    await runtime.updateSettings((current) => ({ ...current, transport: false }));
+    const capabilities = runtime.capabilities();
+    expect(capabilities.surfaces.desktopTunnel.available).toBe(false);
+    expect(capabilities.surfaces.desktopTunnel.reason).toContain("disabled");
+    await expect(
+      runtime.access.createAttachment({ serviceId, surface: "desktop-tunnel" }),
+    ).rejects.toThrow();
+
+    // 2. Revoke active access: every tunnel closes with the revoked code.
+    expect(runtime.access.revokeAll("operator-revoked")).toBeGreaterThanOrEqual(2);
+    expect(await streaming.client.closed).toBe(4410);
+    expect(await hidden.client.closed).toBe(4410);
+
+    // 3. Service definitions and the application itself are untouched; the
+    //    legacy route stays available for old clients.
+    expect(runtime.registry.getDefinition(serviceId)).not.toBeNull();
+    expect(fixture.server.listening).toBe(true);
+    const legacy = await requestUrl(
+      `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
+      { headers: { authorization: `Bearer ${info.token}` } },
+    );
+    expect(legacy.status).toBe(200);
+
+    // 4. Re-enable: fresh access reaches the same service identity, and
+    //    nothing from the revoked streams is replayed.
+    await runtime.updateSettings((current) => ({ ...current, transport: true }));
+    const requestsBefore = fixture.requests.length;
+    const again = await helloReady(info.url, runtime);
+    expect(again.client.frames.find((frame) => frame.type === "ready")).toMatchObject({
+      serviceId,
+    });
+    again.client.ws.send(encodePreviewTunnelFrame({ type: "open" }));
+    await until(() => again.client.frames.some((frame) => frame.type === "open-ok"));
+    again.client.ws.send(
+      Buffer.from("GET /health HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n"),
+    );
+    await again.client.closed;
+    expect(Buffer.concat(again.client.data).toString()).toContain('"marker":"gateway-app"');
+    expect(fixture.requests.slice(requestsBefore).map((request) => request.path)).toEqual([
+      "/health",
+    ]);
+  });
+
   test("legacy preview: a stalled upstream is bounded by the headers deadline", async () => {
     const stalled = createServer(() => undefined);
     auxiliaryServers.push(stalled);

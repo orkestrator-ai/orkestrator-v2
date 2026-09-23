@@ -11,6 +11,8 @@
  *
  * Frame: type(1) channel(4, BE) length(4, BE) payload.
  */
+import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
+
 export const RELAY_FRAME = {
   hello: 1,
   ready: 2,
@@ -29,6 +31,8 @@ export const RELAY_PROTOCOL_VERSION = 1;
 export const PREVIEW_RELAY_SCRIPT = String.raw`
 "use strict";
 const net = require("node:net");
+// The shared guard, reporting to stderr: stdout carries only relay frames.
+(${installFatalRejectionGuard.toString()})({ label: "[preview-relay]" });
 const HEADER = 9;
 const MAX_PAYLOAD = 32 * 1024;
 let buffer = Buffer.alloc(0);

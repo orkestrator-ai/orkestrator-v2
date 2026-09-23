@@ -9,6 +9,13 @@ bun install && bun run dev
 ```
 
 Editing `src/label.js` must update `#app` and increment
-`document.body.dataset.hmrUpdates` without a full reload. Through a preview
-origin, `server.allowedHosts` must list the preview suffix explicitly; do not
-set it to `true`.
+`document.body.dataset.hmrUpdates` without a full reload.
+
+No `allowedHosts` or `hmr` configuration is needed: preview routes present
+`Host: localhost:<port>` upstream. The opt-in transport check runs against the
+installed copy:
+
+```bash
+ORKESTRATOR_TEST_PREVIEW_VITE_DIR=/tmp/preview-vite \
+  bun test apps/backend/src/preview-vite.test.ts
+```

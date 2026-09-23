@@ -105,6 +105,8 @@ export class PreviewRuntime {
           .filter((definition) => definition.targetKind === "container")
           .map((definition) => definition.applicationPort),
     });
+    this.metrics.gauge("relay.processes", () => this.relay.stats().relays);
+    this.metrics.gauge("relay.channels", () => this.relay.stats().channels);
     this.readiness = new PreviewReadinessProber({
       ca: () => this.upstreamCa(),
       relayConnect: (target, signal) => this.relayConnect(target, signal),

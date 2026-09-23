@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
@@ -16,61 +15,9 @@ import {
 } from "../../../test-fixtures/preview-app/server.ts";
 import { createPreviewHarness, type PreviewHarness } from "./core/preview-test-support.js";
 import { PreviewPublicationManager } from "./preview-publication.js";
+import { certificates } from "./preview-test-pki.js";
 
 const DOMAIN = "preview.test";
-
-function certificates(dir: string, names = [`*.${DOMAIN}`, `bootstrap.${DOMAIN}`]) {
-  const run = (...args: string[]) => execFileSync("openssl", args, { cwd: dir, stdio: "pipe" });
-  run(
-    "req",
-    "-x509",
-    "-newkey",
-    "rsa:2048",
-    "-nodes",
-    "-keyout",
-    "ca.key",
-    "-out",
-    "ca.pem",
-    "-days",
-    "2",
-    "-subj",
-    "/CN=Orkestrator Test CA",
-  );
-  run(
-    "req",
-    "-newkey",
-    "rsa:2048",
-    "-nodes",
-    "-keyout",
-    "leaf.key",
-    "-out",
-    "leaf.csr",
-    "-subj",
-    `/CN=${names[0]}`,
-  );
-  const ext = join(dir, "leaf.ext");
-  execFileSync("sh", [
-    "-c",
-    `printf 'subjectAltName=${names.map((name) => `DNS:${name}`).join(",")}\\n' > ${ext}`,
-  ]);
-  run(
-    "x509",
-    "-req",
-    "-in",
-    "leaf.csr",
-    "-CA",
-    "ca.pem",
-    "-CAkey",
-    "ca.key",
-    "-CAcreateserial",
-    "-out",
-    "leaf.pem",
-    "-days",
-    "2",
-    "-extfile",
-    "leaf.ext",
-  );
-}
 
 interface Response {
   status: number;

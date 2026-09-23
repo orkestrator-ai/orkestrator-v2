@@ -19,7 +19,6 @@ import {
   type PreviewFixture,
 } from "../../../test-fixtures/preview-app/server.ts";
 import { createPreviewHarness, type PreviewHarness } from "./core/preview-test-support.js";
-import { PreviewMetrics } from "./preview-metrics.js";
 import { PreviewTunnelServer } from "./preview-tunnel-server.js";
 
 interface TunnelClient {
@@ -38,6 +37,7 @@ describe("PreviewTunnelServer", () => {
   let port: number;
   let serviceId: string;
   const clients: PreviewWebSocket[] = [];
+  const logs: unknown[][] = [];
 
   beforeEach(async () => {
     fixture = await startPreviewFixture({ marker: "tunnel-app" });
@@ -55,8 +55,11 @@ describe("PreviewTunnelServer", () => {
     serviceId = created.definition.serviceId;
     tunnel = new PreviewTunnelServer({
       runtime: harness.runtime,
-      metrics: new PreviewMetrics(),
-      logger: { debug: () => undefined, warn: () => undefined },
+      metrics: harness.runtime.metrics,
+      logger: {
+        debug: (...args: unknown[]) => void logs.push(args),
+        warn: (...args: unknown[]) => void logs.push(args),
+      },
       helloTimeoutMs: 200,
     });
     server = createServer((_request, response) => response.end("not a tunnel"));
@@ -68,6 +71,7 @@ describe("PreviewTunnelServer", () => {
   });
 
   afterEach(async () => {
+    logs.length = 0;
     for (const client of clients.splice(0)) client.terminate();
     tunnel.close();
     server.closeAllConnections();
@@ -296,6 +300,49 @@ describe("PreviewTunnelServer", () => {
     await Promise.all(opened.map((client) => client.closed));
     await Bun.sleep(10);
     expect(tunnel.stats().admission.active).toBe(0);
+  });
+
+  test("logs, diagnostics, and events never carry credentials, app headers, paths, or queries", async () => {
+    const good = await open();
+    const att = await ready(good);
+    const response = await exchange(
+      good,
+      "GET /app/private-route?token=QUERY_SECRET_1 HTTP/1.1\r\nhost: localhost\r\n" +
+        "authorization: Bearer APP_SECRET_2\r\ncookie: sid=COOKIE_SECRET_3\r\nconnection: close\r\n\r\n",
+    );
+    expect(response).toStartWith("HTTP/1.1 200");
+    const bad = await open();
+    bad.ws.send(
+      encodePreviewTunnelFrame({
+        type: "hello",
+        version: 1,
+        attachmentId: att.attachmentId,
+        credential: "WRONG_CREDENTIAL_4".padEnd(43, "x"),
+      }),
+    );
+    await bad.closed;
+    await harness.runtime.registry.settle();
+    harness.runtime.registry.flushEvent();
+
+    const recorded = JSON.stringify({
+      logs,
+      diagnostics: harness.runtime.diagnostics(),
+      events: harness.events,
+      stats: tunnel.stats(),
+    });
+    for (const secret of [
+      att.tunnel!.credential,
+      "QUERY_SECRET_1",
+      "APP_SECRET_2",
+      "COOKIE_SECRET_3",
+      "WRONG_CREDENTIAL_4",
+      "private-route",
+    ]) {
+      expect(recorded).not.toContain(secret);
+    }
+    // The failure is still observable as a bounded category count.
+    const counters = Object.keys(harness.runtime.metrics.snapshot().counters);
+    expect(counters.some((name) => name.startsWith("tunnel.rejected"))).toBe(true);
   });
 
   test("unknown paths are not claimed", async () => {

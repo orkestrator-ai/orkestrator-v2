@@ -2721,6 +2721,33 @@ async function waitUntil(
   }
 }
 
+test("adaptive supervision keeps a running review scheduled until consolidation finishes", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  await withService(
+    "env-adaptive-review",
+    provider,
+    async ({ service, start, snapshot }) => {
+      await service.init();
+      const started = await start();
+      await waitUntil(async () => (await snapshot(started.id))?.reviewers[0]?.status === "running");
+      const callsWhileRunning = provider.statusCalls;
+      await waitUntil(() => provider.statusCalls > callsWhileRunning);
+      provider.statusValue = "idle";
+      await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
+      expect((await snapshot(started.id))?.consolidatedReport).toBeDefined();
+    },
+    {
+      serviceOptions: {
+        autoAdvance: true,
+        pollIntervalMs: 10,
+        observationIntervalMs: 10,
+        reconcileIntervalMs: 30,
+      },
+    },
+  );
+});
+
 test.each(["grok", "cursor", "pi", "codex"] as const)(
   "MultiReviewService delivers %s reviewer and consolidation reports through MCP tools",
   async (agent) => {

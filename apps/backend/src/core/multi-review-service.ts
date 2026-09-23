@@ -40,11 +40,7 @@ import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   type ReviewContractValidationIssue,
 } from "@orkestrator/protocol/structured-review";
-import type {
-  JsonSchema,
-  StructuredOutputProvider,
-  StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
+import type { JsonSchema, StructuredOutputProvider } from "@orkestrator/protocol/structured-output";
 import {
   workflowResultInstruction,
   workflowResultToolName,
@@ -3392,7 +3388,7 @@ export class MultiReviewService {
       return;
     }
     if (request.kind === "consolidate") {
-      const parsed = this.parseReportResult(result);
+      const parsed = parseStructuredReportResult(result, workflow.reviewers);
       if (!parsed.success) {
         await this.prepareFixSessionSchemaRepair(workflow, token, request, session, parsed.error);
         return;
@@ -3472,10 +3468,6 @@ export class MultiReviewService {
     await this.save(workflow, token);
     await this.consumePendingResults(workflow, token);
     await this.release(workflow, token);
-  }
-
-  private parseReportResult(result: StructuredOutputResult<unknown>) {
-    return parseStructuredReportResult(result);
   }
 
   private async prepareFixSessionSchemaRepair(

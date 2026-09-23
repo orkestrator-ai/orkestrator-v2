@@ -44,6 +44,8 @@ const MAX_SCHEDULED_WORKFLOWS = 4_096;
 
 export class WorkflowDueScheduler {
   private readonly due = new Map<string, number>();
+  private readonly dueRevision = new Map<string, number>();
+  private revision = 0;
   private readonly running = new Map<string, Promise<void>>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private reconcileAt = 0;
@@ -75,6 +77,7 @@ export class WorkflowDueScheduler {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.due.clear();
+    this.dueRevision.clear();
     await Promise.allSettled([
       ...this.running.values(),
       ...(this.reconciling ? [this.reconciling] : []),
@@ -90,8 +93,11 @@ export class WorkflowDueScheduler {
   wake(workflowId: string, dueAt: number = this.now()): void {
     if (this.stopped) return;
     const existing = this.due.get(workflowId);
-    if (existing !== undefined && existing <= dueAt) return;
     if (existing === undefined && this.due.size >= MAX_SCHEDULED_WORKFLOWS) return;
+    // A wake during discover is newer than that scan even when an earlier
+    // deadline was already queued. Reconciliation must not discard it.
+    this.dueRevision.set(workflowId, ++this.revision);
+    if (existing !== undefined && existing <= dueAt) return;
     this.due.set(workflowId, dueAt);
     this.arm();
   }
@@ -105,15 +111,19 @@ export class WorkflowDueScheduler {
 
   forget(workflowId: string): void {
     this.due.delete(workflowId);
+    this.dueRevision.delete(workflowId);
   }
 
   private arm(): void {
     if (this.stopped) return;
     if (this.timer) clearTimeout(this.timer);
-    let nextAt = this.reconcileAt;
-    for (const [workflowId, dueAt] of this.due) {
-      if (!this.running.has(workflowId) && dueAt < nextAt) nextAt = dueAt;
+    let nextAt = this.reconciling ? Infinity : this.reconcileAt;
+    if (this.running.size < this.options.maxConcurrent) {
+      for (const [workflowId, dueAt] of this.due) {
+        if (!this.running.has(workflowId) && dueAt < nextAt) nextAt = dueAt;
+      }
     }
+    if (!Number.isFinite(nextAt)) return;
     this.timer = setTimeout(() => void this.fire(), Math.max(0, nextAt - this.now()));
     this.timer.unref?.();
   }
@@ -132,6 +142,7 @@ export class WorkflowDueScheduler {
   }
 
   private async reconcile(): Promise<void> {
+    const scanRevision = this.revision;
     try {
       const ids = await this.options.discover();
       const discovered = new Set(ids);
@@ -143,7 +154,13 @@ export class WorkflowDueScheduler {
       // Drop timers for workflows storage no longer reports as supervised
       // (terminal or deleted), so the map tracks only live work.
       for (const workflowId of Array.from(this.due.keys())) {
-        if (!discovered.has(workflowId)) this.due.delete(workflowId);
+        if (
+          !discovered.has(workflowId) &&
+          (this.dueRevision.get(workflowId) ?? 0) <= scanRevision
+        ) {
+          this.due.delete(workflowId);
+          this.dueRevision.delete(workflowId);
+        }
       }
     } catch (error) {
       console.warn(
@@ -164,6 +181,7 @@ export class WorkflowDueScheduler {
     for (const [workflowId, dueAt] of ready) {
       if (this.running.size >= this.options.maxConcurrent) break;
       this.due.delete(workflowId);
+      this.dueRevision.delete(workflowId);
       const started = this.now();
       const pass = this.options
         .run(workflowId)
@@ -183,6 +201,7 @@ export class WorkflowDueScheduler {
               workflowId,
               pendingWake === undefined ? next : Math.min(pendingWake, next),
             );
+            if (pendingWake === undefined) this.dueRevision.set(workflowId, ++this.revision);
           }
         })
         .finally(() => {

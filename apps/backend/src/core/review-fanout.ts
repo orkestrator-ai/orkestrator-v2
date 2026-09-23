@@ -34,6 +34,8 @@ import {
 import {
   ReviewContractValidationError,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+  STRUCTURED_REVIEW_MAX_COVERAGE_GAPS,
+  STRUCTURED_REVIEW_MAX_ISSUES,
   safeParseStructuredReviewReport,
   structuredReviewReportBudgetIssues,
   stripStructuredReviewProvenance,
@@ -463,7 +465,10 @@ export function reviewerFailureSummary(reviewers: readonly ReviewerRecord[]): st
  * {@link ReviewContractValidationError} the local parser raises, so one repair
  * path covers both. Any other provider error is a real fault and is thrown.
  */
-export function parseStructuredReportResult(result: StructuredOutputResult<unknown>) {
+export function parseStructuredReportResult(
+  result: StructuredOutputResult<unknown>,
+  consolidationReviewers?: readonly ReviewerRecord[],
+) {
   if (!result.ok) {
     if (
       result.error.code === "schema_retry_exhausted" ||
@@ -492,7 +497,28 @@ export function parseStructuredReportResult(result: StructuredOutputResult<unkno
   // A shape-valid answer can still be too large to consolidate. Budget
   // feedback goes through the same bounded repair as a schema fault, and
   // never quotes the report back.
-  const budget = structuredReviewReportBudgetIssues(parsed.data);
+  const sourceReports = consolidationReviewers
+    ? usableReviewerReports(consolidationReviewers)
+    : undefined;
+  const budget = structuredReviewReportBudgetIssues(
+    parsed.data,
+    sourceReports
+      ? {
+          maxIssues: Math.max(
+            STRUCTURED_REVIEW_MAX_ISSUES,
+            sourceReports.reduce((total, reviewer) => total + reviewer.report!.issues.length, 0),
+          ),
+          maxCoverageGaps: Math.max(
+            STRUCTURED_REVIEW_MAX_COVERAGE_GAPS,
+            sourceReports.reduce(
+              (total, reviewer) => total + reviewer.report!.testCoverageGaps.length,
+              0,
+            ),
+          ),
+          preserveFindings: true,
+        }
+      : undefined,
+  );
   if (budget.length > 0) {
     return {
       success: false as const,

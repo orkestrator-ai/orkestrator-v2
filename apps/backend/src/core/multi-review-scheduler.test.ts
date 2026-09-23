@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { WorkflowDueScheduler, stableJitterMs } from "./multi-review-scheduler.js";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -108,6 +108,72 @@ describe("due-time workflow scheduler", () => {
     await scheduler.stop();
     expect(maxActive).toBe(3);
   });
+
+  test("a due workflow waits without spinning while the only slot is occupied", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const started: string[] = [];
+    const timer = spyOn(globalThis, "setTimeout");
+    const scheduler = new WorkflowDueScheduler({
+      run: async (workflowId) => {
+        started.push(workflowId);
+        if (workflowId === "first") await gate;
+      },
+      nextDueAt: async () => undefined,
+      discover: async () => ["first", "second"],
+      reconcileIntervalMs: 60_000,
+      maxConcurrent: 1,
+    });
+    try {
+      scheduler.start();
+      await waitFor(() => started.length === 1);
+      const zeroTimers = () => timer.mock.calls.filter((call) => call[1] === 0).length;
+      const before = zeroTimers();
+      await sleep(30);
+      expect(started).toEqual(["first"]);
+      expect(zeroTimers() - before).toBeLessThanOrEqual(1);
+      release();
+      await waitFor(() => started.length === 2);
+      expect(started).toEqual(["first", "second"]);
+    } finally {
+      release();
+      await scheduler.stop();
+      timer.mockRestore();
+    }
+  });
+
+  for (const signal of ["wake", "reschedule"] as const) {
+    test(`${signal} during discover survives stale scan cleanup`, async () => {
+      let finishDiscover!: (ids: string[]) => void;
+      const discovering = new Promise<string[]>((resolve) => (finishDiscover = resolve));
+      let discoveringStarted = false;
+      let nextDueReads = 0;
+      const started: string[] = [];
+      const scheduler = new WorkflowDueScheduler({
+        run: async (workflowId) => {
+          started.push(workflowId);
+        },
+        nextDueAt: async () => (nextDueReads++ === 0 ? Date.now() : undefined),
+        discover: async () => {
+          discoveringStarted = true;
+          return discovering;
+        },
+        reconcileIntervalMs: 60_000,
+        maxConcurrent: 1,
+      });
+      try {
+        scheduler.start();
+        await waitFor(() => discoveringStarted);
+        if (signal === "wake") scheduler.wake("new");
+        else await scheduler.reschedule("new");
+        finishDiscover([]);
+        await waitFor(() => started.includes("new"));
+      } finally {
+        finishDiscover([]);
+        await scheduler.stop();
+      }
+    });
+  }
 
   test("jitter is stable and bounded", () => {
     expect(stableJitterMs("workflow-a", 1_000)).toBe(stableJitterMs("workflow-a", 1_000));

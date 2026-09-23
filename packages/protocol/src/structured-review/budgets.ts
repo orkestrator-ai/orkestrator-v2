@@ -99,6 +99,7 @@ export function utf8Bytes(value: string): number {
  */
 export function structuredReviewReportBudgetIssues(
   report: unknown,
+  options: { maxIssues?: number; maxCoverageGaps?: number; preserveFindings?: boolean } = {},
 ): ReviewContractValidationIssue[] {
   const issues: ReviewContractValidationIssue[] = [];
   let encoded: string;
@@ -135,12 +136,19 @@ export function structuredReviewReportBudgetIssues(
       return;
     }
     if (Array.isArray(value)) {
-      const limit = LIST_LIMITS[normalizedPath] ?? STRUCTURED_REVIEW_MAX_LIST_ITEMS;
+      const limit =
+        normalizedPath === "$.issues"
+          ? (options.maxIssues ?? STRUCTURED_REVIEW_MAX_ISSUES)
+          : normalizedPath === "$.testCoverageGaps"
+            ? (options.maxCoverageGaps ?? STRUCTURED_REVIEW_MAX_COVERAGE_GAPS)
+            : (LIST_LIMITS[normalizedPath] ?? STRUCTURED_REVIEW_MAX_LIST_ITEMS);
       if (value.length > limit) {
         issues.push({
           path,
           code: "invalid_value",
-          message: `This list has ${value.length} entries; the limit is ${limit}. Merge or drop the least important entries.`,
+          message: options.preserveFindings
+            ? `This list has ${value.length} entries; the limit is ${limit}. Keep every distinct source finding and merge only duplicates.`
+            : `This list has ${value.length} entries; the limit is ${limit}. Merge or drop the least important entries.`,
         });
         return;
       }

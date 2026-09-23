@@ -169,7 +169,7 @@ export function AgentPlatformPane({
   const reasoningModel = models.find((model) => model.id === reasoningModelId) ?? models[0];
 
   const reasoningOptions = useMemo<AgentReasoningOption[]>(() => {
-    const efforts = reasoningModel?.reasoningEfforts ?? [];
+    const efforts: readonly string[] = reasoningModel?.reasoningEfforts ?? [];
     // A stored level the catalog no longer lists stays selectable, so opening
     // this pane cannot quietly rewrite a saved choice to "inherit".
     const current = stored?.reasoningEffort;

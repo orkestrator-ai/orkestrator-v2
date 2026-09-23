@@ -15,9 +15,14 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
 import { StorageService } from "./storage.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
-import { ReviewSnapshotChangedError } from "./review-fanout.js";
+import {
+  deriveConsolidatedProvenance,
+  parseStructuredReportResult,
+  ReviewSnapshotChangedError,
+} from "./review-fanout.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
 import type {
@@ -87,6 +92,51 @@ function reportFor(summary: string, issueTitle?: string): StructuredReviewReport
   };
 }
 
+test("consolidation accepts more than 100 distinct source findings without a drop repair", () => {
+  const source = reportFor("source", "Finding").issues[0]!;
+  const issues = Array.from({ length: 101 }, (_, index) => ({
+    ...source,
+    title: `Finding ${index + 1}`,
+  }));
+  const reviewers: ReviewerRecord[] = [issues.slice(0, 51), issues.slice(51)].map(
+    (sourceIssues, index) => ({
+      id: `reviewer-${index + 1}`,
+      agent: "claude",
+      model: "opus",
+      status: "completed",
+      report: { ...reportFor("source"), issues: sourceIssues },
+    }),
+  );
+  const consolidated = {
+    ...reportFor("consolidated"),
+    issues: issues.map((issue, index) => ({
+      ...issue,
+      reviewSourceIds: [
+        index < 51 ? `reviewer-1/issue-${index + 1}` : `reviewer-2/issue-${index - 50}`,
+      ],
+    })),
+  };
+  const result = parseStructuredReportResult(
+    { ok: true, provider: "claude", requestId: "consolidate", value: consolidated },
+    reviewers,
+  );
+  expect(result.success).toBe(true);
+  if (result.success) {
+    expect(deriveConsolidatedProvenance(result.data, reviewers).issues).toEqual([]);
+  }
+  const overflow = parseStructuredReportResult(
+    {
+      ok: true,
+      provider: "claude",
+      requestId: "overflow",
+      value: { ...consolidated, issues: [...consolidated.issues, consolidated.issues[0]!] },
+    },
+    reviewers,
+  );
+  expect(overflow.success).toBe(false);
+  if (!overflow.success) expect(overflow.error.message).not.toContain("drop");
+});
+
 /**
  * A provider whose answer depends on which session asked.
  *
@@ -110,6 +160,7 @@ class FanoutProvider implements BuildPipelineProvider {
   }> = [];
   readonly aborted: string[] = [];
   readonly statusReads: string[] = [];
+  readonly messageReads: Array<{ sessionId: string; limit?: number }> = [];
   /**
    * Models whose sessions answer `error` rather than produce a report.
    *
@@ -187,7 +238,8 @@ class FanoutProvider implements BuildPipelineProvider {
     };
   }
 
-  async messages(sessionId: string): Promise<unknown[]> {
+  async messages(sessionId: string, options: { limit?: number } = {}): Promise<unknown[]> {
+    this.messageReads.push({ sessionId, ...options });
     const version = this.changingMessages ? ++this.messageVersion : 1;
     return [
       {
@@ -255,7 +307,12 @@ async function withPipeline(
     providers: Map<BuildPipelineAgent, FanoutProvider>;
     read: (id: string) => Promise<BuildPipeline>;
     worktree: { head: string; fingerprint: string; fail: boolean };
-    packageGeneration: { count: number; verificationCount: number; failVerification: boolean };
+    packageGeneration: {
+      count: number;
+      verificationCount: number;
+      failVerification: boolean;
+      failUnexpectedly: boolean;
+    };
     commands: string[];
     workflowResults?: WorkflowResultService;
   }) => Promise<void>,
@@ -294,7 +351,12 @@ async function withPipeline(
     ["pi", new FanoutProvider("pi")],
   ]);
   const worktree = { head: HEAD, fingerprint: FINGERPRINT, fail: false };
-  const packageGeneration = { count: 0, verificationCount: 0, failVerification: false };
+  const packageGeneration = {
+    count: 0,
+    verificationCount: 0,
+    failVerification: false,
+    failUnexpectedly: false,
+  };
   const commands: string[] = [];
   const invoke = async <T>(command: string, _args: Record<string, unknown> = {}): Promise<T> => {
     commands.push(command);
@@ -315,6 +377,7 @@ async function withPipeline(
     }
     if (command === "verify_looped_review_package") {
       packageGeneration.verificationCount += 1;
+      if (packageGeneration.failUnexpectedly) throw new Error("verification service unavailable");
       if (packageGeneration.failVerification) {
         throw new ReviewSnapshotChangedError(
           "Multi-model review stopped because the environment worktree changed after the review started.",
@@ -873,7 +936,7 @@ describe("build pipeline multi-model review", () => {
         /^Review \d+$/.test(session.label),
       );
       expect(cancelledReviews.every((session) => session.completedAt !== undefined)).toBe(true);
-      expect(cancelledReviews.map((session) => session.model)).toEqual(["opus", "sonnet"]);
+      expect(cancelledReviews.map((session) => session.model).sort()).toEqual(["opus", "sonnet"]);
       expect(
         cancelled.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "cancelled"),
       ).toBe(true);
@@ -1277,11 +1340,52 @@ describe("build pipeline multi-model review", () => {
           if ((await read(started.id)).reviewFanout?.consolidation) break;
         }
         const before = (await storage.getBuildPipeline(started.id))!.revision;
+        const readsBefore = provider.messageReads.filter(
+          (entry) => entry.sessionId.includes("consolidation") && entry.limit === undefined,
+        ).length;
 
         await service.advanceNow(started.id);
         const after = (await storage.getBuildPipeline(started.id))!.revision;
+        const readsAfter = provider.messageReads.filter(
+          (entry) => entry.sessionId.includes("consolidation") && entry.limit === undefined,
+        ).length;
 
         expect(after).toBe(before);
+        expect(readsAfter).toBe(readsBefore);
+      },
+      { transcriptPersistIntervalMs: 60_000 },
+    );
+  });
+
+  test("persists a reviewer's final transcript even inside the persist interval", async () => {
+    await withPipeline(
+      async ({ service, read, provider }) => {
+        provider.runningModels.add("opus");
+        provider.runningModels.add("sonnet");
+        provider.changingMessages = true;
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+          ]),
+        );
+        await advanceUntil(service, read, started.id, "reviewing");
+        await service.advanceNow(started.id);
+        const before = await read(started.id);
+        const reviewer = before.reviewFanout!.reviewers[0]!;
+        const sessionBefore = before.sessions.find(
+          (entry) => entry.sessionKey === reviewer.sessionKey,
+        )!;
+        const priorMessages = JSON.stringify(sessionBefore.messages);
+        provider.runningModels.delete("opus");
+        await service.advanceNow(started.id);
+        const after = await read(started.id);
+        const sessionAfter = after.sessions.find(
+          (entry) => entry.sessionKey === reviewer.sessionKey,
+        )!;
+        expect(after.reviewFanout!.reviewers[0]!.status).toBe("completed");
+        expect(sessionAfter.status).toBe("idle");
+        expect(JSON.stringify(sessionAfter.messages)).not.toBe(priorMessages);
       },
       { transcriptPersistIntervalMs: 60_000 },
     );
@@ -1471,6 +1575,35 @@ describe("build pipeline multi-model review", () => {
 
       await service.advanceNow(started.id);
       expect(reviewerSessionCreates(provider)).toHaveLength(8);
+    });
+  });
+
+  test("an unexpected admission failure fails the pass and stops existing reviewers", async () => {
+    await withPipeline(async ({ service, storage, read, provider, packageGeneration }) => {
+      provider.runningModels.add("haiku");
+      provider.runningModels.add("compact");
+      const started = await service.start(startInput(fourReviewers()));
+      await advanceUntil(service, read, started.id, "reviewing");
+      await service.advanceNow(started.id);
+      const midPanel = await read(started.id);
+      const running = midPanel.reviewFanout!.reviewers.filter(
+        (reviewer) => reviewer.status === "running",
+      );
+      expect(running).toHaveLength(2);
+      await rewritePipeline(storage, started.id, (pipeline) => {
+        for (const reviewer of pipeline.reviewFanout!.reviewers) {
+          if (reviewer.status === "running") reviewer.dispatchState = "prepared";
+        }
+      });
+      packageGeneration.failUnexpectedly = true;
+      const failed = await advanceUntil(service, read, started.id, "failed", 10);
+      expect(failed.failureContext?.phase).toBe("reviewing");
+      expect(
+        failed.reviewFanout!.reviewers.filter((reviewer) => reviewer.status === "cancelled"),
+      ).toHaveLength(2);
+      for (const reviewer of running) {
+        expect(provider.aborted).toContain(reviewer.providerSessionId!);
+      }
     });
   });
 

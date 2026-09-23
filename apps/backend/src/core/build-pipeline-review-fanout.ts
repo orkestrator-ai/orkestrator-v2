@@ -766,10 +766,15 @@ export class BuildPipelineReviewFanout {
       consolidation.requestId,
     );
     if (status === "idle" && turnSettled === false) return { kind: "working" };
-    const transcriptChanged = await this.deps.refreshTranscript(session, provider);
-    if (transcriptChanged && this.deps.shouldPersistTranscript(session)) {
-      session.messagesPersistedAt = reviewFanoutNowIso();
-      await this.save(pipeline);
+    // Running sessions need a full snapshot only at the persist boundary.
+    // The progress probe below reads a bounded tail on its own cadence.
+    const persistDue = this.deps.shouldPersistTranscript(session);
+    if (status !== "running" || persistDue) {
+      const transcriptChanged = await this.deps.refreshTranscript(session, provider);
+      if (transcriptChanged || (status === "running" && persistDue)) {
+        session.messagesPersistedAt = reviewFanoutNowIso();
+        await this.save(pipeline);
+      }
     }
     if (status === "running") {
       if (consolidation.idleResultPolls !== undefined) {
@@ -822,7 +827,7 @@ export class BuildPipelineReviewFanout {
     }
     let parsed: ReturnType<typeof parseStructuredReportResult>;
     try {
-      parsed = parseStructuredReportResult(result);
+      parsed = parseStructuredReportResult(result, state.reviewers);
     } catch (error) {
       return { kind: "failed", error: reviewFanoutErrorMessage(error) };
     }

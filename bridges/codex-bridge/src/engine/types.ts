@@ -327,9 +327,17 @@ export interface ListThreadsResult {
   supported: boolean;
 }
 
+/**
+ * One input item for `turn/start` / `turn/steer`.
+ *
+ * `skill` carries a private binding resolved by the bridge's own skill
+ * inventory (see `commands/skill-inventory.ts`). A browser never supplies the
+ * path: it only names an opaque catalogue id the bridge looks up.
+ */
 export type EngineUserInput =
   | { type: "text"; text: string }
-  | { type: "local_image"; path: string };
+  | { type: "local_image"; path: string }
+  | { type: "skill"; name: string; path: string };
 
 export interface StartTurnOptions {
   /** Engine-side thread address from `startThread`/`resumeThread`. */
@@ -487,6 +495,12 @@ export type EngineEvent = EngineEventMeta &
         credits?: EngineCreditSnapshot;
       }
     | { kind: "engine.state"; state: EngineState; detail?: string }
+    /**
+     * `skills/changed`: watched skill files moved. An invalidation mark only —
+     * it carries no inventory, and consumers must re-read `skills/list`
+     * off the notification path rather than per event.
+     */
+    | { kind: "skills.changed" }
     /**
      * A replacement child is ready. Every loaded thread must be re-subscribed and
      * every in-flight turn reconciled before the thread can accept work again —

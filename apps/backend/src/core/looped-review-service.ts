@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
 import {
+  DEFAULT_STALL_ABANDON_MS,
+  DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
+  PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
+  noProgressElapsedMs,
+  progressFingerprint,
+} from "./multi-review-progress.js";
+import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   AGENT_INTERACTION_JOURNAL_VERSION,
   AGENT_INTERACTION_LIMITS,
@@ -899,11 +906,11 @@ export class LoopedReviewService {
     // produce structured output, and only this branch classifies that as
     // definite; letting it throw made the same condition indefinite — and so
     // retried — whenever the provider explained why it failed.
-    const { status, error: statusDetail } = await readProviderStatus(
-      provider,
-      session.providerSessionId,
-      dispatch.requestId,
-    );
+    const {
+      status,
+      error: statusDetail,
+      backgroundWorkLive,
+    } = await readProviderStatus(provider, session.providerSessionId, dispatch.requestId);
     await this.assertFence(workflow.id, lease.token);
     if (status === "blocked") {
       // An authoritative interaction snapshot was already checked above. A
@@ -923,6 +930,37 @@ export class LoopedReviewService {
         workflow.structuredWait?.dispatchId === dispatch.id
           ? workflow.structuredWait
           : { dispatchId: dispatch.id, startedAt: nowIso(), idlePolls: 0 };
+      if (backgroundWorkLive) {
+        wait.idlePolls = 0;
+        const lastProbe = wait.lastProbeAt ? Date.parse(wait.lastProbeAt) : Number.NaN;
+        if (
+          !Number.isFinite(lastProbe) ||
+          Date.now() - lastProbe >= DEFAULT_PROGRESS_PROBE_INTERVAL_MS
+        ) {
+          wait.lastProbeAt = nowIso();
+          try {
+            const messages = await provider.messages(session.providerSessionId, {
+              limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
+            });
+            const digest = progressFingerprint(messages.slice(-PROGRESS_TRANSCRIPT_TAIL_MESSAGES));
+            if (wait.progressDigest !== digest) {
+              wait.progressDigest = digest;
+              wait.progressAt = nowIso();
+            }
+          } catch {
+            // A failed transcript read does not pause the durable stall clock.
+          }
+        }
+        await this.assertFence(workflow.id, lease.token);
+        workflow.structuredWait = wait;
+        if (noProgressElapsedMs(wait.progressAt, wait.startedAt)! >= DEFAULT_STALL_ABANDON_MS) {
+          throw new DefiniteResultError(
+            "Native provider produced no activity while awaiting background work",
+          );
+        }
+        await this.save(workflow, lease.token);
+        return;
+      }
       wait.idlePolls += 1;
       workflow.structuredWait = wait;
       if (wait.idlePolls >= (this.options.missingResultPollLimit ?? DEFAULT_MISSING_RESULT_POLLS)) {

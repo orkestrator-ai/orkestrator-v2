@@ -220,6 +220,7 @@ describe("CoordinatorPanel", () => {
     render(<CoordinatorPanel projectId="project-1" />);
 
     const agent = await screen.findByTestId("native-agent");
+    expect(agent.closest("[data-agent-scope]")?.id).toBe("project-panel-coordinator");
     expect(agent.getAttribute("data-coordinator-project-id")).toBe("project-1");
     expect(renderAgentNativeTab.mock.calls.at(-1)?.[0]).toMatchObject({
       coordinatorProjectId: "project-1",

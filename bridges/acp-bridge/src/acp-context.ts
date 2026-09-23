@@ -367,8 +367,21 @@ export interface SessionState {
   turnStartedAt?: number;
   /** A user cancellation suppresses any retriable-provider retry still in backoff. */
   retryCancelledPromptSequence?: number;
-  /** Bounded ACP command catalogue; persisted so detach/re-attach does not empty the picker. */
+  /**
+   * Bounded ACP command inventory (see `acp-commands.ts`); persisted so a
+   * restart does not empty the picker. Undefined until anything is known.
+   */
   availableCommands?: NativeAgentSlashCommand[];
+  /**
+   * True once the agent pushed an inventory to *this* bridge process. Rows
+   * restored from disk leave it unset: they are shown as stale and never
+   * authorize executing a command. Never persisted.
+   */
+  commandsLive?: boolean;
+  /** Advances with every pushed inventory; persisted so it stays monotonic. */
+  commandsRevision?: number;
+  /** The last pushed inventory dropped advertised rows. */
+  commandsTruncated?: boolean;
   /** Whether session/load is replaying transcript updates into this state. */
   historyReplay: false | "hydrate" | "ignore";
   /**
@@ -454,6 +467,8 @@ export interface PersistedSession {
   sessionConfig?: AcpNormalizedSessionConfig;
   usage?: PersistedUsage;
   availableCommands?: NativeAgentSlashCommand[];
+  commandsRevision?: number;
+  commandsTruncated?: boolean;
   subagentLimitExceeded?: boolean;
   settledCursorAgentIds?: string[];
 }
@@ -763,6 +778,9 @@ export const PARENT_WATCHDOG_INTERVAL_MS = parseDuration(
 );
 export const ACP_TOKEN_HEADER = "x-orkestrator-acp-token";
 
+/** `AcpProcess.onUpdate` before a session handler is attached. */
+const unattachedUpdate = (): void => undefined;
+
 export class AcpProcess {
   readonly child: ChildProcessWithoutNullStreams;
   readonly clientMethods = new AcpClientMethods(workingDirectory);
@@ -780,7 +798,15 @@ export class AcpProcess {
   #closed = false;
   #terminationOutcome?: "resolved" | "rejected";
   #stdoutBuffer = Buffer.alloc(0);
-  onUpdate: (params: JsonObject) => void = () => undefined;
+  onUpdate: (params: JsonObject) => void = unattachedUpdate;
+  /**
+   * The latest `available_commands_update` that arrived before a session
+   * handler was attached. Agents announce commands right after `session/new`
+   * answers, often in the same stdout chunk, so the notification is read
+   * before the caller has even seen the new session id. The inventory is a
+   * full replacement, so the latest one is all that needs keeping.
+   */
+  earlyCommandsUpdate: JsonObject | null = null;
   onVendor: (method: string, params: JsonObject) => void = () => undefined;
   onPermission: (id: number, params: JsonObject) => void = (id) => {
     this.respond(id, { outcome: { outcome: "cancelled" } });
@@ -842,7 +868,7 @@ export class AcpProcess {
       clientCapabilities: {
         fs: { readTextFile: true, writeTextFile: true },
         terminal: true,
-        session: { configOptions: { boolean: {} } },
+        session: { configOptions: { boolean: {} }, notices: {} },
         _meta: { parameterizedModelPicker: true },
       },
       clientInfo: { name: "orkestrator", title: "Orkestrator", version: "1.0.0" },
@@ -1091,6 +1117,13 @@ export class AcpProcess {
     if (message.method === "session/update" && isObject(message.params)) {
       this.#diagnostics?.activity("notification");
       this.#diagnostics?.count("notificationsReceived");
+      if (
+        this.onUpdate === unattachedUpdate &&
+        isObject(message.params.update) &&
+        message.params.update.sessionUpdate === "available_commands_update"
+      ) {
+        this.earlyCommandsUpdate = message.params;
+      }
       this.onUpdate(message.params);
       return;
     }

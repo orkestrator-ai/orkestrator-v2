@@ -87,6 +87,7 @@ import { persistState, schedulePersist } from "./acp-persist-writer.js";
 import { applyGrokInterjectionBroadcast } from "./grok-interjection.js";
 import { effectiveTurnExecutionPolicy } from "./acp-policy.js";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
+import { applyCommandInventory } from "./acp-commands.js";
 
 export async function listResumableSessions(): Promise<JsonObject[]> {
   if (sessionListProbe) return sessionListProbe;
@@ -486,6 +487,12 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
   state.pendingLateTurnUsage = undefined;
   state.ignoreUncorrelatedVendorUsage = undefined;
   child.onUpdate = (params) => applySessionUpdate(state, params);
+  // An inventory announced before this handler existed (see
+  // `AcpProcess.earlyCommandsUpdate`) would otherwise be lost until the agent
+  // happened to announce again.
+  const earlyCommands = child.earlyCommandsUpdate;
+  child.earlyCommandsUpdate = null;
+  if (earlyCommands) applySessionUpdate(state, earlyCommands);
   child.onVendor = (method, params) => {
     // Same generation rule as `onClose` below: a superseded child can emit long
     // after a replacement attached, and letting it rewrite `sessionConfig`
@@ -895,6 +902,25 @@ function appendNonTextContent(
   if (state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES) boundTranscript(state);
 }
 
+function recordAcpNotice(state: SessionState, update: JsonObject): void {
+  const title = typeof update.title === "string" ? update.title.trim() : "";
+  if (!title) return;
+  // The schema leaves severity open-ended; an unrecognised level is reported
+  // at the recorder's default rather than promoted to an error advisory.
+  const severity =
+    update.severity === "info" || update.severity === "warning" || update.severity === "error"
+      ? update.severity
+      : "warning";
+  const description = typeof update.description === "string" ? update.description.trim() : "";
+  state.health.recordNotice({
+    method: "notice",
+    severity,
+    source: "provider",
+    message: title,
+    ...(description ? { detail: description } : {}),
+  });
+}
+
 export function applySessionUpdate(state: SessionState, params: JsonObject): void {
   if (params.sessionId !== state.acpSessionId || !isObject(params.update)) return;
   const update = params.update;
@@ -921,6 +947,15 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     if (state.historyReplay !== "ignore") recordTurnUsage(state, update);
     return;
   }
+  if (kind === "notice") {
+    // ACP 1.5 (`ClientSessionCapabilities.notices`): a fire-and-forget
+    // advisory, not transcript. It lands in the shared runtime-health notices,
+    // which already bound, dedupe and surface errors as transcript advisories.
+    // A reconnect replays notices already recorded, so they are dropped like
+    // replayed usage rather than inflating the occurrence count.
+    if (state.historyReplay !== "ignore") recordAcpNotice(state, update);
+    return;
+  }
   if (kind === "config_option_update") {
     state.sessionConfig = applyConfigOptionUpdate(provider, state.sessionConfig, update);
     rememberCatalog(state.sessionConfig.composer);
@@ -929,25 +964,10 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     return;
   }
   if (kind === "available_commands_update") {
+    // A full replacement, not a merge: an empty list removes every command,
+    // and rows restored from disk are dropped rather than merged back.
     if (Array.isArray(update.availableCommands)) {
-      state.availableCommands = update.availableCommands.slice(0, 256).flatMap((candidate) => {
-        if (!isObject(candidate)) return [];
-        const rawName = boundedString(candidate.name, 256)?.trim().replace(/^\//, "");
-        if (!rawName) return [];
-        const description = boundedString(candidate.description, 2_048)?.trim();
-        const argumentHint =
-          boundedString(candidate.inputHint, 512)?.trim() ||
-          boundedString(candidate.argumentHint, 512)?.trim();
-        return [
-          {
-            name: `/${rawName}`,
-            description: description || rawName,
-            source: "builtin" as const,
-            scope: "session" as const,
-            ...(argumentHint ? { argumentHint } : {}),
-          },
-        ];
-      });
+      applyCommandInventory(state, update.availableCommands);
       state.revision += 1;
       schedulePersist();
     }

@@ -1244,7 +1244,106 @@ describe("routes the SDK has no surface for", () => {
     expect(await (await call(`/session/${state.id}/interactions`)).json()).toMatchObject({
       interactions: [],
     });
-    expect(await (await call("/global/slash-commands")).json()).toEqual({ commands: [] });
+    expect(await (await call("/global/slash-commands")).json()).toMatchObject({ commands: [] });
+  });
+});
+
+describe("provider commands", () => {
+  const unsupported = { catalogueVersion: 1, status: "unsupported", commands: [] };
+
+  test("legacy catalogue routes stay empty and the enhanced envelope says unsupported", async () => {
+    const state = await createSession();
+    state.lastAccessed = 0;
+    // `commands: []` is all an older backend reads; the envelope keeps a newer
+    // one from mistaking "no SDK surface" for an authoritative empty list.
+    expect(await (await call("/global/slash-commands")).json()).toEqual(unsupported);
+    expect(await (await call(`/session/${state.id}/commands`)).json()).toEqual(unsupported);
+    const refresh = await call(`/session/${state.id}/commands/refresh`, { method: "POST" });
+    expect(refresh.status).toBe(200);
+    expect(await refresh.json()).toMatchObject({ outcome: "unsupported" });
+    // Metadata reads never keep an idle agent attached.
+    expect(state.lastAccessed).toBe(0);
+  });
+
+  test("an unknown session is answered in band, never 404", async () => {
+    const commands = await call("/session/nope/commands");
+    expect(commands.status).toBe(200);
+    expect(await commands.json()).toEqual({
+      catalogueVersion: 1,
+      status: "missing",
+      commands: [],
+    });
+    const refresh = await call("/session/nope/commands/refresh", { method: "POST" });
+    expect(refresh.status).toBe(200);
+    expect(await refresh.json()).toMatchObject({ outcome: "unsupported" });
+  });
+
+  test("a selected command is refused before anything is journaled or sent", async () => {
+    const state = await createSession();
+    const agent = attachFake(state);
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({
+        prompt: "/review src",
+        requestId: "command-1",
+        allowProviderCommands: true,
+        command: {
+          id: "cursor:review",
+          name: "/review",
+          executionKind: "provider-prompt",
+          arguments: "src",
+        },
+      }),
+    });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({
+      error: "Cursor exposes no provider commands",
+      kind: "command-unavailable",
+    });
+    expect(agent.sends).toHaveLength(0);
+    expect(state.promptJournal.has("command-1")).toBe(false);
+    expect(state.messages).toEqual([]);
+  });
+
+  test("malformed command fields are caller errors", async () => {
+    const state = await createSession();
+    const agent = attachFake(state);
+    for (const body of [
+      { prompt: "hello", allowProviderCommands: "no" },
+      { prompt: "hello", command: { id: "x" } },
+      {
+        prompt: "/review",
+        allowProviderCommands: false,
+        command: { id: "x", name: "/x", executionKind: "provider-prompt", arguments: "" },
+      },
+    ]) {
+      const response = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ ...body, requestId: "bad" }),
+      });
+      expect(response.status).toBe(400);
+    }
+    expect(agent.sends).toHaveLength(0);
+    expect(state.promptJournal.has("bad")).toBe(false);
+  });
+
+  test("literal intent skips the local /steer reply and sends the text unchanged", async () => {
+    const state = await createSession();
+    const agent = attachFake(state);
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({
+        prompt: "/steer is a word in this workflow input",
+        requestId: "literal-1",
+        allowProviderCommands: false,
+      }),
+    });
+    expect(response.status).toBe(202);
+    await waitFor(() => agent.sends.length === 1);
+    expect(JSON.stringify(agent.sends[0]?.message)).toContain(
+      "/steer is a word in this workflow input",
+    );
+    expect(state.promptJournal.get("literal-1")?.local).toBeUndefined();
   });
 });
 

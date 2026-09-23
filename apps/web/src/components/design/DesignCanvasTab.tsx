@@ -1,43 +1,66 @@
 import "./design.css";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Plus, Minus, Save, Download, Layers, MousePointer2 } from "lucide-react";
+import { Plus, Minus, Save, Download, Layers, MousePointer2, Undo2, Redo2 } from "lucide-react";
 import {
   DESIGN_EVENT,
   type DesignCanvas,
   type DesignChange,
   type DesignElement,
   type DesignFrame,
+  type DesignHistoryStatus,
   type DesignLayer,
 } from "@orkestrator/protocol/design-canvas";
 import { Button } from "@/components/ui/button";
 import { invoke } from "@/lib/native/backend";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
-import { designAction, getCanvas, getChanges } from "./design-client";
+import { designAction, getCanvas, getCanvasState, getChanges } from "./design-client";
 import { DesignFrameView, type DesignSelection } from "./DesignFrameView";
 import { DesignInspector } from "./DesignInspector";
 import { DesignFrameBridge } from "./frame-bridge";
 import { LatestMutationQueue } from "./latest-mutation-queue";
 
+const EMPTY_HISTORY: DesignHistoryStatus = {
+  revision: 0,
+  undoCount: 0,
+  redoCount: 0,
+  canUndo: false,
+  canRedo: false,
+};
+
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    Boolean(target.closest('input, textarea, [contenteditable="true"]'))
+  );
+}
+
 export function DesignCanvasTab({
   canvasId,
   environmentId,
   isActive,
+  ownsGlobalShortcuts,
 }: {
   canvasId: string;
   environmentId: string;
   isActive: boolean;
+  ownsGlobalShortcuts: boolean;
 }) {
   const [canvas, setCanvas] = useState<DesignCanvas | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [history, setHistory] = useState<DesignHistoryStatus>(EMPTY_HISTORY);
   const [selection, setSelection] = useState<DesignSelection | null>(null);
   const [layers, setLayers] = useState<Record<string, DesignLayer[]>>({});
   const [showLayers, setShowLayers] = useState(true);
+  const [layersWidth, setLayersWidth] = useState(160);
+  const [layersMaxWidth, setLayersMaxWidth] = useState(400);
+  const layersResize = useRef<{ x: number; width: number } | null>(null);
   const [zoom, setZoom] = useState(0.65);
   const [pan, setPan] = useState({ x: 45, y: 65 });
   const panStart = useRef<{ x: number; y: number; origin: typeof pan } | null>(null);
   const viewport = useRef<HTMLElement>(null);
+  const canvasBody = useRef<HTMLDivElement>(null);
   const bridges = useRef(new Map<string, DesignFrameBridge>());
   const sync = useRef<(() => Promise<void>) | null>(null);
   const canvasRef = useRef<DesignCanvas | null>(null);
@@ -56,6 +79,22 @@ export function DesignCanvasTab({
     (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)),
     [],
   );
+  useEffect(() => {
+    setHistory(EMPTY_HISTORY);
+  }, [canvasId]);
+  useEffect(() => {
+    const target = canvasBody.current;
+    if (!isActive || !target) return;
+    const updateMaximum = () => {
+      const maximum = Math.max(120, Math.min(400, Math.floor(target.clientWidth * 0.45)));
+      setLayersMaxWidth(maximum);
+      setLayersWidth((width) => Math.min(width, maximum));
+    };
+    updateMaximum();
+    const observer = new ResizeObserver(updateMaximum);
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [isActive]);
   useEffect(() => {
     const target = viewport.current;
     if (!isActive || !target) return;
@@ -88,7 +127,10 @@ export function DesignCanvasTab({
           const changes = await getChanges(environmentId, canvasId, generation, after);
           if (disposed) return;
           if (changes.reset || changes.revision !== after) {
-            const snapshot = await getCanvas(environmentId, canvasId);
+            const { canvas: snapshot, history: nextHistory } = await getCanvasState(
+              environmentId,
+              canvasId,
+            );
             if (disposed) return;
             if (!canvasRef.current || canvasRef.current.revision <= snapshot.revision)
               canvasRef.current = snapshot;
@@ -96,6 +138,7 @@ export function DesignCanvasTab({
               current && current.revision > snapshot.revision ? current : snapshot,
             );
             after = snapshot.revision;
+            setHistory(nextHistory);
           }
           generation = changes.generation;
         } while (again && !disposed);
@@ -134,10 +177,13 @@ export function DesignCanvasTab({
     const latestFrame = frameId
       ? canvasRef.current?.frames.find((frame) => frame.id === frameId)
       : undefined;
+    const latestCanvas = canvasRef.current;
     const input =
       latestFrame && "expectedRevision" in request.input
         ? { ...request.input, expectedRevision: latestFrame.revision }
-        : request.input;
+        : latestCanvas && "expectedRevision" in request.input
+          ? { ...request.input, expectedRevision: latestCanvas.revision }
+          : request.input;
     try {
       await designAction(environmentId, request.action, { canvasId, ...input });
     } catch (reason) {
@@ -153,6 +199,34 @@ export function DesignCanvasTab({
     const key = typeof input.frameId === "string" ? input.frameId : "canvas";
     mutationQueue.current!.enqueue(key, { action, input });
   }, []);
+  const restoreHistory = useCallback(
+    (action: "undo" | "redo") => {
+      const current = canvasRef.current;
+      if (!current) return;
+      mutate(action, { expectedRevision: current.revision });
+    },
+    [mutate],
+  );
+  useEffect(() => {
+    if (!ownsGlobalShortcuts) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.altKey ||
+        (!event.metaKey && !event.ctrlKey) ||
+        isTextEditingTarget(event.target)
+      )
+        return;
+      const key = event.key.toLowerCase();
+      const redo = (key === "z" && event.shiftKey) || (key === "y" && event.ctrlKey);
+      const undo = key === "z" && !event.shiftKey;
+      if (busy || (!undo && !redo) || (undo ? !history.canUndo : !history.canRedo)) return;
+      event.preventDefault();
+      restoreHistory(undo ? "undo" : "redo");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busy, history.canRedo, history.canUndo, ownsGlobalShortcuts, restoreHistory]);
   const selectLayer = (frame: DesignFrame, selector: string) => {
     const bridge = bridges.current.get(frame.id);
     if (!bridge || bridge.renderedRevision !== frame.revision) return;
@@ -213,7 +287,7 @@ export function DesignCanvasTab({
       className="design-workspace absolute inset-0 flex min-h-0 flex-col bg-background"
       aria-label="Design canvas"
     >
-      <header className="flex flex-wrap items-center gap-1 border-b px-2 py-2">
+      <header className="flex flex-wrap items-center gap-1 border-b border-divider px-2 py-2">
         <Button
           variant="ghost"
           size="icon"
@@ -274,6 +348,26 @@ export function DesignCanvasTab({
         <Button
           variant="ghost"
           size="icon"
+          aria-label="Undo design change"
+          title="Undo (Ctrl/⌘+Z)"
+          disabled={!canvas || busy || !history.canUndo}
+          onClick={() => restoreHistory("undo")}
+        >
+          <Undo2 className="size-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Redo design change"
+          title="Redo (Ctrl/⌘+Shift+Z)"
+          disabled={!canvas || busy || !history.canRedo}
+          onClick={() => restoreHistory("redo")}
+        >
+          <Redo2 className="size-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
           aria-label="Save design to repository"
           disabled={!canvas || busy}
           onClick={() => void save()}
@@ -291,7 +385,10 @@ export function DesignCanvasTab({
         </Button>
       </header>
       {error && (
-        <div role="alert" className="flex items-center gap-2 border-b p-2 text-xs text-destructive">
+        <div
+          role="alert"
+          className="flex items-center gap-2 border-b border-divider p-2 text-xs text-destructive"
+        >
           <span className="flex-1">{error}</span>
           <button
             onClick={() => {
@@ -308,38 +405,92 @@ export function DesignCanvasTab({
           {notice}
         </p>
       )}
-      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+      <div ref={canvasBody} className="relative flex min-h-0 flex-1 overflow-hidden">
         {showLayers && (
-          <nav
-            aria-label="Design hierarchy"
-            className="design-hierarchy w-40 shrink-0 overflow-auto border-r p-2 text-xs"
+          <div
+            className="design-hierarchy relative flex shrink-0"
+            style={{ width: layersWidth, maxWidth: layersMaxWidth }}
             data-inspecting={Boolean(selection)}
           >
-            <h3 className="mb-3 text-muted-foreground">Layers</h3>
-            {canvas?.frames.map((frame) => (
-              <div key={frame.id} className="mb-4">
-                <button
-                  className="mb-1 w-full truncate text-left font-medium"
-                  onClick={() => {
-                    setPan({ x: 40 - frame.x * zoom, y: 65 - frame.y * zoom });
-                    setSelection(null);
-                  }}
-                >
-                  {frame.name}
-                </button>
-                {(layers[frame.id] ?? []).map((layer) => (
+            <nav aria-label="Design hierarchy" className="min-w-0 flex-1 overflow-auto p-2 text-xs">
+              <h3 className="mb-3 text-muted-foreground">Layers</h3>
+              {canvas?.frames.map((frame) => (
+                <div key={frame.id} className="mb-4">
                   <button
-                    key={layer.selector}
-                    className={`block w-full truncate py-1 text-left hover:bg-muted ${selection?.frameId === frame.id && selection.element.selector === layer.selector ? "bg-muted" : ""}`}
-                    style={{ paddingLeft: Math.min(layer.depth, 8) * 10 }}
-                    onClick={() => selectLayer(frame, layer.selector)}
+                    className="mb-1 w-full truncate text-left font-medium"
+                    onClick={() => {
+                      setPan({ x: 40 - frame.x * zoom, y: 65 - frame.y * zoom });
+                      setSelection(null);
+                    }}
                   >
-                    {layer.label}
+                    {frame.name}
                   </button>
-                ))}
-              </div>
-            ))}
-          </nav>
+                  {(layers[frame.id] ?? []).map((layer) => (
+                    <button
+                      key={layer.selector}
+                      className={`block w-full truncate py-1 text-left hover:bg-muted ${selection?.frameId === frame.id && selection.element.selector === layer.selector ? "bg-muted" : ""}`}
+                      style={{ paddingLeft: Math.min(layer.depth, 8) * 10 }}
+                      onClick={() => selectLayer(frame, layer.selector)}
+                    >
+                      {layer.label}
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </nav>
+            <div
+              role="separator"
+              aria-label="Resize design hierarchy"
+              aria-orientation="vertical"
+              aria-valuemin={120}
+              aria-valuemax={layersMaxWidth}
+              aria-valuenow={layersWidth}
+              tabIndex={0}
+              className="relative z-30 w-px shrink-0 cursor-col-resize touch-none bg-divider after:absolute after:inset-y-0 after:-left-1 after:w-2 hover:bg-primary/50 focus-visible:bg-primary/50 focus-visible:outline-none"
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                event.preventDefault();
+                event.currentTarget.focus();
+                event.currentTarget.setPointerCapture(event.pointerId);
+                layersResize.current = {
+                  x: event.clientX,
+                  width: event.currentTarget.parentElement!.getBoundingClientRect().width,
+                };
+              }}
+              onPointerMove={(event) => {
+                const start = layersResize.current;
+                if (!start) return;
+                setLayersWidth(
+                  Math.max(120, Math.min(layersMaxWidth, start.width + event.clientX - start.x)),
+                );
+              }}
+              onPointerUp={(event) => {
+                layersResize.current = null;
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }}
+              onLostPointerCapture={() => {
+                layersResize.current = null;
+              }}
+              onPointerCancel={() => {
+                layersResize.current = null;
+              }}
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const width = event.currentTarget.parentElement!.getBoundingClientRect().width;
+                setLayersWidth(
+                  event.key === "Home"
+                    ? 120
+                    : event.key === "End"
+                      ? layersMaxWidth
+                      : Math.max(
+                          120,
+                          Math.min(layersMaxWidth, width + (event.key === "ArrowRight" ? 10 : -10)),
+                        ),
+                );
+              }}
+            />
+          </div>
         )}
         <main
           ref={viewport}
@@ -443,7 +594,7 @@ export function DesignCanvasTab({
           />
         )}
       </div>
-      <footer className="flex gap-3 border-t px-3 py-1 text-[10px] text-muted-foreground">
+      <footer className="flex gap-3 border-t border-divider px-3 py-1 text-[10px] text-muted-foreground">
         <span>Drag background to pan · Scroll to pan · Ctrl + scroll to zoom</span>
         <span className="ml-auto">{canvas ? `Revision ${canvas.revision}` : "Connecting"}</span>
       </footer>

@@ -27,6 +27,7 @@ Refreshed 2026-09-17 against the current tree.
 | [remote-gateway.md](architecture/remote-gateway.md) | Living | Standalone backend, Tailscale Serve, flags, troubleshooting. |
 | [browser-previews.md](architecture/browser-previews.md) | Living | Service previews: registry, desktop tunnel, private HTTPS origins, relay, kill switch, rollback. |
 | [review-preparation.md](architecture/review-preparation.md) | Living | Multi-review pipeline; queue wait is 30 minutes. |
+| [native-agent-commands.md](architecture/native-agent-commands.md) | Living | Slash-command descriptors, bridge wire contract, intent resolution, collisions, catalogue lifecycle. |
 | [bridge-diagnostics.md](architecture/bridge-diagnostics.md) | Living | Shared bridge debug logging. |
 | [cursor-usage.md](architecture/cursor-usage.md) | Living | Cursor usage mapping. |
 | [cursor-diagnostics.md](architecture/cursor-diagnostics.md) | Historical | September 9 and 14 stall investigations. Current logging is in `bridge-diagnostics.md`. |
@@ -54,6 +55,7 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 
 | Document | Status | Notes |
 | --- | --- | --- |
+| [2026-09-22-platform-version-audit.md](reviews/2026-09-22-platform-version-audit.md) | Historical | Compatibility and feature audit for the 2026-09-22 platform version refresh. |
 | [2026-09-17-platform-version-audit.md](reviews/2026-09-17-platform-version-audit.md) | Historical | Compatibility and feature audit for the 2026-09-17 platform version refresh. |
 
 ## Plans
@@ -62,6 +64,7 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 | --- | --- | --- |
 | [sdk-coverage/00-index.md](plans/sdk-coverage/00-index.md) | Active | Living index. 01–03 Done; 04–10 and 14–15 Active; 11–13 code done, QA leftover. |
 | [improvements/browser/plan/00-index.md](improvements/browser/plan/00-index.md) | Active | Browser preview plan. 01–13 implemented behind disabled-by-default capabilities; 14–15 partly evidenced. Browser, Safari/iOS, two-machine, and Docker Desktop runs are outstanding. |
+| [slash-commands/plan/00-index.md](improvements/slash-commands/plan/00-index.md) | Active | Slash-command correctness plan. Code landed; live provider probes and isolated browser QA are the open items. Findings: [slash-commands.md](improvements/slash-commands.md). |
 | [codex-duplicate-agent-cards.md](plans/codex-duplicate-agent-cards.md) | Done | Automated verification landed; isolated browser QA still pending. |
 | [sdk-coverage-2026-09-06.md](plans/sdk-coverage-2026-09-06.md) | Historical | Source review for the SDK plans. Do not pick work from this file. |
 
@@ -72,6 +75,6 @@ These are the only unfinished `docs/todo/` files.
 | Document | Status | Notes |
 | --- | --- | --- |
 | [coordinator-to-implement.md](todo/coordinator-to-implement.md) | Active | Coordinator read-only adapters, turn-control gaps, and one live suite. |
-| [opencode-v2.md](todo/opencode-v2.md) | Deferred | Session v2 is unused. Production stays on the legacy `client.session.*` API. Pin is `1.18.31`. |
+| [opencode-v2.md](todo/opencode-v2.md) | Deferred | Session v2 is unused. Production stays on the legacy `client.session.*` API. Pin is `1.18.32`. |
 | [remote-stream-compression.md](todo/remote-stream-compression.md) | Deferred | Measure redundant payloads before changing compression defaults. |
 | [remote-client-data-saving-mode.md](todo/remote-client-data-saving-mode.md) | Deferred | Proposal only. Measure existing incremental reads first. |

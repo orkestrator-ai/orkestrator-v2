@@ -125,6 +125,8 @@ class FanoutProvider implements BuildPipelineProvider {
   invalidConsolidationResults = 0;
   unknownSourceConsolidationResults = 0;
   runningConsolidation = false;
+  missingConsolidationResult = false;
+  backgroundWorkLive = false;
   failingConsolidation = false;
   changingMessages = false;
   private consolidationResultCalls = 0;
@@ -180,6 +182,7 @@ class FanoutProvider implements BuildPipelineProvider {
     return {
       status: await this.status(sessionId),
       ...(this.usagePending ? { usagePending: true } : {}),
+      ...(this.backgroundWorkLive ? { backgroundWorkLive: true } : {}),
     };
   }
 
@@ -194,9 +197,13 @@ class FanoutProvider implements BuildPipelineProvider {
     ];
   }
 
-  async structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T>> {
+  async structured<T>(
+    sessionId: string,
+    requestId: string,
+  ): Promise<StructuredOutputResult<T> | null> {
     const base = { ok: true as const, provider: "claude" as const, requestId };
     if (sessionId.includes("consolidation")) {
+      if (this.missingConsolidationResult) return null;
       this.consolidationResultCalls += 1;
       if (this.consolidationResultCalls <= this.invalidConsolidationResults) {
         return { ...base, value: {} as T };
@@ -1233,6 +1240,25 @@ describe("build pipeline multi-model review", () => {
       },
       { transcriptPersistIntervalMs: 60_000 },
     );
+  });
+
+  test("keeps consolidation open for background work and resumes the idle bound afterward", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+      );
+      await advanceUntil(service, read, started.id, "reviewing");
+      provider.missingConsolidationResult = true;
+      provider.backgroundWorkLive = true;
+      for (let attempt = 0; attempt < 16; attempt++) await service.advanceNow(started.id);
+      expect((await read(started.id)).reviewFanout?.consolidation?.idleResultPolls).toBeUndefined();
+      provider.backgroundWorkLive = false;
+      for (let attempt = 0; attempt < 6; attempt++) await service.advanceNow(started.id);
+      expect((await read(started.id)).phase).toBe("failed");
+    });
   });
 
   test("keeps consolidation on the provider that created its durable session", async () => {

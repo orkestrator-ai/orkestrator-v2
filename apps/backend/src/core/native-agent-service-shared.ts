@@ -45,6 +45,7 @@ import type {
   NativeAgentSessionProjection,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
+  NativeAgentCommandIntent,
   NativeAgentSlashCommand,
   NativeAgentSlashCommandSource,
   NativeAgentMcpServer,
@@ -175,6 +176,11 @@ export interface DispatchNativeAgentPromptInput extends EnsureNativeAgentSession
   promptSuggestions?: boolean;
   /** Explicit literal-text override for backend-authored prompts such as mail. */
   allowProviderCommands?: boolean;
+  /**
+   * How to interpret a leading command token. Absent: interactive sessions
+   * resolve typed commands, every other origin is literal.
+   */
+  command?: NativeAgentCommandIntent;
 }
 
 export type MailInjectDispatchOutcome =

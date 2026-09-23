@@ -5,6 +5,11 @@ import {
   COORDINATOR_CONTEXT_OPEN_TAG,
   COORDINATOR_EXECUTION_POLICY,
 } from "@orkestrator/protocol/coordinator";
+import {
+  NativeAgentCommandCatalogueCache,
+  commandCatalogueKey,
+} from "./native-agent-command-catalogue.js";
+import type { NativeAgentCommandRefreshOutcome } from "@orkestrator/protocol/native-agent";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
   coordinatorRuntimeUnavailableMessage,
@@ -18,6 +23,7 @@ import {
   controlsFromSessionInput,
   isValidInteractionMetadata,
   nativeAgentSessionStorageKey,
+  nativeCapabilities,
   nonBlank,
   readProviderStatus,
 } from "./native-agent-service-shared.js";
@@ -200,10 +206,13 @@ export abstract class NativeAgentServiceBase {
     string,
     { models: AgentModel[]; expiresAt: number }
   >();
-  protected readonly slashCommandCache = new Map<
-    string,
-    { commands: NativeAgentSlashCommand[]; expiresAt: number }
-  >();
+  /** Authoritative, bounded command catalogues; see native-agent-command-catalogue.ts. */
+  protected readonly commandCatalogues = new NativeAgentCommandCatalogueCache({
+    now: () => this.now(),
+    announce: (environmentId) => {
+      if (!this.stopped) this.storage.announceNativeAgentSessionProjection(environmentId);
+    },
+  });
   protected readonly authStatusCache = new Map<
     string,
     { status: NativeAgentAuthStatus | undefined; expiresAt: number }
@@ -213,13 +222,6 @@ export abstract class NativeAgentServiceBase {
     string,
     {
       operation: Promise<AgentModel[]>;
-      validity: { current: boolean };
-    }
-  >();
-  protected readonly slashCommandRefreshes = new Map<
-    string,
-    {
-      operation: Promise<NativeAgentSlashCommand[]>;
       validity: { current: boolean };
     }
   >();
@@ -837,7 +839,11 @@ export abstract class NativeAgentServiceBase {
     const session = await this.storage.getNativeAgentSession(sessionKey);
     if (session) this.assertSessionIdentity(session, input, sessionKey);
     const provider = await this.provider(input);
-    const slashCommandKey = `${input.environmentId}\0${input.agent}\0${session?.providerSessionId ?? "global"}`;
+    const slashCommandKey = commandCatalogueKey(
+      input.environmentId,
+      input.agent,
+      session?.providerSessionId,
+    );
     // Discard in-flight discovery rather than waiting for it. Each refresh
     // re-checks its validity flag immediately before writing its cache, with no
     // await in between, so an invalidated read can no longer land. Awaiting one
@@ -848,13 +854,8 @@ export abstract class NativeAgentServiceBase {
       pendingModelCatalog.validity.current = false;
       this.modelCatalogRefreshes.delete(input.environmentId);
     }
-    const pendingSlashCommands = this.slashCommandRefreshes.get(slashCommandKey);
-    if (pendingSlashCommands) {
-      pendingSlashCommands.validity.current = false;
-      this.slashCommandRefreshes.delete(slashCommandKey);
-    }
     this.modelCatalogCache.delete(input.environmentId);
-    this.slashCommandCache.delete(slashCommandKey);
+    this.commandCatalogues.invalidate(slashCommandKey);
     this.authStatusCache.delete(`${input.environmentId}\0${input.agent}`);
     // Best-effort, and dropped *after* the caches above rather than before.
     // Some providers answer this by reaching their bridge process — Pi has to,
@@ -875,6 +876,47 @@ export abstract class NativeAgentServiceBase {
       console.warn(`[native-agent] ${input.agent} catalogue refresh failed:`, error);
     }
     return this.refreshProjection(input, true);
+  }
+
+  /**
+   * Explicit command refresh for one session.
+   *
+   * Asks the provider to reload what it can, re-reads the catalogue, and says
+   * which of those actually happened — a push-only provider cannot claim a
+   * reload. Never restarts a provider and never cancels its work.
+   */
+  async refreshProjectionCommands(input: NativeAgentProjectionInput): Promise<{
+    outcome: NativeAgentCommandRefreshOutcome;
+    message?: string;
+    projection: NativeAgentSessionProjection | null;
+  }> {
+    this.assertProjectionInput(input);
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const session = await this.storage.getNativeAgentSession(sessionKey);
+    if (session) this.assertSessionIdentity(session, input, sessionKey);
+    const provider = await this.provider(input);
+    const capabilities = nativeCapabilities(input.agent);
+    const supported =
+      capabilities.slashCommands && Boolean(provider.slashCommands || provider.commandCatalogue);
+    const result = supported
+      ? await this.commandCatalogues.refresh(
+          commandCatalogueKey(input.environmentId, input.agent, session?.providerSessionId),
+          input.environmentId,
+          provider,
+          session?.providerSessionId,
+        )
+      : { outcome: "unsupported" as const };
+    this.invalidateProjection(sessionKey);
+    return { ...result, projection: await this.refreshProjection(input, true) };
+  }
+
+  /** Called when an environment is deleted; never on tab unmount or switch. */
+  forgetEnvironmentCommandCatalogues(environmentId: string): void {
+    this.commandCatalogues.forgetEnvironment(environmentId);
   }
 
   async listProjectionModels(input: NativeAgentProjectionInput): Promise<AgentModel[]> {

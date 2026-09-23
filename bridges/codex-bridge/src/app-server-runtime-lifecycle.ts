@@ -106,17 +106,7 @@ import {
   type NormalizedPart,
 } from "./messages/types.js";
 import { appendAttachmentTags } from "./messages/attachment-tags.js";
-import {
-  buildPromptInput,
-  expandPromptTemplate,
-  getAvailableSlashCommandDefinitions,
-  isCodexCliNativeSlashCommand,
-  parseCodexSteerCommand,
-  parseSlashCommandPrompt,
-  wrapPromptForConversationMode,
-  type ConversationMode,
-  type PromptSlashCommand,
-} from "./prompts/slash-commands.js";
+import type { ConversationMode } from "./prompts/slash-commands.js";
 import {
   getWorkingDirectory,
   hydrateMessagesFromPersistedSession,
@@ -228,6 +218,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     this.sweepTimer = null;
     for (const timer of this.recoveryBackstops.values()) clearTimeout(timer);
     this.recoveryBackstops.clear();
+    this.commandCatalogue.dispose();
     // Nothing will report terminal after this, so release the drain rather than
     // holding shutdown for its full deadline.
     this.notifyThreadActivity();
@@ -744,7 +735,15 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       }
       return;
     }
+    if (event.kind === "skills.changed") {
+      // Constant-time mark; the catalogue coalesces the re-read off this path.
+      this.commandCatalogue.markSkillsChanged();
+      return;
+    }
     if (event.kind === "engine.generation") {
+      // Skill bindings came from the dead child; never execute one of its paths
+      // until the replacement has listed it again.
+      this.commandCatalogue.withdrawGeneration(event.generation);
       // `recovering` must be transient. Left unresolved, the overlapping-turn
       // guard rejects every later prompt with a 409 and the session is bricked.
       const recovery = this.generationRecovery.then(() =>

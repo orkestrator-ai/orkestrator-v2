@@ -119,7 +119,6 @@ export const MAX_STRUCTURED_RESULTS = 64;
 export const MAX_STRUCTURED_RESULT_BYTES = 1024 * 1024;
 export const MAX_STATE_FILE_BYTES = 32 * 1024 * 1024;
 export const MAX_RESUME_ENTRIES = 200;
-export const MAX_SLASH_COMMANDS = 512;
 export const MAX_PENDING_APPROVALS = 64;
 
 /** How long a turn may run before the bridge gives up and reports failure. */

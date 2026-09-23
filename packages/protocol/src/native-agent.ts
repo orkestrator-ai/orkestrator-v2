@@ -1323,13 +1323,118 @@ export interface NativeAgentForkOutcome {
   draft?: string;
 }
 
+/**
+ * One command a composer can offer.
+ *
+ * The first six fields are the legacy display record every client understands.
+ * The rest are the additive execution descriptor (catalogue version 1): they
+ * say *how* the command runs, not just what it is called. A descriptor without
+ * an `id` came from a legacy source and carries no execution authority of its
+ * own — see `agent-command-catalogue.ts`.
+ */
 export interface NativeAgentSlashCommand {
+  /** Display name, preserving the provider's spelling and namespace. */
   name: string;
   description?: string;
   argumentHint?: string;
+  /** Provenance category used for picker grouping; `unknown` stays unknown. */
   source: NativeAgentSlashCommandSource;
+  /** Alternative spellings that resolve to this same binding. */
   aliases?: string[];
+  /** Lifetime of the row, never ownership. See {@link origin} for that. */
   scope?: "global" | "session";
+  /**
+   * Opaque identity within one provider/environment/session authority.
+   * Stable across description edits and row reordering. A lookup key, never a
+   * permission grant: the executor revalidates it against its own registry.
+   */
+  id?: string;
+  /** Exact text a picker inserts; `$name` for a Codex skill. Defaults to `name`. */
+  insertText?: string;
+  executionKind?: NativeAgentCommandExecutionKind;
+  /** Verified ownership, when the provider actually reports it. */
+  origin?: NativeAgentCommandOrigin;
+  availability?: NativeAgentCommandAvailability;
+  inputPolicy?: NativeAgentCommandInputPolicy;
+  /**
+   * Changes when the command's execution meaning changes (a different skill
+   * path, template file or provider command), never for presentation edits.
+   * A selection made against one revision is refused against another.
+   */
+  bindingRevision?: string;
+  /** True when the provider distinguishes spellings that differ only in case. */
+  caseSensitive?: boolean;
+}
+
+/**
+ * How an enabled command executes. A closed set: each value names a routing
+ * path the executor implements, never arbitrary code.
+ *
+ * - `provider-prompt`: canonical text through the provider's prompt transport
+ *   (Claude SDK query, ACP `session/prompt`, Pi `session.prompt`).
+ * - `provider-command`: a separate provider command API (OpenCode
+ *   `session.command`).
+ * - `structured-skill`: an explicit structured skill input (Codex app-server).
+ * - `bridge-template`: an Orkestrator-owned compatibility template the bridge
+ *   expands before dispatch (Codex prompt files).
+ * - `bridge-local`: answered by the bridge without a model turn (Codex `/help`).
+ * - `session-action`: an Orkestrator runtime action (`/steer`, `/compact`).
+ */
+export const NATIVE_AGENT_COMMAND_EXECUTION_KINDS = [
+  "provider-prompt",
+  "provider-command",
+  "structured-skill",
+  "bridge-template",
+  "bridge-local",
+  "session-action",
+] as const;
+export type NativeAgentCommandExecutionKind = (typeof NATIVE_AGENT_COMMAND_EXECUTION_KINDS)[number];
+
+export const NATIVE_AGENT_COMMAND_ORIGINS = [
+  "project",
+  "user",
+  "system",
+  "admin",
+  "plugin",
+  "orkestrator",
+  "unknown",
+] as const;
+export type NativeAgentCommandOrigin = (typeof NATIVE_AGENT_COMMAND_ORIGINS)[number];
+
+/** Bounded, allowlisted reasons a listed command cannot run. */
+export const NATIVE_AGENT_COMMAND_UNAVAILABLE_REASONS = [
+  "disabled",
+  "shadowed",
+  "reserved-name",
+  "ambiguous",
+  "requires-interactive-ui",
+  "requires-shell-execution",
+  "session-changing",
+  "unqualified",
+  "unsupported",
+  "update-required",
+] as const;
+export type NativeAgentCommandUnavailableReason =
+  (typeof NATIVE_AGENT_COMMAND_UNAVAILABLE_REASONS)[number];
+
+export interface NativeAgentCommandAvailability {
+  state: "available" | "unavailable";
+  reason?: NativeAgentCommandUnavailableReason;
+  /** Short, user-facing explanation. Never a raw provider error. */
+  message?: string;
+}
+
+export interface NativeAgentCommandInputPolicy {
+  /** Absent means optional. */
+  arguments?: "none" | "optional" | "required";
+  /** Absent means the provider's ordinary attachment support applies. */
+  attachments?: "none" | "images" | "any";
+  /**
+   * When a command may run relative to the agent's turn.
+   * `queue` waits behind a running turn like a prompt; `idle` refuses while
+   * the agent is busy; `running` exists only relative to a live turn.
+   */
+  busy?: "queue" | "idle" | "running";
 }
 
 export type NativeAgentSlashCommandSource =
@@ -1342,6 +1447,86 @@ export type NativeAgentSlashCommandSource =
   | "extension"
   | "orkestrator"
   | "unknown";
+
+/**
+ * Whether a command list is authoritative, and how fresh it is.
+ *
+ * `ready` with an empty list is a real "this session has no commands";
+ * `unsupported` is "this integration exposes no provider catalogue". Neither
+ * may be produced by a failed read: failures are `unavailable` (nothing
+ * retained) or `stale` (a previous list retained for display only).
+ */
+export const NATIVE_AGENT_COMMAND_CATALOGUE_STATUSES = [
+  "loading",
+  "ready",
+  "stale",
+  "unavailable",
+  "unsupported",
+] as const;
+export type NativeAgentCommandCatalogueStatus =
+  (typeof NATIVE_AGENT_COMMAND_CATALOGUE_STATUSES)[number];
+
+/** What an explicit refresh actually did. Never claims a reload it did not do. */
+export const NATIVE_AGENT_COMMAND_REFRESH_OUTCOMES = [
+  "reloaded",
+  "reread",
+  "deferred",
+  "unsupported",
+  "failed",
+] as const;
+export type NativeAgentCommandRefreshOutcome =
+  (typeof NATIVE_AGENT_COMMAND_REFRESH_OUTCOMES)[number];
+
+export const NATIVE_AGENT_COMMAND_CATALOGUE_ERROR_CODES = [
+  "timeout",
+  "unreachable",
+  "rejected",
+  "malformed",
+  "too-large",
+  "provider-error",
+] as const;
+export type NativeAgentCommandCatalogueErrorCode =
+  (typeof NATIVE_AGENT_COMMAND_CATALOGUE_ERROR_CODES)[number];
+
+export interface NativeAgentCommandCatalogueState {
+  status: NativeAgentCommandCatalogueStatus;
+  /** Advances only when commands or status meaningfully change. */
+  revision: number;
+  /**
+   * True when descriptors carry execution identity negotiated with the
+   * bridge. False for a legacy list, whose rows run as ordinary prompt text.
+   */
+  enhanced: boolean;
+  /** How the backend learns about changes; `ttl` means events are not guaranteed. */
+  freshness?: "push" | "ttl";
+  fetchedAt?: string;
+  truncated?: boolean;
+  error?: { code: NativeAgentCommandCatalogueErrorCode; message?: string };
+  lastRefresh?: { outcome: NativeAgentCommandRefreshOutcome; at: string; message?: string };
+}
+
+/**
+ * How a composer submission should be interpreted.
+ *
+ * - `literal`: ordinary text. Never matched against commands.
+ * - `typed`: resolve a leading command token against the authoritative
+ *   catalogue; unknown tokens stay ordinary text.
+ * - `selected`: the user picked this descriptor. Binding, not a hint — if it
+ *   is gone or changed, the submission fails instead of becoming a prompt.
+ */
+export type NativeAgentCommandIntent =
+  | { kind: "literal" }
+  | { kind: "typed" }
+  | { kind: "selected"; commandId: string; bindingRevision?: string };
+
+/** Content-free record of what a dispatch resolved to, kept for retries. */
+export interface NativeAgentResolvedCommandRecord {
+  intent: NativeAgentCommandIntent;
+  commandId?: string;
+  name?: string;
+  executionKind?: NativeAgentCommandExecutionKind;
+  bindingRevision?: string;
+}
 
 /**
  * How much of a transcript the projection is carrying.
@@ -1452,6 +1637,8 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   completionBlockedByBackgroundTasks?: boolean;
   turnBoundaries?: NativeAgentTurnBoundary[];
   slashCommands?: NativeAgentSlashCommand[];
+  /** Freshness of {@link slashCommands}; absent from a legacy backend. */
+  slashCommandCatalogue?: NativeAgentCommandCatalogueState;
   /** Monotonic within one runtime generation. */
   revision: number;
   /** Changes whenever the provider transport authority is replaced. */
@@ -1550,7 +1737,10 @@ export interface NativeAgentDiscoveryView {
   identity: NativeAgentViewIdentity;
   sections: {
     models?: NativeAgentDiscoverySectionState<AgentModel[]>;
-    commands?: NativeAgentDiscoverySectionState<NativeAgentSlashCommand[]>;
+    commands?: NativeAgentDiscoverySectionState<NativeAgentSlashCommand[]> & {
+      /** Richer freshness than `availability`; absent from a legacy backend. */
+      catalogue?: NativeAgentCommandCatalogueState;
+    };
     mcp?: NativeAgentDiscoverySectionState<NativeAgentMcpServer[]>;
     auth?: NativeAgentDiscoverySectionState<NativeAgentAuthStatus | null>;
     runtime?: NativeAgentDiscoverySectionState<{
@@ -1649,7 +1839,8 @@ export type NativeAgentProjectionField =
   | "suggestedPrompt"
   | "completionBlockedByBackgroundTasks"
   | "turnBoundaries"
-  | "slashCommands";
+  | "slashCommands"
+  | "slashCommandCatalogue";
 
 export interface NativeAgentProjectionDelta<TMessage = unknown> {
   messageUpserts: TMessage[];
@@ -1738,6 +1929,7 @@ const PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
   "completionBlockedByBackgroundTasks",
   "turnBoundaries",
   "slashCommands",
+  "slashCommandCatalogue",
 ]);
 const OPTIONAL_PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
   "sessionId",
@@ -1760,6 +1952,7 @@ const OPTIONAL_PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
   "completionBlockedByBackgroundTasks",
   "turnBoundaries",
   "slashCommands",
+  "slashCommandCatalogue",
 ]);
 
 export function isNativeAgentSessionProjection(

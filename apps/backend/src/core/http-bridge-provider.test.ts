@@ -1700,6 +1700,38 @@ describe("HTTP bridge provider", () => {
     }
   });
 
+  test("flags an idle session whose turn was released to live background tasks", async () => {
+    const observe = async (backgroundTasks: unknown, status = "idle") => {
+      const { provider } = httpProvider(() => Response.json({ status, backgroundTasks }));
+      return provider.observeSession!("session-1");
+    };
+
+    await expect(
+      observe({ "task-1": { status: "running" }, "task-2": { status: "completed" } }),
+    ).resolves.toMatchObject({ status: "idle", backgroundWorkLive: true });
+    await expect(observe({ "task-1": { status: "paused" } })).resolves.toMatchObject({
+      backgroundWorkLive: true,
+    });
+    for (const settled of [{ "task-1": { status: "completed" } }, {}, undefined]) {
+      expect((await observe(settled)).backgroundWorkLive).toBeUndefined();
+    }
+    expect(
+      (await observe({ "task-1": { status: "running" } }, "running")).backgroundWorkLive,
+    ).toBeUndefined();
+  });
+
+  test("keeps only the matching retained continuation unsettled", async () => {
+    const { provider } = httpProvider(() =>
+      Response.json({ status: "idle", retainedContinuationRequestIds: ["request-1"] }),
+    );
+    expect((await readProviderStatus(provider, "session-1", "request-1")).backgroundWorkLive).toBe(
+      true,
+    );
+    expect(
+      (await readProviderStatus(provider, "session-1", "another-request")).backgroundWorkLive,
+    ).toBeUndefined();
+  });
+
   test("preserves the bridge failure detail from an errored session", async () => {
     const { provider } = httpProvider(
       () =>
@@ -1991,6 +2023,7 @@ describe("HTTP bridge progressive transcript", () => {
           value: {
             messages: [{ id: "m1", content: "hello", parts: [] }],
             startIndex: 3,
+            messageWindow: { truncated: true, omittedParts: 7 },
             complete: true,
             generation: 4,
             contentEpoch: 2,
@@ -2006,10 +2039,39 @@ describe("HTTP bridge progressive transcript", () => {
     if ("unchanged" in snapshot) throw new Error("expected a snapshot");
     expect(snapshot.historyEpoch).toBe("4:2");
     expect(snapshot.historyStartIndex).toBe(3);
+    expect(snapshot.omittedParts).toBe(7);
     expect(snapshot.sourceToken).toBe("bt1.def");
     expect(snapshot.title).toBe("Titled");
     expect(snapshot.revision).toBe(9);
     expect(snapshot.freshness).toBe("cached");
+  });
+
+  test.each([
+    { name: "a missing message window", value: undefined },
+    { name: "zero omitted parts", value: { omittedParts: 0 } },
+    { name: "fractional omitted parts", value: { omittedParts: 1.5 } },
+    { name: "non-numeric omitted parts", value: { omittedParts: "1" } },
+  ])("leaves omittedParts unset for $name", async ({ value }) => {
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          version: 1,
+          status: "snapshot",
+          token: "bt1.no-omission",
+          value: {
+            messages: [{ id: "m1", content: "hello", parts: [] }],
+            ...(value === undefined ? {} : { messageWindow: value }),
+            complete: false,
+            generation: 1,
+            contentEpoch: 1,
+          },
+        }),
+      codexConnection,
+    );
+
+    const snapshot = await provider.transcriptSnapshot!("session-1", transcriptOptions);
+    if ("unchanged" in snapshot) throw new Error("expected a snapshot");
+    expect(snapshot.omittedParts).toBeUndefined();
   });
 
   test("rejects a malformed transcript envelope instead of showing an empty tab", async () => {

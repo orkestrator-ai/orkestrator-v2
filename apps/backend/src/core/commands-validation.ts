@@ -1,3 +1,4 @@
+import { parseNativeAgentCommandIntent } from "@orkestrator/protocol/agent-command-catalogue";
 import {
   createHash,
   AGENT_INTERACTION_ORIGINS,
@@ -344,7 +345,20 @@ export function asBoundedNonBlankString(value: unknown, name: string, maxLength:
 
 export function asDispatchNativeAgentPromptInput(args: JsonRecord): DispatchNativeAgentPromptInput {
   const agent = asString(args.agent, "agent") as import("./models.js").NativeAgentProvider;
+  const command =
+    args.command === undefined ? undefined : parseNativeAgentCommandIntent(args.command);
+  if (args.command !== undefined && !command) {
+    throw new Error("Native agent command intent is invalid");
+  }
+  // A command's argument suffix is kept byte-for-byte, trailing whitespace
+  // included; ordinary prompts keep their historical trimming.
+  const commandPrompt =
+    command && command.kind !== "literal" ? asString(args.prompt, "prompt") : undefined;
+  if (commandPrompt !== undefined && !commandPrompt.trim()) {
+    throw new Error("Expected prompt to be a non-blank string");
+  }
   return {
+    ...(command ? { command } : {}),
     environmentId: asNonBlankString(args.environmentId, "environmentId"),
     agent,
     logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
@@ -357,7 +371,7 @@ export function asDispatchNativeAgentPromptInput(args: JsonRecord): DispatchNati
       typeof args.phase === "string"
         ? (args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase)
         : undefined,
-    prompt: asNonBlankString(args.prompt, "prompt"),
+    prompt: commandPrompt?.trimStart() ?? asNonBlankString(args.prompt, "prompt"),
     requestId: asNonBlankString(args.requestId, "requestId"),
     sessionMode:
       args.sessionMode === "plan" || args.sessionMode === "build" ? args.sessionMode : undefined,

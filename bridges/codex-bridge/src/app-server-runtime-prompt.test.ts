@@ -2,7 +2,7 @@ import { describe, expect, jest, test } from "bun:test";
 import { AppServerProcessExitError, AppServerTimeoutError } from "./app-server/errors.js";
 import { hashCwd } from "./sessions/persistence.js";
 import { MAX_LOCAL_MESSAGES, phaseToExternalStatus } from "./sessions/thread-registry.js";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -3059,5 +3059,330 @@ describe("steering", () => {
       status: "running",
       phase: "cancelling",
     });
+  });
+});
+
+describe("command catalogue dispatch", () => {
+  const DEPLOY_PATH = "/tmp/ws/.codex/skills/deploy/SKILL.md";
+  const skillsResponse = (skills: Array<Record<string, unknown>>) => ({
+    data: [{ cwd: "/tmp/ws", skills, errors: [] }],
+  });
+  const deploy = (overrides: Record<string, unknown> = {}) => ({
+    name: "deploy",
+    description: "Deploy the app",
+    path: DEPLOY_PATH,
+    scope: "repo",
+    enabled: true,
+    pluginId: null,
+    ...overrides,
+  });
+
+  function writeUserPrompt(name: string, content: string): void {
+    const dir = join(codexHome, "prompts");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${name}.md`), content);
+  }
+
+  async function withSkills(skills: () => Array<Record<string, unknown>>) {
+    const h = await harness({ "skills/list": () => skillsResponse(skills()) });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const catalogue = await h.runtime.getCommandCatalogue(sessionId);
+    const row = catalogue.commands.find((entry) => entry.name === "$deploy");
+    return { h, sessionId, catalogue, row };
+  }
+
+  function selection(
+    row: { id?: string; name: string; executionKind?: string; bindingRevision?: string },
+    args: string,
+  ) {
+    return {
+      id: row.id!,
+      name: row.name,
+      executionKind: row.executionKind as "structured-skill",
+      ...(row.bindingRevision ? { bindingRevision: row.bindingRevision } : {}),
+      arguments: args,
+    };
+  }
+
+  const turnStarts = (h: Awaited<ReturnType<typeof harness>>) =>
+    h.child().requests.filter((request) => request.method === "turn/start");
+
+  test("a selected skill sends one text item, the private skill binding and the images", async () => {
+    const { h, sessionId, row } = await withSkills(() => [deploy()]);
+    expect(JSON.stringify(row)).not.toContain(DEPLOY_PATH);
+
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "$deploy to staging\n\tthen verify",
+      requestId: "req-skill",
+      attachments: [{ path: "/tmp/ws/shot.png", filename: "shot.png" }],
+      command: selection(row!, "to staging\n\tthen verify"),
+    });
+
+    expect(outcome).toMatchObject({ ok: true });
+    const input = turnStarts(h)[0]!.params.input as Array<Record<string, unknown>>;
+    expect(input.filter((item) => item.type === "text")).toHaveLength(1);
+    expect(input[0]).toMatchObject({ type: "text", text_elements: [] });
+    expect(String(input[0]!.text).startsWith("$deploy to staging\n\tthen verify")).toBe(true);
+    expect(input[1]).toEqual({ type: "skill", name: "deploy", path: DEPLOY_PATH });
+    expect(input[2]).toEqual({ type: "localImage", path: "/tmp/ws/shot.png" });
+    expect(input).toHaveLength(3);
+    // The transcript shows what the user typed, not the wire form.
+    const messages = await h.runtime.getMessages(sessionId);
+    expect(messages?.[0]?.content).toBe("$deploy to staging\n\tthen verify");
+  });
+
+  test("typed /skill:name resolves to the same structured binding", async () => {
+    const { h, sessionId } = await withSkills(() => [deploy()]);
+    await h.runtime.prompt(sessionId, {
+      prompt: "/skill:deploy now",
+      requestId: "req-typed-skill",
+      attachments: [],
+    });
+    expect(turnStarts(h)[0]!.params.input).toEqual([
+      { type: "text", text: "$deploy now", text_elements: [] },
+      { type: "skill", name: "deploy", path: DEPLOY_PATH },
+    ]);
+  });
+
+  test("forged, mismatched, disabled and removed selections fail before journaling or turn/start", async () => {
+    let skills = [deploy()];
+    const { h, sessionId, row } = await withSkills(() => skills);
+    const attempts: Array<[string, () => Record<string, unknown>]> = [
+      ["forged", () => ({ ...selection(row!, ""), id: "codex-skill:0123456789abcdef" })],
+      ["wrong-kind", () => ({ ...selection(row!, ""), executionKind: "bridge-template" })],
+      ["wrong-revision", () => ({ ...selection(row!, ""), bindingRevision: "ffffffffffffffff" })],
+    ];
+    for (const [label, command] of attempts) {
+      const outcome = await h.runtime.prompt(sessionId, {
+        prompt: "$deploy",
+        requestId: `req-${label}`,
+        attachments: [],
+        command: command() as never,
+      });
+      expect(outcome).toMatchObject({ ok: false, status: 422, kind: "command-unavailable" });
+      expect(h.runtime.getJournal().get(`req-${label}`)).toBeUndefined();
+    }
+
+    // Disabled, then removed, each announced by skills/changed.
+    for (const [label, next] of [
+      ["disabled", [deploy({ enabled: false })]],
+      ["removed", []],
+    ] as const) {
+      skills = [...next];
+      h.child().notify("skills/changed", {});
+      await h.drain();
+      const outcome = await h.runtime.prompt(sessionId, {
+        prompt: "$deploy",
+        requestId: `req-${label}`,
+        attachments: [],
+        command: selection(row!, ""),
+      });
+      expect(outcome).toMatchObject({ ok: false, status: 422 });
+      expect(h.runtime.getJournal().get(`req-${label}`)).toBeUndefined();
+    }
+    expect(turnStarts(h)).toHaveLength(0);
+    expect(await h.runtime.getMessages(sessionId)).toEqual([]);
+  });
+
+  test("a binding from a dead generation is withdrawn and revalidated against the new child", async () => {
+    let skills = [deploy()];
+    const { h, sessionId, row } = await withSkills(() => skills);
+    const firstGeneration = h.engine.info().generation;
+    skills = [];
+    h.child().exit(1);
+    await waitUntil(
+      async () => {
+        await h.drain();
+        return h.engine.info().generation !== firstGeneration;
+      },
+      "the supervisor did not start a replacement child",
+      2_000,
+    ).catch(async () => {
+      // The supervisor restarts lazily; any request brings the child back.
+      await h.engine.listSkills({ cwd: "/tmp/ws" });
+    });
+    await h.drain();
+    expect(h.engine.info().generation).not.toBe(firstGeneration);
+
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "$deploy",
+      requestId: "req-stale-generation",
+      attachments: [],
+      command: selection(row!, ""),
+    });
+    expect(outcome).toMatchObject({ ok: false, status: 422 });
+    expect(
+      h.children.flatMap((child) => child.requests).some((r) => r.method === "turn/start"),
+    ).toBe(false);
+  });
+
+  test("literal intent bypasses built-ins, templates and skills", async () => {
+    writeUserPrompt("review", "Review $ARGUMENTS thoroughly.");
+    const { h, sessionId } = await withSkills(() => [deploy()]);
+    for (const [index, prompt] of ["/help", "/review src/a.ts", "/skill:deploy go"].entries()) {
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed" },
+      });
+      await h.drain();
+      const outcome = await h.runtime.prompt(sessionId, {
+        prompt,
+        requestId: `req-literal-${index}`,
+        attachments: [],
+        allowProviderCommands: false,
+      });
+      expect(outcome).toMatchObject({ ok: true });
+      expect(turnStarts(h).at(-1)!.params.input).toEqual([
+        { type: "text", text: prompt, text_elements: [] },
+      ]);
+    }
+  });
+
+  test("typed templates keep multiline and tab-separated arguments", async () => {
+    writeUserPrompt("review", "---\nargument-hint: <target>\n---\nReview $ARGUMENTS and report.");
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: '/review\tsrc/a.ts\n\n  and "src/b.ts"',
+      requestId: "req-multiline-template",
+      attachments: [],
+    });
+    expect(turnStarts(h)[0]!.params.input).toEqual([
+      {
+        type: "text",
+        text: 'Review src/a.ts\n\n  and "src/b.ts" and report.',
+        text_elements: [],
+      },
+    ]);
+  });
+
+  test("shell templates fail explicitly with no side effects; shell text in arguments stays text", async () => {
+    const marker = join(codexHome, "shell-ran");
+    writeUserPrompt("branch", `Branch: !\`touch ${marker}\``);
+    writeUserPrompt("echo", "Echo: $ARGUMENTS");
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    const typed = await h.runtime.prompt(sessionId, {
+      prompt: "/branch",
+      requestId: "req-shell-typed",
+      attachments: [],
+    });
+    expect(typed).toMatchObject({ ok: true });
+    const messages = await h.runtime.getMessages(sessionId);
+    expect(messages?.[1]?.content).toContain("no longer executes");
+
+    const catalogue = await h.runtime.getCommandCatalogue(sessionId);
+    const branch = catalogue.commands.find((entry) => entry.name === "/branch")!;
+    expect(branch.availability).toMatchObject({ reason: "requires-shell-execution" });
+    const selected = await h.runtime.prompt(sessionId, {
+      prompt: "/branch",
+      requestId: "req-shell-selected",
+      attachments: [],
+      command: { ...selection(branch, ""), executionKind: "bridge-template" },
+    });
+    expect(selected).toMatchObject({ ok: false, status: 422 });
+    expect(turnStarts(h)).toHaveLength(0);
+
+    await h.runtime.prompt(sessionId, {
+      prompt: `/echo !\`touch ${marker}\``,
+      requestId: "req-shell-args",
+      attachments: [],
+    });
+    expect(turnStarts(h)[0]!.params.input).toEqual([
+      { type: "text", text: `Echo: !\`touch ${marker}\``, text_elements: [] },
+    ]);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test("a reserved template never shadows /help, on either the typed or selected path", async () => {
+    writeUserPrompt("help", "Template help");
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const catalogue = await h.runtime.getCommandCatalogue(sessionId);
+    const help = catalogue.commands.find((entry) => entry.name === "/help")!;
+    const reserved = catalogue.commands.find((entry) => entry.name === "/prompts:help")!;
+    expect(reserved.availability).toMatchObject({ reason: "reserved-name" });
+
+    await h.runtime.prompt(sessionId, {
+      prompt: "/help",
+      requestId: "req-help-selected",
+      attachments: [],
+      command: { ...selection(help, ""), executionKind: "bridge-local" },
+    });
+    const selectedReserved = await h.runtime.prompt(sessionId, {
+      prompt: "/prompts:help",
+      requestId: "req-reserved-selected",
+      attachments: [],
+      command: { ...selection(reserved, ""), executionKind: "bridge-template" },
+    });
+    expect(selectedReserved).toMatchObject({ ok: false, status: 422 });
+    const messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages[1]!.content).toContain("Available Codex slash commands");
+    expect(messages[1]!.content).toContain("/prompts:help (unavailable:");
+    expect(turnStarts(h)).toHaveLength(0);
+  });
+
+  test("catalogue and status reads are metadata: no touch, no attach, no turn", async () => {
+    let clock = 1_000_000;
+    const h = await harness(
+      { "skills/list": () => skillsResponse([deploy()]) },
+      { now: () => clock, skillRefreshDebounceMs: 1 },
+    );
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const session = h.runtime.getRegistry().getSession(sessionId)!;
+    const lastAccessed = session.lastAccessed;
+    expect(h.runtime.getStatus(sessionId, false)?.commandRevision).toBeUndefined();
+
+    clock += 60_000;
+    const catalogue = await h.runtime.getCommandCatalogue(sessionId);
+    expect(catalogue.status).toBe("ready");
+    expect(session.lastAccessed).toBe(lastAccessed);
+    const methods = h.child().requests.map((request) => request.method);
+    expect(methods).not.toContain("thread/resume");
+    expect(methods).not.toContain("thread/start");
+    expect(methods).not.toContain("turn/start");
+
+    // The status route publishes the same inventory revision without listing.
+    const listCount = () =>
+      h.child().requests.filter((request) => request.method === "skills/list").length;
+    const before = listCount();
+    expect(h.runtime.getStatus(sessionId, false)?.commandRevision).toBe(catalogue.revision);
+    expect(listCount()).toBe(before);
+
+    expect(await h.runtime.getCommandCatalogue("no-such-session")).toEqual({
+      catalogueVersion: 1,
+      status: "missing",
+      commands: [],
+    });
+  });
+
+  test("a skills/changed burst is O(1) on the read path and coalesces into one re-read", async () => {
+    let skills = [deploy()];
+    const h = await harness(
+      { "skills/list": () => skillsResponse(skills) },
+      { skillRefreshDebounceMs: 5 },
+    );
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const first = await h.runtime.getCommandCatalogue(sessionId);
+    const listCount = () =>
+      h.child().requests.filter((request) => request.method === "skills/list").length;
+    expect(listCount()).toBe(1);
+
+    skills = [deploy(), deploy({ name: "lint", path: "/tmp/ws/.codex/skills/lint/SKILL.md" })];
+    for (let index = 0; index < 500; index += 1) h.child().notify("skills/changed", {});
+    await h.drain();
+    // Nothing was listed on the notification path itself.
+    expect(listCount()).toBe(1);
+    await waitUntil(() => listCount() === 2, "the coalesced re-read never ran", 1_000);
+    await waitUntil(
+      () => (h.runtime.getStatus(sessionId, false)?.commandRevision ?? 0) > first.revision!,
+      "the inventory revision did not advance",
+      1_000,
+    );
+    expect(listCount()).toBe(2);
+    const next = await h.runtime.getCommandCatalogue(sessionId);
+    expect(next.commands.map((row) => row.name)).toContain("$lint");
+    expect(next.revision).toBe(h.runtime.getStatus(sessionId, false)?.commandRevision);
   });
 });

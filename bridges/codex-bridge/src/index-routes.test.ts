@@ -1853,3 +1853,135 @@ describe("progressive transcript route", () => {
     );
   });
 });
+
+describe("command catalogue routes", () => {
+  test("serves the enhanced catalogue and answers an unknown session in band", async () => {
+    const payload = {
+      catalogueVersion: 1,
+      status: "ready",
+      revision: 4,
+      generation: "2",
+      freshness: "ttl",
+      truncated: false,
+      commands: [{ name: "/help", id: "codex-builtin:/help", executionKind: "bridge-local" }],
+    };
+    const calls: string[] = [];
+    await withRuntimeMethod(
+      "getCommandCatalogue",
+      async (sessionId: string) => {
+        calls.push(sessionId);
+        return payload;
+      },
+      async () => {
+        const response = await app.request("/session/session-7/commands");
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual(payload);
+      },
+    );
+    expect(calls).toEqual(["session-7"]);
+
+    // The real runtime: an unknown session is `missing`, never a 404 (a 404
+    // means "this bridge predates the route").
+    const missing = await app.request("/session/never-created/commands");
+    expect(missing.status).toBe(200);
+    expect(await missing.json()).toEqual({ catalogueVersion: 1, status: "missing", commands: [] });
+  });
+
+  test("refresh reports the runtime outcome", async () => {
+    await withRuntimeMethod(
+      "refreshCommandCatalogue",
+      async () => ({ outcome: "reloaded" }),
+      async () => {
+        const response = await jsonRequest("/session/session-1/commands/refresh", "POST");
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ outcome: "reloaded" });
+      },
+    );
+    const missing = await jsonRequest("/session/never-created/commands/refresh", "POST");
+    expect(await missing.json()).toEqual({ outcome: "failed", message: "Session not found" });
+  });
+
+  test("the prompt route forwards literal intent and a selection, and validates both", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    let outcome: unknown = {
+      ok: true,
+      result: { status: "processing", requestId: "request-1", threadId: "thread-1" },
+    };
+    const command = {
+      id: "codex-skill:0123456789abcdef",
+      name: "$deploy",
+      executionKind: "structured-skill",
+      bindingRevision: "fedcba9876543210",
+      arguments: "to staging\n\tnow",
+    };
+    await withRuntimeMethod(
+      "prompt",
+      async (_sessionId: string, input: Record<string, unknown>) => {
+        calls.push(input);
+        return outcome;
+      },
+      async () => {
+        const literal = await jsonRequest("/session/session-1/prompt", "POST", {
+          prompt: "/help",
+          requestId: "request-literal",
+          allowProviderCommands: false,
+        });
+        expect(literal.status).toBe(202);
+
+        const selected = await jsonRequest("/session/session-1/prompt", "POST", {
+          prompt: "$deploy to staging\n\tnow",
+          requestId: "request-selected",
+          allowProviderCommands: true,
+          command,
+        });
+        expect(selected.status).toBe(202);
+
+        for (const invalid of [
+          { allowProviderCommands: "no" },
+          { command: { ...command, arguments: 3 } },
+          { command: { ...command, id: "has space" } },
+          { command, allowProviderCommands: false },
+        ]) {
+          const rejected = await jsonRequest("/session/session-1/prompt", "POST", {
+            prompt: "$deploy",
+            requestId: "request-invalid",
+            ...invalid,
+          });
+          expect(rejected.status).toBe(400);
+        }
+
+        outcome = {
+          ok: false,
+          status: 422,
+          error: "The selected command is no longer available.",
+          kind: "command-unavailable",
+        };
+        const unavailable = await jsonRequest("/session/session-1/prompt", "POST", {
+          prompt: "$deploy",
+          requestId: "request-unavailable",
+          command,
+        });
+        expect(unavailable.status).toBe(422);
+        expect(await unavailable.json()).toEqual({
+          error: "The selected command is no longer available.",
+          kind: "command-unavailable",
+        });
+      },
+    );
+
+    expect(calls[0]).toEqual({
+      prompt: "/help",
+      requestId: "request-literal",
+      attachments: [],
+      allowProviderCommands: false,
+    });
+    // Interpretation is the default and is not forwarded; the selection is.
+    expect(calls[1]).toEqual({
+      prompt: "$deploy to staging\n\tnow",
+      requestId: "request-selected",
+      attachments: [],
+      command,
+    });
+    expect(calls).toHaveLength(3);
+  });
+});

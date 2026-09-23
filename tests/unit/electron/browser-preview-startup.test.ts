@@ -442,6 +442,54 @@ describe("browser preview startup wiring", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onCreateError).toHaveBeenCalledWith(failure);
   });
+
+  test("handles quit-time activate before startup and ahead of window checks", async () => {
+    let activate!: () => void;
+    let startupComplete = false;
+    let quitting = false;
+    let windowCount = 1;
+    let finishCreation!: () => void;
+    const createWindow = mock(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCreation = resolve;
+        }),
+    );
+    const relaunch = mock(() => undefined);
+    registerBrowserPreviewWindowActivation({
+      onActivate: (listener) => {
+        activate = listener;
+      },
+      handleActivate: () => {
+        if (quitting) {
+          relaunch();
+          return true;
+        }
+        return !startupComplete;
+      },
+      getWindowCount: () => windowCount,
+      createWindow,
+      onCreateError: () => undefined,
+    });
+
+    activate(); // Startup still owns the first window.
+    expect(createWindow).not.toHaveBeenCalled();
+    windowCount = 0;
+    quitting = true;
+    activate(); // Reopen during an asynchronous startup step.
+    expect(relaunch).toHaveBeenCalledTimes(1);
+    quitting = false;
+    startupComplete = true;
+    activate();
+    await Promise.resolve();
+    expect(createWindow).toHaveBeenCalledTimes(1);
+    quitting = true;
+    windowCount = 1;
+    activate(); // Existing window and in-flight creation cannot hide a reopen.
+    expect(relaunch).toHaveBeenCalledTimes(2);
+    finishCreation();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 });
 
 describe("configurePreviewServiceSession", () => {

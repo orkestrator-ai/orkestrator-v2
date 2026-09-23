@@ -86,6 +86,7 @@ function phaseFields(phase: MultiReviewPhase): Record<string, unknown> {
           },
         }
       : {}),
+    ...(phase === "paused" ? { pausedFromPhase: "consolidating", pausedStep: "consolidate" } : {}),
     ...(phase === "cancelling" ? { cancellingSince: TIMESTAMP } : {}),
   };
 }
@@ -136,6 +137,7 @@ describe("findActiveMultiReviewWorkflow", () => {
     "consolidating",
     "ready",
     "fixing",
+    "paused",
     "cancelling",
     "failed",
   ])("treats %s as the active workflow", async (phase) => {

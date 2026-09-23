@@ -47,7 +47,6 @@ export const DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS = 10_000;
 export const OPENCODE_SUBAGENT_MAX_SESSIONS = 16;
 export const OPENCODE_SUBAGENT_MESSAGE_LIMIT = OPEN_CODE_MESSAGE_HISTORY_LIMIT;
 export const OPENCODE_SUBAGENT_FETCH_CONCURRENCY = 4;
-export const OPENCODE_COMMAND_NAME_TTL_MS = 30_000;
 
 export interface OpenCodeProviderDependencies {
   openCodeClient?: OpencodeClient;
@@ -165,11 +164,15 @@ export async function listOpenCodeResumableSessions(
   });
 }
 
+export function openCodeRequestTimeoutMs(connection: BridgeConnection): number {
+  return Math.max(1, connection.requestTimeoutMs ?? DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS);
+}
+
 export function openCodeRequestOptions(
   connection: BridgeConnection,
   monitorSignal: AbortSignal,
 ): { signal: AbortSignal } {
-  const timeoutMs = Math.max(1, connection.requestTimeoutMs ?? DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS);
+  const timeoutMs = openCodeRequestTimeoutMs(connection);
   return { signal: AbortSignal.any([monitorSignal, AbortSignal.timeout(timeoutMs)]) };
 }
 
@@ -436,8 +439,8 @@ export function openCodeCoordinatorAgent(
 /**
  * The agent a dispatch runs as, with the coordinator override applied.
  *
- * `fallback` is omitted for a slash command, which OpenCode resolves itself:
- * naming "build" there would override a command that declares its own agent.
+ * `fallback` is omitted for a slash command: OpenCode applies a command's own
+ * agent first and otherwise its default agent, which "build" would override.
  */
 export function openCodeAgentFor(
   policy: NativeAgentExecutionPolicy | undefined,

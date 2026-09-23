@@ -157,10 +157,41 @@ export type BridgeMessagePart =
 
 export interface PromptJournalEntry {
   requestId: string;
-  state: "prepared" | "accepted" | "completed" | "failed" | "ambiguous";
+  state: "prepared" | "accepted" | "completed" | "failed" | "dropped" | "ambiguous";
   acceptedAt: number;
   /** Set when this id answered an idle `/steer` locally. */
   local?: boolean;
+}
+
+export interface PiCommandCatalogueState {
+  /**
+   * `ready` once this process has read the list from an attached session;
+   * `stale` for a list restored from disk, never read, or retained across a
+   * reload that has not happened yet (or failed).
+   */
+  status: "ready" | "stale";
+  /** Advances whenever the rows or the status change. */
+  revision: number;
+  truncated?: boolean;
+}
+
+/**
+ * One extension command in flight.
+ *
+ * Pi runs an extension command's handler inside `prompt()` and reports its
+ * failure only through the extension error listener, and a command may finish
+ * without any assistant message at all. This record is what lets the turn end
+ * with an explicit outcome rather than a silent success or a stuck user row.
+ */
+export interface PiCommandRun {
+  /** Canonical invocation name, without the leading slash. */
+  invocation: string;
+  /** The first failure the handler (or work it started) reported. */
+  error?: string;
+  /** Text of display messages the extension emitted while it ran. */
+  output: string[];
+  /** The user cancelled; the handler itself may still be running. */
+  cancelled?: boolean;
 }
 
 export interface SteerJournalEntry {
@@ -254,7 +285,7 @@ export interface SessionState {
   promptJournal: Map<string, PromptJournalEntry>;
   steerJournal: Map<string, SteerJournalEntry>;
   /** Live FIFO used to correlate Pi's authoritative user delivery event. */
-  pendingSteerDeliveries: Array<{ requestId: string; text: string }>;
+  pendingSteerDeliveries: Array<{ requestId: string; text: string; expectedRunId: string }>;
   /** Tool calls parked on a human decision, newest last. */
   approvals: Map<string, PendingApproval>;
   /** Merge source for the next todo update; restored from the newest part. */
@@ -316,8 +347,26 @@ export interface SessionState {
   turnStartedAt?: number;
   /** Steering and follow-up prompts Pi is holding for the running turn. */
   queue: { steering: string[]; followUp: string[] };
-  /** Prompt templates, skills and extension commands the session offers. */
+  /**
+   * Prompt templates, skills and extension commands the session offers.
+   *
+   * Every row is an enhanced descriptor built by `commands.ts`, and the row
+   * *is* the executor's registry: its id names the kind and canonical Pi
+   * invocation, so nothing private has to be held beside it.
+   */
   slashCommands: NativeAgentSlashCommand[];
+  /** Freshness of {@link slashCommands}. */
+  commandCatalogue: PiCommandCatalogueState;
+  /**
+   * A resource reload asked for while the session was busy. Pi's own terminal
+   * refuses `/reload` mid-turn, so the bridge runs it once the session is idle.
+   * Runtime-only: a restarted process re-reads the list on its next attach.
+   */
+  commandReloadPending?: boolean;
+  /** The resource reload in flight. Prompts wait for it rather than racing it. */
+  commandReload?: Promise<unknown>;
+  /** The extension command the current turn is running, if it is one. */
+  commandRun?: PiCommandRun;
   /** True while Pi is compacting; the tab shows it as still working. */
   compacting: boolean;
   /** Wall clock the session was last touched by a tab-facing route. */
@@ -351,6 +400,9 @@ export interface PersistedSession {
   steerJournal?: SteerJournalEntry[];
   composer?: NativeAgentComposerState;
   usage?: PersistedUsage;
+  /** Public descriptors only; restored as `stale` until the next attach. */
+  commands?: NativeAgentSlashCommand[];
+  commandsTruncated?: boolean;
 }
 
 export interface PersistedState {

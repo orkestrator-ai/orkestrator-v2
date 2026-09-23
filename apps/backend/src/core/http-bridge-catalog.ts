@@ -1,10 +1,19 @@
-import type {
-  NativeAgentAuthStatus,
-  NativeAgentMcpServer,
-  NativeAgentMcpServerAction,
-  NativeAgentSlashCommand,
+import {
+  COMMAND_CATALOGUE_LIMITS,
+  normalizeCommandCataloguePayload,
+} from "@orkestrator/protocol/agent-command-catalogue";
+import {
+  NATIVE_AGENT_COMMAND_REFRESH_OUTCOMES,
+  type NativeAgentAuthStatus,
+  type NativeAgentMcpServer,
+  type NativeAgentMcpServerAction,
+  type NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
-import type { BridgeConnection } from "./agent-provider-contract.js";
+import type {
+  BridgeConnection,
+  ProviderCommandCatalogue,
+  ProviderCommandRefreshResult,
+} from "./agent-provider-contract.js";
 import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
 import {
   assertOk,
@@ -15,24 +24,6 @@ import {
 
 export type HttpBridgeAgent = "claude" | "codex" | "cursor" | "grok" | "pi";
 
-const CLAUDE_BUILT_IN_SLASH_COMMANDS: readonly NativeAgentSlashCommand[] = [
-  ["/clear", "Clear conversation history"],
-  ["/compact", "Compact conversation to reduce tokens"],
-  ["/context", "Show current context"],
-  ["/cost", "Show token usage and cost"],
-  ["/doctor", "Check system health"],
-  ["/goal", "Set, view, or clear a completion goal"],
-  ["/help", "Show available commands"],
-  ["/init", "Re-initialize the session"],
-  ["/logout", "Log out of Claude"],
-  ["/memory", "Show memory usage"],
-  ["/model", "Show or change model"],
-  ["/permissions", "Manage permissions"],
-  ["/review", "Review recent changes"],
-  ["/status", "Show session status"],
-  ["/vim", "Toggle vim mode"],
-].map(([name, description]) => ({ name: name!, description, source: "builtin" }));
-
 /** Optional discovery and account surfaces shared by the HTTP-backed agents. */
 export class HttpBridgeCatalogAdapter {
   constructor(
@@ -41,73 +32,78 @@ export class HttpBridgeCatalogAdapter {
     private readonly fetchImpl: typeof fetch,
   ) {}
 
-  async slashCommands(sessionId?: string): Promise<NativeAgentSlashCommand[]> {
-    let response = sessionId
-      ? await bridgeFetch(
-          this.connection,
-          `/session/${encodeURIComponent(sessionId)}/commands`,
-          {},
-          this.fetchImpl,
-        )
-      : new Response(null, { status: 404 });
-    if (response.status === 404) {
-      response = await bridgeFetch(
-        this.connection,
-        this.agent === "codex" || this.agent === "cursor"
-          ? "/global/slash-commands"
-          : "/plugins/commands",
-        {},
-        this.fetchImpl,
-      );
+  /**
+   * Read the command catalogue, preferring the session route.
+   *
+   * An enhanced bridge answers an unknown session in band (`status:
+   * "missing"`), so a 404 here can only mean the session route predates the
+   * contract; only then does this fall back to the legacy global list. Rows
+   * are normalized and bounded by the shared protocol normalizer; nothing is
+   * seeded — a successful empty list stays empty.
+   */
+  async commandCatalogue(sessionId?: string): Promise<ProviderCommandCatalogue> {
+    const globalRoute =
+      this.agent === "codex" || this.agent === "cursor"
+        ? "/global/slash-commands"
+        : "/plugins/commands";
+    let response = await bridgeFetch(
+      this.connection,
+      sessionId ? `/session/${encodeURIComponent(sessionId)}/commands` : globalRoute,
+      {},
+      this.fetchImpl,
+    );
+    if (sessionId && response.status === 404) {
+      response = await bridgeFetch(this.connection, globalRoute, {}, this.fetchImpl);
     }
     assertOk(response, `${this.agent} slash command list`);
     const payload = asRecord(
-      await boundedJson(response, `${this.agent} slash command list`, { remaining: 512 * 1024 }),
+      await boundedJson(response, `${this.agent} slash command list`, {
+        remaining: COMMAND_CATALOGUE_LIMITS.maxWireBytes,
+      }),
     );
-    const commands = new Map<string, NativeAgentSlashCommand>(
-      this.agent === "claude"
-        ? CLAUDE_BUILT_IN_SLASH_COMMANDS.map((command) => [command.name, command])
-        : [],
-    );
-    if (!payload || !Array.isArray(payload.commands)) return [...commands.values()];
-    for (const candidate of payload.commands.slice(0, 512)) {
-      const command = typeof candidate === "string" ? { name: candidate } : asRecord(candidate);
-      const rawName = nonEmptyString(command?.name);
-      if (!rawName) continue;
-      const name = rawName.startsWith("/") ? rawName : `/${rawName}`;
-      commands.set(name, {
-        name: name.slice(0, 256),
-        source:
-          command?.source === "builtin" ||
-          command?.source === "project" ||
-          command?.source === "user" ||
-          command?.source === "plugin" ||
-          command?.source === "skill" ||
-          command?.source === "template" ||
-          command?.source === "extension" ||
-          command?.source === "orkestrator"
-            ? command.source
-            : "unknown",
-        ...(typeof command?.description === "string"
-          ? { description: command.description.slice(0, 1_000) }
-          : {}),
-        ...(typeof command?.argumentHint === "string"
-          ? { argumentHint: command.argumentHint.slice(0, 512) }
-          : {}),
-        ...(Array.isArray(command?.aliases)
-          ? {
-              aliases: command.aliases
-                .filter((alias): alias is string => typeof alias === "string")
-                .slice(0, 16)
-                .map((alias) => alias.slice(0, 256)),
-            }
-          : {}),
-        ...(command?.scope === "global" || command?.scope === "session"
-          ? { scope: command.scope }
-          : {}),
+    if (!payload || !Array.isArray(payload.commands)) {
+      throw Object.assign(new Error(`${this.agent} returned a malformed command list`), {
+        catalogueErrorCode: "malformed",
       });
     }
-    return [...commands.values()].slice(0, 512);
+    const normalized = normalizeCommandCataloguePayload(payload);
+    return {
+      enhanced: normalized.enhanced,
+      commands: normalized.commands,
+      status: normalized.status ?? "ready",
+      ...(normalized.truncated ? { truncated: true } : {}),
+      ...(normalized.revision !== undefined ? { revision: normalized.revision } : {}),
+      ...(normalized.generation ? { generation: normalized.generation } : {}),
+      ...(normalized.freshness ? { freshness: normalized.freshness } : {}),
+    };
+  }
+
+  async slashCommands(sessionId?: string): Promise<NativeAgentSlashCommand[]> {
+    return (await this.commandCatalogue(sessionId)).commands;
+  }
+
+  /**
+   * Ask the bridge to reload its command sources. A bridge that predates the
+   * route (404) gets a plain re-read, reported as exactly that.
+   */
+  async refreshCommands(sessionId?: string): Promise<ProviderCommandRefreshResult> {
+    if (!sessionId) return { outcome: "reread" };
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/commands/refresh`,
+      { method: "POST" },
+      this.fetchImpl,
+    );
+    if (response.status === 404) return { outcome: "reread" };
+    await assertOkWithErrorDetail(response, `${this.agent} command refresh`);
+    const body = asRecord(
+      await boundedJson(response, `${this.agent} command refresh`, { remaining: 64 * 1024 }),
+    );
+    const outcome = NATIVE_AGENT_COMMAND_REFRESH_OUTCOMES.find(
+      (candidate) => candidate === body?.outcome,
+    );
+    const message = nonEmptyString(body?.message)?.slice(0, 512);
+    return { outcome: outcome ?? "failed", ...(message ? { message } : {}) };
   }
 
   async mcpServers(sessionId: string): Promise<NativeAgentMcpServer[]> {

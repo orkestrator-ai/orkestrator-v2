@@ -2,6 +2,17 @@
   container-type: inline-size;
 }
 
+.design-color-swatch {
+  background-color: white;
+  background-image: conic-gradient(#d4d4d8 25%, transparent 0 50%, #d4d4d8 0 75%, transparent 0);
+  background-size: 8px 8px;
+}
+
+.design-color-swatch:focus-within {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
 @container (max-width: 600px) {
   .design-hierarchy[data-inspecting="true"] {
     display: none;
@@ -10,7 +21,7 @@
   .design-inspector {
     position: absolute;
     inset: 0 0 0 auto;
-    width: 200px;
+    width: min(288px, 100%);
     z-index: 30;
   }
 }

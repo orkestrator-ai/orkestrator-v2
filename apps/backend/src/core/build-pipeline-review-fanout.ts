@@ -685,6 +685,7 @@ export class BuildPipelineReviewFanout {
       status,
       error: statusDetail,
       turnSettled,
+      backgroundWorkLive,
     } = await readProviderStatus(
       provider,
       consolidation.providerSessionId,
@@ -732,6 +733,13 @@ export class BuildPipelineReviewFanout {
             consolidation.requestId,
           );
     if (!result) {
+      if (backgroundWorkLive) {
+        if (consolidation.idleResultPolls !== undefined) {
+          delete consolidation.idleResultPolls;
+          await this.deps.save(pipeline);
+        }
+        return this.observeConsolidationProgress(pipeline, state, provider);
+      }
       return this.countIdlePoll(
         pipeline,
         state,

@@ -211,4 +211,92 @@ describe("nativeComposeStore", () => {
       attachments: [expect.objectContaining({ annotationId: browserAnnotation.id })],
     });
   });
+  describe("command selection", () => {
+    const selection = {
+      commandId: "claude:/review",
+      bindingRevision: "rev-1",
+      token: "/review",
+      platform: "claude" as const,
+      sessionId: "session-1",
+    };
+
+    test("survives argument edits byte-for-byte and drops when the token changes", () => {
+      const sessionKey = "env-env-1:tab-select";
+      const store = useNativeComposeStore.getState();
+      store.updateDraft(sessionKey, { text: "/review ", commandSelection: selection });
+
+      for (const text of [
+        "/review src/a.ts",
+        "/review\tsrc/a.ts  ",
+        '/review "quoted"\nsecond line\n',
+        "  /review keeps leading space",
+      ]) {
+        useNativeComposeStore.getState().updateDraft(sessionKey, { text });
+        const draft = useNativeComposeStore.getState().drafts.get(sessionKey);
+        expect(draft?.text).toBe(text);
+        expect(draft?.commandSelection).toEqual(selection);
+      }
+
+      for (const text of ["/reviews x", "/reviewx", "review x", "/Review x"]) {
+        useNativeComposeStore
+          .getState()
+          .updateDraft(sessionKey, { text: "/review ", commandSelection: selection });
+        useNativeComposeStore.getState().updateDraft(sessionKey, { text });
+        expect(
+          useNativeComposeStore.getState().drafts.get(sessionKey)?.commandSelection,
+        ).toBeUndefined();
+      }
+    });
+
+    test("an explicit clear wins and non-text edits leave it alone", () => {
+      const sessionKey = "env-env-1:tab-select-clear";
+      const store = useNativeComposeStore.getState();
+      store.updateDraft(sessionKey, { text: "/review ", commandSelection: selection });
+      store.updateDraft(sessionKey, { attachments: [] });
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.commandSelection).toEqual(
+        selection,
+      );
+      store.updateDraft(sessionKey, { commandSelection: undefined });
+      expect(
+        useNativeComposeStore.getState().drafts.get(sessionKey)?.commandSelection,
+      ).toBeUndefined();
+    });
+
+    test("persists with the draft and restores a valid identity", () => {
+      const sessionKey = "env-env-1:tab-select-persist";
+      useNativeComposeStore
+        .getState()
+        .updateDraft(sessionKey, { text: "/review x", commandSelection: selection });
+      const metadata = nativeComposePersistenceStore.getState().draftMetadata?.get(sessionKey);
+      expect(metadata).toMatchObject({ commandSelection: selection });
+
+      useNativeComposeStore.setState({ drafts: new Map() });
+      const persistence = nativeComposePersistenceStore.getState();
+      persistence.setDraftText(sessionKey, "/review x");
+      persistence.setDraftMetadata?.(sessionKey, metadata);
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.commandSelection).toEqual(
+        selection,
+      );
+    });
+
+    test("refuses malformed persisted identities", () => {
+      const persistence = unassignedNativeComposePersistenceStore.getState();
+      const bad = [
+        { ...selection, commandId: "" },
+        { ...selection, commandId: "has space" },
+        { ...selection, commandId: "x".repeat(300) },
+        { ...selection, token: "review" },
+        { ...selection, token: "/re view" },
+        { ...selection, bindingRevision: 7 },
+        "not an object",
+      ];
+      bad.forEach((commandSelection, index) => {
+        const sessionKey = `env-env-1:tab-bad-${index}`;
+        persistence.setDraftMetadata?.(sessionKey, { mode: "build", commandSelection });
+        expect(
+          useNativeComposeStore.getState().drafts.get(sessionKey)?.commandSelection,
+        ).toBeUndefined();
+      });
+    });
+  });
 });

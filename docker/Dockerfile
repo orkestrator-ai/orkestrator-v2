@@ -404,6 +404,8 @@ COPY docker/init-firewall.sh docker/update-firewall.sh docker/run-root-setup.sh 
 USER root
 RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/update-firewall.sh /usr/local/bin/run-root-setup.sh && \
   printf '%s\n' \
+    'Defaults!/usr/local/bin/network-policy-entrypoint.sh env_keep += "NETWORK_MODE ALLOWED_DOMAINS"' \
+    'node ALL=(root) NOPASSWD: /usr/local/bin/network-policy-entrypoint.sh *' \
     'node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh' \
     'node ALL=(root) NOPASSWD: /usr/local/bin/run-root-setup.sh *' \
     > /etc/sudoers.d/node-firewall && \
@@ -427,11 +429,15 @@ RUN mkdir -p /home/node/.ssh && \
   chmod 700 /home/node/.ssh
 
 # Copy entrypoint and workspace setup scripts
-COPY docker/entrypoint.sh /usr/local/bin/
+COPY docker/entrypoint.sh docker/network-policy-entrypoint.sh /usr/local/bin/
 COPY docker/workspace-setup.sh /usr/local/bin/
 COPY docker/git-branch-helpers.sh /usr/local/bin/
 COPY docker/runtime-env.sh /usr/local/bin/orkestrator-runtime-env.sh
-RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/workspace-setup.sh /usr/local/bin/git-branch-helpers.sh /usr/local/bin/orkestrator-runtime-env.sh
+RUN apt-get update && apt-get install -y --no-install-recommends util-linux \
+  && apt-get clean && rm -rf /var/lib/apt/lists/* \
+  && chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/network-policy-entrypoint.sh /usr/local/bin/workspace-setup.sh /usr/local/bin/git-branch-helpers.sh /usr/local/bin/orkestrator-runtime-env.sh \
+  && command -v setpriv \
+  && test "$(setpriv --reuid=node --regid=node --init-groups id -u)" = "$(id -u node)"
 
 USER node
 
@@ -439,5 +445,5 @@ USER node
 ENV TERM=xterm-256color
 
 # Entrypoint and default command
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/sudo", "/usr/local/bin/network-policy-entrypoint.sh"]
 CMD ["/bin/zsh"]

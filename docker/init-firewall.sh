@@ -2,26 +2,10 @@
 set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
 IFS=$'\n\t'       # Stricter word splitting
 
-# Read Docker's original container configuration from PID 1. The node account
-# is allowed to invoke this exact script through sudo so the entrypoint can set
-# up networking, but it must not be able to widen the policy by replacing its
-# own environment first.
-read_pid1_environ() {
-    if [ -n "${ORKESTRATOR_PID1_ENVIRON:-}" ]; then
-        cat "$ORKESTRATOR_PID1_ENVIRON"
-        return
-    fi
-    # PID 1 runs as node, and the kernel gates /proc/<pid>/environ on a ptrace
-    # check: a different uid needs CAP_SYS_PTRACE, which Docker drops, so even
-    # root is denied. Read it with PID 1's own credentials instead.
-    setpriv --reuid="$(stat -c %u /proc/1)" --regid="$(stat -c %g /proc/1)" \
-        --clear-groups cat /proc/1/environ
-}
-container_env() {
-    read_pid1_environ | tr '\0' '\n' | sed -n "s/^$1=//p" | head -n 1
-}
-NETWORK_MODE="$(container_env NETWORK_MODE)"
-ALLOWED_DOMAINS="$(container_env ALLOWED_DOMAINS)"
+# The root entrypoint captures Docker's initial policy before dropping to node.
+# A caller's environment and PID 1 memory are both controlled by node.
+IFS= read -r NETWORK_MODE < /etc/orkestrator/network-mode
+IFS= read -r ALLOWED_DOMAINS < /etc/orkestrator/allowed-domains
 
 # Check network mode - if full, skip firewall entirely
 if [ "${NETWORK_MODE:-restricted}" = "full" ]; then

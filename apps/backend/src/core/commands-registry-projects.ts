@@ -1,5 +1,6 @@
 import nodePath from "node:path";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import {
   isResourceChange,
   type ResourceChange,
@@ -459,9 +460,16 @@ export function registerProjectCommands(
   register("get_project", ({ projectId }, { storage }) =>
     storage.getProject(asString(projectId, "projectId")),
   );
-  register("update_project", ({ projectId, updates }, { storage }) =>
-    storage.updateProject(asString(projectId, "projectId"), parseUpdateObject(updates)),
-  );
+  register("update_project", async ({ projectId, updates }, { storage }) => {
+    const parsedUpdates = parseUpdateObject(updates);
+    if (
+      parsedUpdates.gitUrl !== undefined &&
+      !isGitRemoteUrl(asString(parsedUpdates.gitUrl, "updates.gitUrl"))
+    ) {
+      throw new Error("Git URL must be an HTTPS, SSH, or git@ remote URL");
+    }
+    return storage.updateProject(asString(projectId, "projectId"), parsedUpdates);
+  });
   register("reorder_projects", ({ projectIds }, { storage }) =>
     storage.reorderProjects(asStringArray(projectIds)),
   );
@@ -481,9 +489,7 @@ export function registerProjectCommands(
     }
     return storage.arrangeProjects(asStringArray(args.projectIds), folders);
   });
-  register("validate_git_url", ({ url }) =>
-    /^(https?:\/\/|git@|ssh:\/\/).+/.test(asString(url, "url").trim()),
-  );
+  register("validate_git_url", ({ url }) => isGitRemoteUrl(asString(url, "url")));
   register("get_git_remote_url", async ({ path: repoPath }) => {
     // Reads the raw config value rather than `remote get-url`, which applies
     // `insteadOf` rewrites and can therefore hand back an embedded credential.

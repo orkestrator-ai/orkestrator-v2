@@ -22,6 +22,7 @@ const mockUpdateRepositoryConfig = mock((projectId: string, repoConfig: unknown)
   updateRepositoryConfigImpl(projectId, repoConfig),
 );
 const mockUpdateProject = mock(async (project: unknown) => project);
+const mockGetGitRemoteUrl = mock(async (_path: string): Promise<string | null> => null);
 const mockGetCachedOpenCodeModelCatalog = mock(
   async (_projectId: string): Promise<OpenCodeModelCatalogSnapshot | null> => null,
 );
@@ -36,6 +37,7 @@ const realSelectSnapshot = { ...realSelect };
 mock.module("@/lib/backend", () => ({
   updateRepositoryConfig: mockUpdateRepositoryConfig,
   updateProject: mockUpdateProject,
+  getGitRemoteUrl: mockGetGitRemoteUrl,
   getCachedOpenCodeModelCatalog: mockGetCachedOpenCodeModelCatalog,
 }));
 
@@ -282,6 +284,8 @@ describe("RepositorySettings", () => {
 
     mockUpdateRepositoryConfig.mockClear();
     mockUpdateProject.mockClear();
+    mockGetGitRemoteUrl.mockReset();
+    mockGetGitRemoteUrl.mockImplementation(async () => null);
     mockGetCachedOpenCodeModelCatalog.mockReset();
     mockGetCachedOpenCodeModelCatalog.mockImplementation(async () => null);
     mockOpenDialog.mockClear();
@@ -443,8 +447,9 @@ describe("RepositorySettings", () => {
       nextDialogResult = "/Users/test/repo";
       renderSettings({ section: "general" });
 
-      const contentButtons = within(getSettingsContent()).getAllByRole("button");
-      fireEvent.click(contentButtons[1]!);
+      fireEvent.click(
+        within(getSettingsContent()).getByRole("button", { name: "Browse for local path" }),
+      );
 
       await waitFor(() => expect(mockOpenDialog).toHaveBeenCalledTimes(1));
       expect((screen.getByLabelText("Local Path") as HTMLInputElement).value).toBe(
@@ -475,6 +480,101 @@ describe("RepositorySettings", () => {
       );
     });
 
+    test("the Git URL is editable and saved with the project", async () => {
+      const onUpdateProject = mock(async (project: Project) => project);
+      renderSettings({ section: "general", onUpdateProject });
+
+      const gitUrlInput = screen.getByLabelText("Git URL") as HTMLInputElement;
+      expect(gitUrlInput.value).toBe("git@github.com:test/repo.git");
+      expect(gitUrlInput.readOnly).toBe(false);
+
+      fireEvent.change(gitUrlInput, {
+        target: { value: "  https://github.com/new-owner/repo.git  " },
+      });
+      fireEvent.click(getSaveButton());
+
+      await waitFor(() => expect(onUpdateProject).toHaveBeenCalledTimes(1));
+      expect(onUpdateProject.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({
+          id: "project-1",
+          name: "test-repo",
+          gitUrl: "https://github.com/new-owner/repo.git",
+        }),
+      );
+    });
+
+    test("an unchanged Git URL does not update the project", async () => {
+      const onUpdateProject = mock(async (project: Project) => project);
+      renderSettings({ section: "general", onUpdateProject });
+
+      fireEvent.click(getSaveButton());
+
+      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
+      expect(onUpdateProject).not.toHaveBeenCalled();
+    });
+
+    test("rejects an empty or malformed Git URL", () => {
+      renderSettings({ section: "general" });
+      const gitUrlInput = screen.getByLabelText("Git URL");
+
+      fireEvent.change(gitUrlInput, { target: { value: "   " } });
+      expect(screen.getByText("Git URL cannot be empty")).toBeTruthy();
+      expect((getSaveButton() as HTMLButtonElement).disabled).toBe(true);
+
+      fireEvent.change(gitUrlInput, { target: { value: "github.com/owner/repo" } });
+      expect(screen.getByText("Enter an HTTPS, SSH, or git@ remote URL")).toBeTruthy();
+      expect((getSaveButton() as HTMLButtonElement).disabled).toBe(true);
+
+      fireEvent.change(gitUrlInput, { target: { value: "git@github.com:owner/repo.git" } });
+      expect(screen.queryByText("Enter an HTTPS, SSH, or git@ remote URL")).toBeNull();
+      expect((getSaveButton() as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    test("fills the Git URL from the local clone's origin remote", async () => {
+      mockGetGitRemoteUrl.mockImplementation(async () => "git@github.com:moved/repo.git");
+      renderSettings({ section: "general", project: { localPath: "/Users/test/repo" } });
+
+      fireEvent.click(
+        within(getSettingsContent()).getByRole("button", {
+          name: "Use the local clone's origin remote",
+        }),
+      );
+
+      await waitFor(() =>
+        expect((screen.getByLabelText("Git URL") as HTMLInputElement).value).toBe(
+          "git@github.com:moved/repo.git",
+        ),
+      );
+      expect(mockGetGitRemoteUrl).toHaveBeenCalledWith("/Users/test/repo");
+    });
+
+    test("reports a local clone without an origin remote", async () => {
+      renderSettings({ section: "general", project: { localPath: "/Users/test/repo" } });
+
+      fireEvent.click(
+        within(getSettingsContent()).getByRole("button", {
+          name: "Use the local clone's origin remote",
+        }),
+      );
+
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("No origin remote found", expect.anything()),
+      );
+      expect((screen.getByLabelText("Git URL") as HTMLInputElement).value).toBe(
+        "git@github.com:test/repo.git",
+      );
+    });
+
+    test("hides the local remote shortcut without a local path", () => {
+      renderSettings({ section: "general" });
+
+      expect(
+        within(getSettingsContent()).queryByRole("button", {
+          name: "Use the local clone's origin remote",
+        }),
+      ).toBeNull();
+    });
+
     test("cancel resets edits and closes the dialog", () => {
       const onOpenChange = mock(() => {});
       renderSettings({
@@ -484,9 +584,15 @@ describe("RepositorySettings", () => {
 
       fireEvent.change(screen.getByLabelText("Name"), { target: { value: "changed" } });
       fireEvent.change(screen.getByLabelText("Local Path"), { target: { value: "/tmp/changed" } });
+      fireEvent.change(screen.getByLabelText("Git URL"), {
+        target: { value: "https://github.com/changed/repo.git" },
+      });
       fireEvent.click(getCancelButton());
 
       expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("test-repo");
+      expect((screen.getByLabelText("Git URL") as HTMLInputElement).value).toBe(
+        "git@github.com:test/repo.git",
+      );
       expect((screen.getByLabelText("Local Path") as HTMLInputElement).value).toBe("");
       expect(onOpenChange).toHaveBeenCalledWith(false);
     });

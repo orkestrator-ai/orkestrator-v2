@@ -440,6 +440,27 @@ describe("Electron StorageService", () => {
       name: "First renamed",
       localPath: "/tmp/first",
     });
+    await storage.updateProject(firstProject.id, {
+      gitUrl: "  git@github.com:acme/first-moved.git  ",
+    });
+    expect(await storage.getProject(firstProject.id)).toMatchObject({
+      name: "First renamed",
+      gitUrl: "git@github.com:acme/first-moved.git",
+      localPath: "/tmp/first",
+    });
+    await expect(
+      storage.updateProject(firstProject.id, { gitUrl: secondProject.gitUrl }),
+    ).rejects.toThrow("Duplicate project URL");
+    await expect(storage.updateProject(firstProject.id, { gitUrl: "   " })).rejects.toThrow(
+      "Git URL cannot be empty",
+    );
+    // Re-saving a project's own URL is not a duplicate of itself.
+    await storage.updateProject(firstProject.id, {
+      gitUrl: "git@github.com:acme/first-moved.git",
+    });
+    expect((await storage.getProject(firstProject.id))?.gitUrl).toBe(
+      "git@github.com:acme/first-moved.git",
+    );
     expect(
       (await storage.reorderProjects([secondProject.id])).map((project) => project.id),
     ).toEqual([secondProject.id, firstProject.id]);

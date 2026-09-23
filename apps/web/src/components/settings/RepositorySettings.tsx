@@ -15,6 +15,7 @@ import {
   type AgentSettingsTier,
 } from "@orkestrator/protocol/agent-settings";
 import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
+import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ import { Label } from "@/components/ui/label";
 import { useConfigStore } from "@/stores";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import * as backend from "@/lib/backend";
+import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
 import {
   Loader2,
   Network,
@@ -33,6 +35,7 @@ import {
   FileText,
   Settings2,
   GitBranch,
+  RefreshCw,
 } from "lucide-react";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 import { open as openDialog } from "@/lib/native/dialog";
@@ -73,8 +76,10 @@ export function RepositorySettings({
 
   // Project fields
   const [projectName, setProjectName] = useState(project.name);
+  const [gitUrl, setGitUrl] = useState(project.gitUrl);
   const [localPath, setLocalPath] = useState(project.localPath || "");
   const [projectNameError, setProjectNameError] = useState<string | null>(null);
+  const [isReadingRemote, setIsReadingRemote] = useState(false);
 
   // Repository config fields
   const [defaultBranch, setDefaultBranch] = useState(initialConfig.defaultBranch);
@@ -102,6 +107,7 @@ export function RepositorySettings({
     if (open) {
       // Reset project fields
       setProjectName(project.name);
+      setGitUrl(project.gitUrl);
       setLocalPath(project.localPath || "");
       setProjectNameError(null);
 
@@ -114,7 +120,7 @@ export function RepositorySettings({
       setAgentSettings(normalizeAgentSettings(config.agentSettings));
       setEntryPort(config.entryPort != null ? String(config.entryPort) : "");
     }
-  }, [open, project.id, project.name, project.localPath, getRepositoryConfig]);
+  }, [open, project.id, project.name, project.gitUrl, project.localPath, getRepositoryConfig]);
 
   // Validate project name
   const validateProjectName = (value: string): boolean => {
@@ -136,6 +142,35 @@ export function RepositorySettings({
     const value = e.target.value;
     setProjectName(value);
     validateProjectName(value);
+  };
+
+  const gitUrlError = useMemo(() => {
+    if (!gitUrl.trim()) return "Git URL cannot be empty";
+    if (!isGitRemoteUrl(gitUrl)) return "Enter an HTTPS, SSH, or git@ remote URL";
+    return null;
+  }, [gitUrl]);
+
+  // Fill the Git URL from the local clone's origin, the usual source of truth
+  // once a repository has been moved or renamed.
+  const handleUseLocalRemote = async () => {
+    const path = localPath.trim();
+    if (!path) return;
+    setIsReadingRemote(true);
+    try {
+      const remoteUrl = await backend.getGitRemoteUrl(path);
+      if (remoteUrl) {
+        setGitUrl(remoteUrl);
+      } else {
+        toast.error("No origin remote found", {
+          description: "The local clone does not have an origin remote configured.",
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to read the Git remote";
+      toast.error("Could not read the local remote", { description: message });
+    } finally {
+      setIsReadingRemote(false);
+    }
   };
 
   // Browse for local directory
@@ -269,6 +304,11 @@ export function RepositorySettings({
       return;
     }
 
+    if (gitUrlError) {
+      toast.error("Invalid Git URL", { description: gitUrlError });
+      return;
+    }
+
     // Validate port mappings
     const portValidation = validatePortMappings();
     if (!portValidation.valid) {
@@ -289,15 +329,20 @@ export function RepositorySettings({
 
     setIsSaving(true);
     try {
-      // Update project if name or localPath changed
+      // Update project if name, Git URL, or localPath changed
       const trimmedName = projectName.trim();
+      const trimmedGitUrl = gitUrl.trim();
       const trimmedPath = localPath.trim() || null;
-      const projectChanged = trimmedName !== project.name || trimmedPath !== project.localPath;
+      const projectChanged =
+        trimmedName !== project.name ||
+        trimmedGitUrl !== project.gitUrl ||
+        trimmedPath !== project.localPath;
 
       if (projectChanged && onUpdateProject) {
         await onUpdateProject({
           ...project,
           name: trimmedName,
+          gitUrl: trimmedGitUrl,
           localPath: trimmedPath,
         });
       }
@@ -335,6 +380,7 @@ export function RepositorySettings({
   const handleCancel = () => {
     // Reset project fields
     setProjectName(project.name);
+    setGitUrl(project.gitUrl);
     setLocalPath(project.localPath || "");
     setProjectNameError(null);
 
@@ -354,7 +400,10 @@ export function RepositorySettings({
   const filesValidationResult = useMemo(() => validateFilesToCopy(), [validateFilesToCopy]);
 
   const hasErrors =
-    projectNameError !== null || !portValidationResult.valid || !filesValidationResult.valid;
+    projectNameError !== null ||
+    gitUrlError !== null ||
+    !portValidationResult.valid ||
+    !filesValidationResult.valid;
 
   const repoMenuItems: SettingsMenuItem[] = [
     { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
@@ -388,26 +437,57 @@ export function RepositorySettings({
               {projectNameError && <p className="text-sm text-destructive">{projectNameError}</p>}
             </div>
             <div className="grid gap-2">
-              <Label>Git URL</Label>
+              <Label htmlFor="gitUrl">Git URL</Label>
               <div className="flex items-center gap-2">
                 <Input
-                  value={project.gitUrl}
-                  readOnly
-                  className="flex-1 cursor-default bg-input-surface"
+                  id="gitUrl"
+                  value={gitUrl}
+                  onChange={(e) => setGitUrl(e.target.value)}
+                  placeholder="git@github.com:owner/repo.git"
+                  className="flex-1"
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  disabled={isSaving}
                 />
+                {localPath.trim() && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={handleUseLocalRemote}
+                    disabled={isSaving || isReadingRemote}
+                    title="Use the local clone's origin remote"
+                    aria-label="Use the local clone's origin remote"
+                  >
+                    {isReadingRemote ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4" />
+                    )}
+                  </Button>
+                )}
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
-                  onClick={() => window.open(project.gitUrl, "_blank")}
+                  onClick={() =>
+                    window.open(getGitHubRepositoryUrl(gitUrl) ?? gitUrl.trim(), "_blank")
+                  }
+                  disabled={gitUrlError !== null}
                   title="Open in browser"
+                  aria-label="Open in browser"
                 >
                   <ExternalLink className="h-4 w-4" />
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground">
-                The Git URL cannot be changed after adding the project.
-              </p>
+              {gitUrlError ? (
+                <p className="text-sm text-destructive">{gitUrlError}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Update this if the repository has moved. New environments clone from this URL.
+                </p>
+              )}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="localPath">Local Path</Label>
@@ -426,6 +506,8 @@ export function RepositorySettings({
                   size="icon"
                   onClick={handleBrowse}
                   disabled={isSaving}
+                  title="Browse for local path"
+                  aria-label="Browse for local path"
                 >
                   <FolderOpen className="h-4 w-4" />
                 </Button>

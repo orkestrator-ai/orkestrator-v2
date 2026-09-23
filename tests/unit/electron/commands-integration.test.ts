@@ -246,6 +246,24 @@ describe("storage-backed command delegation", () => {
       ),
     ).resolves.toEqual({ name: "renamed" });
     await expect(
+      commands.get("update_project")?.(
+        { projectId: "project-1", updates: { gitUrl: "git@github.com:acme/moved.git" } },
+        context,
+      ),
+    ).resolves.toEqual({ gitUrl: "git@github.com:acme/moved.git" });
+    await expect(
+      commands.get("update_project")?.(
+        { projectId: "project-1", updates: { gitUrl: "/tmp/repo" } },
+        context,
+      ),
+    ).rejects.toThrow("Git URL must be an HTTPS, SSH, or git@ remote URL");
+    await expect(
+      commands.get("update_project")?.(
+        { projectId: "project-1", updates: { gitUrl: 42 } },
+        context,
+      ),
+    ).rejects.toThrow("updates.gitUrl");
+    await expect(
       commands.get("reorder_projects")?.({ projectIds: ["project-2", "project-1"] }, context),
     ).resolves.toEqual(["project-2", "project-1"]);
     expect(
@@ -464,6 +482,10 @@ describe("storage-backed command delegation", () => {
 
     expect(storage.removeProject).toHaveBeenCalledWith("project-1");
     expect(storage.updateProject).toHaveBeenCalledWith("project-1", { name: "renamed" });
+    expect(storage.updateProject).toHaveBeenCalledWith("project-1", {
+      gitUrl: "git@github.com:acme/moved.git",
+    });
+    expect(storage.updateProject).not.toHaveBeenCalledWith("project-1", { gitUrl: "/tmp/repo" });
     expect(storage.updateRepositorySettings).toHaveBeenCalledWith("project-1", repositoryConfig);
     expect(storage.updateRepositoryConfig).not.toHaveBeenCalled();
   });

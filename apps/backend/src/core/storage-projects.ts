@@ -233,12 +233,24 @@ export abstract class StorageProjects extends StorageBase {
 
   async updateProject(
     projectId: string,
-    updates: Partial<Pick<Project, "name" | "localPath" | "folder">>,
+    updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder">>,
   ): Promise<Project> {
     const project = await this.enqueueProjectMutation(async () => {
       const projects = await this.loadProjects();
       const project = projects.find((candidate) => candidate.id === projectId);
       if (!project) throw new Error(`Project not found: ${projectId}`);
+      if (typeof updates.gitUrl === "string") {
+        // A repository that moved keeps its project: settings, environments,
+        // and history are keyed by project id, not by remote URL.
+        const gitUrl = updates.gitUrl.trim();
+        if (!gitUrl) throw new Error("Git URL cannot be empty");
+        if (
+          projects.some((candidate) => candidate.id !== projectId && candidate.gitUrl === gitUrl)
+        ) {
+          throw new Error(`Duplicate project URL: ${gitUrl}`);
+        }
+        project.gitUrl = gitUrl;
+      }
       if (typeof updates.name === "string") project.name = updates.name;
       if ("localPath" in updates) project.localPath = updates.localPath ?? null;
       if ("folder" in updates) applyProjectFolder(project, updates.folder);

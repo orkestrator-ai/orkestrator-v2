@@ -1,0 +1,23 @@
+import { describe, expect, test } from "bun:test";
+import { isGitRemoteUrl } from "./git-remote-url";
+
+describe("isGitRemoteUrl", () => {
+  test("accepts HTTPS, SSH, and scp-style remotes", () => {
+    expect(isGitRemoteUrl("https://github.com/owner/repo.git")).toBe(true);
+    expect(isGitRemoteUrl("http://git.example.com/owner/repo")).toBe(true);
+    expect(isGitRemoteUrl("ssh://git@github.com/owner/repo.git")).toBe(true);
+    expect(isGitRemoteUrl("git@github.com:owner/repo.git")).toBe(true);
+  });
+
+  test("ignores surrounding whitespace", () => {
+    expect(isGitRemoteUrl("  git@github.com:owner/repo.git  ")).toBe(true);
+  });
+
+  test("rejects blank values, local paths, and bare hosts", () => {
+    expect(isGitRemoteUrl("")).toBe(false);
+    expect(isGitRemoteUrl("   ")).toBe(false);
+    expect(isGitRemoteUrl("/Users/me/repo")).toBe(false);
+    expect(isGitRemoteUrl("github.com/owner/repo")).toBe(false);
+    expect(isGitRemoteUrl("https://")).toBe(false);
+  });
+});

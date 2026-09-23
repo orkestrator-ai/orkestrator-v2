@@ -22,6 +22,7 @@ export type BackendEmit = (event: string, payload: unknown) => void;
 
 export type CommandContext = {
   design?: import("./design-service.js").DesignService;
+  previews?: import("./preview-runtime.js").PreviewRuntime;
   storage: StorageService;
   emit: BackendEmit;
   appRoot: string;

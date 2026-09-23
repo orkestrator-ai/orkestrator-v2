@@ -1,4 +1,5 @@
 import { DesignService } from "./design-service.js";
+import { PreviewRuntime } from "./preview-runtime.js";
 import {
   closeLocalServerAdmission,
   createCommandRegistry,
@@ -137,6 +138,11 @@ export class OrkestratorBackend {
       async () => (await storage.loadConfig()).global.workflowResultTools,
     );
     const design = new DesignService(options.dataDir, options.emit);
+    const previews = new PreviewRuntime({
+      storage,
+      emit: options.emit,
+      strictDockerOwner: options.strictDockerOwner ?? false,
+    });
     this.agentTools =
       options.agentTools ?? new AgentToolsServer(storage, "0.0.0.0", this.workflowResults, design);
     const resolveAgentToolConnection = this.agentTools.workflowResultConnection
@@ -175,6 +181,7 @@ export class OrkestratorBackend {
     const context = {
       storage,
       design,
+      previews,
       toolchainBinDir: options.toolchainBinDir,
       appRoot: options.appRoot,
       resourceRoot: options.resourceRoot,
@@ -481,6 +488,15 @@ export class OrkestratorBackend {
   async init(): Promise<void> {
     await this.context.storage.init();
     await this.context.design?.initialize();
+    // Preview definitions load before the gateway accepts commands; resolving
+    // targets happens in the background so a slow Docker daemon cannot delay
+    // startup. A registry that fails to load disables previews, not the backend.
+    await this.context.previews?.init().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to initialize preview services:",
+        error instanceof Error ? error.message : error,
+      );
+    });
     const terminalHistoryConfig = (await this.context.storage.loadConfig()).global;
     configureTerminalHistoryRetention({
       enabled: terminalHistoryConfig.terminalHistoryEnabled,
@@ -504,6 +520,7 @@ export class OrkestratorBackend {
       this.context.storage,
     );
     await this.agentTools.start();
+    this.reserveOwnedPreviewPorts();
     // No renderer can be alive yet, so every persisted `frontend` activity
     // snapshot belongs to a process that is gone. They cannot be retracted
     // later — the aggregate is a max — so a renderer that quit mid-turn would
@@ -830,6 +847,7 @@ export class OrkestratorBackend {
       // opening so the user can diagnose it.
       console.warn("[backend] Failed to start control MCP:", error);
     });
+    this.reserveOwnedPreviewPorts();
     reconcileCoordinatorWorkflows();
   }
 
@@ -842,6 +860,26 @@ export class OrkestratorBackend {
    */
   hasCommand(command: string): boolean {
     return this.commands.has(command);
+  }
+
+  /** Orkestrator's own listeners can never be registered as preview targets. */
+  private reserveOwnedPreviewPorts(): void {
+    const ports: number[] = [];
+    const agentToolsPort = (
+      this.agentTools as { listeningPort?: () => number | null }
+    ).listeningPort?.();
+    if (agentToolsPort) ports.push(agentToolsPort);
+    const controlUrl = this.controlMcp.getInfo()?.url;
+    if (controlUrl) {
+      const port = Number(new URL(controlUrl).port);
+      if (port > 0) ports.push(port);
+    }
+    this.context.previews?.reservePorts("backend", ports);
+  }
+
+  /** Backend-owned preview services, for gateway transport adapters. */
+  get previews(): PreviewRuntime | undefined {
+    return this.context.previews;
   }
 
   getControlMcpInfo(): ControlMcpInfo | null {
@@ -933,6 +971,7 @@ export class OrkestratorBackend {
           operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
         });
       } finally {
+        this.context.previews?.dispose();
         await this.controlMcp.stop();
         await this.agentTools.stop();
         await this.context.design?.close();

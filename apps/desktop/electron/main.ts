@@ -51,7 +51,11 @@ import {
 } from "./browser-preview-startup.js";
 import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapters.js";
 import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
-import { registerWindowAllClosedQuit } from "./quit-policy.js";
+import {
+  handleStartupFailure,
+  registerQuitReopenRelaunch,
+  registerWindowAllClosedQuit,
+} from "./quit-policy.js";
 import { createApplicationMenuTemplate } from "./application-menu.js";
 import {
   applyWindowTitle,
@@ -69,6 +73,7 @@ import {
   cleanupFailedDesktopWindow,
   DesktopWindowRequestGate,
   DesktopWindowSlotAllocator,
+  releaseBoundWindowIfQuitting,
   rendererPartitionForWindow,
 } from "./desktop-window-lifecycle.js";
 import {
@@ -127,6 +132,11 @@ const windowAllClosedQuit = registerWindowAllClosedQuit({
   platform: process.platform,
   alwaysQuit: runtimeFlavor === "agent-test",
 });
+const quitReopen = registerQuitReopenRelaunch({
+  app,
+  allowRelaunch: runtimeFlavor !== "agent-test",
+});
+let startupComplete = false;
 const toolchainProgress = createToolchainProgressController({
   createWindow: () =>
     createToolchainBootstrapWindow({
@@ -237,6 +247,7 @@ function createMenu(): void {
 
 async function createWindow(connectionId?: string): Promise<void> {
   if (!connectionManager) throw new Error("Connections are not initialized");
+  if (quitReopen.isQuitting()) throw new Error(`${productName} is quitting`);
   const currentContext = focusedContext();
   const inheritedConnectionId =
     connectionId ??
@@ -251,6 +262,16 @@ async function createWindow(connectionId?: string): Promise<void> {
   } catch (error) {
     windowSlots.release(slot);
     throw error;
+  }
+  // A quit may have stopped the Local backend while the binding was pending.
+  if (
+    releaseBoundWindowIfQuitting({
+      isQuitting: quitReopen.isQuitting,
+      releaseScope: () => connectionManager?.release(scope),
+      releaseSlot: () => windowSlots.release(slot),
+    })
+  ) {
+    throw new Error(`${productName} is quitting`);
   }
   const activeConnection = connectionList.connections.find((connection) => connection.active);
   const activeConnectionId = activeConnection?.id ?? LOCAL_CONNECTION_ID;
@@ -362,7 +383,11 @@ function registerIpc(): void {
     clipboardApi: clipboard,
     dialogApi: dialog,
     shellApi: shell,
-    appApi: app,
+    appApi: {
+      exit: (code) => app.exit(code),
+      quit: () => app.quit(),
+      relaunch: () => quitReopen.scheduleRelaunch(),
+    },
     nativeImageApi: nativeImage,
     getMacOsPermissions,
     listConnections: (event) => manager().getList(scopeForEvent(event)),
@@ -535,6 +560,7 @@ async function startApplication(): Promise<void> {
     await createWindow();
   }
   await toolchainProgress.close();
+  startupComplete = true;
 
   if (runtimeProfile) {
     const info = backendProcess.getInfo();
@@ -550,21 +576,28 @@ async function startApplication(): Promise<void> {
       })}\n`,
     );
   }
+}
 
+if (isPrimaryInstance) {
   registerBrowserPreviewWindowActivation({
     onActivate: (listener) => app.on("activate", listener),
+    // Startup owns its first window. A quit-time reopen must be handled even
+    // while a window exists or another activation is creating one.
+    handleActivate: () => quitReopen.deferReopenWhileQuitting() || !startupComplete,
     getWindowCount: () => BrowserWindow.getAllWindows().length,
     createWindow,
     onCreateError: (error) => console.error("[Desktop] Failed to recreate the main window:", error),
   });
-}
-
-if (isPrimaryInstance) {
+  // Registered first: a launch during quit relaunches instead of reaching
+  // windows that are closing or bound to the stopped Local backend.
+  app.on("second-instance", () => {
+    quitReopen.deferReopenWhileQuitting();
+  });
   registerSecondInstanceFocus(
     app,
-    () => focusedContext()?.window ?? null,
+    () => (quitReopen.isQuitting() ? null : (focusedContext()?.window ?? null)),
     () => {
-      if (!windowRequestGate.request()) return;
+      if (quitReopen.isQuitting() || !windowRequestGate.request()) return;
       void createWindow().catch((error) =>
         console.error("[Desktop] Failed to create a window for a second launch:", error),
       );
@@ -575,12 +608,18 @@ if (isPrimaryInstance) {
     .whenReady()
     .then(startApplication)
     .catch((error: unknown) => {
-      console.error("[Desktop] Startup failed:", error);
-      dialog.showErrorBox(
-        `${productName} failed to start`,
-        error instanceof Error ? error.message : String(error),
-      );
-      app.quit();
+      handleStartupFailure({
+        isQuitting: quitReopen.isQuitting,
+        error,
+        report: (failure) => {
+          console.error("[Desktop] Startup failed:", failure);
+          dialog.showErrorBox(
+            `${productName} failed to start`,
+            failure instanceof Error ? failure.message : String(failure),
+          );
+        },
+        quit: () => app.quit(),
+      });
     });
 } else {
   console.error(

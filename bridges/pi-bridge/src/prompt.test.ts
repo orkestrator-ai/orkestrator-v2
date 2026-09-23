@@ -237,7 +237,11 @@ describe("dispatchPrompt", () => {
   test("clears an undelivered steer when its target run ends", async () => {
     const state = runningState();
     const stub = stubSession();
-    state.pendingSteerDeliveries.push({ requestId: "steer-late", text: "too late" });
+    state.pendingSteerDeliveries.push({
+      requestId: "steer-late",
+      text: "too late",
+      expectedRunId: "pi:generation:1",
+    });
     state.steerJournal.set("steer-late", {
       requestId: "steer-late",
       inputDigest: "a".repeat(64),
@@ -261,7 +265,11 @@ describe("dispatchPrompt", () => {
   test("keeps an undelivered steer ambiguous when Pi refuses to clear its queue", async () => {
     const state = runningState();
     const stub = stubSession();
-    state.pendingSteerDeliveries.push({ requestId: "steer-unclear", text: "too late" });
+    state.pendingSteerDeliveries.push({
+      requestId: "steer-unclear",
+      text: "too late",
+      expectedRunId: "pi:generation:1",
+    });
     state.steerJournal.set("steer-unclear", {
       requestId: "steer-unclear",
       inputDigest: "b".repeat(64),

@@ -4073,31 +4073,31 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    render(<ActionBar presentation="grid" />);
+    jest.useFakeTimers();
+    try {
+      render(<ActionBar presentation="grid" />);
 
-    const reviewButton = screen.getByRole("button", { name: "Code review" });
-    fireEvent.pointerDown(reviewButton, {
-      pointerId: 1,
-      pointerType: "touch",
-      clientX: 24,
-      clientY: 24,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    await waitFor(
-      () => {
-        expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
-      },
-      { timeout: 10_000 },
-    );
+      const reviewButton = screen.getByRole("button", { name: "Code review" });
+      fireEvent.pointerDown(reviewButton, {
+        pointerId: 1,
+        pointerType: "touch",
+        clientX: 24,
+        clientY: 24,
+      });
+      await act(async () => jest.advanceTimersByTime(15));
+      expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
 
-    await new Promise((resolve) => setTimeout(resolve, 1_025));
-    fireEvent.click(reviewButton);
+      await act(async () => jest.advanceTimersByTime(CLICK_SUPPRESSION_MS));
+      fireEvent.click(reviewButton);
 
-    expect(createTabMock).toHaveBeenCalledTimes(1);
-    expect(createTabMock).toHaveBeenCalledWith(
-      "codex",
-      expect.objectContaining({ displayTitle: "Review", isReviewTab: true }),
-    );
+      expect(createTabMock).toHaveBeenCalledTimes(1);
+      expect(createTabMock).toHaveBeenCalledWith(
+        "codex",
+        expect.objectContaining({ displayTitle: "Review", isReviewTab: true }),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
   }, 20_000);
 
   test("clears active long-press click suppression when the action bar unmounts", async () => {
@@ -5522,14 +5522,16 @@ describe("ActionBar configured action defaults", () => {
       model: "gpt-5.4",
       reasoningEffort: "xhigh",
     });
+    // Configured as Fable 5, which Claude Code 2.1.280 superseded with Fable
+    // 5.1: the saved choice carries forward rather than dropping to Default.
     expect(launch.reviewers[2]).toMatchObject({
       agent: "claude",
-      model: "claude-fable-5[1m]",
+      model: "claude-fable-5-1[1m]",
       reasoningEffort: "xhigh",
     });
     expect(launch.fixModel).toMatchObject({
       agent: "claude",
-      model: "claude-fable-5[1m]",
+      model: "claude-fable-5-1[1m]",
       reasoningEffort: "xhigh",
     });
   });
@@ -5998,6 +6000,255 @@ describe("ActionBar run commands", () => {
           title: "Run Commands",
         }),
       ),
+    );
+  });
+
+  test("re-scans run commands when the environment's agent finishes working", async () => {
+    currentWorkspaceReady = true;
+    currentEnvironment = { ...selectedEnvironment, agentActivityState: "idle" };
+    readContainerFileMock.mockResolvedValue({ content: "{}" });
+    const { rerender } = render(<ActionBar />);
+
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
+    const runButton = screen.getByRole("button", { name: "Run commands" });
+    expect(runButton.getAttribute("aria-disabled")).toBe("true");
+
+    // The run-script agent starts; nothing is re-read while it works.
+    currentEnvironment = { ...currentEnvironment, agentActivityState: "working" };
+    rerender(<ActionBar />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(readContainerFileMock).toHaveBeenCalledTimes(1);
+
+    // The agent writes orkestrator-ai.json and goes idle.
+    readContainerFileMock.mockResolvedValue({ content: '{"run":["bun run dev"]}' });
+    currentEnvironment = { ...currentEnvironment, agentActivityState: "idle" };
+    rerender(<ActionBar />);
+
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(2));
+    expect(readContainerFileMock).toHaveBeenLastCalledWith("container-1", "orkestrator-ai.json");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+      ).toBe("false"),
+    );
+  });
+
+  test("re-scans run commands once per finished working period", async () => {
+    currentWorkspaceReady = true;
+    currentEnvironment = { ...selectedEnvironment, agentActivityState: "working" };
+    readContainerFileMock.mockResolvedValue({ content: "{}" });
+    const { rerender } = render(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
+
+    // Leaving "working" re-reads once; later non-working changes do not.
+    currentEnvironment = { ...currentEnvironment, agentActivityState: "waiting" };
+    rerender(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(2));
+
+    currentEnvironment = { ...currentEnvironment, agentActivityState: "idle" };
+    rerender(<ActionBar />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(readContainerFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("re-scans when the run-script session finishes while another session keeps working", async () => {
+    currentWorkspaceReady = true;
+    currentEnvironment = { ...selectedEnvironment, agentActivityState: "working" };
+    readContainerFileMock.mockResolvedValue({ content: "{}" });
+    const { rerender } = render(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({ environmentId: "env-1", title: "Run Script" }),
+      ),
+    );
+
+    // The backend reports this session's completion while the sibling is still working.
+    readContainerFileMock.mockResolvedValue({ content: '{"run":["bun run dev"]}' });
+    currentEnvironment = {
+      ...currentEnvironment,
+      agentSessionCompletedAt: "2026-09-23T00:00:01.000Z",
+    };
+    rerender(<ActionBar />);
+
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(2));
+    expect(currentEnvironment.agentActivityState).toBe("working");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+      ).toBe("false"),
+    );
+  });
+
+  test("re-scans local run commands after a native session completes", async () => {
+    currentWorkspaceReady = true;
+    currentEnvironment = {
+      ...selectedEnvironment,
+      environmentType: "local",
+      containerId: null,
+      status: "stopped",
+      worktreePath: "/tmp/repo-worktree",
+      agentActivityState: "working",
+    };
+    readLocalFileMock.mockResolvedValue({ content: "{}" });
+    const { rerender } = render(<ActionBar />);
+    await waitFor(() => expect(readLocalFileMock).toHaveBeenCalledTimes(1));
+
+    readLocalFileMock.mockResolvedValue({ content: '{"run":["bun run dev"]}' });
+    currentEnvironment = {
+      ...currentEnvironment,
+      agentSessionCompletedAt: "2026-09-23T00:00:01.000Z",
+    };
+    rerender(<ActionBar />);
+
+    await waitFor(() => expect(readLocalFileMock).toHaveBeenCalledTimes(2));
+    expect(readLocalFileMock).toHaveBeenLastCalledWith("/tmp/repo-worktree", "orkestrator-ai.json");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+      ).toBe("false"),
+    );
+  });
+
+  test("keeps existing run commands enabled while a same-source rescan is pending", async () => {
+    currentWorkspaceReady = true;
+    currentEnvironment = { ...selectedEnvironment, agentActivityState: "working" };
+    readContainerFileMock.mockResolvedValue({ content: '{"run":["bun test"]}' });
+    const { rerender } = render(<ActionBar />);
+    const runButton = screen.getByRole("button", { name: "Run commands" });
+    await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
+
+    let finishRead!: (result: { content: string }) => void;
+    readContainerFileMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRead = resolve;
+        }),
+    );
+    currentEnvironment = {
+      ...currentEnvironment,
+      agentSessionCompletedAt: "2026-09-23T00:00:01.000Z",
+    };
+    rerender(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(2));
+    expect(runButton.getAttribute("aria-disabled")).toBe("false");
+    expect(runButton.querySelector(".animate-spin") === null).toBe(true);
+
+    await act(async () => finishRead({ content: '{"run":["bun run dev"]}' }));
+    expect(runButton.getAttribute("aria-disabled")).toBe("false");
+  });
+
+  test("keeps valid run commands after a failed or malformed quiet rescan", async () => {
+    currentWorkspaceReady = true;
+    currentEnvironment = { ...selectedEnvironment, agentActivityState: "working" };
+    readContainerFileMock.mockResolvedValue({ content: '{"run":["bun test"]}' });
+    const { rerender } = render(<ActionBar />);
+    const runButton = screen.getByRole("button", { name: "Run commands" });
+    await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
+
+    readContainerFileMock.mockRejectedValueOnce(new Error("temporary read failure"));
+    currentEnvironment = {
+      ...currentEnvironment,
+      agentSessionCompletedAt: "2026-09-23T00:00:01.000Z",
+    };
+    rerender(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(console.error).toHaveBeenCalledWith(
+        "[ActionBar] Failed to read orkestrator-ai.json:",
+        expect.any(Error),
+      ),
+    );
+    expect(runButton.getAttribute("aria-disabled")).toBe("false");
+
+    readContainerFileMock.mockResolvedValueOnce({ content: "{not-json" });
+    currentEnvironment = {
+      ...currentEnvironment,
+      agentSessionCompletedAt: "2026-09-23T00:00:02.000Z",
+    };
+    rerender(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(3));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(runButton.getAttribute("aria-disabled")).toBe("false");
+
+    fireEvent.click(runButton);
+    await waitFor(() =>
+      expect(launchTerminalJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({ data: "bun test\n" }),
+      ),
+    );
+  });
+
+  test("does not rescan the new environment for the previous environment's completion", async () => {
+    currentWorkspaceReady = true;
+    currentEnvironment = { ...selectedEnvironment, agentActivityState: "working" };
+    const { rerender } = render(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
+
+    currentSelectedEnvironmentId = "env-2";
+    currentEnvironment = {
+      ...selectedEnvironment,
+      id: "env-2",
+      name: "other-environment",
+      containerId: "container-2",
+      agentActivityState: "idle",
+      agentSessionCompletedAt: "2026-09-23T00:00:01.000Z",
+    };
+    rerender(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(2));
+    expect(readContainerFileMock).toHaveBeenLastCalledWith("container-2", "orkestrator-ai.json");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(readContainerFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("loads a run script completed while its environment was inactive", async () => {
+    currentWorkspaceReady = true;
+    currentEnvironment = { ...selectedEnvironment, agentActivityState: "working" };
+    readContainerFileMock.mockResolvedValue({ content: "{}" });
+    const { rerender } = render(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
+
+    const firstEnvironment = currentEnvironment;
+    currentSelectedEnvironmentId = "env-2";
+    currentEnvironment = {
+      ...selectedEnvironment,
+      id: "env-2",
+      name: "other-environment",
+      containerId: "container-2",
+      agentActivityState: "idle",
+    };
+    currentOtherEnvironments = [firstEnvironment];
+    rerender(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(2));
+
+    // The backend persisted the completion and the file changed off-screen.
+    currentSelectedEnvironmentId = "env-1";
+    currentEnvironment = {
+      ...firstEnvironment,
+      agentActivityState: "idle",
+      agentSessionCompletedAt: "2026-09-23T00:00:01.000Z",
+    };
+    currentOtherEnvironments = [];
+    readContainerFileMock.mockResolvedValue({ content: '{"run":["bun run dev"]}' });
+    rerender(<ActionBar />);
+
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(3));
+    expect(readContainerFileMock).toHaveBeenLastCalledWith("container-1", "orkestrator-ai.json");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+      ).toBe("false"),
     );
   });
 

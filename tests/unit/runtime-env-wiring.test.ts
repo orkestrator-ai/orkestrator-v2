@@ -2149,8 +2149,9 @@ eval "$opencode_setup"
           . ${shellQuote(helper)}
           export GITHUB_TOKEN="stale-container-token"
           export GH_TOKEN="stale-container-token"
+          export GITHUB_PERSONAL_ACCESS_TOKEN="stale-mcp-token"
           orkestrator_source_runtime_env
-          printf "%s|%s" "$GITHUB_TOKEN" "$GH_TOKEN"
+          printf "%s|%s|%s" "$GITHUB_TOKEN" "$GH_TOKEN" "$GITHUB_PERSONAL_ACCESS_TOKEN"
         `,
         {
           HOME: join(dir, "home"),
@@ -2161,7 +2162,7 @@ eval "$opencode_setup"
         },
       );
       expect(selected.exitCode).toBe(0);
-      expect(selected.stdout).toBe("host-gh-token|host-gh-token");
+      expect(selected.stdout).toBe("host-gh-token|host-gh-token|host-gh-token");
 
       writeFileSync(credentialFile, "", { mode: 0o600 });
       const cleared = runShell(
@@ -2169,8 +2170,9 @@ eval "$opencode_setup"
           . ${shellQuote(helper)}
           export GITHUB_TOKEN="stale-container-token"
           export GH_TOKEN="stale-container-token"
+          export GITHUB_PERSONAL_ACCESS_TOKEN="stale-mcp-token"
           orkestrator_source_runtime_env
-          printf "%s|%s" "\${GITHUB_TOKEN:-}" "\${GH_TOKEN:-}"
+          printf "%s|%s|%s" "\${GITHUB_TOKEN:-}" "\${GH_TOKEN:-}" "\${GITHUB_PERSONAL_ACCESS_TOKEN:-}"
         `,
         {
           HOME: join(dir, "home"),
@@ -2181,7 +2183,7 @@ eval "$opencode_setup"
         },
       );
       expect(cleared.exitCode).toBe(0);
-      expect(cleared.stdout).toBe("|");
+      expect(cleared.stdout).toBe("||");
     });
   });
 

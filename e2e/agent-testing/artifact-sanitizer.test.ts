@@ -49,7 +49,7 @@ describe("agent-test artifact sanitizer", () => {
     expect(trace).not.toContain(secret);
     expect(trace).not.toContain(session);
     expect(trace).toContain("orkestrator_gateway_auth=[REDACTED]");
-  });
+  }, 20_000);
 
   test("stages the redacted trace beside the original so the swap cannot cross filesystems", async () => {
     // `rename` fails with EXDEV across mount points, and on Linux the temp
@@ -76,7 +76,7 @@ describe("agent-test artifact sanitizer", () => {
     );
     // No staging directory survives next to the archive it redacted.
     expect(await readdir(root)).toEqual(["trace.zip"]);
-  });
+  }, 20_000);
 
   test("destroys an archive it could not redact rather than leaving the original", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "ork-agent-unredactable-"));

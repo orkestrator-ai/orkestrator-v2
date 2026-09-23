@@ -6,7 +6,7 @@ import {
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Copy, Loader2, RefreshCw, SquareTerminal } from "lucide-react";
+import { Copy, Loader2, RefreshCw, Square, SquareTerminal } from "lucide-react";
 import { toast } from "sonner";
 import { getReviewValidationOutput } from "@/lib/backend";
 import { stripAnsi } from "@/lib/terminal-utils";
@@ -248,12 +248,17 @@ export function ReviewValidationStatus({
   run,
   now = Date.now(),
   loadOutput = getReviewValidationOutput,
+  onStop,
+  stopping = false,
 }: {
   environmentId: string;
   run: ReviewValidationRun;
   /** Parent-owned live clock, so every running row advances on the same tick. */
   now?: number;
   loadOutput?: typeof getReviewValidationOutput;
+  /** Optional owner action that stops active commands while retaining partial evidence. */
+  onStop?: () => void;
+  stopping?: boolean;
 }) {
   const validationElapsedMs = reviewValidationElapsedMs(run, now);
   const notes = run.plan.limitations;
@@ -267,15 +272,32 @@ export function ReviewValidationStatus({
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="font-semibold">Validation</h3>
-        <span className="text-muted-foreground">
-          {run.status === "planned" ||
-          (run.status === "running" &&
-            (run.queueReason ||
-              (run.results.some((result) => result.status === "queued") &&
-                !run.results.some((result) => result.status === "running"))))
-            ? "Queued"
-            : run.status}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-muted-foreground">
+            {stopping
+              ? "Stopping"
+              : run.status === "planned" ||
+                  (run.status === "running" &&
+                    (run.queueReason ||
+                      (run.results.some((result) => result.status === "queued") &&
+                        !run.results.some((result) => result.status === "running"))))
+                ? "Queued"
+                : run.status}
+          </span>
+          {onStop && (run.status === "planned" || run.status === "running") && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-[11px]"
+              disabled={stopping}
+              onClick={onStop}
+            >
+              {stopping ? <Loader2 className="animate-spin" /> : <Square />}
+              {stopping ? "Stopping tests…" : "Stop tests and continue"}
+            </Button>
+          )}
+        </div>
       </div>
       <p className="mb-2 text-muted-foreground">
         {run.discoveryDurationMs !== undefined &&
@@ -290,66 +312,100 @@ export function ReviewValidationStatus({
           {run.queueReason}
         </p>
       )}
-      <ul
-        aria-label="Validation commands"
-        className="grid grid-cols-[minmax(0,1fr)_max-content_max-content_max-content_max-content_auto] gap-x-3 gap-y-2"
-      >
-        {run.results.map((result) => {
-          const resultElapsedMs = reviewValidationResultElapsedMs(result, now);
-          const queuedMs = result.queuedMs ?? 0;
-          return (
-            <li key={result.id} className="col-span-full grid grid-cols-subgrid">
-              <button
-                type="button"
-                className="col-span-full grid grid-cols-subgrid items-center rounded-md px-1.5 py-1 text-left transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                aria-label={`View terminal output for ${result.command}`}
-                onClick={() => setSelectedResultId(result.id)}
-              >
-                <code className="min-w-0 break-all">{result.command}</code>
-                <span
-                  data-slot="validation-status"
-                  className="whitespace-nowrap text-muted-foreground"
+      <div className="overflow-x-auto rounded-md border border-border">
+        <table
+          aria-label="Validation commands"
+          className="w-full min-w-[36rem] table-fixed border-collapse text-left"
+        >
+          <thead className="bg-muted/50 text-muted-foreground">
+            <tr className="divide-x divide-border border-b border-border">
+              <th scope="col" className="px-2 py-2 font-medium">
+                Command
+              </th>
+              <th scope="col" className="w-36 px-2 py-2 font-medium">
+                Status
+              </th>
+              <th scope="col" className="w-20 px-2 py-2 text-right font-medium">
+                Duration
+              </th>
+              <th scope="col" className="w-20 px-2 py-2 text-right font-medium">
+                Queued
+              </th>
+              <th scope="col" className="w-16 px-1 py-2 text-center font-medium">
+                Output
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {run.results.map((result) => {
+              const resultElapsedMs = reviewValidationResultElapsedMs(result, now);
+              const queuedMs = result.queuedMs ?? 0;
+              return (
+                <tr
+                  key={result.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`View terminal output for ${result.command}`}
+                  className="cursor-pointer divide-x divide-border transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+                  onClick={() => setSelectedResultId(result.id)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    if (event.key === " ") event.preventDefault();
+                    setSelectedResultId(result.id);
+                  }}
                 >
-                  {result.status === "queued" ? "waiting for capacity" : result.status}
-                </span>
-                <span
-                  data-slot="validation-elapsed"
-                  className="whitespace-nowrap text-right tabular-nums text-muted-foreground"
-                >
-                  {resultElapsedMs !== null ? formatSeconds(resultElapsedMs) : ""}
-                </span>
-                <span className="whitespace-nowrap text-muted-foreground">
-                  {queuedMs > 0 ? "queued" : ""}
-                </span>
-                <span
-                  data-slot="validation-queued"
-                  className="whitespace-nowrap text-right tabular-nums text-muted-foreground"
-                >
-                  {queuedMs > 0 ? formatSeconds(queuedMs) : ""}
-                </span>
-                <SquareTerminal className="size-3.5 opacity-60" aria-hidden="true" />
-                {result.queueReason && ["queued", "running"].includes(result.status) && (
-                  <span
-                    data-slot="validation-queue-reason"
-                    className="col-span-full mt-1 break-words text-muted-foreground"
+                  <td className="px-2 py-2 align-top">
+                    <code className="break-all">{result.command}</code>
+                    {result.queueReason && ["queued", "running"].includes(result.status) && (
+                      <div
+                        data-slot="validation-queue-reason"
+                        className="mt-1 break-words text-muted-foreground"
+                      >
+                        {result.queueReason}
+                      </div>
+                    )}
+                    {result.limitation && (
+                      <div
+                        data-slot="validation-limitation"
+                        className="mt-1 break-words text-muted-foreground"
+                      >
+                        <span className="sr-only">{result.command}: </span>
+                        {result.limitation}
+                      </div>
+                    )}
+                  </td>
+                  <td
+                    data-slot="validation-status"
+                    className="whitespace-nowrap px-2 py-2 align-top text-muted-foreground"
                   >
-                    {result.queueReason}
-                  </span>
-                )}
-                {result.limitation && (
-                  <span
-                    data-slot="validation-limitation"
-                    className="col-span-full mt-1 text-muted-foreground"
+                    {result.status === "queued" ? "waiting for capacity" : result.status}
+                  </td>
+                  <td
+                    data-slot="validation-elapsed"
+                    className="px-2 py-2 text-right align-top tabular-nums text-muted-foreground"
                   >
-                    <span className="sr-only">{result.command}: </span>
-                    {result.limitation}
-                  </span>
-                )}
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+                    {resultElapsedMs !== null ? formatSeconds(resultElapsedMs) : ""}
+                  </td>
+                  <td
+                    data-slot="validation-queued"
+                    className="px-2 py-2 text-right align-top tabular-nums text-muted-foreground"
+                  >
+                    {queuedMs > 0 ? formatSeconds(queuedMs) : ""}
+                  </td>
+                  <td className="px-1 py-1 text-center align-top">
+                    <span
+                      className="inline-flex size-6 items-center justify-center text-muted-foreground"
+                      aria-hidden="true"
+                    >
+                      <SquareTerminal className="size-3.5" aria-hidden="true" />
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
       {((run.environmentChanges && run.environmentChanges.length > 0) ||
         (run.environmentChangesOmitted ?? 0) > 0) && (
         <details className="mt-3 text-xs text-muted-foreground">

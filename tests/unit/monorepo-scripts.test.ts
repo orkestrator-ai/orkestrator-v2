@@ -211,24 +211,15 @@ describe("monorepo orchestration scripts", () => {
     );
   });
 
-  test("bridge suites carry the root preload harness Turbo's package cwd would drop", () => {
-    // Turbo runs each script from its own package, and Bun reads `bunfig.toml`
-    // from the invocation directory without walking up. Anything the root
-    // bunfig preloads — the happy-dom registration, the git-config isolation,
-    // `CODEX_BRIDGE_NO_SERVER`, the bounded diagnostics — therefore has to be
-    // named explicitly, or bridge tests silently run without it and the codex
-    // suite binds a real port.
-    const preloads = (Bun.TOML.parse(read("bunfig.toml")) as { test?: { preload?: string[] } }).test
-      ?.preload;
-    expect(preloads?.length).toBeGreaterThan(0);
-
+  test("bridge suites use the node preload without registering a browser DOM", () => {
+    // Bridge tests exercise HTTP/process code. Happy DOM replaces Bun's native
+    // fetch/Response classes and forces loopback tests to swap them back.
     for (const bridge of BRIDGE_MANIFESTS) {
       const scripts =
         (JSON.parse(read(bridge)) as { scripts?: Record<string, string> }).scripts ?? {};
-      for (const preload of preloads ?? []) {
-        // `./tests/setup.ts` at the root is `../../tests/setup.ts` from a bridge.
-        expect(scripts["test:bridge"]).toContain(`--preload ${preload.replace(/^\.\//, "../../")}`);
-      }
+      expect(scripts["test:bridge"]).toContain("--preload ../../tests/setup-node.ts");
+      expect(scripts["test:bridge"]).not.toContain("register-dom");
+      expect(scripts["test:bridge"]).not.toContain("tests/setup.ts");
     }
   });
 
@@ -244,6 +235,25 @@ describe("monorepo orchestration scripts", () => {
     // `build` stays cacheable: it is the expensive dependency, and replaying it
     // does not weaken any assertion.
     expect(turbo.tasks?.build?.cache).not.toBe(false);
+  });
+
+  test("source-only workspace tests can overlap required production builds", () => {
+    for (const configPath of [
+      "apps/web/turbo.json",
+      "apps/web-public/turbo.json",
+      "apps/desktop/turbo.json",
+      "packages/protocol/turbo.json",
+    ]) {
+      const config = JSON.parse(read(configPath)) as {
+        tasks?: Record<string, { dependsOn?: string[] }>;
+      };
+      expect(config.tasks?.["test:workspace"]?.dependsOn, configPath).toEqual([]);
+    }
+
+    // These two suites consume built artifacts and inherit the root edge.
+    expect(read("apps/backend/tests/standalone.test.ts")).toContain("apps/backend/dist/main.js");
+    expect(read("packages/cli/tests/cli.test.ts")).toContain("dist");
+    expect(read("scripts/test-all.ts")).toContain('"build",\n        "test:workspace"');
   });
 
   test("the aggregate runner relays interrupts to its detached groups", () => {

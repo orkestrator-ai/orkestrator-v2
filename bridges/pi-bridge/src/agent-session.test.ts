@@ -340,6 +340,74 @@ describe("session ownership", () => {
     });
   });
 
+  test("rehydrates past usage and context-edit entries without rendering them", async () => {
+    // Pi 0.87 added both entry types. Neither carries a `message`, so letting
+    // them reach the message branch threw during hydration and lost the resume.
+    const sessionFile = join(sessionDirectory, "accounting-history.jsonl");
+    const timestamp = "2026-09-22T00:00:00.000Z";
+    const usage = {
+      input: 10,
+      output: 0,
+      cacheRead: 100,
+      cacheWrite: 0,
+      totalTokens: 110,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const entries = [
+      { type: "session", version: 3, id: "accounting-history", timestamp, cwd: workingDirectory },
+      {
+        type: "message",
+        id: "user-entry",
+        parentId: null,
+        timestamp,
+        message: { role: "user", content: "Hello", timestamp: Date.parse(timestamp) },
+      },
+      {
+        type: "usage",
+        id: "usage-entry",
+        parentId: "user-entry",
+        timestamp,
+        kind: "cache_warm",
+        provider: "test",
+        model: "test",
+        usage,
+      },
+      {
+        type: "context_edit",
+        id: "context-edit-entry",
+        parentId: "usage-entry",
+        timestamp,
+        targetId: "user-entry",
+        replacement: { content: "Hello (edited)" },
+      },
+      {
+        type: "message",
+        id: "assistant-entry",
+        parentId: "context-edit-entry",
+        timestamp,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hi" }],
+          api: "openai-completions",
+          provider: "test",
+          model: "test",
+          usage,
+          stopReason: "stop",
+          timestamp: Date.parse(timestamp),
+        },
+      },
+    ];
+    await writeFile(sessionFile, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+
+    const resumed = await resumeSession(sessionFile, undefined);
+    // The edit changes model context only; the transcript keeps the original,
+    // as Pi's own UI does, and neither entry becomes a message of its own.
+    expect(resumed.messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "Hello"],
+      ["assistant", "Hi"],
+    ]);
+  });
+
   test("waits for a cold attach and disposes it when the owner closes", async () => {
     const state = newSessionState();
     let publish: (() => void) | undefined;

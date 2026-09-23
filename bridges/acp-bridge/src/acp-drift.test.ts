@@ -121,6 +121,48 @@ describe("unknown session/update kinds", () => {
   });
 });
 
+describe("ACP notice updates", () => {
+  test("a notice becomes a provider runtime-health notice, not drift or transcript", () => {
+    const session = state();
+    update(session, "notice", {
+      severity: "error",
+      title: "Rate limit reached",
+      description: "Retrying in 30s",
+    });
+
+    expect(session.health.drift()).toBeUndefined();
+    expect(session.messages).toEqual([]);
+    expect(session.health.listNotices()).toMatchObject([
+      {
+        method: "notice",
+        message: "Rate limit reached",
+        severity: "error",
+        source: "provider",
+        count: 1,
+        occurrences: [{ detail: "Retrying in 30s" }],
+      },
+    ]);
+  });
+
+  test("an open-ended severity falls back to a warning and an untitled notice is ignored", () => {
+    const session = state();
+    update(session, "notice", { severity: "critical-ish", title: "Heads up" });
+    update(session, "notice", { severity: "error", title: "   " });
+
+    expect(session.health.listNotices()).toMatchObject([
+      { message: "Heads up", severity: "warning" },
+    ]);
+  });
+
+  test("notices replayed on reconnect are not counted again", () => {
+    const session = state();
+    session.historyReplay = "ignore";
+    update(session, "notice", { severity: "info", title: "Replayed" });
+
+    expect(session.health.listNotices()).toEqual([]);
+  });
+});
+
 /**
  * Non-text ACP content blocks.
  *

@@ -403,6 +403,71 @@ test("real Electron main process shares one backend across independent windows",
   }
 });
 
+test("a real window with a missing preload reaches recovery without mounting the workspace", async () => {
+  const temporaryRoot = await mkdtemp(
+    path.join(os.tmpdir(), "orkestrator-electron-preload-fault-"),
+  );
+  const entrypoint = path.join(temporaryRoot, "main.cjs");
+  const [rendererPort] = await reserveLoopbackPorts(1);
+  const rendererUrl = `http://127.0.0.1:${rendererPort}`;
+  let vite: ChildProcess | null = null;
+  let launchedApp: ElectronApplication | null = null;
+  try {
+    vite = spawn("bun", ["run", "dev"], {
+      cwd: webRoot,
+      detached: true,
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        VITE_DEV_HOST: "127.0.0.1",
+        VITE_DEV_PORT: String(rendererPort),
+      },
+    });
+    await waitForUrl(rendererUrl);
+    await writeFile(
+      entrypoint,
+      [
+        'const { app, BrowserWindow } = require("electron");',
+        "app.whenReady().then(async () => {",
+        "  const window = new BrowserWindow({",
+        "    webPreferences: {",
+        `      preload: ${JSON.stringify(path.join(temporaryRoot, "missing-preload.cjs"))},`,
+        "      contextIsolation: true,",
+        "      nodeIntegration: false,",
+        "      sandbox: false,",
+        "    },",
+        "  });",
+        `  await window.loadURL(${JSON.stringify(rendererUrl)});`,
+        "});",
+        'app.on("window-all-closed", () => app.quit());',
+        "",
+      ].join("\n"),
+    );
+
+    const app = await electron.launch({
+      executablePath: electronExecutable,
+      args: [entrypoint],
+      cwd: repositoryRoot,
+    });
+    launchedApp = app;
+    const window = await app.firstWindow();
+    await expect(window.getByRole("alert")).toContainText("Orkestrator couldn’t connect", {
+      timeout: 15_000,
+    });
+    await expect(window.getByRole("button", { name: "Reload window" })).toBeVisible();
+    await expect(window.getByRole("button", { name: "Global settings" })).toHaveCount(0);
+    expect(await window.evaluate(() => typeof (globalThis as any).orkestrator)).toBe("undefined");
+  } finally {
+    await launchedApp?.close().catch(() => undefined);
+    if (vite?.pid) {
+      try {
+        process.kill(-vite.pid, "SIGTERM");
+      } catch {}
+    }
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
 test("bootstrap window repaints a resized native Wayland surface at fractional scale", async () => {
   test.skip(
     process.platform !== "linux" || !process.env.WAYLAND_DISPLAY,

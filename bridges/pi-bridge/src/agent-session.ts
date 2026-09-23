@@ -1152,6 +1152,10 @@ function appendHistoricNotice(
  * transcript disagree with the one it was reproducing.
  *
  * `label` and `session_info` entries stay out: they are naming, not history.
+ * `usage` entries (a cache-warm refresh's token spend) stay out too: they are
+ * accounting, and `getSessionStats` already counts them. `context_edit` entries
+ * change what the model sees without changing the conversation — Pi's own UI
+ * keeps showing the edited entries — so the transcript does the same.
  */
 function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
   switch (entry.type) {
@@ -1195,6 +1199,8 @@ function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
     case "custom_message":
     case "label":
     case "session_info":
+    case "usage":
+    case "context_edit":
       return;
     case "message":
       break;

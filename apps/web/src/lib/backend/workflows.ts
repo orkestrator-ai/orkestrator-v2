@@ -261,6 +261,13 @@ export async function stopMultiReviewReviewer(
   });
 }
 
+/** Stop validation commands and continue Multi Review with the evidence collected so far. */
+export async function stopMultiReviewValidation(
+  workflowId: string,
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("stop_multi_review_validation", { workflowId });
+}
+
 export async function restartMultiReviewReviewer(
   workflowId: string,
   reviewerId: string,
@@ -274,8 +281,27 @@ export async function restartMultiReviewReviewer(
 export async function restartMultiReviewStep(
   workflowId: string,
   kind: "prepare" | "consolidate" | "fix",
+  model?: BackendMultiReviewWorkflow["fixModel"],
 ): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("restart_multi_review_step", { workflowId, kind });
+  return invoke<BackendMultiReviewWorkflow>("restart_multi_review_step", {
+    workflowId,
+    kind,
+    ...(model ? { model } : {}),
+  });
+}
+
+export async function pauseMultiReviewStep(
+  workflowId: string,
+  kind: "prepare" | "consolidate" | "fix",
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("pause_multi_review_step", { workflowId, kind });
+}
+
+export async function resumeMultiReviewStep(
+  workflowId: string,
+  kind: "prepare" | "consolidate" | "fix",
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("resume_multi_review_step", { workflowId, kind });
 }
 
 export async function unstickMultiReviewReviewer(

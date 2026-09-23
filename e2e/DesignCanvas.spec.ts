@@ -19,7 +19,7 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
       y: 0,
       width: 480,
       height: 400,
-      html: `<style>body{margin:0;padding:24px;font-family:system-ui}h1{color:rgb(20,30,40)}</style><h1 id="title">A better workspace</h1><script>document.body.textContent="EXECUTED"</script><img onerror="document.body.textContent='EXECUTED'" src="https://example.invalid/x"><template id="nested"><script>bad()</script><iframe src="data:text/html,bad"></iframe><frame src="bad"></frame></template><div id="target"></div>`,
+      html: `<style>body{margin:0;padding:24px;font-family:system-ui}h1{color:rgb(20,30,40);background-color:rgba(10,20,30,.4)}</style><h1 id="title">A better workspace</h1><script>document.body.textContent="EXECUTED"</script><img onerror="document.body.textContent='EXECUTED'" src="https://example.invalid/x"><template id="nested"><script>bad()</script><iframe src="data:text/html,bad"></iframe><frame src="bad"></frame></template><div id="target"></div>`,
     });
     const changeGenerations: Array<string | undefined> = [];
     await page.exposeFunction("designInvoke", (command: string, args: Record<string, unknown>) => {
@@ -39,6 +39,50 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
     });
     await page.goto(`/design-canvas?canvasId=${canvas.id}`);
     await expect(page.getByRole("button", { name: "title", exact: true })).toBeVisible();
+    const hierarchy = page.getByRole("navigation", { name: "Design hierarchy" });
+    const divider = page.getByRole("separator", { name: "Resize design hierarchy" });
+    const workspace = page.locator(".design-workspace");
+    await expect(workspace.locator("header")).toHaveCSS("border-bottom-color", "rgb(34, 38, 45)");
+    await expect(workspace.locator("footer")).toHaveCSS("border-top-color", "rgb(34, 38, 45)");
+    await expect(divider).toHaveCSS("background-color", "rgb(34, 38, 45)");
+    const beforeResize = (await hierarchy.boundingBox())!.width;
+    const handle = (await divider.boundingBox())!;
+    await page.mouse.move(handle.x, handle.y + 30);
+    await page.mouse.down();
+    await page.mouse.move(handle.x - 30, handle.y + 30, { steps: 5 });
+    await page.mouse.up();
+    await expect.poll(async () => (await hierarchy.boundingBox())!.width).toBe(beforeResize - 30);
+    await divider.press("ArrowRight");
+    await expect.poll(async () => (await hierarchy.boundingBox())!.width).toBe(beforeResize - 20);
+    const initialViewport = page.viewportSize()!;
+    const resizedForMaximum = Number(await divider.getAttribute("aria-valuemax")) === 400;
+    if (resizedForMaximum)
+      await page.setViewportSize({ width: 700, height: initialViewport.height });
+    await expect
+      .poll(async () => Number(await divider.getAttribute("aria-valuemax")))
+      .toBeLessThan(400);
+    const reachableMaximum = await divider.getAttribute("aria-valuemax");
+    await divider.press("End");
+    await expect
+      .poll(async () => await divider.getAttribute("aria-valuenow"))
+      .toBe(reachableMaximum);
+    if (resizedForMaximum) await page.setViewportSize(initialViewport);
+    await expect
+      .poll(
+        async () =>
+          (await page.getByRole("main", { name: "Canvas viewport" }).boundingBox())!.width,
+      )
+      .toBeGreaterThan(200);
+    await divider.press("Home");
+    await expect(divider).toHaveAttribute("aria-valuenow", "120");
+    await page.getByRole("button", { name: "Toggle layers" }).click();
+    await expect(divider).toBeHidden();
+    await page.getByRole("button", { name: "Toggle layers" }).click();
+    await expect(divider).toHaveAttribute("aria-valuenow", "120");
+    await divider.press("ArrowRight");
+    await divider.press("ArrowRight");
+    await divider.press("ArrowRight");
+    await divider.press("ArrowRight");
     const embedded = page.frameLocator('iframe[title="Homepage"]');
     await expect(embedded.getByRole("heading")).toHaveText("A better workspace");
     await expect(embedded.locator("script")).toHaveCount(0);
@@ -56,6 +100,14 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
     expect(headingBounds).not.toBeNull();
     await page.mouse.click(headingBounds!.x + 8, headingBounds!.y + 8);
     await expect(page.getByRole("complementary", { name: "Element inspector" })).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "Element inspector" })).toHaveCSS(
+      "border-left-color",
+      "rgb(34, 38, 45)",
+    );
+    if (page.viewportSize()!.width <= 600) {
+      await expect(hierarchy).toBeHidden();
+      await expect(divider).toBeHidden();
+    }
     await page
       .getByRole("button", { name: "Resize selected element" })
       .dispatchEvent("pointerdown", {
@@ -72,9 +124,47 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
     });
     expect((await service.getFrame(canvas.id, "design-fixture", frame.id)).revision).toBe(1);
     await page.screenshot({ path: testInfo.outputPath("design-inspector.png") });
+    const widthField = page.getByRole("textbox", { name: "width", exact: true });
+    const heightField = page.getByRole("textbox", { name: "height", exact: true });
+    const widthBox = (await widthField.boundingBox())!;
+    const heightBox = (await heightField.boundingBox())!;
+    expect(widthBox.y).toBe(heightBox.y);
+    expect(heightBox.x).toBeGreaterThan(widthBox.x + widthBox.width);
+    const inspector = page.getByRole("complementary", { name: "Element inspector" });
+    expect(await inspector.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+      true,
+    );
+    await expect(page.getByRole("button", { name: "Apply styles" })).toBeDisabled();
+    await page.getByRole("combobox", { name: "position", exact: true }).click();
+    await page.getByRole("option", { name: "relative", exact: true }).click();
+    await page.getByRole("button", { name: "Reset", exact: true }).click();
+    await expect(page.getByRole("combobox", { name: "position", exact: true })).toContainText(
+      "static",
+    );
+    await expect(page.getByRole("button", { name: "Apply styles" })).toBeDisabled();
+    await page.getByRole("combobox", { name: "position", exact: true }).click();
+    await page.getByRole("option", { name: "relative", exact: true }).click();
+    await page.getByRole("combobox", { name: "text-align", exact: true }).click();
+    await page.getByRole("option", { name: "center", exact: true }).click();
+    await page.getByRole("combobox", { name: "font-weight", exact: true }).click();
+    await page.getByRole("option", { name: "Custom…", exact: true }).click();
+    await page.getByRole("textbox", { name: "font-weight", exact: true }).fill("450");
+    await page.getByLabel("Pick background-color", { exact: true }).fill("#336699");
+    await expect(page.getByRole("textbox", { name: "background-color", exact: true })).toHaveValue(
+      "rgba(51, 102, 153, 0.4)",
+    );
+    // Draft controls must not overwrite the frame until explicitly applied.
+    expect((await service.getFrame(canvas.id, "design-fixture", frame.id)).revision).toBe(1);
     await page.getByLabel("color", { exact: true }).fill("rgb(240, 10, 20)");
     await page.getByRole("button", { name: "Apply styles" }).click();
     await expect(embedded.getByRole("heading")).toHaveCSS("color", "rgb(240, 10, 20)");
+    await expect(embedded.getByRole("heading")).toHaveCSS(
+      "background-color",
+      "rgba(51, 102, 153, 0.4)",
+    );
+    await expect(embedded.getByRole("heading")).toHaveCSS("position", "relative");
+    await expect(embedded.getByRole("heading")).toHaveCSS("text-align", "center");
+    await expect(embedded.getByRole("heading")).toHaveCSS("font-weight", "450");
     expect((await service.getFrame(canvas.id, "design-fixture", frame.id)).revision).toBe(2);
     await page.getByRole("button", { name: "Switch tab" }).click();
     await service.mutate(canvas.id, "design-fixture", frame.id, 2, {

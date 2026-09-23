@@ -84,6 +84,10 @@ const HANDLED_UPDATE_TYPES: Record<InteractionUpdate["type"] | NestedTaskUpdate[
     // rendered by the deltas and tool calls it contains.
     "step-started": true,
     "step-completed": true,
+    // SDK 1.0.32: how many tool calls the model requested in this step. A
+    // count ahead of the calls themselves, each of which already renders as
+    // its own card, so it carries nothing the transcript lacks.
+    "tool-requests-listed": true,
   };
 
 /**
@@ -161,6 +165,7 @@ export function applyInteractionUpdate(
       break;
     case "step-started":
     case "step-completed":
+    case "tool-requests-listed":
       // Known lifecycle frames, not bridge drift. Counting these as
       // `unrendered:*` made every ordinary Cursor turn display an alarming
       // "did not recognise" warning even though no user-visible data was lost.

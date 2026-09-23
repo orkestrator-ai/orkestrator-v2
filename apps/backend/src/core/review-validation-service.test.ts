@@ -20,6 +20,71 @@ import {
 } from "./commands-review.js";
 import type { CommandContext } from "./commands-context.js";
 
+test("cancelled validation preparation preserves partial evidence and its diagnostic", () => {
+  const run = newReviewValidationRun("review-validation-cancelled", {
+    headRef: "a".repeat(40),
+    commands: ["pending", "queued", "running", "cancelled", "dependency"].map((id) => ({
+      id,
+      command: `run ${id}`,
+      cwd: ".",
+      dependsOn: [],
+      resources: [],
+      weight: 1 as const,
+      timeoutMs: 1_000,
+    })),
+    limitations: ["Plan limitation"],
+  });
+  run.status = "cancelled";
+  run.error = "Validation worker stopped; unfinished command results are uncertain";
+  Object.assign(run.results[1]!, { status: "queued", limitation: "Worker supplied limitation" });
+  Object.assign(run.results[2]!, { status: "running" });
+  Object.assign(run.results[3]!, {
+    status: "skipped",
+    limitation: "Validation was cancelled",
+  });
+  Object.assign(run.results[4]!, {
+    status: "skipped",
+    limitation: "A prerequisite did not pass",
+  });
+
+  expect(() => validationPreparation(run)).toThrow(run.error);
+  const preparation = validationPreparation(run, { allowCancelled: true });
+  expect(preparation.validation.map((result) => result.status)).toEqual([
+    "incomplete",
+    "incomplete",
+    "incomplete",
+    "incomplete",
+    "skipped",
+  ]);
+  expect(preparation.validation[0]!.limitation).toBe(
+    "Validation was stopped before this command completed",
+  );
+  expect(preparation.validation[1]!.limitation).toBe("Worker supplied limitation");
+  expect(preparation.validation[4]!.limitation).toBe("A prerequisite did not pass");
+  expect(preparation.limitations).toEqual([
+    "Plan limitation",
+    "Validation was stopped before every command completed; partial results were preserved.",
+    run.error,
+  ]);
+  expect(() => parseReviewPreparationValidation(preparation.validation, run.id)).not.toThrow();
+});
+
+test("cancelled validation preparation does not duplicate a diagnostic plan limitation", () => {
+  const diagnostic = "Validation worker stopped";
+  const run = newReviewValidationRun("review-validation-cancelled-deduplicated", {
+    headRef: "a".repeat(40),
+    commands: [],
+    limitations: [diagnostic],
+  });
+  run.status = "cancelled";
+  run.error = `  ${diagnostic}  `;
+
+  expect(validationPreparation(run, { allowCancelled: true }).limitations).toEqual([
+    diagnostic,
+    "Validation was stopped before every command completed; partial results were preserved.",
+  ]);
+});
+
 test("validation output reader returns a bounded tail and rejects replaced artifacts", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "validation-output-reader-"));
   const outsideRoot = await mkdtemp(path.join(tmpdir(), "validation-output-outside-"));

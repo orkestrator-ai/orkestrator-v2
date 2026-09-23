@@ -220,26 +220,58 @@ function createProbe(): Query {
   });
 }
 
+/**
+ * Where a Claude command comes from, as far as the SDK says.
+ *
+ * `SlashCommand.builtin` (SDK 0.3.280) is the only provenance the SDK reports:
+ * it marks Claude Code's own commands and is absent for everything a user,
+ * project, plugin or MCP server defines. Before it existed this read `source`
+ * and `scope` fields the SDK never sent, so every row fell through to
+ * "builtin". Those legacy fields are still honoured when present, which costs
+ * nothing and keeps a test double or an older bridge build labelled the way it
+ * was.
+ *
+ * An unmarked row is split three ways. A namespaced `plugin:command` name is
+ * how Claude Code spells plugin (and marketplace-skill) commands. A trailing
+ * "(project)" is the CLI's own label for `.claude/` commands and skills in the
+ * working tree, and is the one hint that the row belongs to this checkout
+ * rather than to the account. Everything else is the user's own `~/.claude`
+ * command or skill — by far the common case — so "user" groups it under the
+ * menu's "User" heading instead of the catch-all "Other".
+ */
 function commandSource(command: SlashCommand): NativeAgentSlashCommand["source"] {
-  const metadata = command as SlashCommand & { source?: unknown; scope?: unknown };
+  if (command.builtin === true) return "builtin";
+  const metadata = command as SlashCommand & { source?: unknown };
   const raw = typeof metadata.source === "string" ? metadata.source.toLowerCase() : "";
   if (raw.includes("project") || raw.includes("local")) return "project";
   if (raw.includes("user")) return "user";
   if (raw.includes("plugin")) return "plugin";
   if (raw.includes("skill")) return "skill";
-  return "builtin";
+  if (raw.includes("builtin") || raw.includes("built-in")) return "builtin";
+  if (command.name.includes(":")) return "plugin";
+  if (/\(project\)\s*$/i.test(command.description ?? "")) return "project";
+  return "user";
 }
 
-function normalizeCommands(
+export function normalizeCommands(
   commands: readonly SlashCommand[],
   skills: readonly string[] = [],
 ): NativeAgentSlashCommand[] {
   const result = new Map<string, NativeAgentSlashCommand>();
+  // Rows can share a name. The SDK's rule is that a `builtin` row is the one
+  // `/name` runs, and an unmarked row runs only when no marked row shares its
+  // name — so a marked row replaces an unmarked one, never the reverse, and
+  // the menu advertises the command that will actually execute.
+  const builtinNames = new Set<string>();
   for (const command of commands.slice(0, CATALOG_LIMIT)) {
     const name = command.name.startsWith("/") ? command.name : `/${command.name}`;
+    const builtin = command.builtin === true;
+    if (result.has(name) && (builtinNames.has(name) || !builtin)) continue;
+    if (builtin) builtinNames.add(name);
+    const source = commandSource(command);
     result.set(name, {
       name,
-      source: commandSource(command),
+      source,
       ...(command.description ? { description: command.description.slice(0, 1_000) } : {}),
       ...(command.argumentHint ? { argumentHint: command.argumentHint.slice(0, 512) } : {}),
       ...(command.aliases?.length
@@ -249,7 +281,7 @@ function normalizeCommands(
               .map((alias) => (alias.startsWith("/") ? alias : `/${alias}`)),
           }
         : {}),
-      scope: commandSource(command) === "project" ? "session" : "global",
+      scope: source === "project" ? "session" : "global",
     });
   }
   for (const skill of skills.slice(0, CATALOG_LIMIT)) {

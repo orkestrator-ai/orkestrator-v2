@@ -384,6 +384,9 @@ describe("Electron backend process supervisor", () => {
         DATABASE_URL: "postgres://secret",
         SSH_AUTH_SOCK: "/tmp/private-agent.sock",
         CUSTOM_SERVICE_LOGIN: "unexpected-credential-name",
+        ORKESTRATOR_TEST_SCHEDULER_DIR: "/profiles/qa/test-scheduler",
+        ORKESTRATOR_TEST_HOST_WORKERS: "2",
+        ORKESTRATOR_TEST_HOST_MEMORY_MIB: "2048",
       },
       "2.8.2",
       {
@@ -403,6 +406,9 @@ describe("Electron backend process supervisor", () => {
     expect(isolated.DATABASE_URL).toBeUndefined();
     expect(isolated.SSH_AUTH_SOCK).toBeUndefined();
     expect(isolated.CUSTOM_SERVICE_LOGIN).toBeUndefined();
+    expect(isolated.ORKESTRATOR_TEST_SCHEDULER_DIR).toBe("/profiles/qa/test-scheduler");
+    expect(isolated.ORKESTRATOR_TEST_HOST_WORKERS).toBe("2");
+    expect(isolated.ORKESTRATOR_TEST_HOST_MEMORY_MIB).toBe("2048");
     expect(isolated.HOME).toBe("/profiles/qa/credentials/home");
     expect(isolated.ORKESTRATOR_AGENT_TEST_HOST_HOME).toBe("/Users/tester");
     expect(isolated.CODEX_HOME).toBe("/profiles/qa/credentials/codex");

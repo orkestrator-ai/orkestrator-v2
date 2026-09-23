@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import type { ActionDefaults } from "../../../packages/protocol/src/action-defaults";
+import { installControlledTimeout } from "../../helpers/controlled-timeout";
 
 const mockUpdateGlobalConfig = mock(async (globalConfig: unknown) => ({
   version: "1.0",
@@ -39,14 +40,19 @@ function openPicker(action: string) {
   );
 }
 
+let autoSaveClock: ReturnType<typeof installControlledTimeout>;
+
 async function flushAutoSave() {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    await Promise.resolve();
+    autoSaveClock.advance();
+    await Promise.resolve();
   });
 }
 
 describe("GlobalSettings defaults section", () => {
   beforeEach(() => {
+    autoSaveClock = installControlledTimeout(400, { label: "GlobalSettings auto-save debounce" });
     cleanup();
     mockUpdateGlobalConfig.mockClear();
     mockGetLogDirectory.mockClear();
@@ -86,6 +92,7 @@ describe("GlobalSettings defaults section", () => {
 
   afterEach(() => {
     cleanup();
+    autoSaveClock.restore();
     window.orkestratorGateway = undefined;
   });
 

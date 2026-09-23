@@ -157,7 +157,7 @@ export type BridgeMessagePart =
 
 export interface PromptJournalEntry {
   requestId: string;
-  state: "prepared" | "accepted" | "completed" | "failed" | "ambiguous";
+  state: "prepared" | "accepted" | "completed" | "failed" | "dropped" | "ambiguous";
   acceptedAt: number;
   /** Set when this id answered an idle `/steer` locally. */
   local?: boolean;
@@ -254,7 +254,7 @@ export interface SessionState {
   promptJournal: Map<string, PromptJournalEntry>;
   steerJournal: Map<string, SteerJournalEntry>;
   /** Live FIFO used to correlate Pi's authoritative user delivery event. */
-  pendingSteerDeliveries: Array<{ requestId: string; text: string }>;
+  pendingSteerDeliveries: Array<{ requestId: string; text: string; expectedRunId: string }>;
   /** Tool calls parked on a human decision, newest last. */
   approvals: Map<string, PendingApproval>;
   /** Merge source for the next todo update; restored from the newest part. */

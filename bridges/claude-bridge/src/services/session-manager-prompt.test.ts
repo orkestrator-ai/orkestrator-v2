@@ -116,9 +116,11 @@ describe("sendPrompt", () => {
     const originalCredentialFile = process.env[credentialFileEnv];
     const originalGitHubToken = process.env.GITHUB_TOKEN;
     const originalGhToken = process.env.GH_TOKEN;
+    const originalMcpToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
     process.env[credentialFileEnv] = credentialFile;
     process.env.GITHUB_TOKEN = "stale-bridge-token";
     process.env.GH_TOKEN = "stale-bridge-token";
+    process.env.GITHUB_PERSONAL_ACCESS_TOKEN = "stale-mcp-token";
 
     try {
       await writeFile(credentialFile, "managed-query-token");
@@ -127,9 +129,19 @@ describe("sendPrompt", () => {
       expect(call.options.env).toMatchObject({
         GITHUB_TOKEN: "managed-query-token",
         GH_TOKEN: "managed-query-token",
+        GITHUB_PERSONAL_ACCESS_TOKEN: "managed-query-token",
       });
       expect(process.env.GITHUB_TOKEN).toBe("stale-bridge-token");
       expect(process.env.GH_TOKEN).toBe("stale-bridge-token");
+      expect(process.env.GITHUB_PERSONAL_ACCESS_TOKEN).toBe("stale-mcp-token");
+
+      await writeFile(credentialFile, "");
+      const { call: clearedCall } = await runPromptWithMessages([
+        { type: "result", subtype: "success" },
+      ]);
+      expect(clearedCall.options.env?.GITHUB_TOKEN).toBeUndefined();
+      expect(clearedCall.options.env?.GH_TOKEN).toBeUndefined();
+      expect(clearedCall.options.env?.GITHUB_PERSONAL_ACCESS_TOKEN).toBeUndefined();
     } finally {
       if (originalCredentialFile === undefined) delete process.env[credentialFileEnv];
       else process.env[credentialFileEnv] = originalCredentialFile;
@@ -137,6 +149,8 @@ describe("sendPrompt", () => {
       else process.env.GITHUB_TOKEN = originalGitHubToken;
       if (originalGhToken === undefined) delete process.env.GH_TOKEN;
       else process.env.GH_TOKEN = originalGhToken;
+      if (originalMcpToken === undefined) delete process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+      else process.env.GITHUB_PERSONAL_ACCESS_TOKEN = originalMcpToken;
       await rm(directory, { recursive: true, force: true });
     }
   });

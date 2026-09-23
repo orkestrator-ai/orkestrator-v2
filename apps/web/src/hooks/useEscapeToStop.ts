@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { type RefObject, useEffect } from "react";
 
 interface UseEscapeToStopOptions {
   /** Only the visible tab should claim the Escape key. */
@@ -6,6 +6,29 @@ interface UseEscapeToStopOptions {
   /** Only bind while there is a turn to interrupt. */
   isLoading: boolean;
   onStop: () => void | Promise<void>;
+  /**
+   * The tab's composer. Escape only stops the turn when it is pressed inside
+   * the pane that holds this element (the composer included), or when nothing
+   * has focus at all and no modal surface is open.
+   */
+  scopeRef: RefObject<HTMLElement | null>;
+}
+
+function isUnfocusedTarget(target: EventTarget | null): boolean {
+  // Keydown lands on the window, document or body when nothing has focus.
+  return (
+    !(target instanceof Node) ||
+    target === document ||
+    target === document.body ||
+    target === document.documentElement
+  );
+}
+
+function isOutsideModalOpen(pane: Element | null): boolean {
+  for (const modal of document.querySelectorAll('[aria-modal="true"]')) {
+    if (!pane || !modal.contains(pane)) return true;
+  }
+  return false;
 }
 
 /**
@@ -17,8 +40,17 @@ interface UseEscapeToStopOptions {
  * - `repeat` — holding Escape should not fire a second interrupt.
  * - modifier keys — Cmd/Ctrl/Alt+Escape belong to the OS or other bindings.
  * - `isComposing` — Escape cancels an IME composition, it is not a stop.
+ * - scope — the listener is window-wide and usually registers before the
+ *   surfaces it could collide with (fullscreen settings, the sidebar search,
+ *   file previews), so it runs first and cannot rely on them preventing the
+ *   key. An Escape aimed at anything outside the tab's pane is not a stop.
  */
-export function useEscapeToStop({ isActive, isLoading, onStop }: UseEscapeToStopOptions): void {
+export function useEscapeToStop({
+  isActive,
+  isLoading,
+  onStop,
+  scopeRef,
+}: UseEscapeToStopOptions): void {
   useEffect(() => {
     if (!isActive || !isLoading) {
       return;
@@ -37,6 +69,16 @@ export function useEscapeToStop({ isActive, isLoading, onStop }: UseEscapeToStop
         return;
       }
 
+      const scope = scopeRef.current;
+      // PaneLeafContainer marks its root; hosts without panes fall back to the composer.
+      const pane = scope?.closest("[data-pane-leaf]") ?? scope;
+      const target = event.target;
+      const insidePane = target instanceof Node && Boolean(pane?.contains(target));
+      const unfocused = isUnfocusedTarget(target) && !isOutsideModalOpen(pane);
+      if (!insidePane && !unfocused) {
+        return;
+      }
+
       event.preventDefault();
       void onStop();
     };
@@ -45,5 +87,5 @@ export function useEscapeToStop({ isActive, isLoading, onStop }: UseEscapeToStop
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [onStop, isActive, isLoading]);
+  }, [onStop, isActive, isLoading, scopeRef]);
 }

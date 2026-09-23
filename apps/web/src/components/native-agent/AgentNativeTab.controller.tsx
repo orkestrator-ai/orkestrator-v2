@@ -1431,6 +1431,7 @@ export function SharedNativeAgentController({
     isActive: ownsGlobalShortcuts ?? isActive,
     isLoading: isTurnActive,
     onStop: stopSafely,
+    scopeRef: inputContainerRef,
   });
   useManualSessionRefresh({
     refreshRequestId,

@@ -1,18 +1,37 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useRef } from "react";
 import { useEscapeToStop } from "./useEscapeToStop";
 
 function Harness({
   isActive = true,
   isLoading = true,
   onStop,
+  modalOpen = false,
 }: {
   isActive?: boolean;
   isLoading?: boolean;
   onStop: () => void;
+  modalOpen?: boolean;
 }) {
-  useEscapeToStop({ isActive, isLoading, onStop });
-  return null;
+  const composerRef = useRef<HTMLDivElement>(null);
+  useEscapeToStop({ isActive, isLoading, onStop, scopeRef: composerRef });
+  return (
+    <>
+      <div data-pane-leaf="">
+        <button type="button">Pane tab</button>
+        <div ref={composerRef}>
+          <textarea aria-label="Composer" />
+        </div>
+      </div>
+      <input aria-label="Sidebar search" />
+      {modalOpen ? (
+        <div role="dialog" aria-modal="true">
+          <input aria-label="Settings field" />
+        </div>
+      ) : null}
+    </>
+  );
 }
 
 function pressEscape(init: KeyboardEventInit = {}) {
@@ -113,6 +132,43 @@ describe("useEscapeToStop", () => {
     window.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  test("stops from the attached composer", () => {
+    const onStop = mock(() => {});
+    render(<Harness onStop={onStop} />);
+
+    fireEvent.keyDown(screen.getByLabelText("Composer"), { key: "Escape" });
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("stops from anywhere else in the tab's pane", () => {
+    const onStop = mock(() => {});
+    render(<Harness onStop={onStop} />);
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "Pane tab" }), { key: "Escape" });
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("ignores Escape aimed at a control outside the pane", () => {
+    // The sidebar search, file previews and similar surfaces close on Escape
+    // without always claiming the key; that must not interrupt the agent.
+    const onStop = mock(() => {});
+    render(<Harness onStop={onStop} />);
+
+    fireEvent.keyDown(screen.getByLabelText("Sidebar search"), { key: "Escape" });
+    expect(onStop).not.toHaveBeenCalled();
+  });
+
+  test("ignores Escape that closes a modal surface over the tab", () => {
+    // Fullscreen settings listens on window too, but registers after the tab,
+    // so it cannot prevent the key before this handler sees it.
+    const onStop = mock(() => {});
+    render(<Harness onStop={onStop} modalOpen />);
+
+    fireEvent.keyDown(screen.getByLabelText("Settings field"), { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(onStop).not.toHaveBeenCalled();
   });
 
   test("unbinds on unmount", () => {

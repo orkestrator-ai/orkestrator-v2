@@ -581,7 +581,10 @@ test("MultiReviewService treats transcript-derived usage failures as non-fatal",
 
     expect((await snapshot(started.id))?.reviewers[0]).toMatchObject({ status: "running" });
     expect((await snapshot(started.id))?.reviewers[0]?.tokenCount).toBeUndefined();
-    expect(provider.messagesCalls).toBe(provider.statusCalls);
+    // Transcript-derived usage shares the throttled progress probe instead of
+    // reading the transcript on every status observation.
+    expect(provider.messagesCalls).toBe(1);
+    expect(provider.statusCalls).toBeGreaterThanOrEqual(provider.messagesCalls);
     expect(provider.messageOptions.every((options) => options?.limit === 64)).toBe(true);
   });
 });
@@ -6956,9 +6959,11 @@ test("Multi Review prepares and consolidates with its review model before openin
       expect(
         commands.filter((entry) => entry.command === "get_environment_uncommitted_paths"),
       ).toHaveLength(1);
+      // One verification per phase — fan-out admission and consolidation —
+      // independent of how many reviewers the panel has.
       expect(
         commands.filter((entry) => entry.command === "verify_looped_review_package"),
-      ).toHaveLength(3);
+      ).toHaveLength(2);
       const consolidation = [...provider.sends.values()].find((sent) =>
         sent.prompt.includes("<multi-review-reports-json>"),
       );

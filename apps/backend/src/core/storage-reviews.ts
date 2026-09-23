@@ -77,6 +77,9 @@ type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogSt
 type ResourceChangeListener = shared.ResourceChangeListener;
 
 import { StorageSessions } from "./storage-sessions.ts";
+import { promises as fsPromises } from "node:fs";
+
+type MultiReviewLease = NonNullable<PersistedMultiReviewWorkflow["controllerLease"]>;
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
@@ -144,6 +147,50 @@ export type StorageLayerTypes = [
 ];
 
 export abstract class StorageReviews extends StorageSessions {
+  /**
+   * Controller leases indexed from the Multi Review store, valid while the
+   * file's identity (inode, size, mtime, ctime) is unchanged. A fence check
+   * runs around nearly every provider call a supervisor makes; re-parsing the
+   * whole store — every retained report — for one lease lookup made each check
+   * cost as much as the review history. Every write replaces the file through
+   * an atomic rename, which changes the inode, so the index can never answer
+   * from a store another write has replaced.
+   */
+  private multiReviewLeaseIndex: {
+    fingerprint: string;
+    leases: Map<string, MultiReviewLease | null>;
+  } | null = null;
+
+  /** Lease for one workflow: `undefined` when the workflow does not exist. */
+  private async readMultiReviewLease(
+    workflowId: string,
+  ): Promise<MultiReviewLease | null | undefined> {
+    const filePath = this.multiReviewsFile();
+    let fingerprint: string | undefined;
+    try {
+      const stat = await fsPromises.stat(filePath);
+      fingerprint = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+    } catch {
+      fingerprint = undefined;
+    }
+    if (fingerprint === undefined || this.multiReviewLeaseIndex?.fingerprint !== fingerprint) {
+      const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
+        filePath,
+        () => ({}),
+      );
+      const leases = new Map<string, MultiReviewLease | null>();
+      for (const [id, workflow] of Object.entries(workflows)) {
+        if (isPersistedMultiReviewWorkflow(workflow, id)) {
+          leases.set(id, workflow.controllerLease ?? null);
+        }
+      }
+      // An unreadable stat is not cached: the next check must look again.
+      this.multiReviewLeaseIndex = fingerprint === undefined ? null : { fingerprint, leases };
+      return leases.has(workflowId) ? leases.get(workflowId) : undefined;
+    }
+    const leases = this.multiReviewLeaseIndex.leases;
+    return leases.has(workflowId) ? leases.get(workflowId) : undefined;
+  }
   async getLoopedReviewWorkflow(workflowId: string): Promise<PersistedLoopedReviewWorkflow | null> {
     if (!isNonBlankString(workflowId)) {
       throw new Error("Looped review workflow ID must not be blank");
@@ -673,7 +720,11 @@ export abstract class StorageReviews extends StorageSessions {
         ...workflow,
         controllerLease: { ownerId, token, expiresAt },
       };
-      await this.saveSensitiveJson(this.multiReviewsFile(), workflows);
+      // A lease change alters no workflow content. Rotating every retained
+      // backup for it would make each backup a copy that differs only in a
+      // lease timestamp, at ~13 extra filesystem operations per renewal. The
+      // primary write is still atomic; content commits keep their backups.
+      await this.saveSensitiveJson(this.multiReviewsFile(), workflows, { backup: false });
       return { granted: true, token, expiresAt };
     });
   }
@@ -686,13 +737,7 @@ export abstract class StorageReviews extends StorageSessions {
     if (!isNonBlankString(workflowId) || !isNonBlankString(ownerId) || !isNonBlankString(token))
       return false;
     return this.enqueueMultiReviewMutation(async () => {
-      const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
-        this.multiReviewsFile(),
-        () => ({}),
-      );
-      const workflow = workflows[workflowId];
-      if (!isPersistedMultiReviewWorkflow(workflow, workflowId)) return false;
-      const lease = workflow.controllerLease;
+      const lease = await this.readMultiReviewLease(workflowId);
       return (
         lease?.ownerId === ownerId &&
         lease.token === token &&
@@ -720,7 +765,8 @@ export abstract class StorageReviews extends StorageSessions {
         return;
       const { controllerLease: _lease, ...released } = workflow;
       workflows[workflowId] = released;
-      await this.saveSensitiveJson(this.multiReviewsFile(), workflows);
+      // Lease-only write; see claimMultiReviewController.
+      await this.saveSensitiveJson(this.multiReviewsFile(), workflows, { backup: false });
     });
   }
 

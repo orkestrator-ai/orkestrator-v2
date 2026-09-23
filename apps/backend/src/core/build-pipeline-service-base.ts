@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
+import type { MultiReviewEfficiencyObserver } from "./multi-review-efficiency.js";
 import type {
   BuildPipeline,
   BuildPipelineAgent,
@@ -166,6 +168,10 @@ export abstract class BuildPipelineServiceBase {
         resultKey: string,
         provider?: StructuredOutputProvider,
       ) => AgentToolConnection;
+      /** Multi-reviewer stage concurrency; clamped by the shared fan-out runner. */
+      reviewFanoutConcurrency?: Partial<ReviewFanoutConcurrency>;
+      /** Content-free fan-out measurements (tests and benchmarks). */
+      efficiency?: MultiReviewEfficiencyObserver;
     } = {},
   ) {}
 

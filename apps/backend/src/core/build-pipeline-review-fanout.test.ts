@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { RecordingEfficiencyObserver } from "./multi-review-efficiency.js";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -258,7 +259,11 @@ async function withPipeline(
     commands: string[];
     workflowResults?: WorkflowResultService;
   }) => Promise<void>,
-  options: { transcriptPersistIntervalMs?: number; toolMode?: boolean } = {},
+  options: {
+    transcriptPersistIntervalMs?: number;
+    toolMode?: boolean;
+    efficiency?: RecordingEfficiencyObserver;
+  } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-fanout-"));
   const storage = new StorageService(dataDir);
@@ -335,6 +340,7 @@ async function withPipeline(
     autoAdvance: false,
     provider: async (_pipeline, agent) => providers.get(agent)!,
     transcriptPersistIntervalMs: options.transcriptPersistIntervalMs,
+    ...(options.efficiency ? { efficiency: options.efficiency } : {}),
     ...(workflowResults
       ? {
           workflowResults,
@@ -600,7 +606,9 @@ describe("build pipeline multi-model review", () => {
       );
       expect(reviewerPrompts).toHaveLength(2);
       expect(reviewerPrompts.every((entry) => entry.prompt.includes("review-package-"))).toBe(true);
-      expect(packageGeneration.verificationCount).toBeGreaterThanOrEqual(2);
+      // One verification admits the whole reviewer wave; it is no longer
+      // repeated inside every reviewer's prompt.
+      expect(packageGeneration.verificationCount).toBe(1);
       expect(
         reviewerPrompts.every((entry) =>
           entry.prompt.includes("Do not modify, create, or delete files"),
@@ -1129,6 +1137,40 @@ describe("build pipeline multi-model review", () => {
     });
   });
 
+  test("emits the same content-free fan-out measurements as standalone Multi Review", async () => {
+    const efficiency = new RecordingEfficiencyObserver();
+    await withPipeline(
+      async ({ service, read, packageGeneration }) => {
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+            { agent: "claude", model: "haiku" },
+          ]),
+        );
+        const addressing = await advanceUntil(service, read, started.id, "addressing");
+        expect(addressing.error ?? addressing.phase).toBe("addressing");
+        // One verification for the whole three-reviewer wave.
+        expect(packageGeneration.verificationCount).toBe(1);
+      },
+      { efficiency },
+    );
+    const events = efficiency.events.filter((event) => event.owner === "build-pipeline");
+    expect(efficiency.count("reviewer.send", { owner: "build-pipeline", outcome: "success" })).toBe(
+      3,
+    );
+    expect(efficiency.count("evidence.verify", { owner: "build-pipeline" })).toBe(1);
+    expect(efficiency.count("consolidation.input", { owner: "build-pipeline" })).toBe(1);
+    expect(efficiency.count("launch.duplicate_reviewers", { owner: "build-pipeline" })).toBe(1);
+    // Content-free by construction: nothing but enums and numbers.
+    for (const event of events) {
+      for (const value of Object.values(event)) {
+        expect(["string", "number"]).toContain(typeof value);
+        if (typeof value === "string") expect(value.length).toBeLessThan(40);
+      }
+    }
+  });
+
   test("throttles token-count-only reviewer persistence", async () => {
     await withPipeline(
       async ({ service, storage, read, provider }) => {
@@ -1154,7 +1196,10 @@ describe("build pipeline multi-model review", () => {
         const after = (await storage.getBuildPipeline(started.id))!.revision;
 
         expect(after).toBe(before);
-        expect(tokens).toBeGreaterThan(tokensAtPersist);
+        // Inside the progress-probe and transcript-persist intervals a running
+        // reviewer's transcript is not read at all, so the message-derived
+        // meter is not consulted either.
+        expect(tokens).toBe(tokensAtPersist);
       },
       { transcriptPersistIntervalMs: 60_000 },
     );

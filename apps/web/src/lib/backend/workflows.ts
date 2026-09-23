@@ -332,13 +332,20 @@ export async function listMultiReviewWorkflows<T = unknown>(
   });
 }
 
+/**
+ * Reads a bounded reviewer transcript tail. Passing the previous response's
+ * `sourceToken` lets the backend answer `transcript: "unchanged"` with no
+ * messages when nothing moved; the caller then keeps what it already shows.
+ */
 export async function getMultiReviewReviewerTranscript(
   workflowId: string,
   reviewerId: string,
+  options: { knownSourceToken?: string } = {},
 ): Promise<MultiReviewReviewerTranscript> {
   return invoke<MultiReviewReviewerTranscript>("get_multi_review_reviewer_transcript", {
     workflowId,
     reviewerId,
+    ...(options.knownSourceToken ? { knownSourceToken: options.knownSourceToken } : {}),
   });
 }
 

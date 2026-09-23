@@ -8,6 +8,7 @@ import {
   isLoopedReviewTerminalPhase,
   isLoopedReviewWorkflow,
   isMultiReviewStepControlInput,
+  isMultiReviewReviewerTranscriptRequest,
   isRestartMultiReviewStepInput,
   isStartMultiReviewCustomFixInput,
   isStartLoopedReviewInput,
@@ -224,13 +225,27 @@ export function registerReviewWorkflowCommands(
         .then((records) => records.map(stripLoopedReviewRendererSecrets)),
     ),
   );
-  register("get_multi_review_reviewer_transcript", ({ workflowId, reviewerId }, context) => {
-    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
-    return context.multiReviews.reviewerTranscript(
-      asNonBlankString(workflowId, "workflowId"),
-      asNonBlankString(reviewerId, "reviewerId"),
-    );
-  });
+  register(
+    "get_multi_review_reviewer_transcript",
+    ({ workflowId, reviewerId, knownSourceToken }, context) => {
+      if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+      const request = {
+        workflowId: asNonBlankString(workflowId, "workflowId"),
+        reviewerId: asNonBlankString(reviewerId, "reviewerId"),
+        ...(knownSourceToken === undefined ? {} : { knownSourceToken }),
+      };
+      // The token is renderer-supplied and forwarded toward a provider, so it
+      // is bounded here; the backend still ignores one that is stale or foreign.
+      if (!isMultiReviewReviewerTranscriptRequest(request)) {
+        throw new Error("Invalid multi review reviewer transcript source token");
+      }
+      return context.multiReviews.reviewerTranscript(
+        request.workflowId,
+        request.reviewerId,
+        request.knownSourceToken,
+      );
+    },
+  );
   register("start_multi_review", (args, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     if (!isStartMultiReviewInput(args)) throw new Error("Invalid multi review start request");

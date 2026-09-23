@@ -68,6 +68,7 @@ import {
 import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
 import type { BuildStepSelection } from "./build-pipeline-service-helpers.js";
 import { createDiscoveryPrompt } from "./looped-review-prompts.js";
+import { reviewerPanelSection } from "./multi-review-prompts.js";
 import {
   MAX_REVIEW_IDLE_RESULT_POLLS,
   MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS,
@@ -92,6 +93,9 @@ import {
   noProgressElapsedMs,
   stalledMinutes,
 } from "./multi-review-progress.js";
+import { recordEfficiency, type MultiReviewEfficiencyObserver } from "./multi-review-efficiency.js";
+import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
+import { multiReviewDuplicateReviewerCount } from "@orkestrator/protocol/multi-review-launch";
 
 /** Names the pipeline in reviewer-facing and user-facing failure text. */
 const FANOUT_LABEL = "Multi-model review";
@@ -138,6 +142,10 @@ export interface BuildPipelineReviewFanoutDeps {
     resultKey: string,
     provider?: BuildPipelineAgent,
   ): AgentToolConnection | undefined;
+  /** Bounded reviewer concurrency shared with standalone Multi Review. */
+  concurrency?: Partial<ReviewFanoutConcurrency>;
+  /** Content-free measurement sink. */
+  efficiency?: MultiReviewEfficiencyObserver;
 }
 
 /** What the supervisor should do after one fan-out pass. */
@@ -150,7 +158,26 @@ export type ReviewFanoutStep =
   | { kind: "failed"; error: string };
 
 export class BuildPipelineReviewFanout {
+  /**
+   * Per-pipeline write queue. Reviewers advance concurrently, and every write
+   * here is revision-checked against the pipeline snapshot, so two unserialized
+   * saves of the same in-memory pipeline would conflict with each other.
+   */
+  private readonly saveTails = new WeakMap<BuildPipeline, Promise<void>>();
+
   constructor(private readonly deps: BuildPipelineReviewFanoutDeps) {}
+
+  /** Serialized {@link BuildPipelineReviewFanoutDeps.save} for one pipeline object. */
+  private save(pipeline: BuildPipeline): Promise<void> {
+    const run = (this.saveTails.get(pipeline) ?? Promise.resolve()).then(() =>
+      this.deps.save(pipeline),
+    );
+    this.saveTails.set(
+      pipeline,
+      run.catch(() => undefined),
+    );
+    return run;
+  }
 
   /**
    * Opens the fan-out over the package prepared by the implementing model.
@@ -174,6 +201,12 @@ export class BuildPipelineReviewFanout {
       })),
     );
     pipeline.reviewFanout = { reviewers: selections.map(reviewerFromConfig) };
+    recordEfficiency(this.deps.efficiency, {
+      owner: "build-pipeline",
+      operation: "launch.duplicate_reviewers",
+      reviewers: pipeline.reviewFanout.reviewers.length,
+      count: multiReviewDuplicateReviewerCount(pipeline.reviewFanout.reviewers),
+    });
     pipeline.phase = "reviewing";
     delete pipeline.structuredReview;
     delete pipeline.structuredReviewRequestId;
@@ -183,7 +216,7 @@ export class BuildPipelineReviewFanout {
     // state: the fan-out has no single pending attempt of its own.
     delete pipeline.pendingPromptAttempt;
     delete pipeline.activePromptContext;
-    await this.deps.save(pipeline);
+    await this.save(pipeline);
   }
 
   /** Advances the fan-out by one supervisor pass. */
@@ -246,7 +279,7 @@ export class BuildPipelineReviewFanout {
     delete state.consolidation;
     delete pipeline.structuredReview;
     delete pipeline.structuredReviewRequestId;
-    await this.deps.save(pipeline);
+    await this.save(pipeline);
     return true;
   }
 
@@ -302,26 +335,44 @@ export class BuildPipelineReviewFanout {
               this.deps.workflowResults!.close(requestId, "superseded"),
           }
         : {}),
-      save: () => this.deps.save(pipeline),
+      save: () => this.save(pipeline),
       // The pipeline has no controller lease of its own: the supervisor holds
       // the pipeline lock for the whole pass, so there is no fence to lose
       // part-way through one.
       assertFence: async () => {},
+      // One verification per admission wave instead of one per reviewer. The
+      // pipeline holds its lock for the whole pass, so the package cannot be
+      // regenerated between this check and the dispatches it admits.
+      beforeAdmission: async () => {
+        const reviewPackage = pipeline.reviewPackage;
+        if (!reviewPackage) {
+          throw new Error(`${FANOUT_LABEL} lost its immutable review package`);
+        }
+        if (!("kind" in reviewPackage)) return;
+        const started = Date.now();
+        await this.deps.verifyReviewPackage(pipeline, reviewPackage);
+        recordEfficiency(this.deps.efficiency, {
+          owner: "build-pipeline",
+          operation: "evidence.verify",
+          phase: "reviewing",
+          bytes: reviewPackage.bytes,
+          elapsedMs: Date.now() - started,
+        });
+      },
       reviewerPrompt: async (index, count) => {
         const reviewPackage = pipeline.reviewPackage;
         if (!reviewPackage) {
           throw new Error(`${FANOUT_LABEL} lost its immutable review package`);
         }
-        if ("kind" in reviewPackage) {
-          await this.deps.verifyReviewPackage(pipeline, reviewPackage);
-        }
+        // Shared package prompt first so every reviewer's prefix is identical;
+        // the panel position is the only per-reviewer text.
         return [
-          `You are independent reviewer ${index + 1} of ${count}. Your analysis will be combined with other reviewers by a separate consolidation model. Do not coordinate with, defer to, or speculate about the other reviewers.`,
           createDiscoveryPrompt({
             reviewPackage,
             reviewInstruction: await this.deps.reviewInstruction(),
             context: await this.deps.reviewContext(pipeline),
           }),
+          reviewerPanelSection(index + 1, count),
         ].join("\n\n");
       },
       resolveUnattendedInteractions: (provider, providerSessionId) =>
@@ -334,9 +385,12 @@ export class BuildPipelineReviewFanout {
       // with the transcript throttle, not on every poll.
       captureReviewerUsage: true,
       persistReviewerUsageImmediately: false,
-      onReviewerObserved: (reviewer, index, provider, messages) =>
-        this.mirrorReviewerSession(pipeline, reviewer, index, provider, messages),
+      onReviewerObserved: (reviewer, index, provider, readTranscript, settling) =>
+        this.mirrorReviewerSession(pipeline, reviewer, index, provider, readTranscript, settling),
       progress: this.deps.progress,
+      concurrency: this.deps.concurrency,
+      efficiency: this.deps.efficiency,
+      efficiencyOwner: "build-pipeline",
       stallWarningMs: this.deps.stallWarningMs,
       stallAbandonMs: this.deps.stallAbandonMs,
     };
@@ -348,13 +402,19 @@ export class BuildPipelineReviewFanout {
    * Created lazily rather than up front, because a reviewer has no provider
    * session until the runner opens one, and a session record with no session id
    * would fail snapshot validation and take the whole pipeline offline.
+   *
+   * The transcript is read only when this pass could persist it — the persist
+   * throttle is due, the session's status changes, or the turn is settling and
+   * this may be the last look. A copy refreshed in memory and never saved was
+   * previously paid for on every pass and then discarded with the pass.
    */
   private async mirrorReviewerSession(
     pipeline: BuildPipeline,
     reviewer: ReviewerRecord,
     index: number,
     provider: BuildPipelineProvider,
-    messages?: readonly unknown[],
+    readTranscript: () => Promise<readonly unknown[]>,
+    settling: boolean,
   ): Promise<void> {
     if (!reviewer.providerSessionId || !reviewer.sessionKey) return;
     const session = this.ensureSession(pipeline, {
@@ -384,18 +444,23 @@ export class BuildPipelineReviewFanout {
     // rewrite the whole build-pipelines file once per reviewer per tick.
     const tokenCountChanged =
       reviewer.tokenCount !== undefined && session.tokenCount !== reviewer.tokenCount;
-    const changed = await this.deps.refreshTranscript(session, provider, messages);
     const status = reviewer.status === "running" ? "running" : "idle";
     const statusChanged = session.status !== status;
+    const persistDue = this.deps.shouldPersistTranscript(session);
+    const changed =
+      persistDue || statusChanged || settling
+        ? await this.deps.refreshTranscript(session, provider, await readTranscript())
+        : false;
     if (
       metadataChanged ||
       statusChanged ||
-      ((changed || tokenCountChanged) && this.deps.shouldPersistTranscript(session))
+      ((changed || tokenCountChanged) && persistDue) ||
+      (changed && settling)
     ) {
       if (tokenCountChanged) session.tokenCount = reviewer.tokenCount;
       session.status = status;
       session.messagesPersistedAt = reviewFanoutNowIso();
-      await this.deps.save(pipeline);
+      await this.save(pipeline);
     }
   }
 
@@ -437,7 +502,7 @@ export class BuildPipelineReviewFanout {
         changed = true;
       }
     }
-    if (changed) await this.deps.save(pipeline);
+    if (changed) await this.save(pipeline);
   }
 
   private ensureSession(
@@ -572,7 +637,7 @@ export class BuildPipelineReviewFanout {
         ...(step.effort ? { reasoningEffort: step.effort } : {}),
         ...(typeof step.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
       };
-      await this.deps.save(pipeline);
+      await this.save(pipeline);
     }
 
     const consolidation = state.consolidation;
@@ -601,6 +666,15 @@ export class BuildPipelineReviewFanout {
         prompt = createReviewConsolidationPrompt({
           targetBranch,
           reports: consolidationReports(state.reviewers),
+          onEvidenceStats: (stats) =>
+            recordEfficiency(this.deps.efficiency, {
+              owner: "build-pipeline",
+              operation: "consolidation.input",
+              phase: "consolidating",
+              reviewers: stats.reviewers,
+              count: stats.sourceFindings,
+              bytes: stats.compactBytes,
+            }),
         });
       }
       const agentMcp =
@@ -629,7 +703,7 @@ export class BuildPipelineReviewFanout {
           : undefined,
       );
       consolidation.state = "dispatching";
-      await this.deps.save(pipeline);
+      await this.save(pipeline);
       try {
         await provider.send(
           consolidation.providerSessionId,
@@ -661,19 +735,19 @@ export class BuildPipelineReviewFanout {
       } catch (error) {
         if (error instanceof AmbiguousPromptDispatchError) return { kind: "working" };
         consolidation.state = "prepared";
-        await this.deps.save(pipeline);
+        await this.save(pipeline);
         if (error instanceof ProviderDispatchPreparationError) return { kind: "working" };
         throw error;
       }
       consolidation.state = "sent";
       session.status = "running";
-      await this.deps.save(pipeline);
+      await this.save(pipeline);
     }
     if (consolidation.state === "dispatching") {
       // Dispatch acceptance is ambiguous after a crash. The stable request id
       // makes provider reconciliation authoritative; never send it twice.
       consolidation.state = "sent";
-      await this.deps.save(pipeline);
+      await this.save(pipeline);
     }
 
     await resolveUnattendedReviewerInteractions(
@@ -695,12 +769,12 @@ export class BuildPipelineReviewFanout {
     const transcriptChanged = await this.deps.refreshTranscript(session, provider);
     if (transcriptChanged && this.deps.shouldPersistTranscript(session)) {
       session.messagesPersistedAt = reviewFanoutNowIso();
-      await this.deps.save(pipeline);
+      await this.save(pipeline);
     }
     if (status === "running") {
       if (consolidation.idleResultPolls !== undefined) {
         delete consolidation.idleResultPolls;
-        await this.deps.save(pipeline);
+        await this.save(pipeline);
       }
       return this.observeConsolidationProgress(pipeline, state, provider);
     }
@@ -736,7 +810,7 @@ export class BuildPipelineReviewFanout {
       if (backgroundWorkLive) {
         if (consolidation.idleResultPolls !== undefined) {
           delete consolidation.idleResultPolls;
-          await this.deps.save(pipeline);
+          await this.save(pipeline);
         }
         return this.observeConsolidationProgress(pipeline, state, provider);
       }
@@ -775,7 +849,7 @@ export class BuildPipelineReviewFanout {
         new Set([...(pipeline.pendingResultConsumptions ?? []), consolidation.requestId]),
       );
     }
-    await this.deps.save(pipeline);
+    await this.save(pipeline);
     if (consolidation.resultTransport === "tool-v1") {
       try {
         await this.deps.workflowResults?.consume(consolidation.requestId);
@@ -785,7 +859,7 @@ export class BuildPipelineReviewFanout {
         );
         if (pending.length > 0) pipeline.pendingResultConsumptions = pending;
         else delete pipeline.pendingResultConsumptions;
-        await this.deps.save(pipeline);
+        await this.save(pipeline);
       } catch (error) {
         pipeline.pendingResultConsumptions = Array.from(
           new Set([...(pipeline.pendingResultConsumptions ?? []), consolidation.requestId]),
@@ -816,12 +890,12 @@ export class BuildPipelineReviewFanout {
     );
     const decision = commitProgressObservation(consolidation, observation);
     if (decision === "reset" || decision === "hold") {
-      await this.deps.save(pipeline);
+      await this.save(pipeline);
       return { kind: "working" };
     }
     const elapsedMs = noProgressElapsedMs(consolidation.progressAt, consolidation.createdAt);
     if (elapsedMs === null) {
-      if (consolidation.progressDigest !== previousDigest) await this.deps.save(pipeline);
+      if (consolidation.progressDigest !== previousDigest) await this.save(pipeline);
       return { kind: "working" };
     }
     if (elapsedMs >= (this.deps.stallAbandonMs ?? DEFAULT_STALL_ABANDON_MS)) {
@@ -841,10 +915,10 @@ export class BuildPipelineReviewFanout {
       consolidation.stalledSince === undefined
     ) {
       consolidation.stalledSince = reviewFanoutNowIso();
-      await this.deps.save(pipeline);
+      await this.save(pipeline);
       return { kind: "working" };
     }
-    if (consolidation.progressDigest !== previousDigest) await this.deps.save(pipeline);
+    if (consolidation.progressDigest !== previousDigest) await this.save(pipeline);
     return { kind: "working" };
   }
 
@@ -856,7 +930,7 @@ export class BuildPipelineReviewFanout {
     const consolidation = state.consolidation;
     if (!consolidation) return { kind: "working" };
     consolidation.idleResultPolls = (consolidation.idleResultPolls ?? 0) + 1;
-    await this.deps.save(pipeline);
+    await this.save(pipeline);
     if (consolidation.idleResultPolls >= MAX_REVIEW_IDLE_RESULT_POLLS) {
       return { kind: "failed", error };
     }
@@ -898,7 +972,7 @@ export class BuildPipelineReviewFanout {
     if (previousTransport === "tool-v1") {
       await this.deps.workflowResults?.close(previousRequestId, "superseded");
     }
-    await this.deps.save(pipeline);
+    await this.save(pipeline);
     return { kind: "working" };
   }
 }

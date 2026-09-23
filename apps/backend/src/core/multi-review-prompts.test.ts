@@ -5,7 +5,10 @@ import {
   createMultiReviewConsolidationPrompt,
   createMultiReviewPreparationPrompt,
   createMultiReviewerPrompt,
+  createPackagedMultiReviewerPrompt,
+  reviewerPanelSection,
 } from "./multi-review-prompts.js";
+import { parseReviewPackageReference } from "./review-package.js";
 import { testGeneratedReviewPackage } from "./build-pipeline-test-fixtures.js";
 
 const report = {
@@ -267,5 +270,54 @@ describe("multi review preparation prompt", () => {
     expect(prompt).toContain("provider-labelled field as progress");
     expect(prompt).toContain("Do not use the final-response channel for progress");
     expect(prompt).toContain("make the final assistant response the one authoritative JSON object");
+  });
+});
+
+describe("reviewer prompt prefix stability", () => {
+  const reviewPackage = parseReviewPackageReference(
+    testGeneratedReviewPackage({
+      packageId: "review-package-prefix",
+      round: 1,
+      targetBranch: "main",
+    }),
+    { id: "review-package-prefix", round: 1, targetBranch: "main" },
+  );
+
+  test("every packaged reviewer shares a byte-identical prefix", () => {
+    const prompts = [1, 2, 3].map((reviewerNumber) =>
+      createPackagedMultiReviewerPrompt({
+        reviewPackage,
+        reviewInstruction: "Focus on concurrency",
+        reviewerNumber,
+        reviewerCount: 3,
+      }),
+    );
+    const suffixes = [1, 2, 3].map((reviewerNumber) => reviewerPanelSection(reviewerNumber, 3));
+    prompts.forEach((prompt, index) => expect(prompt.endsWith(suffixes[index]!)).toBe(true));
+    const prefixes = prompts.map((prompt, index) =>
+      prompt.slice(0, prompt.length - suffixes[index]!.length),
+    );
+    expect(new Set(prefixes).size).toBe(1);
+    // The invariant contract and package evidence dominate the prompt.
+    expect(prefixes[0]!.length).toBeGreaterThan(prompts[0]!.length * 0.9);
+    expect(prefixes[0]).toContain(reviewPackage.filePath);
+    expect(prefixes[0]).not.toContain("reviewer 1 of 3");
+  });
+
+  test("the live-worktree reviewer prompt ends with its panel position too", () => {
+    const prompts = [1, 2].map((reviewerNumber) =>
+      createMultiReviewerPrompt({ targetBranch: "main", reviewerNumber, reviewerCount: 2 }),
+    );
+    expect(prompts[0]!.endsWith(reviewerPanelSection(1, 2))).toBe(true);
+    expect(prompts[0]!.slice(0, -reviewerPanelSection(1, 2).length)).toBe(
+      prompts[1]!.slice(0, -reviewerPanelSection(2, 2).length),
+    );
+  });
+
+  test("the panel position grants no authority over other reviewers", () => {
+    const section = reviewerPanelSection(2, 4);
+    expect(section).toContain("You are independent reviewer 2 of 4");
+    expect(section).toContain("carries no priority");
+    expect(section).toContain("Do not coordinate with, defer to");
   });
 });

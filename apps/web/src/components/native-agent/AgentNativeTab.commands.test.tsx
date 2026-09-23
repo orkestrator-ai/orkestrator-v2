@@ -324,7 +324,7 @@ describe("AgentNativeTab commands", () => {
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
   });
 
-  test("sends a selected command as raw text, never shaped like a prompt", async () => {
+  test("keeps a selected command token raw and resolves file mentions in its arguments", async () => {
     const tabId = "tab-raw";
     const raw = '/review @a.ts\t"quoted"  \nsecond line  ';
     seedDraft(tabId, {
@@ -337,7 +337,7 @@ describe("AgentNativeTab commands", () => {
 
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
     const sent = dispatchNativeAgentIntentMock.mock.calls[0]![0];
-    expect(sent.prompt).toBe(raw);
+    expect(sent.prompt).toBe('/review [@a.ts](src/a.ts)\t"quoted"  \nsecond line  ');
     expect(sent.command).toEqual({
       kind: "selected",
       commandId: "codex:/review",

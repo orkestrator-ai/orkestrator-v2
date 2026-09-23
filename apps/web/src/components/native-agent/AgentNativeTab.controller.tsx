@@ -12,6 +12,7 @@ import {
 import { MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE } from "@orkestrator/protocol/multi-review";
 import {
   isProviderSlashCommand,
+  parseCommandToken,
   resolveSessionActionCommand,
 } from "@orkestrator/protocol/agent-slash-commands";
 import { Button } from "@/components/ui/button";
@@ -1130,8 +1131,12 @@ export function SharedNativeAgentController({
       }
       const rawCommand = commandSubmission.kind !== "prompt";
       const commandIntent = commandSubmissionIntent(commandSubmission);
+      const commandToken = rawCommand ? parseCommandToken(text, ["/", "$"]) : null;
       const basePrompt = rawCommand
-        ? text
+        ? commandToken
+          ? text.slice(0, commandToken.argumentsStart) +
+            serializeForLLM(text.slice(commandToken.argumentsStart), draft.mentions)
+          : text
         : preparedPrompt
           ? text.trim()
           : buildInitialPromptWithAttachmentReferences(

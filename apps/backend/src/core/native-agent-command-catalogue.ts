@@ -410,12 +410,17 @@ export class NativeAgentCommandCatalogueCache {
       await this.acquire();
       let result: ProviderCommandCatalogue;
       try {
-        result = await this.withTimeout(readProviderCatalogue(provider, sessionId));
+        const providerRead = readProviderCatalogue(provider, sessionId);
+        // A caller timeout ends the catalogue request, not the provider probe.
+        // Keep its slot until the probe itself settles.
+        void providerRead.then(
+          () => this.release(),
+          () => this.release(),
+        );
+        result = await this.withTimeout(providerRead);
       } catch (error) {
         if (validity.current && !this.stopped) this.recordFailure(key, environmentId, error);
         throw error;
-      } finally {
-        this.release();
       }
       if (!validity.current || this.stopped) {
         throw new ProviderUnavailableError("Command discovery was invalidated");
@@ -564,13 +569,17 @@ export class NativeAgentCommandCatalogueCache {
       throw new CommandCatalogueBusyError();
     }
     await new Promise<void>((resolve) => this.waiters.push(resolve));
-    if (this.stopped) throw new ProviderUnavailableError("Command discovery stopped");
-    this.activeReads += 1;
+    if (this.stopped) {
+      this.release();
+      throw new ProviderUnavailableError("Command discovery stopped");
+    }
+    // release() transferred a reserved slot to this waiter.
   }
 
   private release(): void {
-    this.activeReads = Math.max(0, this.activeReads - 1);
-    this.waiters.shift()?.();
+    const waiter = this.waiters.shift();
+    if (waiter && !this.stopped) waiter();
+    else this.activeReads = Math.max(0, this.activeReads - 1);
   }
 
   private withTimeout<T>(operation: Promise<T>): Promise<T> {

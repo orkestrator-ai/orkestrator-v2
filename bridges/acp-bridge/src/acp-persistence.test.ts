@@ -967,7 +967,7 @@ describe("ACP command inventory across a bridge restart", () => {
     commands: Array<{ name: string; id?: string; argumentHint?: string; bindingRevision?: string }>;
   };
 
-  test("restored commands are shown stale and never run until the live agent re-reports", async () => {
+  test("restored commands are shown stale and revalidated against the live agent on dispatch", async () => {
     const stateDirectory = await temporaryDirectory();
     const workspace = await temporaryDirectory();
     const commandsFile = resolve(workspace, "commands.json");
@@ -1043,8 +1043,9 @@ describe("ACP command inventory across a bridge restart", () => {
           },
         }),
       });
-    // Even a command the agent still offers: the restored list is not authority.
-    const stale = await send("stale-1", "commit");
+    // A restored selection first reattaches and checks the live inventory.
+    // The removed command must still be refused before journaling.
+    const stale = await send("stale-1", "review");
     expect(stale.status).toBe(422);
     expect(await stale.json()).toMatchObject({ kind: "command-unavailable" });
 

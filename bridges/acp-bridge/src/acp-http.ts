@@ -443,7 +443,8 @@ export async function route(
     }
     // A selected command is sent as its canonical text with the arguments
     // exactly as typed; the typed `prompt` is display text only.
-    let prompt = selectedCommand ? "" : typeof body.prompt === "string" ? body.prompt.trim() : "";
+    const displayPrompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    let prompt = selectedCommand ? "" : displayPrompt;
     // Shape validation happens before the turn is claimed: a malformed
     // attachment list is a caller error, not a turn that half-started.
     let attachments;
@@ -486,7 +487,7 @@ export async function route(
     // anything is journaled. A command the live agent no longer offers, or a
     // list only restored from disk, is refused outright: sending the text as
     // an ordinary prompt is exactly what a selection must never become.
-    if (selectedCommand) {
+    if (selectedCommand && state.commandsLive) {
       const resolved = resolveSelectedCommand(state, selectedCommand);
       if (!resolved.ok) return json(response, 422, commandUnavailableResponse(resolved.message));
       prompt = resolved.text;
@@ -559,16 +560,17 @@ export async function route(
       throw error;
     }
     const userMessageId = randomBytes(12).toString("hex");
+    const userVisiblePrompt = selectedCommand ? displayPrompt || prompt : prompt;
     state.messages.push({
       id: userMessageId,
       role: "user",
-      content: prompt,
+      content: userVisiblePrompt,
       parts: [
-        ...(prompt
+        ...(userVisiblePrompt
           ? [
               {
                 type: "text" as const,
-                content: prompt,
+                content: userVisiblePrompt,
                 sourcePartId: `${userMessageId}:0`,
                 sourceMessageId: userMessageId,
               },

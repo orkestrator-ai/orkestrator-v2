@@ -2,6 +2,7 @@ import * as shared from "./native-agent-service-shared.js";
 import {
   coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
+  stripCoordinatorContext,
 } from "@orkestrator/protocol/coordinator";
 import type { MailboxPresence } from "@orkestrator/protocol/agent-mail";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
@@ -354,8 +355,14 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       const commandPlan = await this.planDispatchCommand(input, session, provider);
       if (commandPlan.kind === "rejected") throw new PromptRejectedError(commandPlan.message);
       if (commandPlan.kind === "session-action") {
-        await this.performCommandSessionAction(input, session, provider, commandPlan.action);
-        return session;
+        const result = await this.storage.dispatchNativeAgentPromptOnce(
+          session.key,
+          input.requestId,
+          async (durable) => {
+            await this.performCommandSessionAction(input, durable, provider, commandPlan.action);
+          },
+        );
+        return result.session;
       }
       /*
        * Attach the provider before the at-most-once window opens.
@@ -625,7 +632,8 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     const planInput = {
       platform: input.agent,
       agentLabel: AGENT_PLATFORM_LABELS[input.agent] ?? input.agent,
-      prompt: input.prompt,
+      prompt:
+        input.owner?.kind === "coordinator" ? stripCoordinatorContext(input.prompt) : input.prompt,
       intent,
       structuredOutput: input.schema !== undefined,
       attachments: [
@@ -634,7 +642,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       ],
     };
     const capabilities = nativeCapabilities(input.agent);
-    if (!commandDispatchNeedsCatalogue(input.agent, input.prompt, intent)) {
+    if (!commandDispatchNeedsCatalogue(input.agent, planInput.prompt, intent)) {
       return planCommandDispatch({
         ...planInput,
         commands: [],
@@ -655,8 +663,10 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
           )
         : { commands: [], state: unsupportedCommandCatalogueState() };
     let snapshot = await read(false);
+    const busy = (await readProviderStatus(provider, session.providerSessionId)).status !== "idle";
     let plan = planCommandDispatch({
       ...planInput,
+      busy,
       commands: withSessionActionSlashCommands(snapshot.commands, capabilities),
       catalogue: snapshot.state,
     });
@@ -664,6 +674,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       snapshot = await read(true);
       plan = planCommandDispatch({
         ...planInput,
+        busy,
         commands: withSessionActionSlashCommands(snapshot.commands, capabilities),
         catalogue: snapshot.state,
       });

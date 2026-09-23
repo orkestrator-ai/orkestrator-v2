@@ -336,6 +336,32 @@ describe("NativeAgentService command intent", () => {
         kind: "compact",
       });
       expect(stub.send).not.toHaveBeenCalled();
+      await expect(
+        service.dispatchIntent({ ...base, agent: "codex", prompt: "/compact", requestId: "c-1" }),
+      ).resolves.toMatchObject({ outcome: "accepted" });
+      expect(stub.performSessionAction).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("an idle-only provider command is refused while its session is running", async () => {
+    const stub = providerStub("claude", {
+      status: async () => "running",
+      catalogue: async () => ({
+        enhanced: true,
+        status: "ready",
+        commands: [command("/review", { inputPolicy: { busy: "idle" } })],
+      }),
+    });
+    await withService(stub.provider, async ({ service }) => {
+      const outcome = await service.dispatchIntent({
+        ...base,
+        prompt: "/review src/a.ts",
+        requestId: "busy-1",
+        command: { kind: "selected", commandId: "claude:/review" },
+      });
+      expect(outcome).toMatchObject({ outcome: "rejected" });
+      expect(outcome.outcome === "rejected" && outcome.error).toContain("idle");
+      expect(stub.send).not.toHaveBeenCalled();
     });
   });
 

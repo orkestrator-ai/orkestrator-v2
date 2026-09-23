@@ -281,6 +281,37 @@ describe("NativeAgentCommandCatalogueCache", () => {
     await Bun.sleep(0);
   });
 
+  test("timed out probes retain their slot and waking waiters cannot over-admit", async () => {
+    const h = harness({ maxConcurrentReads: 1, readTimeoutMs: 20 });
+    const gates = Array.from({ length: 3 }, () => deferred<void>());
+    let started = 0;
+    let active = 0;
+    let peak = 0;
+    const source = provider(async () => {
+      const gate = gates[started++]!;
+      active += 1;
+      peak = Math.max(peak, active);
+      await gate.promise;
+      active -= 1;
+      return catalogue([]);
+    });
+    const first = h.cache.readForDispatch("k1", "env-1", source, "s1");
+    await Bun.sleep(0);
+    const second = h.cache.readForDispatch("k2", "env-1", source, "s2");
+    expect((await first).state.error?.code).toBe("timeout");
+    const third = h.cache.readForDispatch("k3", "env-1", source, "s3");
+    expect(started).toBe(1);
+    gates[0]!.resolve();
+    await Bun.sleep(0);
+    expect(started).toBe(2);
+    gates[1]!.resolve();
+    await Bun.sleep(0);
+    expect(started).toBe(3);
+    gates[2]!.resolve();
+    await Promise.all([second, third]);
+    expect(peak).toBe(1);
+  });
+
   test("dispatch reads force a re-read on request and forget environments", async () => {
     const h = harness();
     const reads = mock(async () => catalogue([row("/a")]));

@@ -60,6 +60,8 @@ export interface CommandDispatchInput {
   catalogue: NativeAgentCommandCatalogueState;
   structuredOutput: boolean;
   attachments: readonly { type: "image" | "file" }[];
+  /** Current provider activity at the authoritative dispatch boundary. */
+  busy?: boolean;
 }
 
 /** Whether resolving this submission needs the catalogue at all. */
@@ -141,6 +143,16 @@ export function planCommandDispatch(input: CommandDispatchInput): CommandDispatc
       break;
   }
   const { command, token } = resolution;
+  if (
+    command.executionKind !== "session-action" &&
+    command.inputPolicy?.busy === "idle" &&
+    input.busy
+  ) {
+    return {
+      kind: "rejected",
+      message: `${command.name} runs when ${input.agentLabel} is idle. Try again after this turn.`,
+    };
+  }
   const attachmentError = checkAttachments(command, input.attachments);
   if (attachmentError) return { kind: "rejected", message: attachmentError };
   if (command.executionKind === "session-action") {

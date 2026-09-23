@@ -26,7 +26,9 @@ export interface Fixture {
   activity: Map<string, "idle" | "working" | "waiting" | "unknown">;
   reloads: string[];
   reloadFailure: { value: Error | null };
+  reloadControl: { wait?: () => Promise<void> };
   environment: Record<string, unknown>;
+  extraEnvironments: Record<string, unknown>[];
   /** Files inside the fake container, by absolute container path. */
   containerFiles: Map<string, string>;
   service: McpManagementService;
@@ -50,6 +52,7 @@ export function createFixture(
   const activity = new Map<string, "idle" | "working" | "waiting" | "unknown">();
   const reloads: string[] = [];
   const reloadFailure = { value: null as Error | null };
+  const reloadControl: { wait?: () => Promise<void> } = {};
   const now = { value: Date.parse("2026-09-23T12:00:00Z") };
   const containerFiles = new Map<string, string>();
   const environment: Record<string, unknown> = {
@@ -67,21 +70,24 @@ export function createFixture(
     localOpencodePort: 5,
     localPiPort: 6,
   };
+  const extraEnvironments: Record<string, unknown>[] = [];
   const probe: RuntimeProbe = {
-    environments: async () => [
-      {
-        id: environment.id as string,
-        name: environment.name as string,
-        status: environment.status as string,
-        environmentType: environment.environmentType as "local" | "containerized",
-        providerRunning: (provider: AgentPlatform) =>
-          environment.status === "running" && provider !== ("none" as never),
-      },
-    ],
+    environments: async () =>
+      [environment, ...extraEnvironments].map((environment) => {
+        return {
+          id: environment.id as string,
+          name: environment.name as string,
+          status: environment.status as string,
+          environmentType: environment.environmentType as "local" | "containerized",
+          providerRunning: (provider: AgentPlatform) =>
+            environment.status === "running" && provider !== ("none" as never),
+        };
+      }),
     sessions: async () => sessions,
     activity: (environmentId, agent, key) =>
       activity.get(`${environmentId}:${agent}:${key}`) ?? "idle",
     reloadCodex: async (environmentId, key) => {
+      await reloadControl.wait?.();
       if (reloadFailure.value) throw reloadFailure.value;
       reloads.push(`${environmentId}:${key}`);
     },
@@ -95,7 +101,9 @@ export function createFixture(
       now: () => now.value,
       tickMs: 1_000_000,
       storage: {
-        getEnvironment: async (id) => (id === environment.id ? (environment as never) : null),
+        getEnvironment: async (id) =>
+          ([environment, ...extraEnvironments].find((candidate) => candidate.id === id) ??
+            null) as never,
         getProject: async () => ({ id: "proj-1", name: "project-one" }) as never,
         getPreviewBackendIdentity: async () => ({ instanceId: "backend-1" }),
       },
@@ -119,7 +127,9 @@ export function createFixture(
     activity,
     reloads,
     reloadFailure,
+    reloadControl,
     environment,
+    extraEnvironments,
     containerFiles,
     now,
     service: newService(),

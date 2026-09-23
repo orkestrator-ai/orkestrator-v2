@@ -220,6 +220,111 @@ describe("runtime application", () => {
     expect(cancelled.phase).toBe("saved");
   });
 
+  test("a project apply keeps a different environment's user apply queued", async () => {
+    fixture.extraEnvironments.push({
+      ...fixture.environment,
+      id: "env-2",
+      name: "env-two",
+      worktreePath: path.join(fixture.root, "worktree-two"),
+    });
+    session("codex", "env-env-1:tab-1");
+    session("codex", "env-env-2:tab-2", { environmentId: "env-2" });
+    fixture.activity.set("env-1:codex:env-env-1:tab-1", "working");
+    fixture.activity.set("env-2:codex:env-env-2:tab-2", "working");
+    const targetId = await targetIdFor(fixture, "codex", "environment");
+    const firstSnapshot = await fixture.service.snapshot({ targetId });
+    const user = await fixture.service.mutate(
+      mutation(
+        targetId,
+        {
+          kind: "add",
+          sourceId: "codex:user",
+          expectedRevision: revision(firstSnapshot, "codex:user"),
+          definition: { name: "user", transport: "stdio", command: "x" },
+        },
+        "save-and-apply",
+      ),
+    );
+    const projectSnapshot = await fixture.service.snapshot({ targetId });
+    await fixture.service.mutate(
+      mutation(
+        targetId,
+        {
+          kind: "add",
+          sourceId: "codex:project",
+          expectedRevision: revision(projectSnapshot, "codex:project"),
+          definition: { name: "project", transport: "stdio", command: "x" },
+        },
+        "save-and-apply",
+      ),
+    );
+    const first = await fixture.service.getOperation({ operationId: user.operation.operationId });
+    expect(first.apply.runtimes.find((runtime) => runtime.environmentId === "env-2")?.state).toBe(
+      "queued",
+    );
+  });
+
+  test("cancelling during a reload is retained after the tick completes", async () => {
+    session("codex", "env-env-1:tab-1");
+    let release!: () => void;
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    fixture.reloadControl.wait = () => {
+      started();
+      return gate;
+    };
+    const result = await saveAndApply("codex", "codex:user");
+    const ticking = fixture.service.tick();
+    await entered;
+    await fixture.service.cancelApply({ operationId: result.operation.operationId });
+    release();
+    await ticking;
+    const final = await fixture.service.getOperation({ operationId: result.operation.operationId });
+    expect(final.apply.state).toBe("cancelled");
+    expect(final.apply.runtimes[0]?.state).toBe("cancelled");
+  });
+
+  test("a newer apply during reload keeps the older operation superseded", async () => {
+    session("codex", "env-env-1:tab-1");
+    let release!: () => void;
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    fixture.reloadControl.wait = () => {
+      started();
+      return gate;
+    };
+    const first = await saveAndApply("codex", "codex:user");
+    const ticking = fixture.service.tick();
+    await entered;
+    const snapshot = await fixture.service.snapshot({ targetId: first.operation.targetId });
+    const newer = await fixture.service.mutate(
+      mutation(
+        first.operation.targetId,
+        {
+          kind: "remove",
+          entryId: entry(snapshot, "codex:user", "fixture").entryId,
+          expectedRevision: revision(snapshot, "codex:user")!,
+        },
+        "save-and-apply",
+      ),
+    );
+    release();
+    await ticking;
+    const older = await fixture.service.getOperation({ operationId: first.operation.operationId });
+    expect(older.apply.state).toBe("cancelled");
+    expect(newer.operation.apply.state).toBe("queued");
+  });
+
   test("operations survive a backend restart and queued work resumes", async () => {
     session("codex", "env-env-1:tab-1");
     fixture.activity.set("env-1:codex:env-env-1:tab-1", "working");

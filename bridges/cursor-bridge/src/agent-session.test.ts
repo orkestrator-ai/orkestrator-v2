@@ -135,6 +135,7 @@ const {
   rewindSessionHistory,
   SessionConflictError,
   setCursorMcpConfigHomeForTests,
+  setCursorMcpFingerprintForTests,
   useCursorAgentForTests,
 } = await import("./agent-session.js");
 const { refreshAgentUsage } = await import("./prompt.js");
@@ -185,6 +186,7 @@ beforeEach(async () => {
   // The MCP configuration fingerprint must never read the operator's home.
   await rm(configHome, { recursive: true, force: true });
   setCursorMcpConfigHomeForTests(configHome);
+  setCursorMcpFingerprintForTests();
   resetPlanAccountWindowsForTests();
   // The barrier is primed once per process by design, so without this only
   // the first attaching test could observe whether an attach primes it.
@@ -937,6 +939,31 @@ describe("ensureAgent", () => {
     // Unchanged configuration: no further reattach.
     await ensureAgent(state);
     expect(resumed).toEqual([agentId]);
+  });
+
+  test("a turn starting during a config read keeps the attached agent", async () => {
+    const state = newSessionState();
+    const original = await ensureAgent(state);
+    let release!: (value: string) => void;
+    let started!: () => void;
+    const reading = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const fingerprint = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    setCursorMcpFingerprintForTests(async () => {
+      started();
+      return fingerprint;
+    });
+    const pending = ensureAgent(state);
+    await reading;
+    state.status = "running";
+    release("changed");
+    expect(await pending).toBe(original);
+    expect(state.agent).toBe(original);
+    expect(resumed).toEqual([]);
+    setCursorMcpFingerprintForTests();
   });
 
   test("a failed resume for a configuration change keeps the conversation", async () => {

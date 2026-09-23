@@ -179,7 +179,11 @@ export async function ensureAgent(
   const idle = state.status !== "running" && (options.atTurnStart || !state.dispatching);
   if (state.agent && !state.attaching && idle) {
     const attached = attachedConfigKeys.get(state);
-    if (attached !== undefined && attached !== (await cursorMcpConfigFingerprint(state))) {
+    if (
+      attached !== undefined &&
+      attached !== (await cursorMcpConfigFingerprint(state)) &&
+      (options.atTurnStart || (state.status !== "running" && !state.dispatching))
+    ) {
       configResumeRequired.add(state);
       await detachAgent(state);
     }
@@ -272,6 +276,13 @@ export function setCursorMcpConfigHomeForTests(home?: string): void {
 
 /** Fingerprints of the MCP files each attached agent was created from. */
 const attachedConfigKeys = new WeakMap<SessionState, string>();
+let fingerprintForTests: ((state: SessionState) => Promise<string>) | undefined;
+
+export function setCursorMcpFingerprintForTests(
+  fingerprint?: (state: SessionState) => Promise<string>,
+): void {
+  fingerprintForTests = fingerprint;
+}
 /**
  * Sessions detached to adopt a configuration change. Their next attach must
  * resume the same conversation: silently starting a new one to apply a
@@ -284,6 +295,7 @@ const configResumeRequired = new WeakSet<SessionState>();
  * coordinators load no settings sources, so their configuration never changes.
  */
 export async function cursorMcpConfigFingerprint(state: SessionState): Promise<string> {
+  if (fingerprintForTests) return fingerprintForTests(state);
   const policy = resolveCursorExecutionPolicy(state.readOnly ? undefined : state.policy);
   if (state.readOnly || policy.id === "coordinator-read-only") return "read-only";
   const files = [join(configHomeForTests ?? homedir(), ".cursor", "mcp.json")];

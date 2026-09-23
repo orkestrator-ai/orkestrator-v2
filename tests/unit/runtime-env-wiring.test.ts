@@ -422,6 +422,37 @@ describe("container runtime environment wiring", () => {
     }
     expect(entrypoint).toContain('chmod 600 "$HOME/.pi/agent/auth.json"');
     expect(entrypoint).toContain('chmod 600 "$HOME/.pi/agent/mcp.json"');
+    expect(entrypoint).toContain('[ ! -L "$HOME/.pi/agent/mcp.json" ]');
+  });
+
+  test("Pi setup leaves a symlink target's mode unchanged", () => {
+    withTempDir((dir) => {
+      const agent = join(dir, ".pi", "agent");
+      mkdirSync(agent, { recursive: true });
+      const target = join(dir, "outside.json");
+      writeFileSync(target, "{}\n");
+      chmodSync(target, 0o644);
+      symlinkSync(target, join(agent, "mcp.json"));
+      const source = join(dir, "source");
+      mkdirSync(source);
+      writeFileSync(join(source, "mcp.json"), "{}\n");
+      const entrypoint = read("docker/entrypoint.sh");
+      const piSection = section(
+        entrypoint,
+        "if [ -d /pi-config/agent ]; then",
+        "report_agent_copy_skips Pi",
+      );
+      const guard = piSection.match(
+        /if \[ -f "\$HOME\/\.pi\/agent\/mcp\.json" \].*?\n    fi/s,
+      )?.[0];
+      expect(guard).toBeDefined();
+      const script = agentCopyHelperHarness(
+        `copy_agent_file ${shellQuote(source)} ${shellQuote(agent)} mcp.json Pi\n${guard}`,
+      );
+      const result = runShell(script, { ...process.env, HOME: dir } as Record<string, string>);
+      expect(result.exitCode).toBe(0);
+      expect(statSync(target).mode & 0o777).toBe(0o644);
+    });
   });
 
   test("Claude data copy takes config and skips host history", () => {

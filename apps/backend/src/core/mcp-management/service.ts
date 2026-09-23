@@ -350,7 +350,12 @@ export class McpManagementService {
     const specs = await this.specsFor(target);
     const spec = specFor(mutation, specs);
     if (!spec.writable) throw mcpFailure("read-only-source", { message: spec.readOnlyReason });
-    const stored = await this.store.withLock(spec.path, async () => {
+    const locked = await this.store.withLock(spec.path, async () => {
+      const replay = this.operations.byRequest(mutation.targetId, mutation.requestId);
+      if (replay) {
+        if (replay.recovery.fingerprint !== fingerprint) throw mcpFailure("request-conflict");
+        return { stored: replay, replayed: true };
+      }
       // Everything is re-read under the lock; nothing cached authorizes a write.
       const catalog = await loadCatalog(this.store, specs, this.options.readContainerFile);
       const prepared = await this.prepare(mutation, target, specs, catalog);
@@ -413,8 +418,10 @@ export class McpManagementService {
       }
       operation.snapshot.updatedAt = nowIso(this.now);
       await this.operations.put(operation);
-      return operation;
+      return { stored: operation, replayed: false };
     });
+    if (locked.replayed) return this.result(locked.stored, true);
+    const stored = locked.stored;
     this.catalogRevision += 1;
     if (mutation.applyIntent === "save-and-apply") {
       // The file is already saved; a scheduling failure is an apply outcome,
@@ -740,21 +747,7 @@ export class McpManagementService {
     ) {
       throw mcpFailure("busy");
     }
-    // A newer apply for the same target supersedes queued work from older ones.
     const now = nowIso(this.now);
-    for (const other of this.operations.list()) {
-      if (other === stored || other.snapshot.targetId !== target.targetId) continue;
-      let touched = false;
-      for (const runtime of other.snapshot.apply.runtimes) {
-        if (runtime.state === "queued") {
-          runtime.state = "cancelled";
-          runtime.reason = "Superseded by a newer change; that apply covers this one.";
-          runtime.updatedAt = now;
-          touched = true;
-        }
-      }
-      if (touched) await this.finishApplyUpdate(other, false);
-    }
     const environmentIds =
       spec.scope === "backend-user" ? null : new Set([target.info.environmentId!]);
     const planned = await planRuntimes(
@@ -765,6 +758,25 @@ export class McpManagementService {
       spec.excludedReason,
       now,
     );
+    const coveredRuntimeIds = new Set(
+      planned.runtimes
+        .filter((runtime) => runtime.state === "queued")
+        .map((runtime) => runtime.runtimeId),
+    );
+    // A newer apply supersedes only the runtime work it actually covers.
+    for (const other of this.operations.list()) {
+      if (other === stored) continue;
+      let touched = false;
+      for (const runtime of other.snapshot.apply.runtimes) {
+        if (runtime.state === "queued" && coveredRuntimeIds.has(runtime.runtimeId)) {
+          runtime.state = "cancelled";
+          runtime.reason = "Superseded by a newer change; that apply covers this one.";
+          runtime.updatedAt = now;
+          touched = true;
+        }
+      }
+      if (touched) await this.finishApplyUpdate(other, false);
+    }
     stored.snapshot.apply = {
       state: aggregateApplyState(planned.runtimes.map((runtime) => runtime.state)),
       runtimes: planned.runtimes.map(publicRuntime),
@@ -837,6 +849,7 @@ export class McpManagementService {
             logicalSessionKey: recovery?.logicalSessionKey,
           };
         });
+        const startingStates = runtimes.map((runtime) => runtime.state);
         const queuedAt = Date.parse(stored.recovery.applyQueuedAt ?? stored.snapshot.updatedAt);
         const outcome = await advanceCodexRuntimes(
           this.options.probe,
@@ -845,7 +858,12 @@ export class McpManagementService {
           this.now(),
         );
         if (!outcome.changed) continue;
-        stored.snapshot.apply.runtimes = outcome.runtimes.map(publicRuntime);
+        // A request may cancel or replace the plan while reloadCodex awaits.
+        if (stored.snapshot.apply.runtimes !== runtimes) continue;
+        stored.snapshot.apply.runtimes = outcome.runtimes.map((runtime, index) => {
+          const current = runtimes[index]!;
+          return current.state === startingStates[index] ? publicRuntime(runtime) : current;
+        });
         await this.finishApplyUpdate(stored);
       }
     } finally {

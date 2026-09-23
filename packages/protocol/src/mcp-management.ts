@@ -766,7 +766,7 @@ const HEADER_KEY_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
  * name a variable rather than carrying its value.
  */
 const REFERENCE_PATTERNS = [
-  /^\$\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\}$/,
+  /^\$\{[A-Za-z_][A-Za-z0-9_]*(?::-)?\}$/,
   /^\$[A-Za-z_][A-Za-z0-9_]*$/,
   /^\{env:[A-Za-z_][A-Za-z0-9_]*\}$/,
   /^env:[A-Za-z_][A-Za-z0-9_]*$/,
@@ -792,12 +792,14 @@ export function referencedVariables(value: string): string[] {
 
 const SENSITIVE_WORD =
   /(token|secret|passw(or)?d|pwd|api[-_]?key|apikey|auth|bearer|credential|private[-_]?key|access[-_]?key|session|cookie|signature|sig)/i;
+const LITERAL_ENV_FALLBACK = /\$\{[A-Za-z_][A-Za-z0-9_]*:-[^}]+\}/;
 
 /**
  * Whether an argument could carry a credential. Deliberately broad: a false
  * positive costs one "retained value" control, a false negative leaks.
  */
 export function isSensitiveArg(arg: string, previous?: string): boolean {
+  if (LITERAL_ENV_FALLBACK.test(arg)) return true;
   if (
     previous &&
     /^--?[A-Za-z]/.test(previous) &&
@@ -825,8 +827,9 @@ export function isSensitiveArg(arg: string, previous?: string): boolean {
   return false;
 }
 
-/** URLs with userinfo or credential-looking query parameters are never shown verbatim. */
+/** URLs with userinfo, credential-looking paths or query parameters are never shown verbatim. */
 export function isSensitiveUrl(value: string): boolean {
+  if (LITERAL_ENV_FALLBACK.test(value)) return true;
   let parsed: URL;
   try {
     parsed = new URL(value);
@@ -834,19 +837,36 @@ export function isSensitiveUrl(value: string): boolean {
     return true;
   }
   if (parsed.username || parsed.password) return true;
+  const segments = parsed.pathname.split("/").filter(Boolean).map(decodeURIComponentSafe);
+  if (
+    segments.some(
+      (segment, index) =>
+        SENSITIVE_WORD.test(segment) ||
+        /^(key|code|k)$/i.test(segment) ||
+        isSensitiveArg(segment, index ? segments[index - 1] : undefined) ||
+        (segment.length >= 24 && /^[A-Za-z0-9_-]+$/.test(segment)),
+    )
+  )
+    return true;
   for (const key of parsed.searchParams.keys()) {
     if (SENSITIVE_WORD.test(key) || /^(key|code|k)$/i.test(key)) return true;
   }
   return false;
 }
 
-/** A display form that never includes query values or userinfo. */
+function decodeURIComponentSafe(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/** A display form that never includes query values, userinfo or a sensitive path. */
 export function redactUrlForDisplay(value: string): string {
   try {
     const parsed = new URL(value);
-    const keys = Array.from(new Set(parsed.searchParams.keys()));
-    const query = keys.length ? `?${keys.map((key) => `${key}=…`).join("&")}` : "";
-    return `${parsed.protocol}//${parsed.host}${parsed.pathname}${query}`;
+    return `${parsed.protocol}//${parsed.host}/…`;
   } catch {
     return "(retained URL)";
   }

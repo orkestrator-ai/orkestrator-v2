@@ -103,6 +103,7 @@ export interface AgentSessionTestHooks {
   createAgentSession?: (state: SessionState) => Promise<AgentSession>;
   hydrateComposer?: typeof hydrateComposer;
   resolveModel?: typeof resolveModel;
+  mcpConfigNeedsRefresh?: typeof mcpConfigNeedsRefresh;
 }
 
 let agentSessionTestHooks: AgentSessionTestHooks = {};
@@ -364,7 +365,12 @@ export async function reconcileAgentMcp(
   const busy =
     state.status === "running" || state.compacting || (!options.atTurnStart && state.dispatching);
   if (busy) return;
-  if (await mcpConfigNeedsRefresh(state)) await detachSession(state);
+  if (
+    (await (agentSessionTestHooks.mcpConfigNeedsRefresh ?? mcpConfigNeedsRefresh)(state)) &&
+    (options.atTurnStart || (state.status !== "running" && !state.compacting && !state.dispatching))
+  ) {
+    await detachSession(state);
+  }
 }
 
 async function createPiAgentSession(state: SessionState): Promise<AgentSession> {

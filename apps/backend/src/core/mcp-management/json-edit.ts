@@ -302,6 +302,9 @@ function insertProperty(
   if (!object.properties.length) {
     const indent = objectIndent + unit;
     const insert = `${eol}${indent}${JSON.stringify(key)}: ${formatValue(value, unit, indent, eol)}${eol}${objectIndent}`;
+    if (/\/\/|\/\*/.test(text.slice(object.start + 1, object.end - 1))) {
+      return splice(text, object.start + 1, object.start + 1, insert);
+    }
     return splice(text, object.start + 1, object.end - 1, insert);
   }
   const last = object.properties[object.properties.length - 1]!;
@@ -316,11 +319,40 @@ function insertProperty(
   scanner.skipTrivia();
   const hasTrailingComma = text[scanner.index] === ",";
   const property = `${JSON.stringify(key)}: ${formatValue(value, unit, indent, eol)}`;
+  const commentLineEnd = trailingLineCommentEnd(text, last.value.end, object.end - 1);
+  if (commentLineEnd !== null) {
+    const addedComma = hasTrailingComma ? text : splice(text, last.value.end, last.value.end, ",");
+    const shifted = hasTrailingComma ? commentLineEnd : commentLineEnd + 1;
+    return splice(
+      addedComma,
+      shifted,
+      shifted,
+      `${indent}${property}${hasTrailingComma ? "," : ""}${eol}`,
+    );
+  }
   if (hasTrailingComma) {
     return splice(text, scanner.index + 1, scanner.index + 1, `${eol}${indent}${property},`);
   }
-  // Insert directly after the last value, so a trailing line comment stays put.
+  // Insert directly after the last value when no trailing comment owns its line.
   return splice(text, last.value.end, last.value.end, `,${eol}${indent}${property}`);
+}
+
+function trailingLineCommentEnd(text: string, from: number, to: number): number | null {
+  let index = from;
+  while (index < to) {
+    if (/\s|,/.test(text[index]!)) {
+      index += 1;
+    } else if (text.startsWith("/*", index)) {
+      const end = text.indexOf("*/", index + 2);
+      index = end < 0 ? to : end + 2;
+    } else if (text.startsWith("//", index)) {
+      const end = text.indexOf("\n", index + 2);
+      return end < 0 || end >= to ? null : end + 1;
+    } else {
+      break;
+    }
+  }
+  return null;
 }
 
 /** Remove `path` if present. Returns the original text when absent. */
@@ -363,8 +395,10 @@ function removePropertyAt(text: string, object: Node & { type: "object" }, index
     const end = text[scanner.index] === "," ? scanner.index + 1 : property.value.end;
     return splice(text, previous.value.end, end, "");
   }
-  // Only property: leave an empty object.
-  return splice(text, object.start + 1, object.end - 1, "");
+  // Only property: remove its key and value, retaining comments in the interior.
+  const from = lineStartIfOnlyWhitespace(text, property.start);
+  const end = text[property.value.end] === "," ? property.value.end + 1 : property.value.end;
+  return splice(text, from, end, "");
 }
 
 function lineStartIfOnlyWhitespace(text: string, offset: number): number {

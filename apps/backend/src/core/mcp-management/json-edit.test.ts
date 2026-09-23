@@ -88,6 +88,29 @@ describe("json-edit", () => {
     expect(setJsonValue(crlf, ["b"], 2, false)).toBe('{\r\n  "a": 1,\r\n  "b": 2\r\n}\r\n');
   });
 
+  test("keeps comments when adding to or removing from an otherwise empty map", () => {
+    const original = '{\n  "mcp": {\n    // keep this note\n  }\n}\n';
+    const added = setJsonValue(original, ["mcp", "server"], { command: "x" }, true);
+    expect(added).toContain("// keep this note");
+    expect(parseJsonValue(added, true)).toEqual({ mcp: { server: { command: "x" } } });
+    const removed = removeJsonValue(added, ["mcp", "server"], true);
+    expect(removed).toContain("// keep this note");
+    expect(parseJsonValue(removed, true)).toEqual({ mcp: {} });
+  });
+
+  test("keeps a trailing line comment with its original property", () => {
+    const original = '{\n  "a": 1 // belongs to a\n}\n';
+    const added = setJsonValue(original, ["b"], 2, true);
+    expect(added).toContain('"a": 1, // belongs to a\n');
+    expect(parseJsonValue(added, true)).toEqual({ a: 1, b: 2 });
+    const withComma = '{\n  "a": 1, // belongs to a\n}\n';
+    const addedAfterComma = setJsonValue(withComma, ["b"], 2, true);
+    expect(addedAfterComma).toContain('"a": 1, // belongs to a\n');
+    expect(parseJsonValue(addedAfterComma, true)).toEqual({ a: 1, b: 2 });
+    const block = '{\n  "a": 1 /* // inside a block */\n}\n';
+    expect(parseJsonValue(setJsonValue(block, ["b"], 2, true), true)).toEqual({ a: 1, b: 2 });
+  });
+
   test("refuses comments in strict JSON and reports duplicate keys", () => {
     expect(() => setJsonValue('{ // no\n "a": 1 }', ["b"], 1, false)).toThrow(JsonEditError);
     expect(countJsonKeys('{"m": {"a": 1, "a": 2, "b": 3}}', ["m"], false).get("a")).toBe(2);

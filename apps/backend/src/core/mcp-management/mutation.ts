@@ -9,6 +9,7 @@
 
 import {
   isEnvReference,
+  isSensitiveArg,
   isSensitiveUrl,
   mcpFailure,
   type McpAdvancedValue,
@@ -248,6 +249,11 @@ export function projectSecretErrors(
       errors.push({ field: `${kind}.${key}`, message });
     }
   }
+  after.args.forEach((arg, index) => {
+    if (isEnvReference(arg) || !isSensitiveArg(arg, after.args[index - 1])) return;
+    if (before?.args[index] === arg || before?.args.includes(arg)) return;
+    errors.push({ field: `args.${index}`, message });
+  });
   if (after.url && isSensitiveUrl(after.url) && after.url !== before?.url) {
     errors.push({
       field: "url",

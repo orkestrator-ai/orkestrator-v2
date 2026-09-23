@@ -94,6 +94,28 @@ describe("McpManagementService — catalog", () => {
     expect(definition.args[3]!.value.kind).toBe("redacted");
   });
 
+  test("snapshots and editable definitions hide literal fallbacks and URL path credentials", async () => {
+    fixture.write(
+      "home/.claude.json",
+      JSON.stringify({
+        mcpServers: {
+          fallback: { command: "x", env: { KEY: "${API_KEY:-SENTINEL-SECRET-7f3a}" } },
+          path: { type: "http", url: "https://example.com/api/SENTINEL-SECRET-7f3a/mcp" },
+        },
+      }),
+    );
+    const targetId = await targetIdFor(fixture, "claude", "backend");
+    const snapshot = await fixture.service.snapshot({ targetId });
+    expect(JSON.stringify(snapshot)).not.toContain(SENTINEL);
+    for (const name of ["fallback", "path"]) {
+      const definition = await fixture.service.getDefinition({
+        targetId,
+        entryId: entry(snapshot, "claude:user", name).entryId,
+      });
+      expect(JSON.stringify(definition)).not.toContain(SENTINEL);
+    }
+  });
+
   test("a malformed source is reported, never treated as empty, and refuses writes", async () => {
     fixture.write("home/.claude.json", '{"mcpServers": {');
     const targetId = await targetIdFor(fixture, "claude", "backend");
@@ -343,6 +365,25 @@ describe("McpManagementService — writes", () => {
     await expect(fixture.service.mutate(different)).rejects.toThrow("request-conflict");
   });
 
+  test("simultaneous retries share the one saved operation", async () => {
+    const targetId = await targetIdFor(fixture, "claude", "backend");
+    const request = mutation(targetId, {
+      kind: "add",
+      sourceId: "claude:user",
+      expectedRevision: null,
+      definition: { name: "once", transport: "stdio", command: "x" },
+    });
+    const [first, second] = await Promise.all([
+      fixture.service.mutate(request),
+      fixture.service.mutate(request),
+    ]);
+    expect(first.operation.operationId).toBe(second.operation.operationId);
+    expect([first.replayed, second.replayed].sort()).toEqual([false, true]);
+    expect(JSON.parse(fixture.read("home/.claude.json")).mcpServers).toEqual({
+      once: { type: "stdio", command: "x" },
+    });
+  });
+
   test("duplicate names, protected names and unsupported transports are refused", async () => {
     fixture.write("home/.claude.json", CLAUDE_JSON);
     const targetId = await targetIdFor(fixture, "claude", "backend");
@@ -370,7 +411,15 @@ describe("McpManagementService — writes", () => {
   test("project scope refuses new literal secrets but keeps existing ones on unrelated edits", async () => {
     fixture.write(
       "worktree/.mcp.json",
-      JSON.stringify({ mcpServers: { svc: { command: "x", env: { OLD: SENTINEL } } } }, null, 2),
+      JSON.stringify(
+        {
+          mcpServers: {
+            svc: { command: "x", args: ["--api-key", SENTINEL], env: { OLD: SENTINEL } },
+          },
+        },
+        null,
+        2,
+      ),
     );
     const targetId = await targetIdFor(fixture, "claude", "environment");
     let snapshot = await fixture.service.snapshot({ targetId });
@@ -395,7 +444,11 @@ describe("McpManagementService — writes", () => {
         entryId: entry(snapshot, "claude:project", "svc").entryId,
         expectedRevision: revision(snapshot, "claude:project")!,
         patch: {
-          args: [{ kind: "set", value: "--flag" }],
+          args: [
+            { kind: "keep", index: 0 },
+            { kind: "keep", index: 1 },
+            { kind: "set", value: "--flag" },
+          ],
           env: [{ key: "NEW", edit: { kind: "set", value: "${NEW_REF}" } }],
         },
       }),
@@ -405,6 +458,38 @@ describe("McpManagementService — writes", () => {
       OLD: SENTINEL,
       NEW: "${NEW_REF}",
     });
+    expect(JSON.parse(fixture.read("worktree/.mcp.json")).mcpServers.svc.args).toEqual([
+      "--api-key",
+      SENTINEL,
+      "--flag",
+    ]);
+  });
+
+  test("project scope rejects secret fallbacks, URL paths and command arguments", async () => {
+    const targetId = await targetIdFor(fixture, "claude", "environment");
+    const snapshot = await fixture.service.snapshot({ targetId });
+    const add = (definition: Record<string, unknown>) =>
+      fixture.service.mutate(
+        mutation(targetId, {
+          kind: "add",
+          sourceId: "claude:project",
+          expectedRevision: revision(snapshot, "claude:project"),
+          definition: { name: "unsafe", ...definition } as never,
+        }),
+      );
+    await expect(
+      add({
+        transport: "stdio",
+        command: "x",
+        env: [{ key: "KEY", value: "${API_KEY:-SENTINEL-SECRET-7f3a}" }],
+      }),
+    ).rejects.toThrow("variable reference");
+    await expect(
+      add({ transport: "http", url: "https://example.com/api/SENTINEL-SECRET-7f3a/mcp" }),
+    ).rejects.toThrow("credentials out of the URL");
+    await expect(
+      add({ transport: "stdio", command: "x", args: ["--api-key", SENTINEL] }),
+    ).rejects.toThrow("variable reference");
   });
 
   test("private local entries live under the exact worktree key and share the user file's lock", async () => {

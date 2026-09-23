@@ -1118,6 +1118,33 @@ describe("MCP lifecycle", () => {
       setPiMcpTransportForTests();
     }
   });
+
+  test("a turn starting during a config read keeps the live session", async () => {
+    const state = newSessionState();
+    const fake = fakeSession();
+    installTestHooks({ createAgentSession: async () => fake.session });
+    await ensureSession(state);
+    let release!: (value: boolean) => void;
+    let started!: () => void;
+    const reading = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const fingerprint = new Promise<boolean>((resolve) => {
+      release = resolve;
+    });
+    installTestHooks({
+      mcpConfigNeedsRefresh: async () => {
+        started();
+        return fingerprint;
+      },
+    });
+    const pending = reconcileAgentMcp(state);
+    await reading;
+    state.status = "running";
+    release(true);
+    await pending;
+    expect(state.session).toBe(fake.session);
+  });
 });
 
 /**

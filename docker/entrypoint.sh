@@ -908,7 +908,9 @@ if [ -d /pi-config/agent ]; then
     chmod 600 "$HOME/.pi/agent/auth.json" 2>/dev/null || true
     # The bridge's MCP client reads user servers from here; definitions can
     # carry literal header or environment values, so keep it owner-only.
-    chmod 600 "$HOME/.pi/agent/mcp.json" 2>/dev/null || true
+    if [ -f "$HOME/.pi/agent/mcp.json" ] && [ ! -L "$HOME/.pi/agent/mcp.json" ]; then
+        chmod 600 "$HOME/.pi/agent/mcp.json" 2>/dev/null || true
+    fi
 fi
 
 report_agent_copy_skips Pi

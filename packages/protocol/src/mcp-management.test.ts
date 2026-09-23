@@ -184,8 +184,14 @@ describe("mcp-management protocol", () => {
       kind: "redacted",
       display: "(retained value)",
     });
+    expect(visibleArgs(["--setting=${KEY:-literal-value}"])[0]?.value.kind).toBe("redacted");
 
     expect(isSensitiveUrl("https://example.com/mcp?api_key=SENTINEL")).toBe(true);
+    expect(isSensitiveUrl("https://example.com/api/SENTINEL-SECRET-7f3a/mcp")).toBe(true);
+    expect(visibleUrl("https://example.com/api/SENTINEL-SECRET-7f3a/mcp")).toEqual({
+      kind: "redacted",
+      display: "https://example.com/…",
+    });
     expect(isSensitiveUrl("https://example.com/mcp?format=json")).toBe(false);
     expect(redactUrlForDisplay("https://example.com/mcp?api_key=SENTINEL&x=1")).not.toContain(
       "SENTINEL",
@@ -207,6 +213,7 @@ describe("mcp-management protocol", () => {
       expect(isEnvReference(value)).toBe(true);
     }
     expect(isEnvReference("Bearer abc")).toBe(false);
+    expect(isEnvReference("${API_KEY:-SENTINEL-SECRET-7f3a}")).toBe(false);
   });
 
   test("aggregates per-runtime states with in-progress work first", () => {

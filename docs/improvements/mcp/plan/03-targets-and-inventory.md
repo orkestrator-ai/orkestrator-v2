@@ -1,6 +1,7 @@
 # 03 — Resolve execution targets and build passive source inventory
 
-Status: planned. Depends on: 01–02. [Plan index](00-index.md).
+Status: done for backend and local-worktree targets; container targets read the container's files read-only
+(`targets.ts`, `providers.ts`, `catalog.ts`). No file watchers: catalogs are read per request. Depends on: 01–02. [Plan index](00-index.md).
 
 ## Purpose and integration points
 

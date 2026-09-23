@@ -1,6 +1,6 @@
 # 02 — Define management contracts, capabilities and validation
 
-Status: planned. Depends on: 01. [Plan index](00-index.md).
+Status: done — `packages/protocol/src/mcp-management.ts` with tests. Depends on: 01. [Plan index](00-index.md).
 
 ## Purpose and owners
 

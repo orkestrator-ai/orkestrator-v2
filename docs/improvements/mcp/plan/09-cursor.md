@@ -1,6 +1,7 @@
 # 09 — Implement Cursor configuration management
 
-Status: planned. Depends on: 01–05. [Plan index](00-index.md).
+Status: done — file CRUD plus idle reattach at the next message with no silent new conversation.
+Per-send override path not used. Depends on: 01–05. [Plan index](00-index.md).
 
 ## Existing owners
 

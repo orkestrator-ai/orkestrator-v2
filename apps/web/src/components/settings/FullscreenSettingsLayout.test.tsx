@@ -26,6 +26,24 @@ const menuItems = [
 ];
 
 describe("FullscreenSettingsLayout", () => {
+  test("follows a newly requested section while already open", () => {
+    const view = (defaultSection: string) => (
+      <FullscreenSettingsLayout
+        open
+        onOpenChange={() => undefined}
+        title="Settings"
+        menuItems={menuItems}
+        defaultSection={defaultSection}
+      >
+        {(section) => <p>active:{section}</p>}
+      </FullscreenSettingsLayout>
+    );
+    const { rerender } = render(view("general"));
+    expect(screen.getByText("active:general")).toBeTruthy();
+    rerender(view("network"));
+    expect(screen.getByText("active:network")).toBeTruthy();
+  });
+
   test("keeps the application surface independent of a light terminal background", () => {
     const originalConfig = useConfigStore.getState().config;
     useConfigStore.setState((state) => ({

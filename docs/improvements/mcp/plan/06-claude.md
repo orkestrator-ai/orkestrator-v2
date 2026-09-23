@@ -1,6 +1,7 @@
 # 06 — Implement Claude configuration management
 
-Status: planned. Depends on: 01–05. [Plan index](00-index.md).
+Status: done for durable CRUD and next-query application; optional `setMcpServers` replacement not implemented.
+Depends on: 01–05. [Plan index](00-index.md).
 
 ## Existing owners
 

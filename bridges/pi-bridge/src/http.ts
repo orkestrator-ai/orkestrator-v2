@@ -1098,8 +1098,9 @@ async function handlePrompt(
     applyComposerPatch(state, parseComposerPatch(body));
     // A rotated tab credential has to rebuild the SDK session before the turn
     // is dispatched, or the model reaches the mailbox under the previous
-    // identity while `/mcp` already reports the new one.
-    await reconcileAgentMcp(state);
+    // identity while `/mcp` already reports the new one. A saved MCP
+    // configuration change is adopted at this same boundary.
+    await reconcileAgentMcp(state, { atTurnStart: true });
     session = await ensureSession(state);
     await applyComposerToSession(state);
     if (command) {

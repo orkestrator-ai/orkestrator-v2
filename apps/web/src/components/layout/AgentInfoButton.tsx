@@ -92,6 +92,7 @@ import {
 } from "@orkestrator/protocol/agent-platforms";
 import { agentMailCapabilities } from "@orkestrator/protocol/agent-mail";
 import { openAgentMailForTab } from "@/components/agent-mail/AgentMailButton";
+import { requestMcpServerSettings } from "@/lib/mcp-settings-navigation";
 
 interface AgentInfoButtonProps {
   activeTab: TabInfo | null;
@@ -1862,6 +1863,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                   <McpServersPanel
                     servers={neutralProjection!.runtime!.mcp!}
                     busyAction={busyAction}
+                    onManage={() =>
+                      requestMcpServerSettings({
+                        provider: activeSession.provider,
+                        environmentId: activeSession.environmentId,
+                      })
+                    }
                     onAction={(server, action) =>
                       void runAction(`mcp-${server.id}-${action}`, async () => {
                         const result = await performNativeAgentMcpAction({

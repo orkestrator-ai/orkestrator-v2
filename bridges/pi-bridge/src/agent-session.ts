@@ -41,7 +41,13 @@ import {
 } from "./commands.js";
 import { assertAuthenticated } from "./credentials.js";
 import { requestToolApproval } from "./interactions.js";
-import { closePiMcp, mcpConnectionNeedsRefresh, piMcpExtension, preparePiMcp } from "./mcp.js";
+import {
+  closePiMcp,
+  mcpConfigNeedsRefresh,
+  mcpConnectionNeedsRefresh,
+  piMcpExtension,
+  preparePiMcp,
+} from "./mcp.js";
 import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
@@ -332,7 +338,8 @@ async function attach(state: SessionState): Promise<AgentSession> {
 }
 
 /**
- * Rebuild an attached session when its tab-scoped MCP credential changed.
+ * Rebuild an attached session when its tab-scoped MCP credential or its saved
+ * MCP configuration changed.
  *
  * Prompt, create, resume and attach all store a possibly rotated `agentMcp`,
  * but a live Pi session's MCP extension keeps whatever connection it was built
@@ -341,10 +348,23 @@ async function attach(state: SessionState): Promise<AgentSession> {
  * `ensureSession` prepare from the new credential. A session with no live
  * runtime is left alone: the next attach prepares it.
  */
-export async function reconcileAgentMcp(state: SessionState): Promise<void> {
+export async function reconcileAgentMcp(
+  state: SessionState,
+  options: { atTurnStart?: boolean } = {},
+): Promise<void> {
   if (!state.session) return;
-  if (!mcpConnectionNeedsRefresh(state)) return;
-  await detachSession(state);
+  if (mcpConnectionNeedsRefresh(state)) {
+    await detachSession(state);
+    return;
+  }
+  // A saved configuration change is adopted only between turns. The prompt
+  // path has already claimed `dispatching` for the turn it is about to start,
+  // which is exactly the boundary; any other busy state keeps the current
+  // generation, and its tools, until the work finishes.
+  const busy =
+    state.status === "running" || state.compacting || (!options.atTurnStart && state.dispatching);
+  if (busy) return;
+  if (await mcpConfigNeedsRefresh(state)) await detachSession(state);
 }
 
 async function createPiAgentSession(state: SessionState): Promise<AgentSession> {

@@ -886,6 +886,7 @@ if [ -d /pi-config/agent ]; then
         auth.json \
         models.json \
         settings.json \
+        mcp.json \
         SYSTEM.md \
         APPEND_SYSTEM.md
     do
@@ -905,6 +906,9 @@ if [ -d /pi-config/agent ]; then
     done
 
     chmod 600 "$HOME/.pi/agent/auth.json" 2>/dev/null || true
+    # The bridge's MCP client reads user servers from here; definitions can
+    # carry literal header or environment values, so keep it owner-only.
+    chmod 600 "$HOME/.pi/agent/mcp.json" 2>/dev/null || true
 fi
 
 report_agent_copy_skips Pi

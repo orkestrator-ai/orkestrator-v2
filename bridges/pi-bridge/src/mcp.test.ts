@@ -6,6 +6,7 @@ import { newSessionState } from "./agent-session.js";
 import {
   closePiMcp,
   isOrkestratorMcpTool,
+  mcpConfigNeedsRefresh,
   mcpConnectionNeedsRefresh,
   piMcpExtension,
   preparePiMcp,
@@ -253,6 +254,32 @@ describe("Pi MCP client", () => {
 
     await closePiMcp(state);
     expect(mcpConnectionNeedsRefresh(state)).toBe(false);
+  });
+
+  test("reports a saved configuration change, ignoring excluded project files", async () => {
+    setPiMcpTransportForTests(fakeTransport());
+    const root = await mkdtemp(join(tmpdir(), "pi-mcp-config-key-"));
+    const state = newSessionState();
+    await writeFile(join(root, "mcp.json"), JSON.stringify({ mcpServers: {} }));
+    await preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
+    expect(await mcpConfigNeedsRefresh(state)).toBe(false);
+
+    // Project resources are off for this session, so its project file is not read.
+    await mkdir(join(root, ".pi"), { recursive: true });
+    await writeFile(
+      join(root, ".pi", "mcp.json"),
+      JSON.stringify({ mcpServers: { p: { command: "x" } } }),
+    );
+    expect(await mcpConfigNeedsRefresh(state)).toBe(false);
+
+    await writeFile(
+      join(root, "mcp.json"),
+      JSON.stringify({ mcpServers: { added: { url: "https://a.example/mcp" } } }),
+    );
+    expect(await mcpConfigNeedsRefresh(state)).toBe(true);
+
+    await closePiMcp(state);
+    expect(await mcpConfigNeedsRefresh(state)).toBe(false);
   });
 
   test("caps the tools registered from one server", async () => {

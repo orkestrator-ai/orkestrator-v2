@@ -398,6 +398,8 @@ describe("container runtime environment wiring", () => {
       "auth.json",
       "models.json",
       "settings.json",
+      // The bridge's MCP client reads user servers from here (mcp-management plan, step 13).
+      "mcp.json",
       "skills",
       "prompts",
       "extensions",
@@ -419,6 +421,7 @@ describe("container runtime environment wiring", () => {
       );
     }
     expect(entrypoint).toContain('chmod 600 "$HOME/.pi/agent/auth.json"');
+    expect(entrypoint).toContain('chmod 600 "$HOME/.pi/agent/mcp.json"');
   });
 
   test("Claude data copy takes config and skips host history", () => {

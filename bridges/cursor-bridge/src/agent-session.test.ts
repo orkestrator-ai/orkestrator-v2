@@ -12,7 +12,7 @@
  * independent of Bun's process-wide module registry.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { Agent, type CursorAgentPlatform, type LocalAgentStore } from "@cursor/sdk";
+import { Agent, type LocalAgentStore } from "@cursor/sdk";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -134,6 +134,7 @@ const {
   resumeSession,
   rewindSessionHistory,
   SessionConflictError,
+  setCursorMcpConfigHomeForTests,
   useCursorAgentForTests,
 } = await import("./agent-session.js");
 const { refreshAgentUsage } = await import("./prompt.js");
@@ -178,7 +179,12 @@ beforeAll(() => {
   });
 });
 
-beforeEach(() => {
+const configHome = join(bridgeStateRoot, "config-home");
+
+beforeEach(async () => {
+  // The MCP configuration fingerprint must never read the operator's home.
+  await rm(configHome, { recursive: true, force: true });
+  setCursorMcpConfigHomeForTests(configHome);
   resetPlanAccountWindowsForTests();
   // The barrier is primed once per process by design, so without this only
   // the first attaching test could observe whether an attach primes it.
@@ -906,6 +912,43 @@ describe("ensureAgent", () => {
         },
       },
     });
+  });
+
+  test("a saved MCP configuration change resumes the same agent at the next boundary", async () => {
+    const state = newSessionState();
+    await ensureAgent(state);
+    const agentId = state.agentId;
+    await mkdir(join(configHome, ".cursor"), { recursive: true });
+    await writeFile(
+      join(configHome, ".cursor", "mcp.json"),
+      JSON.stringify({ mcpServers: { added: { url: "https://a.example/mcp" } } }),
+    );
+
+    // A running turn keeps its agent and tools.
+    state.status = "running";
+    await ensureAgent(state);
+    expect(resumed).toEqual([]);
+    state.status = "idle";
+
+    await ensureAgent(state, { atTurnStart: true });
+    expect(resumed).toEqual([agentId]);
+    expect(state.agentId).toBe(agentId);
+
+    // Unchanged configuration: no further reattach.
+    await ensureAgent(state);
+    expect(resumed).toEqual([agentId]);
+  });
+
+  test("a failed resume for a configuration change keeps the conversation", async () => {
+    const state = newSessionState();
+    await ensureAgent(state);
+    const agentId = state.agentId;
+    await mkdir(join(configHome, ".cursor"), { recursive: true });
+    await writeFile(join(configHome, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: {} }));
+    resumeFails = true;
+    await expect(ensureAgent(state)).rejects.toThrow("conversation was kept");
+    expect(state.agentId).toBe(agentId);
+    expect(created).toHaveLength(1);
   });
 
   test("an environment-only agent survives a second ensureAgent", async () => {

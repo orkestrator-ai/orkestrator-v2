@@ -1,5 +1,7 @@
 import { DesignService } from "./design-service.js";
 import { PreviewRuntime } from "./preview-runtime.js";
+import { createMcpRuntimeProbe, readContainerMcpFile } from "./commands-registry-mcp.js";
+import { McpManagementService } from "./mcp-management/service.js";
 import {
   closeLocalServerAdmission,
   createCommandRegistry,
@@ -338,6 +340,13 @@ export class OrkestratorBackend {
       },
     );
     context.nativeAgents = this.nativeAgents;
+    context.mcpManagement = new McpManagementService({
+      dataDir: options.dataDir,
+      storage,
+      emit: options.emit,
+      probe: createMcpRuntimeProbe(context),
+      readContainerFile: readContainerMcpFile,
+    });
     this.projectGit = new ProjectGitService(storage, async (projectId) => {
       const workspace = await storage.getCoordinatorWorkspace(projectId);
       if (!workspace) return false;
@@ -494,6 +503,14 @@ export class OrkestratorBackend {
     await this.context.previews?.init().catch((error: unknown) => {
       console.warn(
         "[backend] Failed to initialize preview services:",
+        error instanceof Error ? error.message : error,
+      );
+    });
+    // Recovers interrupted MCP configuration operations. A failure disables
+    // management, not the backend.
+    await this.context.mcpManagement?.init().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to initialize MCP configuration management:",
         error instanceof Error ? error.message : error,
       );
     });
@@ -972,6 +989,7 @@ export class OrkestratorBackend {
         });
       } finally {
         this.context.previews?.dispose();
+        this.context.mcpManagement?.dispose();
         await this.controlMcp.stop();
         await this.agentTools.stop();
         await this.context.design?.close();

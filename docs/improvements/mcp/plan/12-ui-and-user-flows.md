@@ -1,7 +1,7 @@
 # 12 — Build provider settings, server editor and operation feedback
 
-Status: planned. Depends on: 02–05 and verified adapter capabilities.
-[Plan index](00-index.md).
+Status: done — `apps/web/src/components/settings/mcp-servers/`; real-browser QA pending.
+Depends on: 02–05 and verified adapter capabilities. [Plan index](00-index.md).
 
 ## Existing and proposed owners
 

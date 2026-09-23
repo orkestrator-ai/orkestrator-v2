@@ -55,13 +55,16 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
   const [activeSection, setActiveSection] = useState(defaultId);
   const [headerActionsTarget, setHeaderActionsTarget] = useState<HTMLDivElement | null>(null);
 
-  // Reset to default only when transitioning from closed to open
+  // Reset to default when transitioning from closed to open, and follow a new
+  // requested section while already open (a deep link from elsewhere in the app).
   const prevOpenRef = useRef(open);
+  const prevDefaultRef = useRef(defaultId);
   useEffect(() => {
-    if (open && !prevOpenRef.current) {
+    if (open && (!prevOpenRef.current || prevDefaultRef.current !== defaultId)) {
       setActiveSection(defaultId);
     }
     prevOpenRef.current = open;
+    prevDefaultRef.current = defaultId;
   }, [open, defaultId]);
 
   // Handle Escape key

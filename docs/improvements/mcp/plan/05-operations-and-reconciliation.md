@@ -1,6 +1,6 @@
 # 05 — Add backend-owned save/apply operations and reconciliation
 
-Status: planned. Depends on: 02–04. [Plan index](00-index.md).
+Status: done (`service.ts`, `operations-store.ts`, `apply.ts`, `commands-registry-mcp.ts`). Depends on: 02–04. [Plan index](00-index.md).
 
 ## Integration points
 

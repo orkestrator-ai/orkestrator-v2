@@ -1527,10 +1527,13 @@ export function McpServersPanel({
   servers,
   busyAction,
   onAction,
+  onManage,
 }: {
   servers: NativeAgentMcpServer[];
   busyAction: string | null;
   onAction: (server: NativeAgentMcpServer, action: NativeAgentMcpServerAction) => void;
+  /** Opens saved-configuration management; runtime actions above never edit files. */
+  onManage?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   if (servers.length === 0) return null;
@@ -1577,6 +1580,15 @@ export function McpServersPanel({
               onAction={onAction}
             />
           ))}
+          {onManage ? (
+            <button
+              type="button"
+              className="mx-2.5 my-1.5 text-left text-xs text-blue-300 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+              onClick={onManage}
+            >
+              Manage saved servers…
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>

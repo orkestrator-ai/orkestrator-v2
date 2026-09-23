@@ -1,7 +1,8 @@
 # MCP management implementation plan
 
 Date: 2026-09-21. Baseline: `88c2f9cc`.
-Status: planned; none of these implementation steps has been executed.
+Status: implemented except step 13's writable container overlay and the live-probe / real-stack
+evidence of steps 01 and 14 (2026-09-23). Living doc: [mcp-management.md](../../../architecture/mcp-management.md).
 
 Start with the [investigation](../../mcp.md). This directory specifies future
 implementation work only. The investigation's source links identify existing

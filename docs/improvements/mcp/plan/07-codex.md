@@ -1,6 +1,7 @@
 # 07 — Implement Codex configuration management
 
-Status: planned. Depends on: 01–05. [Plan index](00-index.md).
+Status: done using the safe TOML file writer (not `config/batchWrite`) plus the existing process-wide reload;
+thread-level adoption is unverified. Depends on: 01–05. [Plan index](00-index.md).
 
 ## Existing owners
 

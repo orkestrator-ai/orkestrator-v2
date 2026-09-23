@@ -1,6 +1,7 @@
 # 10 — Implement Grok configuration management and ACP application
 
-Status: planned. Depends on: 01–05. [Plan index](00-index.md).
+Status: done for native TOML CRUD and compatibility provenance; apply reports restart-required.
+Depends on: 01–05. [Plan index](00-index.md).
 
 ## Existing owners
 

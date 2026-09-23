@@ -1081,6 +1081,43 @@ describe("MCP lifecycle", () => {
       setPiMcpTransportForTests();
     }
   });
+
+  test("adopts a saved MCP configuration change only between turns", async () => {
+    const { setPiMcpTransportForTests } = await import("./mcp.js");
+    let closed = 0;
+    const state = newSessionState();
+    await prepareConnection(state, () => {
+      closed += 1;
+    });
+    const fake = fakeSession();
+    installTestHooks({ createAgentSession: async () => fake.session });
+    try {
+      await ensureSession(state);
+      await writeFile(
+        join(sessionDirectory, "mcp.json"),
+        JSON.stringify({ mcpServers: { added: { url: "https://a.example/mcp" } } }),
+      );
+
+      // A running turn keeps its tools until it finishes.
+      state.status = "running";
+      await reconcileAgentMcp(state);
+      expect(state.session).toBe(fake.session);
+      state.status = "idle";
+
+      // Another request claimed the session: not this boundary.
+      state.dispatching = true;
+      await reconcileAgentMcp(state);
+      expect(state.session).toBe(fake.session);
+
+      // The prompt that claimed it is the boundary.
+      await reconcileAgentMcp(state, { atTurnStart: true });
+      expect(state.session).toBeNull();
+      expect(closed).toBe(1);
+    } finally {
+      state.dispatching = false;
+      setPiMcpTransportForTests();
+    }
+  });
 });
 
 /**

@@ -753,7 +753,7 @@ async function handlePrompt(
       await detachAgent(state);
       state.readOnly = readOnly;
     }
-    agent = await ensureAgent(state);
+    agent = await ensureAgent(state, { atTurnStart: true });
   } catch (error) {
     // The turn provably did not run, so release the claim and let the caller
     // retry under the same request id.

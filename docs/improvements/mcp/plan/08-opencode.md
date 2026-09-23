@@ -1,6 +1,7 @@
 # 08 — Implement OpenCode configuration management
 
-Status: planned. Depends on: 01–05. [Plan index](00-index.md).
+Status: done for durable CRUD; apply reports restart-required (no directory reload implemented).
+Depends on: 01–05. [Plan index](00-index.md).
 
 ## Existing owners
 

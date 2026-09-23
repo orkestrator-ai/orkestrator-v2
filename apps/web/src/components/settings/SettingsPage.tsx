@@ -19,11 +19,13 @@ import {
   RadioTower,
   MonitorPlay,
   Volume2,
+  Server,
 } from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
 import { SkillsSettings } from "./SkillsSettings";
 import { McpSettings } from "./McpSettings";
+import { ProviderMcpSettings } from "./mcp-servers/ProviderMcpSettings";
 import { PreviewSettings } from "./PreviewSettings";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 import { MessagingSettings } from "./MessagingSettings";
@@ -72,7 +74,8 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },
   { id: "web-client", label: "Web client", icon: <Globe2 className="h-4 w-4" /> },
   { id: "previews", label: "Browser previews", icon: <MonitorPlay className="h-4 w-4" /> },
-  { id: "mcp", label: "MCP", icon: <Cable className="h-4 w-4" /> },
+  { id: "mcp-servers", label: "MCP servers", icon: <Server className="h-4 w-4" /> },
+  { id: "mcp", label: "Control MCP", icon: <Cable className="h-4 w-4" /> },
   { id: "messaging", label: "Messaging", icon: <MessagesSquare className="h-4 w-4" /> },
   { id: "sounds", label: "Sounds", icon: <Volume2 className="h-4 w-4" /> },
   { id: "container", label: "Container", icon: <Container className="h-4 w-4" /> },
@@ -128,6 +131,8 @@ export function SettingsPage({ open, onOpenChange, defaultSection }: SettingsPag
           <ConnectionsSettings />
         ) : activeSection === "mcp" ? (
           <McpSettings />
+        ) : activeSection === "mcp-servers" ? (
+          <ProviderMcpSettings />
         ) : activeSection === "previews" ? (
           <PreviewSettings />
         ) : activeSection === "messaging" ? (

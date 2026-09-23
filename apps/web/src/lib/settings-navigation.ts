@@ -19,6 +19,7 @@ export const GLOBAL_SETTINGS_SECTIONS = [
   "web-client",
   "previews",
   "mcp",
+  "mcp-servers",
   "messaging",
   "sounds",
   "container",

@@ -1,6 +1,9 @@
 # 01 — Establish compatibility evidence and resolve adapter decisions
 
-Status: planned. Dependencies: none. [Plan index](00-index.md).
+Status: partly done. Decisions and source/capability tables are recorded in
+[mcp-management.md](../../../architecture/mcp-management.md) from the pinned SDK declarations,
+generated Codex protocol and vendor docs. Live probes against the pinned binaries have **not** been run;
+unverified behaviour is gated or reported as pending. Dependencies: none. [Plan index](00-index.md).
 
 ## Purpose
 

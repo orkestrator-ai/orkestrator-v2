@@ -6,18 +6,16 @@
  * `extensionFactories` path as the approval gate, and forgets every client
  * on detach. Agent MCP down is a notice, not a failed attach.
  */
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
 import { agentDirectory, workingDirectory } from "./config.js";
-import {
-  ORKESTRATOR_MCP_SERVER_NAME,
-  orkestratorMcpServer,
-  resolvePiMcpServers,
-  sanitizeMcpName,
-  type ResolvedMcpServer,
-} from "./mcp-config.js";
+import { resolvePiMcpServers, sanitizeMcpName, type ResolvedMcpServer } from "./mcp-config.js";
 import { getAgentDir } from "./pi-sdk.js";
 import { isObject, type JsonObject, type SessionState } from "./state.js";
 import { withTimeout } from "./timeout.js";
@@ -95,6 +93,10 @@ interface PiMcpRuntime {
   connections: PiMcpConnection[];
   /** The tab credential these connections were prepared with; "" for the env. */
   connectionKey: string;
+  /** Fingerprint of the MCP files this generation was built from. */
+  configKey: string;
+  /** Where those files were read, so a refresh check reads the same ones. */
+  configPaths: { agentDir?: string; cwd?: string };
   /** Set once `closePiMcp` runs, so an in-flight connect closes on arrival. */
   closed: boolean;
 }
@@ -131,6 +133,42 @@ export function mcpConnectionNeedsRefresh(state: SessionState): boolean {
   return runtime !== undefined && runtime.connectionKey !== mcpConnectionKey(state);
 }
 
+/**
+ * Fingerprint of the MCP configuration files a session reads. Orkestrator's
+ * settings (or the user's editor) can change them while a session is attached,
+ * and Pi fixes tool registrations when the session is created, so a changed
+ * fingerprint means the next safe boundary has to rebuild the session.
+ */
+export async function piMcpConfigFingerprint(
+  state: SessionState,
+  options: { agentDir?: string; cwd?: string } = {},
+): Promise<string> {
+  const agentDir = options.agentDir ?? agentDirectory() ?? getAgentDir();
+  const files = [join(agentDir, "mcp.json")];
+  if (state.policy?.projectResources === true) {
+    files.push(join(options.cwd ?? workingDirectory, ".pi", "mcp.json"));
+  }
+  const parts = await Promise.all(
+    files.map(async (file) => {
+      try {
+        return createHash("sha256")
+          .update(await readFile(file))
+          .digest("base64url");
+      } catch {
+        return "absent";
+      }
+    }),
+  );
+  return parts.join("|");
+}
+
+/** Whether the saved MCP files changed since the live connections were built. */
+export async function mcpConfigNeedsRefresh(state: SessionState): Promise<boolean> {
+  const runtime = runtimes.get(state);
+  if (!runtime) return false;
+  return runtime.configKey !== (await piMcpConfigFingerprint(state, runtime.configPaths));
+}
+
 function mcpConnectionKey(state: SessionState): string {
   return state.agentMcp ? `${state.agentMcp.url}\u0000${state.agentMcp.token}` : "";
 }
@@ -147,6 +185,8 @@ export async function preparePiMcp(
     tools: [],
     connections: [],
     connectionKey: mcpConnectionKey(state),
+    configKey: "",
+    configPaths: { agentDir: options.agentDir, cwd: options.cwd },
     closed: false,
   };
   // Registered synchronously, before the first await. A detach that races this
@@ -158,6 +198,9 @@ export async function preparePiMcp(
   if (previous) {
     await Promise.allSettled(previous.connections.map((connection) => connection.close()));
   }
+  // Fingerprint before reading, so an edit racing this read is seen as a
+  // change at the next boundary rather than missed.
+  runtime.configKey = await piMcpConfigFingerprint(state, options);
   const servers = await resolvePiMcpServers({
     agentDir: options.agentDir ?? agentDirectory() ?? getAgentDir(),
     cwd: options.cwd ?? workingDirectory,

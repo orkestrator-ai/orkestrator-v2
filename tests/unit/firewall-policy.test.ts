@@ -51,6 +51,16 @@ describe("container firewall policy", () => {
     expect(dockerfile).toContain("NOPASSWD: /usr/local/bin/run-root-setup.sh *");
   });
 
+  test("reads PID 1's environment with PID 1's credentials", () => {
+    // Root lacks CAP_SYS_PTRACE in the container, so a plain root read of
+    // /proc/1/environ (owned by node) fails with EACCES in both scripts.
+    for (const path of ["docker/init-firewall.sh", "docker/run-root-setup.sh"]) {
+      const script = read(path);
+      expect(script).toContain('setpriv --reuid="$(stat -c %u /proc/1)"');
+      expect(script).not.toContain('< "${ORKESTRATOR_PID1_ENVIRON:-/proc/1/environ}"');
+    }
+  });
+
   test("bootstraps GitHub metadata through a scoped dig and an ipset", () => {
     const script = read("docker/init-firewall.sh");
     expect(script).toContain("container_env NETWORK_MODE");

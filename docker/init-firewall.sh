@@ -6,8 +6,19 @@ IFS=$'\n\t'       # Stricter word splitting
 # is allowed to invoke this exact script through sudo so the entrypoint can set
 # up networking, but it must not be able to widen the policy by replacing its
 # own environment first.
+read_pid1_environ() {
+    if [ -n "${ORKESTRATOR_PID1_ENVIRON:-}" ]; then
+        cat "$ORKESTRATOR_PID1_ENVIRON"
+        return
+    fi
+    # PID 1 runs as node, and the kernel gates /proc/<pid>/environ on a ptrace
+    # check: a different uid needs CAP_SYS_PTRACE, which Docker drops, so even
+    # root is denied. Read it with PID 1's own credentials instead.
+    setpriv --reuid="$(stat -c %u /proc/1)" --regid="$(stat -c %g /proc/1)" \
+        --clear-groups cat /proc/1/environ
+}
 container_env() {
-    tr '\0' '\n' < "${ORKESTRATOR_PID1_ENVIRON:-/proc/1/environ}" | sed -n "s/^$1=//p" | head -n 1
+    read_pid1_environ | tr '\0' '\n' | sed -n "s/^$1=//p" | head -n 1
 }
 NETWORK_MODE="$(container_env NETWORK_MODE)"
 ALLOWED_DOMAINS="$(container_env ALLOWED_DOMAINS)"
@@ -104,7 +115,9 @@ while read -r cidr; do
         exit 1
     fi
     echo "Adding GitHub range $cidr"
-    ipset add allowed-domains "$cidr"
+    # The bootstrap above already added api.github.com's own /32, which the
+    # published ranges usually repeat verbatim.
+    ipset add -exist allowed-domains "$cidr"
 done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
 
 # Parse ALLOWED_DOMAINS environment variable (comma-separated)

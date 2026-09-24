@@ -2392,7 +2392,7 @@ export function useNativeAgentSession<TMessage = unknown>({
    * Background reads — the 500/1,500 ms cadence, resource-change hints, resync
    * and trailing reconciles — are scheduled by the shared read coordinator:
    * one timer, joined reads with a single dirty flag, paused while the
-   * document is hidden or offline, and reconciled first (critical) on return.
+   * document is hidden, and reconciled first (critical) on return.
    * Reads apply into this instance's fenced state (sequence/epoch, conditional
    * tokens), so the key's view is this instance. Explicit and post-mutation
    * reads stay direct `refresh()` calls, as do connect/adopt reads.

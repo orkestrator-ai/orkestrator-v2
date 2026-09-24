@@ -359,6 +359,8 @@ interface Entry<T> {
   retryAt: number | null;
   unsupported: boolean;
   lastStartedAt: number | null;
+  /** Coordinator-wide start sequence of the latest read (orders reads vs signals). */
+  lastStartSeq: number;
   anchor: number;
   cadenceMs: number | null;
   quietStreak: number;
@@ -399,6 +401,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
   let paused = false;
   let reconnectWhilePaused = false;
   let pendingReconcile: "resume" | "reconnect" | null = null;
+  let pendingReconcileSince: number | null = null;
   let reconcileTimer: unknown = null;
   let subscriberOrder = 0;
   let readsStarted = 0;
@@ -583,6 +586,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
     entry.lastStartedAt = now;
     entry.status = "loading";
     readsStarted += 1;
+    entry.lastStartSeq = readsStarted;
     notify(entry);
     const context: ReadContext = {
       reason,
@@ -708,7 +712,11 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
     if (reconcileTimer !== null) clock.clearTimeout(reconcileTimer);
     reconcileTimer = null;
     const kind = pendingReconcile;
+    // Reads that started after the first coalesced signal already observe
+    // the post-signal state; they need no second reconcile read.
+    const since = pendingReconcileSince;
     pendingReconcile = null;
+    pendingReconcileSince = null;
     if (kind === null || disposed) return;
     if (kind === "reconnect") {
       for (const entry of entries.values()) {
@@ -736,9 +744,14 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
       .sort((a, b) => PRIORITY_RANK[a.demand.priority] - PRIORITY_RANK[b.demand.priority]);
     for (const { entry, demand } of ordered) {
       if (entry.unsupported) continue;
+      const observedSinceSignal = since !== null && entry.lastStartSeq > since;
       if (entry.inFlight) {
-        // The running read may predate the reconnect; follow it once.
-        if (effective === "reconnect") entry.dirty = true;
+        // A running read that predates the reconnect is followed once.
+        if (effective === "reconnect" && !observedSinceSignal) entry.dirty = true;
+        continue;
+      }
+      if (observedSinceSignal && !entry.dirty && entry.status !== "error") {
+        schedule(entry);
         continue;
       }
       if (effective === "resume" && inBackoff(entry, now)) {
@@ -771,6 +784,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
     if (disposed) return;
     pendingReconcile =
       kind === "reconnect" || pendingReconcile === "reconnect" ? "reconnect" : kind;
+    pendingReconcileSince ??= readsStarted;
     if (reconcileTimer !== null) return;
     reconcileTimer = clock.setTimeout(runReconcile, coalesceMs);
   };
@@ -826,6 +840,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
         retryAt: null,
         unsupported: false,
         lastStartedAt: null,
+        lastStartSeq: 0,
         anchor: now,
         cadenceMs: null,
         quietStreak: 0,

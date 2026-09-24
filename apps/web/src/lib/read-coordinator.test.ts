@@ -399,6 +399,32 @@ describe("read coordinator: visibility, focus and reconnect", () => {
     expect(transport.calls).toHaveLength(1);
   });
 
+  test("a read that started after the reconnect signal satisfies the reconcile", async () => {
+    const { clock, coordinator } = setup();
+    const transport = deferredTransport<string>();
+    const sub = coordinator.subscribe({
+      key: key(),
+      read: transport.read,
+      readOnSubscribe: false,
+      demand: { intervalMs: 1_500, priority: "critical" },
+    });
+    coordinator.notifyReconnected();
+    // e.g. the resync that follows the same reconnect invalidates the key.
+    sub.invalidate();
+    expect(transport.calls).toHaveLength(1);
+    await transport.resolveLast("post-reconnect");
+    await clock.advance(READ_RESUME_COALESCE_MS);
+    expect(transport.calls).toHaveLength(1);
+
+    // A read that was already running when the signal arrived is followed once.
+    sub.invalidate();
+    coordinator.notifyReconnected();
+    await clock.advance(READ_RESUME_COALESCE_MS);
+    expect(transport.calls).toHaveLength(2);
+    await transport.resolveLast("pre-reconnect");
+    expect(transport.calls).toHaveLength(3);
+  });
+
   test("focus without a missed period does not read", async () => {
     const { clock, window, coordinator } = setup();
     const transport = deferredTransport<string>();

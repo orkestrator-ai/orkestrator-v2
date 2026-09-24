@@ -373,7 +373,7 @@ export function useFilesPanel() {
   }, [activeTab, loadChanges, loadFileTree]);
 
   // The 5 s auto-refresh is owned by the shared read coordinator: one timer
-  // per environment/tab key, paused while the document is hidden or offline,
+  // per environment/tab key, paused while the document is hidden,
   // reconciled once on return. The store is global, so equivalent mounts
   // share one read. The open/tab/target read below and post-mutation reads
   // stay direct.

@@ -26,6 +26,7 @@ Refreshed 2026-09-17 against the current tree.
 | [control-mcp.md](architecture/control-mcp.md) | Living | Control MCP operator guide. |
 | [mcp-management.md](architecture/mcp-management.md) | Living | Per-provider MCP server management: sources, precedence, safe writes, secrets, apply states, evidence. |
 | [remote-gateway.md](architecture/remote-gateway.md) | Living | Standalone backend, Tailscale Serve, flags, troubleshooting. |
+| [event-snapshot-recovery.md](architecture/event-snapshot-recovery.md) | Living | Which sequence each consumer may compare, revisioned view snapshots/outcomes, bounded client hydration, best-effort PR notifications. |
 | [browser-previews.md](architecture/browser-previews.md) | Living | Service previews: registry, desktop tunnel, private HTTPS origins, relay, kill switch, rollback. |
 | [review-preparation.md](architecture/review-preparation.md) | Living | Multi-review pipeline; queue wait is 30 minutes. |
 | [native-agent-commands.md](architecture/native-agent-commands.md) | Living | Slash-command descriptors, bridge wire contract, intent resolution, collisions, catalogue lifecycle. |

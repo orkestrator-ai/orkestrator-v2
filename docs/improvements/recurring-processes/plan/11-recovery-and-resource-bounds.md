@@ -1,7 +1,10 @@
 # 11 — Qualify bounded event and snapshot recovery
 
-Status: Not started. Dependencies: 01; coordinate contracts with 03, 06 and 07.
-Finding: F07. This is a prerequisite for dependent polling reductions.
+Status: Contracts and PR/diff migration implemented (see
+[completion notes](#completion-notes)); real-stack/browser qualification and
+the file/tree/coordinator/native adopters remain open. Dependencies: 01;
+coordinate contracts with 03, 06 and 07. Finding: F07. This is a prerequisite
+for dependent polling reductions.
 
 ## Outcome
 
@@ -88,3 +91,104 @@ Land additive contracts and client fallback before enabling new policy. If a
 peer lacks the contract or convergence fails, select the conservative read
 schedule automatically. Keep the protocol additive during rollback; remove
 obsolete compatibility only through a separately reviewed support-window change.
+
+## Completion notes
+
+Recorded 2026-09-25. Living reference:
+[event-snapshot-recovery.md](../../../architecture/event-snapshot-recovery.md).
+
+### What landed
+
+| Commit | Change |
+| --- | --- |
+| `0ac34533` | `packages/protocol/src/view-sync.ts`: `ViewRevisionStamp`, `readViewRevisionStamp`, `hasValidOptionalViewStamp`, `parseViewSnapshotRequest`, `resolveViewSnapshotOutcome`, `ViewSnapshotOutcome` (`unchanged`/`snapshot`/`reset`/`deleted`), `classifyViewSnapshotResponse`, `ViewSyncCapability`, `isUnknownViewCommandError`. Optional `generation`/`revision` on PR monitor and diff-stats events and snapshots (`PrMonitorSnapshotOutcome`, `EnvironmentDiffStatsSnapshotOutcome`). |
+| `a4afdf60` | `PrMonitorService` / `DiffStatsService` stamp every announced event with a per-instance generation and contiguous revision; `revisionedSnapshot()` captures entries and revision synchronously. Commands answer conditional reads. PR snapshots now contain announced state only; a mid-check "detecting" state is always lowered; diff untrack announces a removal; shutdown advances the revision. |
+| `13b9132a` | `apps/web/src/lib/bounded-hydration.ts` (+ `-primitives.ts`): bounded subscribe-before-snapshot controller. `usePrMonitorService` and `useEnvironmentDiffStats` migrated (unbounded `bufferedEvents` removed), `syncStatus` mirrored into both stores, `onViewSafetyCheck` in `resource-sync.ts`. |
+| `42780df0`, `7dba0d65` | Test typing fixes found by `mise run check`. |
+| docs commit | This note, the architecture note, and the catalog entry. |
+
+Tasks 1–10 are addressed as follows. (1) Sequence table in the architecture
+note. (2) Stamps plus conditional reads; snapshot revision is captured with
+the body. (3) Generic outcome/deleted/capability contract with tests; the
+file/tree/coordinator producers are deferred to steps 03 and 09. (4)–(7)
+`createBoundedHydration`. (8) Safety reads ride the existing five-minute
+manifest interval and resource revision gaps; the manifest itself was not
+extended because PR/diff ownership (in-memory, process-lifetime generations)
+does not match its persistent-resource digests. (9) No transport code
+changed; replay content was not expanded. (10) Notifications are
+**best-effort**: deduplicated per (environment, URL, state) in a 256-key
+bounded set, delivered after their state, never replayed after disconnection;
+current PR state is always recovered. No durable transition journal.
+
+### Supported peers
+
+Current client + current backend: revisioned. Current client + backend before
+this step: `legacy` — reconnect hydration with bounded buffering and the old
+replay-over-snapshot semantics, no periodic reads. Backend without the
+snapshot command: `unsupported` — live events only until a reconnect. Client
+before this step + current backend: unaffected (additive fields only).
+
+### Recovery coverage list
+
+Later polling-reduction steps must cite the rows they rely on and add their own
+rows for their view.
+
+| Case | Test (file › name) |
+| --- | --- |
+| Event before subscription | `apps/web/src/lib/bounded-hydration.test.ts` › event before subscription…; `apps/web/src/hooks/usePrMonitorService.test.tsx` › subscribes to changes before reading the snapshot |
+| Event during snapshot | bounded-hydration › event during a snapshot is applied over it only when newer; `useEnvironmentDiffStats.test.tsx` › an older buffered change never overwrites the newer snapshot |
+| Multiple reconnects during snapshot | bounded-hydration › multiple reconnects during a snapshot fence it and queue exactly one rerun |
+| Older snapshot resolving late | bounded-hydration › an older snapshot resolving late never overwrites the newer one |
+| Same-revision duplicate | bounded-hydration › a duplicate revision applies and notifies once |
+| Out-of-order update | bounded-hydration › an out-of-order update is detected as a gap…; › a late-filled gap outside recovery… |
+| Generation reset | bounded-hydration › a generation reset replaces the view…; › a snapshot from a replaced owner is not applied |
+| Lost final event | bounded-hydration › a lost final event is recovered by the compact safety check; `usePrMonitorService.test.tsx` › a missed transition never prevents current state recovery |
+| Replay expiry | bounded-hydration › replay expiry reconnect restores the exact snapshot, removals included |
+| Filtered stream cursor | bounded-hydration › filtered global cursors do not create domain gaps |
+| Deletion and recreation | bounded-hydration › deletion then recreation…; › a removal during hydration does not resurrect the key; › a stale update after a removal is ignored; `useEnvironmentDiffStats.test.tsx` › an untracked environment's removal does not resurrect… |
+| Buffer overflow | bounded-hydration › buffer overflow keeps only high-water evidence…; › …insufficient snapshot…converges by bounded retry; › continuous events cannot grow memory while snapshots keep failing |
+| Invalid payload | bounded-hydration › an invalid snapshot is never applied…; existing malformed-event/snapshot tests in `tests/unit/hooks/use{PrMonitorService,EnvironmentDiffStats}.test.tsx`; protocol stamp validation tests |
+| Snapshot timeout | bounded-hydration › snapshot timeouts retry with capped backoff, then degrade until a safety check |
+| Unsupported capability | bounded-hydration › unsupported capability stops timed reads until a reconnect; › a legacy peer replays buffered updates…; `usePrMonitorService.test.tsx` › an unknown snapshot command selects the unsupported capability |
+| Transport switch | bounded-hydration › transport switch to a new owner…; › …to a legacy peer… |
+| Gap → conditional read | `useEnvironmentDiffStats.test.tsx` › a revision gap triggers one conditional read from the contiguous position |
+| Safety cadence | `resource-sync.test.ts` › ephemeral view safety checks (3 tests); `usePrMonitorService.test.tsx` › the resource-sync safety cadence runs a compact check… |
+| PR transitions | `usePrMonitorService.test.tsx` › a retried or re-delivered transition toasts once and a rehydrate never re-toasts (also asserts no client-side terminal mutation); › a replacement PR's merge is announced…; › a missed transition never prevents current state recovery |
+| Backend stamping | `tests/unit/backend/view-revisions.test.ts` (10 tests); `commands-state-sync.test.ts` › snapshot reads are stamped and answer compact conditional reads; `commands-integration.test.ts` › computes counts for a tracked local environment and announces them |
+
+### Checks
+
+Focused suites passed: protocol (`view-sync`, `pr-monitor`, `diff-stats`),
+backend services (`pr-monitor-service`, `diff-stats-service`,
+`view-revisions`), `commands-state-sync` (new test), the diff-statistics
+block of `commands-integration` (with `--timeout 60000`), web
+`bounded-hydration`, both hooks (web and root suites), `resource-sync`, and
+`backend.test` wrappers, plus the related sidebar, `usePullRequest`, store,
+`ActionBar` and `App` suites. `mise run check` passed.
+
+`mise run test:changed` (host shared with several concurrent agents) failed
+only on timeouts in unrelated code: six `commands-registry-environments`
+lifecycle tests (five passed alone; "retains the environment and process
+ownership when deletion cannot reap a server" took ~8 s against a 5 s budget
+and passed with `--timeout 60000`) and `DesignCanvasTab history › only the
+focused pane handles a shared shortcut` (passed alone). The two
+`commands-state-sync` "initial prompt attachment command" tests time out in
+confined file-write helpers under this load and pass with `--timeout 60000`.
+None of these exercise the changed code paths.
+
+### Not done / deferred
+
+- Real-browser and real-stack qualification (two clients, one disconnected,
+  backend restart while a snapshot is in flight). Unit coverage only.
+- Step 03 file/tree producers, step 09 coordinator view, and native-session
+  projections (approvals, parked dispatch, partial history) have not adopted
+  the contract; their "same-count path change", "tree-only edit" and
+  "unavailable is not empty" tests belong to those steps.
+- No UI surfaces `syncStatus` yet; it is available in both stores.
+- No measured before/after call counts: step 01's baseline was not available
+  in this worktree. Expected steady-state cost is one bodiless conditional
+  read per view per five minutes for revisioned peers.
+- Durable transition delivery was deliberately not implemented (best-effort
+  policy above). Reconsider only if a product requirement appears.
+- No polling was reduced by this step; dependent steps must still pass their
+  own qualification before relying on it.

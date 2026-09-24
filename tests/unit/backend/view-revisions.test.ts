@@ -24,6 +24,14 @@ import {
   type PrMonitorTarget,
 } from "../../../apps/backend/src/core/pr-monitor";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 async function settle() {
   for (let index = 0; index < 12; index += 1) await Promise.resolve();
 }
@@ -116,7 +124,7 @@ describe("PrMonitorService revisions", () => {
 
   test("an unannounced probe never appears in the client snapshot", async () => {
     const harness = prHarness();
-    const pending = Promise.withResolvers<PrDetection | null>();
+    const pending = deferred<PrDetection | null>();
     harness.setDetect(() => pending.promise);
     harness.service.probe(prTarget({ prUrl: null, prState: null, hasMergeConflicts: null }));
     await harness.fireAll();
@@ -139,7 +147,7 @@ describe("PrMonitorService revisions", () => {
   test("a mid-check announcement of a detecting state is always followed by its lowering", async () => {
     const harness = prHarness();
     harness.service.sync([prTarget()]);
-    const pending = Promise.withResolvers<PrDetection | null>();
+    const pending = deferred<PrDetection | null>();
     harness.setDetect(() => pending.promise);
     await harness.fireAll();
     // A mode request lands while the check runs and announces checkInProgress.

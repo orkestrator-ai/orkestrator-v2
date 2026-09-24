@@ -60,7 +60,23 @@ function fakeClock() {
   };
 }
 
-type Fetch = HydrationFetchRequest & PromiseWithResolvers<HydrationFetchResult<string | null>>;
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+type Fetch = HydrationFetchRequest & Deferred<HydrationFetchResult<string | null>>;
 
 function harness(limits: Partial<BoundedHydrationLimits> = {}) {
   const time = fakeClock();
@@ -72,9 +88,9 @@ function harness(limits: Partial<BoundedHydrationLimits> = {}) {
   const hydration = createBoundedHydration<string | null>({
     name: "test-view",
     fetchSnapshot: (request) => {
-      const deferred = Promise.withResolvers<HydrationFetchResult<string | null>>();
-      fetches.push({ ...request, ...deferred });
-      return deferred.promise;
+      const pending = deferred<HydrationFetchResult<string | null>>();
+      fetches.push({ ...request, ...pending });
+      return pending.promise;
     },
     replaceAll: (entries) => {
       replaceAllCalls += 1;

@@ -28,7 +28,7 @@ import {
 } from "./interactions.js";
 import { listModels, refreshModels } from "./models.js";
 import { parseAgentMcpConnection } from "./mcp-config.js";
-import { mcpConnectionNeedsRefresh, publicPiMcpServers } from "./mcp.js";
+import { mcpConnectionNeedsRefresh, publicPiMcpConfig, publicPiMcpServers } from "./mcp.js";
 import { persistBarrier, schedulePersist } from "./persistence.js";
 import { dispatchPrompt, errorText, journal, setPromptJournal } from "./prompt.js";
 import {
@@ -441,8 +441,15 @@ async function routeSession(
   if (action === "runtime-health" && request.method === "GET") {
     // A read, like `/activity`: it must not touch liveness, hydrate, or
     // re-attach, or the backend's two-second sweep would keep every session
-    // permanently warm.
-    return json(response, 200, { summary: publicRuntime(state), ...state.health.snapshot() });
+    // permanently warm. `mcpConfig` names the saved MCP files the attached
+    // generation was built from (digests only), so the backend can report a
+    // configuration change as applied on evidence rather than assumption.
+    const mcpConfig = publicPiMcpConfig(state);
+    return json(response, 200, {
+      summary: publicRuntime(state),
+      ...state.health.snapshot(),
+      ...(mcpConfig ? { mcpConfig } : {}),
+    });
   }
   if (action === "dispatch" && request.method === "GET") {
     return json(response, 200, publicDispatch(state, url.searchParams.get("requestId") || ""));

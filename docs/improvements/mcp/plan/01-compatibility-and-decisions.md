@@ -1,9 +1,11 @@
 # 01 — Establish compatibility evidence and resolve adapter decisions
 
 Status: partly done. Decisions and source/capability tables are recorded in
-[mcp-management.md](../../../architecture/mcp-management.md) from the pinned SDK declarations,
-generated Codex protocol and vendor docs. Live probes against the pinned binaries have **not** been run;
-unverified behaviour is gated or reported as pending. Dependencies: none. [Plan index](00-index.md).
+[mcp-management.md](../../../architecture/mcp-management.md) from the pinned SDK declarations, generated Codex protocol, the pinned
+OpenCode and Grok binaries' embedded configuration docs, and one live probe (the pinned Claude SDK
+0.3.280 / CLI 2.1.280 MCP loading, recorded as a discrepancy). The remaining live probes against the pinned
+binaries (Codex reload adoption, OpenCode/Grok restart, Cursor resume re-read, removed tools gone) have
+**not** been run; unverified behaviour is gated or reported as pending. Dependencies: none. [Plan index](00-index.md).
 
 ## Purpose
 

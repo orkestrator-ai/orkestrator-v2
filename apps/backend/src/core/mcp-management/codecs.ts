@@ -195,6 +195,18 @@ function nameErrors(
   return [];
 }
 
+/** For providers whose remote entries have no environment block; the codec would drop it. */
+function remoteEnvErrors(definition: CanonicalDefinition, provider: string): McpFieldError[] {
+  if (definition.transport === "stdio" || definition.transport === "unknown") return [];
+  if (!Object.keys(definition.env).length) return [];
+  return [
+    {
+      field: "env",
+      message: `${provider} remote servers do not take environment variables; use headers.`,
+    },
+  ];
+}
+
 function requireTransportFields(definition: CanonicalDefinition): McpFieldError[] {
   if (definition.transport === "stdio" && !definition.command)
     return [{ field: "command", message: "Required." }];
@@ -388,16 +400,18 @@ export const codexCodec: ProviderCodec = {
       ...requireTransportFields(definition),
       ...validateLimits(definition, {}, CODEX_ADVANCED),
     ];
-    if (definition.transport === "http" && Object.keys(definition.env).length) {
+    errors.push(...remoteEnvErrors(definition, "Codex"));
+    const bearer = definition.advanced.bearer_token_env_var;
+    if (typeof bearer === "string" && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(bearer)) {
       errors.push({
-        field: "env",
-        message: "Codex remote servers do not take environment variables; use headers.",
+        field: "advanced.bearer_token_env_var",
+        message: "Name an environment variable: letters, digits and underscores.",
       });
     }
     return errors;
   },
   mergeNote:
-    "Codex layers configuration files; a project entry replaces the user entry of the same name.",
+    "Codex merges same-name entries field by field: the higher layer's values win, env tables merge key by key, and fields it leaves out are inherited.",
 };
 
 // ---------------------------------------------------------------------------
@@ -502,6 +516,7 @@ export const opencodeCodec: ProviderCodec = {
     return [
       ...nameErrors(GENERIC_NAME, name, isNewName),
       ...requireTransportFields(definition),
+      ...remoteEnvErrors(definition, "OpenCode"),
       ...validateLimits(definition, {}, OPENCODE_ADVANCED),
     ];
   },
@@ -568,7 +583,8 @@ export const cursorCodec: ProviderCodec = {
     return [
       ...nameErrors(GENERIC_NAME, name, isNewName),
       ...requireTransportFields(definition),
-      ...validateLimits(definition, { args: 128, env: 128, headers: 128 }, []),
+      ...remoteEnvErrors(definition, "Cursor"),
+      ...validateLimits(definition, {}, []),
     ];
   },
   mergeNote: "Cursor uses the whole winning entry; fields are not merged across sources.",
@@ -602,6 +618,7 @@ const GROK_OWNED = [
   "env",
   "url",
   "headers",
+  "enabled",
   ...GROK_ADVANCED.map((field) => field.id),
 ];
 
@@ -627,11 +644,15 @@ export const grokCodec: ProviderCodec = {
       definition.invalidReason = "No command or URL.";
     }
     definition.advanced = readAdvanced(raw, GROK_ADVANCED, definition.transport);
+    // Documented as `enabled = true` by default; `false` skips the server.
+    definition.enabled = raw.enabled !== false;
     if (env.invalid || headers.invalid || args.invalid)
       definition.invalidReason ??= "Some values are not text.";
     return definition;
   },
   encode(definition, previous) {
+    // `enabled` is read but never written: toggling it is not a verified
+    // operation, so whatever the file says is carried through unchanged.
     const out: NativeEntry = { ...previous };
     for (const key of ["command", "args", "env", "url", "headers"]) delete out[key];
     if (definition.transport === "stdio") {
@@ -649,6 +670,7 @@ export const grokCodec: ProviderCodec = {
     return [
       ...nameErrors(GENERIC_NAME, name, isNewName),
       ...requireTransportFields(definition),
+      ...remoteEnvErrors(definition, "Grok Build"),
       ...validateLimits(definition, {}, GROK_ADVANCED),
     ];
   },
@@ -673,6 +695,53 @@ export function piSanitizedName(value: string): string | undefined {
   if (!trimmed || trimmed.length > 64) return undefined;
   const sanitized = trimmed.replace(/[^a-zA-Z0-9_-]/g, "_");
   return /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(sanitized) ? sanitized : undefined;
+}
+
+/** Servers the Pi bridge accepts from one file (`MAX_MCP_SERVERS` in pi-bridge/src/mcp-config.ts). */
+export const PI_SERVERS_PER_FILE = 64;
+
+function nonBlank(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * Why the Pi bridge silently skips an entry, mirroring `normalizeMcpServer` /
+ * `readTransport` in pi-bridge/src/mcp-config.ts. `undefined` means Pi loads
+ * it. A disabled entry is reported separately and is not a load failure.
+ */
+export function piLoadBlock(name: string, raw: NativeEntry | null): string | undefined {
+  if (!piSanitizedName(name)) {
+    return "Pi skips this entry: a server name must start with a letter and be at most 64 characters.";
+  }
+  if (!raw) return "Pi skips this entry: it is not an object.";
+  const declared =
+    typeof raw.transport === "string"
+      ? raw.transport
+      : typeof raw.type === "string"
+        ? raw.type
+        : undefined;
+  let transport: "http" | "stdio" | undefined;
+  if (declared === "streamable-http" || declared === "http" || declared === "sse") {
+    transport = "http";
+  } else if (declared === "stdio" || declared === undefined) {
+    if (nonBlank(raw.url)) transport = "http";
+    else if (nonBlank(raw.command)) transport = "stdio";
+  } else {
+    return `Pi skips this entry: transport "${declared}" is not recognised.`;
+  }
+  if (transport === "http") {
+    if (!nonBlank(raw.url)) return "Pi skips this entry: a remote server needs a URL.";
+    try {
+      const url = new URL(raw.url.trim());
+      if (url.protocol !== "http:" && url.protocol !== "https:")
+        return "Pi skips this entry: the URL must start with http:// or https://.";
+    } catch {
+      return "Pi skips this entry: the URL is not valid.";
+    }
+    return undefined;
+  }
+  if (transport !== "stdio") return "Pi skips this entry: it has no command or URL.";
+  return undefined;
 }
 
 export const piCodec: ProviderCodec = {
@@ -745,6 +814,7 @@ export const piCodec: ProviderCodec = {
     return [
       ...nameErrors(PI_NAME, name, isNewName),
       ...requireTransportFields(definition),
+      ...remoteEnvErrors(definition, "Pi"),
       ...validateLimits(definition, { args: 32, env: 32, headers: 16 }, []),
     ];
   },

@@ -1,8 +1,9 @@
 # MCP management implementation plan
 
 Date: 2026-09-21. Baseline: `88c2f9cc`.
-Status: implemented except step 13's writable container overlay and the live-probe / real-stack
-evidence of steps 01 and 14 (2026-09-23). Living doc: [mcp-management.md](../../../architecture/mcp-management.md).
+Status: implemented except the items each step's status line lists as not done — chiefly step 13's
+writable container overlay, the saved-to-live runtime row join, per-session Grok application, and the
+live-provider / container evidence of steps 01 and 14 (2026-09-24). Living doc: [mcp-management.md](../../../architecture/mcp-management.md).
 
 Start with the [investigation](../../mcp.md). This directory specifies future
 implementation work only. The investigation's source links identify existing

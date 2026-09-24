@@ -1,7 +1,10 @@
 # 09 — Implement Cursor configuration management
 
-Status: done — file CRUD plus idle reattach at the next message with no silent new conversation.
-Per-send override path not used. Depends on: 01–05. [Plan index](00-index.md).
+Status: done — file CRUD plus idle reattach at the next message with no silent new conversation (the
+resume requirement is persisted, and covers token rotation); removed servers stop reporting connected; the
+runtime reports its build digests for `applied` evidence; containers are reported as not receiving the
+backend user's file. Per-send override path not used; plugin/team sources not modelled.
+Depends on: 01–05. [Plan index](00-index.md).
 
 ## Existing owners
 

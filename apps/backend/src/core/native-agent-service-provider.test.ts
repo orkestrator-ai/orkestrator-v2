@@ -1188,3 +1188,69 @@ describe("NativeAgentService", () => {
     );
   });
 });
+
+describe("MCP configuration evidence", () => {
+  const LOGICAL = "env-env-1:tab-1";
+  const persist = (storage: StorageService) =>
+    storage.getOrCreateNativeAgentSession(
+      {
+        key: nativeAgentSessionStorageKey("env-1", "claude", LOGICAL),
+        environmentId: "env-1",
+        agent: "claude",
+        logicalSessionKey: LOGICAL,
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      },
+      async () => "provider-session-1",
+    );
+
+  test("reads a persisted session's evidence from the running bridge and nothing else", async () => {
+    const evidence = {
+      sources: { user: `sha256:${"a".repeat(43)}` },
+      observedAt: "2026-09-24T10:00:00.000Z",
+      scope: "session" as const,
+    };
+    const stub = createProviderStub("claude");
+    const read = mock(async (_sessionId: string) => evidence);
+    (stub.provider as { mcpConfigEvidence?: unknown }).mcpConfigEvidence = read;
+    await withService(
+      { prefix: "orkestrator-native-mcp-evidence-", provider: async () => stub.provider },
+      async ({ storage, service }) => {
+        // No persisted mapping: there is no session to ask about.
+        expect(await service.mcpConfigEvidenceIfRunning("env-1", "claude", LOGICAL)).toEqual({
+          state: "none",
+        });
+        expect(read).not.toHaveBeenCalled();
+
+        await persist(storage);
+        expect(await service.mcpConfigEvidenceIfRunning("env-1", "claude", LOGICAL)).toEqual({
+          state: "evidence",
+          evidence,
+        });
+        expect(read).toHaveBeenCalledWith("provider-session-1");
+        // Observation only: nothing was created, sent or re-attached.
+        expect(stub.createSession).not.toHaveBeenCalled();
+        expect(stub.send).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  test("a bridge that is not running is reported, never started", async () => {
+    const commands: string[] = [];
+    const invoke = (async <T>(command: string): Promise<T> => {
+      commands.push(command);
+      if (command === "peek_local_agent_bridge") return null as T;
+      throw new Error(`Unexpected backend command: ${command}`);
+    }) as Invoke;
+    await withService(
+      { prefix: "orkestrator-native-mcp-evidence-idle-", invoke },
+      async ({ storage, service }) => {
+        await persist(storage);
+        expect(await service.mcpConfigEvidenceIfRunning("env-1", "claude", LOGICAL)).toEqual({
+          state: "not-running",
+        });
+        expect(commands).toEqual(["peek_local_agent_bridge"]);
+      },
+    );
+  });
+});

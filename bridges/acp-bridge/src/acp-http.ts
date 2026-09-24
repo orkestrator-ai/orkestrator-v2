@@ -54,6 +54,7 @@ import {
   provider,
   sessions,
   isObject,
+  publicMcpConfigStatus,
   publicRuntime,
   workingDirectory,
   type BridgeFilePart,
@@ -299,13 +300,22 @@ export async function route(
   }
   if (action === "mcp" && request.method === "GET") {
     configuredAcpMcpServers();
-    return json(response, 200, { servers: agentRuntime.mcp ?? [] });
+    // `mcpConfig.inventoryScope` is `process`: this listing is shared by every
+    // session on the bridge, not exact truth for this one.
+    return json(response, 200, {
+      servers: agentRuntime.mcp ?? [],
+      mcpConfig: await publicMcpConfigStatus(),
+    });
   }
   /** Liveness only: no touch, transcript hydration, or re-attach. */
   if (action === "runtime-health" && request.method === "GET") {
     // A read, like `/activity`: no liveness touch, no transcript hydration, no
     // re-attach.
-    return json(response, 200, { summary: publicRuntime(state), ...state.health.snapshot() });
+    return json(response, 200, {
+      summary: publicRuntime(state),
+      ...state.health.snapshot(),
+      mcpConfig: await publicMcpConfigStatus(),
+    });
   }
   if (action === "activity" && request.method === "GET") {
     return json(response, 200, {

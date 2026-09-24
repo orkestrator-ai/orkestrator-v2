@@ -1,4 +1,17 @@
-import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { randomBytes } from "node:crypto";
+
+import {
+  AGENT_PLATFORMS,
+  isAgentPlatform,
+  type AgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
+import {
+  McpManagementFailure,
+  mcpFailure,
+  mcpManagementErrorFromUnknown,
+  normalizeMcpManagementRolloutSettings,
+  type McpManagementRolloutSettings,
+} from "@orkestrator/protocol/mcp-management";
 
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
@@ -15,6 +28,15 @@ const PORT_FIELD: Record<AgentPlatform, keyof Environment> = {
   grok: "localGrokPort",
   opencode: "localOpencodePort",
   pi: "localPiPort",
+};
+
+const PID_FIELD: Record<AgentPlatform, keyof Environment> = {
+  claude: "claudeBridgePid",
+  codex: "codexBridgePid",
+  cursor: "cursorBridgePid",
+  grok: "grokBridgePid",
+  opencode: "opencodePid",
+  pi: "piBridgePid",
 };
 
 /**
@@ -37,6 +59,15 @@ export function createMcpRuntimeProbe(context: CommandContext): RuntimeProbe {
             environment.environmentType === "containerized"
               ? environment.status === "running"
               : typeof environment[PORT_FIELD[provider]] === "number",
+          bridgePid: (provider) => {
+            const pid = environment[PID_FIELD[provider]];
+            return environment.environmentType === "local" &&
+              typeof pid === "number" &&
+              Number.isSafeInteger(pid) &&
+              pid > 0
+              ? pid
+              : undefined;
+          },
         }));
     },
     async sessions(): Promise<ApplySession[]> {
@@ -57,18 +88,35 @@ export function createMcpRuntimeProbe(context: CommandContext): RuntimeProbe {
       if (!service) return "unknown";
       return service.sessionTurnActivitySnapshot(environmentId, agent as never, logicalSessionKey);
     },
-    async reloadCodex(environmentId, logicalSessionKey) {
+    async reloadCodex(environmentId) {
       const service = context.nativeAgents;
-      if (!service) throw new Error("Native agents are unavailable.");
-      // Codex's reconnect is `config/mcpServer/reload`, which is process-wide
-      // and ignores the server name; `orkestrator` is always present.
-      await service.performProjectionMcpAction({
+      // No native agent service means no bridge is running in this backend.
+      if (!service) return "not-running";
+      // Environment-level and no-spawn: never resolves a session (which a
+      // restarted bridge may not have) and never cold-starts app-server.
+      return service.reloadMcpConfigurationIfRunning(environmentId, "codex");
+    },
+    async mcpConfigEvidence(environmentId, agent, logicalSessionKey) {
+      const service = context.nativeAgents;
+      if (!service) return { state: "not-running" };
+      // Observation only: resolves an already-running bridge and reads the
+      // no-touch runtime-health route, so it never starts a bridge, refreshes
+      // a session's liveness or re-attaches an idle one.
+      const read = await service.mcpConfigEvidenceIfRunning(
         environmentId,
-        agent: "codex",
+        agent as never,
         logicalSessionKey,
-        serverId: "orkestrator",
-        action: "reconnect",
-      });
+      );
+      return read.state === "evidence"
+        ? {
+            state: "evidence",
+            evidence: {
+              sources: read.evidence.sources,
+              observedAt: read.evidence.observedAt,
+              scope: read.evidence.scope,
+            },
+          }
+        : read;
     },
   };
 }
@@ -122,10 +170,48 @@ export function mcpManagement(context: CommandContext): McpManagementService {
       emit: (event, payload) => context.emit(event, payload),
       probe: createMcpRuntimeProbe(context),
       readContainerFile: readContainerMcpFile,
+      loadRollout: mcpRolloutLoader(context),
     });
     services.set(context.storage, service);
   }
   return service;
+}
+
+/** Reads the stored rollout gate from the global config. */
+export function mcpRolloutLoader(context: Pick<CommandContext, "storage">): () => Promise<unknown> {
+  return async () => (await context.storage.loadConfig()).global.mcpManagement;
+}
+
+function newCorrelationId(): string {
+  return `mcpe-${randomBytes(9).toString("base64url")}`;
+}
+
+/**
+ * Give every structured failure a correlation id and log it with the code
+ * only — never a value, path or provider text — so an operator can match the
+ * reference a user reports to exactly one log line.
+ */
+export async function withMcpCorrelation<T>(command: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    const known = mcpManagementErrorFromUnknown(error);
+    const detail = known ?? mcpFailure("internal").detail;
+    const correlationId = detail.correlationId ?? newCorrelationId();
+    console.warn(
+      `[mcp-management] ${command} failed: code=${detail.code} ref=${correlationId}${
+        known ? "" : ` cause=${error instanceof Error ? error.name : typeof error}`
+      }`,
+    );
+    throw new McpManagementFailure({ ...detail, correlationId });
+  }
+}
+
+function parseProviders(value: unknown, field: string): AgentPlatform[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((entry) => !isAgentPlatform(entry)))
+    throw mcpFailure("invalid-request", { message: `${field} must list known providers.` });
+  return AGENT_PLATFORMS.filter((provider) => value.includes(provider));
 }
 
 /**
@@ -133,14 +219,39 @@ export function mcpManagement(context: CommandContext): McpManagementService {
  * exposed as Control MCP tools, and none of them accepts a filesystem path.
  */
 export function registerMcpManagementCommands(register: CommandRegistrar): void {
-  register("list_mcp_management_targets", (args, context) =>
-    mcpManagement(context).listTargets(args),
+  const route = (
+    name: string,
+    run: (args: Record<string, unknown>, context: CommandContext) => Promise<unknown>,
+  ) => register(name, (args, context) => withMcpCorrelation(name, () => run(args, context)));
+  route("list_mcp_management_targets", (args, context) => mcpManagement(context).listTargets(args));
+  route("get_mcp_management_snapshot", (args, context) => mcpManagement(context).snapshot(args));
+  route("get_mcp_definition", (args, context) => mcpManagement(context).getDefinition(args));
+  route("validate_mcp_mutation", (args, context) => mcpManagement(context).validate(args));
+  route("mutate_mcp_definition", (args, context) => mcpManagement(context).mutate(args));
+  route("apply_mcp_configuration", (args, context) => mcpManagement(context).apply(args));
+  route("get_mcp_operation", (args, context) => mcpManagement(context).getOperation(args));
+  route("cancel_mcp_apply", (args, context) => mcpManagement(context).cancelApply(args));
+
+  // Backend-owned rollout gate / kill switch (`global.mcpManagement`). An
+  // operator surface, not a user preference; see McpManagementRolloutSettings.
+  route("get_mcp_management_rollout", async (_args, context) =>
+    normalizeMcpManagementRolloutSettings(
+      (await context.storage.loadConfig()).global.mcpManagement,
+    ),
   );
-  register("get_mcp_management_snapshot", (args, context) => mcpManagement(context).snapshot(args));
-  register("get_mcp_definition", (args, context) => mcpManagement(context).getDefinition(args));
-  register("validate_mcp_mutation", (args, context) => mcpManagement(context).validate(args));
-  register("mutate_mcp_definition", (args, context) => mcpManagement(context).mutate(args));
-  register("apply_mcp_configuration", (args, context) => mcpManagement(context).apply(args));
-  register("get_mcp_operation", (args, context) => mcpManagement(context).getOperation(args));
-  register("cancel_mcp_apply", (args, context) => mcpManagement(context).cancelApply(args));
+  route("set_mcp_management_rollout", async (args, context) => {
+    if (args.enabled !== undefined && typeof args.enabled !== "boolean")
+      throw mcpFailure("invalid-request", { message: "enabled must be a boolean." });
+    const writeProviders = parseProviders(args.writeProviders, "writeProviders");
+    const applyProviders = parseProviders(args.applyProviders, "applyProviders");
+    const current = await context.storage.loadConfig();
+    const existing = normalizeMcpManagementRolloutSettings(current.global.mcpManagement);
+    const next: McpManagementRolloutSettings = {
+      enabled: (args.enabled as boolean | undefined) ?? existing.enabled,
+      writeProviders: writeProviders ?? existing.writeProviders,
+      applyProviders: applyProviders ?? existing.applyProviders,
+    };
+    await context.storage.updateMcpManagementRollout(next);
+    return mcpManagement(context).refreshRollout();
+  });
 }

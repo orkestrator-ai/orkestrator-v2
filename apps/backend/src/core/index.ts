@@ -1,6 +1,10 @@
 import { DesignService } from "./design-service.js";
 import { PreviewRuntime } from "./preview-runtime.js";
-import { createMcpRuntimeProbe, readContainerMcpFile } from "./commands-registry-mcp.js";
+import {
+  createMcpRuntimeProbe,
+  mcpRolloutLoader,
+  readContainerMcpFile,
+} from "./commands-registry-mcp.js";
 import { McpManagementService } from "./mcp-management/service.js";
 import {
   closeLocalServerAdmission,
@@ -346,6 +350,7 @@ export class OrkestratorBackend {
       emit: options.emit,
       probe: createMcpRuntimeProbe(context),
       readContainerFile: readContainerMcpFile,
+      loadRollout: mcpRolloutLoader(context),
     });
     this.projectGit = new ProjectGitService(storage, async (projectId) => {
       const workspace = await storage.getCoordinatorWorkspace(projectId);

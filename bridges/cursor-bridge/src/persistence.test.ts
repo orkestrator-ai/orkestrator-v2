@@ -95,6 +95,28 @@ describe("round trip", () => {
     expect(restored.dispatching).toBe(false);
   });
 
+  test("keeps a pending configuration resume, and writes nothing when there is none", async () => {
+    const pending = newSessionState();
+    pending.agentId = "agent-1";
+    pending.configResumePending = true;
+    const settled = newSessionState();
+    settled.agentId = "agent-2";
+    sessions.set(pending.id, pending);
+    sessions.set(settled.id, settled);
+
+    const payload = (await persist()) as { sessions: Array<Record<string, unknown>> };
+    expect(payload.sessions.find((entry) => entry.id === settled.id)).not.toHaveProperty(
+      "configResumePending",
+    );
+    sessions.clear();
+    await loadPersistedState();
+
+    // A restart between the detach and a successful resume must still refuse
+    // to replace the conversation with a new agent.
+    expect(sessions.get(pending.id)?.configResumePending).toBe(true);
+    expect(sessions.get(settled.id)?.configResumePending).toBeUndefined();
+  });
+
   test("drops token counts a state file cannot justify", async () => {
     const state = newSessionState();
     state.usage = {

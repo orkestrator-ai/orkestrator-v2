@@ -3,12 +3,17 @@ import { describe, expect, test } from "bun:test";
 import type { McpEditableDefinition } from "@orkestrator/protocol/mcp-management";
 
 import {
+  advancedTextProblem,
   definitionInputFromDraft,
   draftFromDefinition,
   emptyDraft,
+  formatAdvancedValue,
   isEmptyPatch,
+  newArgRow,
   newMapRow,
+  parseAdvancedText,
   patchFromDraft,
+  rebaseDraft,
   removeMapRow,
 } from "./mcp-draft";
 
@@ -104,5 +109,87 @@ describe("mcp draft model", () => {
       args: ["a b; c"],
       env: [{ key: "A", value: "${A}" }],
     });
+  });
+
+  test("typed advanced text parses without losing what is typed", () => {
+    expect(parseAdvancedText("string-list", "a,")).toEqual(["a"]);
+    expect(parseAdvancedText("string-list", "a, b")).toEqual(["a", "b"]);
+    expect(parseAdvancedText("string-list", " , ")).toBe("");
+    expect(parseAdvancedText("number", "1.")).toBe(1);
+    expect(parseAdvancedText("number", "1.5")).toBe(1.5);
+    expect(parseAdvancedText("number", "  ")).toBe("");
+    // An unparseable number stays visible to the backend, never silently dropped.
+    expect(parseAdvancedText("number", "12s")).toBe("12s");
+    expect(parseAdvancedText("number", "Infinity")).toBe("Infinity");
+    expect(parseAdvancedText("string", " keep spaces ")).toBe(" keep spaces ");
+    expect(formatAdvancedValue(["a", "b"])).toBe("a, b");
+    expect(formatAdvancedValue(1.5)).toBe("1.5");
+    expect(formatAdvancedValue(undefined)).toBe("");
+  });
+
+  test("invalid numbers are explained, not coerced", () => {
+    const field = {
+      id: "t",
+      label: "Timeout",
+      type: "number" as const,
+      transports: ["stdio" as const],
+      min: 1,
+      max: 600,
+    };
+    expect(advancedTextProblem(field, "")).toBeNull();
+    expect(advancedTextProblem(field, "1.")).toBeNull();
+    expect(advancedTextProblem(field, "abc")).toBe("Enter a number.");
+    expect(advancedTextProblem(field, "0")).toBe("Use 1 or more.");
+    expect(advancedTextProblem(field, "601")).toBe("Use 600 or less.");
+    expect(advancedTextProblem({ ...field, type: "string-list" }, "a,,")).toBeNull();
+  });
+
+  test("a reload carries only the user's edits onto the latest revision", () => {
+    const draft = draftFromDefinition(saved);
+    draft.cwd = "/work";
+    draft.env[0] = { ...draft.env[0]!, mode: "set", value: "typed" };
+    draft.advanced = { ...draft.advanced, tool_timeout_sec: 30 };
+    const latest: McpEditableDefinition = {
+      ...saved,
+      sourceRevision: "r1.def",
+      command: { kind: "visible", value: "bunx" },
+      args: [{ index: 0, value: { kind: "visible", value: "--fresh" } }],
+      advanced: { startup_timeout_sec: 20, enabled_tools: ["a"] },
+    };
+    const rebased = rebaseDraft(saved, draft, latest);
+    expect(rebased).not.toBeNull();
+    // Another writer's command, arguments and advanced values survive…
+    expect(rebased!.command).toEqual({ kind: "set", value: "bunx" });
+    expect(rebased!.args.map((arg) => (arg.kind === "set" ? arg.value : arg.index))).toEqual([
+      "--fresh",
+    ]);
+    // …and the user's own edits are kept.
+    expect(rebased!.cwd).toBe("/work");
+    expect(rebased!.env[0]).toMatchObject({ key: "API_KEY", mode: "set", value: "typed" });
+    expect(rebased!.advanced).toEqual({
+      startup_timeout_sec: 20,
+      enabled_tools: ["a"],
+      tool_timeout_sec: 30,
+    });
+    expect(patchFromDraft(latest, rebased!)).toEqual({
+      cwd: { kind: "set", value: "/work" },
+      env: [{ key: "API_KEY", edit: { kind: "set", value: "typed" } }],
+      advanced: { set: { tool_timeout_sec: 30 } },
+    });
+  });
+
+  test("a reload keeps a removed advanced value removed", () => {
+    const draft = draftFromDefinition(saved);
+    draft.advanced = { startup_timeout_sec: "" };
+    const latest = { ...saved, advanced: { startup_timeout_sec: 10, other: true } };
+    expect(patchFromDraft(latest, rebaseDraft(saved, draft, latest)!).advanced).toEqual({
+      remove: ["startup_timeout_sec"],
+    });
+  });
+
+  test("edited arguments that retain saved values by position cannot be carried over", () => {
+    const draft = draftFromDefinition(saved);
+    draft.args = [...draft.args, newArgRow("--extra")];
+    expect(rebaseDraft(saved, draft, { ...saved, sourceRevision: "r1.def" })).toBeNull();
   });
 });

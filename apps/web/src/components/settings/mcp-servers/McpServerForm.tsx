@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 
 import {
@@ -14,7 +15,16 @@ import { Label } from "@/components/ui/label";
 import { SegmentedSelector } from "@/components/ui/segmented-selector";
 import { Switch } from "@/components/ui/switch";
 
-import { newArgRow, newMapRow, removeMapRow, type MapRow, type McpDraft } from "./mcp-draft";
+import {
+  advancedTextProblem,
+  formatAdvancedValue,
+  newArgRow,
+  newMapRow,
+  parseAdvancedText,
+  removeMapRow,
+  type MapRow,
+  type McpDraft,
+} from "./mcp-draft";
 
 const TRANSPORT_LABEL: Record<McpTransport, string> = {
   stdio: "Command (stdio)",
@@ -147,6 +157,39 @@ function AdvancedField({
       </div>
     );
   }
+  return <AdvancedTextField id={id} field={field} value={value} onChange={onChange} />;
+}
+
+/**
+ * Number and list fields keep the typed text locally, so a trailing comma or
+ * "1." stays on screen while the draft holds the parsed value. The text is
+ * re-read from the draft only when the draft changes from elsewhere.
+ */
+function AdvancedTextField({
+  id,
+  field,
+  value,
+  onChange,
+}: {
+  id: string;
+  field: McpAdvancedFieldSchema;
+  value: McpDraft["advanced"][string] | undefined;
+  onChange: (value: McpDraft["advanced"][string]) => void;
+}) {
+  const [text, setText] = useState(() => formatAdvancedValue(value));
+  const [synced, setSynced] = useState(value);
+  if (!sameAdvancedValue(value, synced)) {
+    setSynced(value);
+    setText(formatAdvancedValue(value));
+  }
+  const edit = (next: string) => {
+    const parsed = parseAdvancedText(field.type, next);
+    setText(next);
+    setSynced(parsed);
+    onChange(parsed);
+  };
+  const problem = advancedTextProblem(field, text);
+  const problemId = `${id}-problem`;
   return (
     <div className="space-y-1">
       <Label htmlFor={id} className="text-xs">
@@ -156,29 +199,34 @@ function AdvancedField({
         id={id}
         className="font-mono text-xs"
         inputMode={field.type === "number" ? "decimal" : undefined}
-        value={Array.isArray(value) ? value.join(", ") : value === undefined ? "" : String(value)}
+        value={text}
         placeholder={field.type === "string-list" ? "comma-separated" : undefined}
-        onChange={(event) => {
-          const text = event.target.value;
-          if (field.type === "number")
-            onChange(text.trim() === "" ? "" : Number.isNaN(Number(text)) ? text : Number(text));
-          else if (field.type === "string-list")
-            onChange(
-              text.trim()
-                ? text
-                    .split(",")
-                    .map((item) => item.trim())
-                    .filter(Boolean)
-                : "",
-            );
-          else onChange(text);
+        aria-invalid={problem ? true : undefined}
+        aria-describedby={problem ? problemId : undefined}
+        onChange={(event) => edit(event.target.value)}
+        onBlur={() => {
+          // Tidy list separators once the user leaves the field; numbers keep
+          // their text so an invalid entry stays visible next to its message.
+          if (field.type === "string-list") setText(formatAdvancedValue(synced));
         }}
       />
+      {problem ? (
+        <p id={problemId} className="text-xs text-red-300" role="alert">
+          {problem}
+        </p>
+      ) : null}
       {field.description ? (
         <p className="text-xs text-muted-foreground">{field.description}</p>
       ) : null}
     </div>
   );
+}
+
+function sameAdvancedValue(
+  left: McpDraft["advanced"][string] | undefined,
+  right: McpDraft["advanced"][string] | undefined,
+): boolean {
+  return JSON.stringify(left ?? "") === JSON.stringify(right ?? "");
 }
 
 export function McpServerForm({

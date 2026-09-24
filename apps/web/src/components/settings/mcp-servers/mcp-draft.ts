@@ -9,6 +9,7 @@
  */
 
 import type {
+  McpAdvancedFieldSchema,
   McpAdvancedValue,
   McpArgEdit,
   McpDefinitionInput,
@@ -254,6 +255,86 @@ export function patchFromDraft(
 
 export function isEmptyPatch(patch: McpDefinitionPatch): boolean {
   return Object.keys(patch).length === 0;
+}
+
+/** Text shown for a saved or draft advanced value in a text input. */
+export function formatAdvancedValue(value: McpDraft["advanced"][string] | undefined): string {
+  if (Array.isArray(value)) return value.join(", ");
+  return value === undefined ? "" : String(value);
+}
+
+/**
+ * Draft value for typed advanced text. Parsing never alters what the user sees;
+ * an unparseable number stays as its text so the backend reports it rather
+ * than the draft silently dropping it.
+ */
+export function parseAdvancedText(
+  type: McpAdvancedFieldSchema["type"],
+  text: string,
+): McpDraft["advanced"][string] {
+  const trimmed = text.trim();
+  if (type === "number") {
+    if (!trimmed) return "";
+    const value = Number(trimmed);
+    return Number.isFinite(value) ? value : text;
+  }
+  if (type === "string-list") {
+    const items = trimmed
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return items.length ? items : "";
+  }
+  return text;
+}
+
+/** Why typed advanced text cannot be saved, or null when it can. */
+export function advancedTextProblem(field: McpAdvancedFieldSchema, text: string): string | null {
+  if (field.type !== "number" || !text.trim()) return null;
+  const value = Number(text.trim());
+  if (!Number.isFinite(value)) return "Enter a number.";
+  if (field.min !== undefined && value < field.min) return `Use ${field.min} or more.`;
+  if (field.max !== undefined && value > field.max) return `Use ${field.max} or less.`;
+  return null;
+}
+
+/**
+ * Carry the user's edits onto a newer saved revision. Only fields the user
+ * changed relative to `original` keep their draft value; everything else is
+ * taken from `latest`, so another writer's change to an untouched field is not
+ * reverted by the next save. Returns null when the draft cannot be carried
+ * over: edited arguments that retain saved values by position.
+ */
+export function rebaseDraft(
+  original: McpEditableDefinition,
+  draft: McpDraft,
+  latest: McpEditableDefinition,
+): McpDraft | null {
+  const changed = patchFromDraft(original, draft);
+  if (changed.args && draft.args.some((arg) => arg.kind === "keep")) return null;
+  const next = draftFromDefinition(latest);
+  if (changed.transport) next.transport = draft.transport;
+  if (changed.command) next.command = draft.command;
+  if (changed.args) next.args = draft.args;
+  if (changed.cwd) next.cwd = draft.cwd;
+  if (changed.url) next.url = draft.url;
+  if (changed.env) {
+    next.env = draft.env;
+    next.clearedEnv = draft.clearedEnv;
+  }
+  if (changed.headers) {
+    next.headers = draft.headers;
+    next.clearedHeaders = draft.clearedHeaders;
+  }
+  if (changed.advanced) {
+    const advanced = { ...next.advanced };
+    for (const key of Object.keys(changed.advanced.set ?? {})) {
+      advanced[key] = draft.advanced[key] ?? "";
+    }
+    for (const key of changed.advanced.remove ?? []) advanced[key] = "";
+    next.advanced = advanced;
+  }
+  return next;
 }
 
 /** Remove a saved env/header row: saved keys become an explicit clear. */

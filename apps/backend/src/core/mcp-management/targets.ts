@@ -4,7 +4,10 @@
  *
  * A target id carries no path. It names the provider, and for an environment
  * its id plus an incarnation derived from its creation time, so a stale id can
- * never address a replacement environment that happens to reuse a name.
+ * never address a replacement environment that happens to reuse a name. A
+ * backend-user id is bound to this backend's instance identity, so an id minted
+ * by another backend (a remote one the client also talks to) is refused rather
+ * than silently addressing this backend's user files.
  */
 
 import { createHash } from "node:crypto";
@@ -22,6 +25,7 @@ import type { TargetContextInfo } from "./types.js";
 export interface TargetStorage {
   getEnvironment(id: string): Promise<Environment | null>;
   getProject(id: string): Promise<Project | null>;
+  getPreviewBackendIdentity(): Promise<{ instanceId: string }>;
 }
 
 export interface ResolvedTarget {
@@ -42,8 +46,15 @@ function incarnation(environment: Environment): string {
     .slice(0, 10);
 }
 
-export function backendTargetId(provider: AgentPlatform): string {
-  return `${PREFIX}~${provider}~backend`;
+function backendBinding(instanceId: string): string {
+  return createHash("sha256")
+    .update(`mcp-target\u0000${instanceId}`)
+    .digest("base64url")
+    .slice(0, 12);
+}
+
+export function backendTargetId(provider: AgentPlatform, instanceId: string): string {
+  return `${PREFIX}~${provider}~backend~${backendBinding(instanceId)}`;
 }
 
 export function environmentTargetId(provider: AgentPlatform, environment: Environment): string {
@@ -56,9 +67,9 @@ export const CONTAINER_READ_ONLY_REASON =
   "environment overlay, which this backend does not provide yet. Edit the backend-user configuration to " +
   "change what newly created containers receive.";
 
-function backendTarget(provider: AgentPlatform): ResolvedTarget {
+function backendTarget(provider: AgentPlatform, instanceId: string): ResolvedTarget {
   return {
-    targetId: backendTargetId(provider),
+    targetId: backendTargetId(provider, instanceId),
     provider,
     info: { kind: "backend", location: "backend-host" },
     context: {
@@ -122,7 +133,11 @@ export async function resolveTarget(
   const parts = targetId.split("~");
   if (parts[0] !== PREFIX || !isAgentPlatform(parts[1])) throw mcpFailure("unknown-target");
   const provider = parts[1];
-  if (parts.length === 3 && parts[2] === "backend") return backendTarget(provider);
+  if (parts.length === 4 && parts[2] === "backend") {
+    const { instanceId } = await storage.getPreviewBackendIdentity();
+    if (parts[3] !== backendBinding(instanceId)) throw mcpFailure("unknown-target");
+    return backendTarget(provider, instanceId);
+  }
   if (parts.length === 5 && parts[2] === "env") {
     const environment = await storage.getEnvironment(parts[3]!);
     if (!usableEnvironment(environment) || incarnation(environment) !== parts[4])
@@ -136,7 +151,8 @@ export async function listTargets(
   storage: TargetStorage,
   environmentId?: string,
 ): Promise<ResolvedTarget[]> {
-  const targets = AGENT_PLATFORMS.map(backendTarget);
+  const { instanceId } = await storage.getPreviewBackendIdentity();
+  const targets = AGENT_PLATFORMS.map((provider) => backendTarget(provider, instanceId));
   if (environmentId) {
     const environment = await storage.getEnvironment(environmentId);
     if (!usableEnvironment(environment))

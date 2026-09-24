@@ -360,6 +360,14 @@ export interface SessionState {
    * default configuration.
    */
   commandDiscoveryInputs?: { readOnly: boolean; includeLocalSettings: boolean };
+  /**
+   * Which saved MCP configuration the most recent query started with, and
+   * when. Runtime-only: after a restart no query has started yet, and the
+   * next one records its own. Served by `/session/:id/runtime-health`.
+   */
+  mcpConfigRevision?: import("../services/mcp-config.js").McpConfigRevision & {
+    queryStartedAt: string;
+  };
   /** Skill names the last explicit `reloadSkills()` reported. */
   commandSkillNames?: string[];
   /** Last completed schema-constrained turn, authoritative across UI remounts. */

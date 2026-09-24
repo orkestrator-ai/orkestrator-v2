@@ -1,6 +1,11 @@
 # 02 — Define management contracts, capabilities and validation
 
-Status: done — `packages/protocol/src/mcp-management.ts` with tests. Depends on: 01. [Plan index](00-index.md).
+Status: done — `packages/protocol/src/mcp-management.ts` with tests: bounds (per-source definition cap,
+subtree, catalog byte budget, gateway body cap), transport-field rejection, internal-credential references,
+correlation ids, rollout capability. Deliberate differences: an entry id is derived from its source and
+name, so a rename yields a new id (continuity is carried by the operation's `resultEntryId`); a
+`revision-conflict` carries a reload hint rather than an embedded snapshot, and the UI re-reads.
+Depends on: 01. [Plan index](00-index.md).
 
 ## Purpose and owners
 

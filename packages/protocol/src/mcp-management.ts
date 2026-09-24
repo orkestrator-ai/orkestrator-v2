@@ -58,8 +58,9 @@ export const MCP_MANAGEMENT_LIMITS = {
   operationRetentionMs: 7 * 24 * 60 * 60_000,
   operationStoreMaxBytes: 4 * 1024 * 1024,
   runtimesPerOperation: 64,
-  activeAppliesPerTarget: 1,
-  concurrentApplyJobs: 2,
+  // Apply concurrency needs no separate budget: the backend scheduler runs one
+  // provider reload at a time, and a newer apply supersedes the queued runtime
+  // work it covers, so at most one reload per runtime is ever pending.
   queuedApplyTargets: 32,
 } as const;
 
@@ -195,6 +196,16 @@ export interface McpTargetCapabilities {
   };
   /** Name grammar the backend enforces; UI mirrors it for early feedback. */
   nameRule: { pattern: string; description: string; maxBytes: number };
+  /**
+   * Backend rollout gate overlay (see {@link McpManagementRolloutSettings}).
+   * Absent on older backends, which means both are allowed.
+   */
+  rollout?: {
+    /** Saving changes for this provider. */
+    write: McpCapabilityFlag;
+    /** Applying saved changes to running sessions of this provider. */
+    apply: McpCapabilityFlag;
+  };
 }
 
 export interface McpManagementTarget {
@@ -448,6 +459,10 @@ export interface McpRuntimeApplyEntry {
   state: McpApplyState;
   reason?: string;
   updatedAt: string;
+  /** Saved source revision this runtime entry is adopting. */
+  savedRevision?: string;
+  /** Runtime generation the state was observed against, when the backend knows it. */
+  generation?: string;
 }
 
 export interface McpOperationSnapshot {
@@ -472,6 +487,8 @@ export interface McpOperationSnapshot {
     omitted: number;
     terminalGuidance?: string;
   };
+  /** Impact scope recorded when the change was saved (bounded, names only). */
+  affectedEnvironments?: McpImpactPreview["affectedEnvironments"];
   createdAt: string;
   updatedAt: string;
 }
@@ -516,6 +533,7 @@ export const MCP_MANAGEMENT_ERROR_CODES = [
   "busy",
   "invalid-request",
   "internal",
+  "management-disabled",
 ] as const;
 export type McpManagementErrorCode = (typeof MCP_MANAGEMENT_ERROR_CODES)[number];
 
@@ -531,6 +549,22 @@ export interface McpManagementError {
 
 /** Marker so an error can survive the IPC/HTTP `Error.message` flattening. */
 export const MCP_MANAGEMENT_ERROR_MARKER = "McpManagementError:";
+
+/**
+ * A correlation id rides at the end of the flattened message as `[ref:<id>]`
+ * so it survives string-only transports; {@link mcpManagementErrorFromUnknown}
+ * strips it back into `correlationId`.
+ */
+const CORRELATION_SUFFIX_PATTERN = /\s*\[ref:([A-Za-z0-9_-]{1,64})\]$/;
+
+function correlationSuffix(correlationId: string): string {
+  return `[ref:${correlationId}]`;
+}
+
+/** Whether a string can be carried as a correlation id. */
+export function isMcpCorrelationId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+}
 
 const ERROR_DEFAULTS: Record<
   McpManagementErrorCode,
@@ -641,6 +675,11 @@ const ERROR_DEFAULTS: Record<
     retryable: true,
     reload: true,
   },
+  "management-disabled": {
+    message: "MCP configuration management is turned off on this backend.",
+    retryable: false,
+    reload: true,
+  },
 };
 
 export function isMcpManagementErrorCode(value: unknown): value is McpManagementErrorCode {
@@ -667,7 +706,11 @@ export class McpManagementFailure extends Error {
   readonly detail: McpManagementError;
 
   constructor(detail: McpManagementError) {
-    super(`${MCP_MANAGEMENT_ERROR_MARKER}${detail.code}: ${detail.message}`);
+    super(
+      `${MCP_MANAGEMENT_ERROR_MARKER}${detail.code}: ${detail.message}${
+        detail.correlationId ? ` ${correlationSuffix(detail.correlationId)}` : ""
+      }`,
+    );
     this.detail = detail;
     this.name = "McpManagementFailure";
   }
@@ -690,14 +733,20 @@ export function mcpManagementErrorFromUnknown(error: unknown): McpManagementErro
   const separator = rest.indexOf(":");
   const code = separator < 0 ? rest : rest.slice(0, separator);
   if (!isMcpManagementErrorCode(code)) return null;
-  const detail = separator < 0 ? "" : rest.slice(separator + 1).trim();
-  return mcpManagementError(code, detail ? { message: detail } : {});
+  let detail = separator < 0 ? "" : rest.slice(separator + 1).trim();
+  const reference = CORRELATION_SUFFIX_PATTERN.exec(detail);
+  const correlationId = reference?.[1];
+  if (reference) detail = detail.slice(0, reference.index).trimEnd();
+  return mcpManagementError(code, {
+    ...(detail ? { message: detail } : {}),
+    ...(correlationId ? { correlationId } : {}),
+  });
 }
 
 /** A *specifically unsupported* command from an older backend. */
 export function isUnknownMcpManagementCommandError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  return /Unknown (?:backend )?command:?\s*(?:list_mcp_management_targets|get_mcp_management_snapshot|get_mcp_definition|validate_mcp_mutation|mutate_mcp_definition|apply_mcp_configuration|get_mcp_operation|cancel_mcp_apply)/i.test(
+  return /Unknown (?:backend )?command:?\s*(?:list_mcp_management_targets|get_mcp_management_snapshot|get_mcp_definition|validate_mcp_mutation|mutate_mcp_definition|apply_mcp_configuration|get_mcp_operation|cancel_mcp_apply|get_mcp_management_rollout|set_mcp_management_rollout)/i.test(
     message,
   );
 }
@@ -966,6 +1015,7 @@ export function validateMcpUrl(value: unknown, errors: McpFieldError[], field = 
     });
   }
   if (!parsed.hostname) errors.push({ field, message: "Must include a host." });
+  checkInternalCredentialReference(value as string, errors, field);
 }
 
 export function validateMcpCommand(
@@ -976,6 +1026,7 @@ export function validateMcpCommand(
   if (!checkString(errors, field, value, MCP_MANAGEMENT_LIMITS.commandMaxBytes, { required: true }))
     return;
   if (/[\r\n]/.test(value as string)) errors.push({ field, message: "Must be a single line." });
+  checkInternalCredentialReference(value as string, errors, field);
 }
 
 export function validateMcpArgs(value: unknown, errors: McpFieldError[], field = "args"): void {
@@ -988,11 +1039,14 @@ export function validateMcpArgs(value: unknown, errors: McpFieldError[], field =
     errors.push({ field, message: `At most ${MCP_MANAGEMENT_LIMITS.argsMax} arguments.` });
     return;
   }
-  value.forEach((arg, index) =>
-    checkString(errors, `${field}.${index}`, arg, MCP_MANAGEMENT_LIMITS.argMaxBytes, {
-      allowEmpty: true,
-    }),
-  );
+  value.forEach((arg, index) => {
+    if (
+      checkString(errors, `${field}.${index}`, arg, MCP_MANAGEMENT_LIMITS.argMaxBytes, {
+        allowEmpty: true,
+      })
+    )
+      checkInternalCredentialReference(arg, errors, `${field}.${index}`);
+  });
 }
 
 export function validateMcpMapKey(
@@ -1028,11 +1082,28 @@ export function validateMcpMapValue(value: unknown, errors: McpFieldError[], fie
     return;
   }
   if (/[\r\n]/.test(value as string)) errors.push({ field, message: "Must be a single line." });
-  for (const name of referencedVariables(value as string)) {
-    if (INTERNAL_CREDENTIAL_ENV_PATTERN.test(name)) {
-      errors.push({ field, message: "References one of Orkestrator's own credentials." });
-    }
-  }
+  checkInternalCredentialReference(value as string, errors, field);
+}
+
+const INTERNAL_CREDENTIAL_MESSAGE = "References one of Orkestrator's own credentials.";
+
+/**
+ * Whether a value names one of Orkestrator's own credential variables, either
+ * as a reference (`${VAR}`, `$VAR`, `{env:VAR}`) or as a bare variable name
+ * (Codex's `bearer_token_env_var` holds the name itself).
+ */
+export function referencesInternalCredential(value: string): boolean {
+  if (INTERNAL_CREDENTIAL_ENV_PATTERN.test(value.trim())) return true;
+  return referencedVariables(value).some((name) => INTERNAL_CREDENTIAL_ENV_PATTERN.test(name));
+}
+
+function checkInternalCredentialReference(
+  value: string,
+  errors: McpFieldError[],
+  field: string,
+): void {
+  if (referencesInternalCredential(value))
+    errors.push({ field, message: INTERNAL_CREDENTIAL_MESSAGE });
 }
 
 /** Detect duplicate keys after the provider's own folding (headers are case-insensitive). */
@@ -1131,9 +1202,18 @@ function validateAdvanced(value: unknown, errors: McpFieldError[], field: string
     }
     const entry = value[key];
     if (typeof entry === "string") {
-      checkString(errors, `${field}.${key}`, entry, MCP_MANAGEMENT_LIMITS.advancedStringMaxBytes, {
-        allowEmpty: true,
-      });
+      if (
+        checkString(
+          errors,
+          `${field}.${key}`,
+          entry,
+          MCP_MANAGEMENT_LIMITS.advancedStringMaxBytes,
+          {
+            allowEmpty: true,
+          },
+        )
+      )
+        checkInternalCredentialReference(entry, errors, `${field}.${key}`);
     } else if (typeof entry === "number") {
       if (!Number.isFinite(entry))
         errors.push({ field: `${field}.${key}`, message: "Must be a finite number." });
@@ -1141,14 +1221,17 @@ function validateAdvanced(value: unknown, errors: McpFieldError[], field: string
       if (entry.length > MCP_MANAGEMENT_LIMITS.advancedListMax) {
         errors.push({ field: `${field}.${key}`, message: "Too many values." });
       }
-      entry.forEach((item, index) =>
-        checkString(
-          errors,
-          `${field}.${key}.${index}`,
-          item,
-          MCP_MANAGEMENT_LIMITS.advancedStringMaxBytes,
-        ),
-      );
+      entry.forEach((item, index) => {
+        if (
+          checkString(
+            errors,
+            `${field}.${key}.${index}`,
+            item,
+            MCP_MANAGEMENT_LIMITS.advancedStringMaxBytes,
+          )
+        )
+          checkInternalCredentialReference(item, errors, `${field}.${key}.${index}`);
+      });
     } else if (typeof entry !== "boolean") {
       errors.push({ field: `${field}.${key}`, message: "Unsupported value." });
     }
@@ -1240,9 +1323,12 @@ export function validateMcpDefinitionPatch(patch: unknown): McpFieldError[] {
             errors.push({ field, message: "Invalid argument reference." });
           }
         } else if (edit.kind === "set") {
-          checkString(errors, field, edit.value, MCP_MANAGEMENT_LIMITS.argMaxBytes, {
-            allowEmpty: true,
-          });
+          if (
+            checkString(errors, field, edit.value, MCP_MANAGEMENT_LIMITS.argMaxBytes, {
+              allowEmpty: true,
+            })
+          )
+            checkInternalCredentialReference(edit.value, errors, field);
         } else errors.push({ field, message: "Edit must be keep or set." });
       });
     }
@@ -1396,4 +1482,49 @@ export function aggregateApplyState(states: readonly McpApplyState[]): McpApplyS
   ];
   for (const state of order) if (states.includes(state)) return state;
   return states[0]!;
+}
+
+// ---------------------------------------------------------------------------
+// Rollout gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Backend-owned rollout gate and kill switch, stored in the global config as
+ * `mcpManagement`. Not a user preference: an operator narrows it while an
+ * adapter is being qualified, or turns it off to roll back.
+ *
+ * Turning something off never edits a saved native file. It refuses new
+ * mutations (`management-disabled`), stops scheduling applies and retires
+ * queued runtime work as `cancelled` with a reason.
+ */
+export interface McpManagementRolloutSettings {
+  /** Master switch. Off: no mutation or apply for any provider; reads still work. */
+  enabled: boolean;
+  /** Providers whose configuration may be saved. */
+  writeProviders: AgentPlatform[];
+  /** Providers whose saved configuration may be applied to running sessions. */
+  applyProviders: AgentPlatform[];
+}
+
+export const DEFAULT_MCP_MANAGEMENT_ROLLOUT: McpManagementRolloutSettings = Object.freeze({
+  enabled: true,
+  writeProviders: [...AGENT_PLATFORMS],
+  applyProviders: [...AGENT_PLATFORMS],
+}) as McpManagementRolloutSettings;
+
+/** Read a stored value defensively; malformed parts fall back to the defaults. */
+export function normalizeMcpManagementRolloutSettings(
+  value: unknown,
+): McpManagementRolloutSettings {
+  const candidate =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Partial<Record<keyof McpManagementRolloutSettings, unknown>>)
+      : {};
+  const providers = (list: unknown): AgentPlatform[] | undefined =>
+    Array.isArray(list) ? AGENT_PLATFORMS.filter((provider) => list.includes(provider)) : undefined;
+  return {
+    enabled: typeof candidate.enabled === "boolean" ? candidate.enabled : true,
+    writeProviders: providers(candidate.writeProviders) ?? [...AGENT_PLATFORMS],
+    applyProviders: providers(candidate.applyProviders) ?? [...AGENT_PLATFORMS],
+  };
 }

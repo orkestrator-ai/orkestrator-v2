@@ -116,13 +116,20 @@ describe("runtime application", () => {
     });
     fixture.environment.status = "running";
     fixture.environment.environmentType = "containerized";
-    const container = await saveAndApply("cursor", "cursor:user");
-    expect(container.operation.apply.runtimes).toEqual([]);
-    session("cursor", "env-env-1:tab-c");
-    const second = await fixture.service.apply({ operationId: container.operation.operationId });
-    expect(second.apply.runtimes[0]).toMatchObject({
+    session("claude", "env-env-1:tab-k");
+    const container = await saveAndApply("claude", "claude:user");
+    expect(container.operation.apply.runtimes[0]).toMatchObject({
       state: "restart-required",
       reason: expect.stringContaining("recreate"),
+    });
+    // Cursor's configuration never reaches a container, so recreating would not help.
+    const cursor = await saveAndApply("cursor", "cursor:user");
+    expect(cursor.operation.apply.runtimes).toEqual([]);
+    session("cursor", "env-env-1:tab-c");
+    const second = await fixture.service.apply({ operationId: cursor.operation.operationId });
+    expect(second.apply.runtimes[0]).toMatchObject({
+      state: "blocked-policy",
+      reason: expect.stringContaining("not copied into containers"),
     });
   });
 
@@ -141,7 +148,7 @@ describe("runtime application", () => {
 
     fixture.activity.set("env-1:codex:env-env-1:tab-2", "idle");
     await fixture.service.tick();
-    expect(fixture.reloads).toEqual(["env-1:env-env-1:tab-1"]);
+    expect(fixture.reloads).toEqual(["env-1"]);
     const done = await fixture.service.getOperation({ operationId: result.operation.operationId });
     expect(done.apply.runtimes.map((runtime) => runtime.state)).toEqual([
       "pending-next-turn",

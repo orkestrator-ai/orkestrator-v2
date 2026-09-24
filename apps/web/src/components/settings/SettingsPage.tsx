@@ -87,9 +87,16 @@ interface SettingsPageProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   defaultSection?: GlobalSettingsSection;
+  /** Changes on every section request; see FullscreenSettingsLayout. */
+  sectionRequest?: number;
 }
 
-export function SettingsPage({ open, onOpenChange, defaultSection }: SettingsPageProps) {
+export function SettingsPage({
+  open,
+  onOpenChange,
+  defaultSection,
+  sectionRequest,
+}: SettingsPageProps) {
   const setConfig = useConfigStore((state) => state.setConfig);
   const isLoading = useConfigStore((state) => state.isLoading);
   const setLoading = useConfigStore((state) => state.setLoading);
@@ -121,6 +128,7 @@ export function SettingsPage({ open, onOpenChange, defaultSection }: SettingsPag
       title="Settings"
       menuItems={MENU_ITEMS}
       defaultSection={defaultSection}
+      sectionRequest={sectionRequest}
     >
       {(activeSection) =>
         // Skills is a read-only browser of the host's skill directories, not a

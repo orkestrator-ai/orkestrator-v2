@@ -25,6 +25,11 @@ interface FullscreenSettingsLayoutProps<TSection extends string = string> {
   title: string;
   menuItems: ReadonlyArray<SettingsMenuItem<TSection>>;
   defaultSection?: TSection;
+  /**
+   * Changes on every navigation request, so asking for the section that is
+   * already the default still returns to it after the user moved elsewhere.
+   */
+  sectionRequest?: number;
   children: (activeSection: TSection | "") => React.ReactNode;
   footer?: React.ReactNode;
   headerActions?: React.ReactNode;
@@ -45,6 +50,7 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
   title,
   menuItems,
   defaultSection,
+  sectionRequest,
   children,
   footer,
   headerActions,
@@ -55,17 +61,25 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
   const [activeSection, setActiveSection] = useState(defaultId);
   const [headerActionsTarget, setHeaderActionsTarget] = useState<HTMLDivElement | null>(null);
 
-  // Reset to default when transitioning from closed to open, and follow a new
-  // requested section while already open (a deep link from elsewhere in the app).
+  // Reset to default when transitioning from closed to open, and follow every
+  // new section request while already open (a deep link from elsewhere in the
+  // app), including a repeat request for the same section.
   const prevOpenRef = useRef(open);
   const prevDefaultRef = useRef(defaultId);
+  const prevRequestRef = useRef(sectionRequest);
   useEffect(() => {
-    if (open && (!prevOpenRef.current || prevDefaultRef.current !== defaultId)) {
+    if (
+      open &&
+      (!prevOpenRef.current ||
+        prevDefaultRef.current !== defaultId ||
+        prevRequestRef.current !== sectionRequest)
+    ) {
       setActiveSection(defaultId);
     }
     prevOpenRef.current = open;
     prevDefaultRef.current = defaultId;
-  }, [open, defaultId]);
+    prevRequestRef.current = sectionRequest;
+  }, [open, defaultId, sectionRequest]);
 
   // Handle Escape key
   useEffect(() => {

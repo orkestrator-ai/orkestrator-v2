@@ -1145,6 +1145,168 @@ describe("MCP lifecycle", () => {
     await pending;
     expect(state.session).toBe(fake.session);
   });
+
+  test("a compaction in progress keeps the live session, even at a turn start", async () => {
+    const state = newSessionState();
+    const fake = fakeSession();
+    let reads = 0;
+    installTestHooks({
+      createAgentSession: async () => fake.session,
+      mcpConfigNeedsRefresh: async () => {
+        reads += 1;
+        return true;
+      },
+    });
+    await ensureSession(state);
+    state.compacting = true;
+    try {
+      await reconcileAgentMcp(state);
+      await reconcileAgentMcp(state, { atTurnStart: true });
+
+      // Pi's compaction aborts whatever runs beside it; rebuilding the session
+      // under it would lose the summary it is writing.
+      expect(state.session).toBe(fake.session);
+      expect(fake.disposed()).toBe(0);
+      expect(reads).toBe(0);
+    } finally {
+      state.compacting = false;
+    }
+  });
+
+  test("the rebuilt session reopens the same conversation file", async () => {
+    const conversation = join(sessionDirectory, "conversation.jsonl");
+    await writeFile(
+      conversation,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "kept-conversation",
+        timestamp: "2026-08-25T00:00:00.000Z",
+        cwd: workingDirectory,
+      })}\n`,
+      "utf8",
+    );
+    const first = fakeSession({ sessionFile: conversation });
+    const second = fakeSession({ sessionFile: conversation });
+    const reopened: Array<string | undefined> = [];
+    let attaches = 0;
+    const state = newSessionState();
+    installTestHooks({
+      createAgentSession: async (target) => {
+        attaches += 1;
+        // What the real factory hands Pi: the manager for the stored file.
+        reopened.push(sessionManagerFor(target).getSessionId());
+        return attaches === 1 ? first.session : second.session;
+      },
+      mcpConfigNeedsRefresh: async () => true,
+    });
+    state.sessionFile = conversation;
+    await ensureSession(state);
+
+    state.dispatching = true;
+    try {
+      await reconcileAgentMcp(state, { atTurnStart: true });
+      expect(state.session).toBeNull();
+      expect(first.disposed()).toBe(1);
+      // Detaching for a configuration change keeps the conversation pointer.
+      expect(state.sessionFile).toBe(conversation);
+
+      expect(await ensureSession(state)).toBe(second.session);
+      expect(reopened).toEqual(["kept-conversation", "kept-conversation"]);
+      expect(state.sessionFile).toBe(conversation);
+    } finally {
+      state.dispatching = false;
+    }
+  });
+
+  test("a late config read never strips the runtime a concurrent rebuild installed", async () => {
+    const { preparePiMcp, publicPiMcpServers, setPiMcpTransportForTests } =
+      await import("./mcp.js");
+    const closedBy: number[] = [];
+    let generation = 0;
+    setPiMcpTransportForTests({
+      async connect() {
+        const owner = generation;
+        return {
+          tools: [{ name: "send_message" }],
+          async call() {
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+          async close() {
+            closedBy.push(owner);
+          },
+        };
+      },
+    });
+    const state = newSessionState();
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
+    const first = fakeSession();
+    const second = fakeSession();
+    let releaseAttach!: () => void;
+    const attachGate = new Promise<void>((resolve) => {
+      releaseAttach = resolve;
+    });
+    let attachStarted!: () => void;
+    const attachRunning = new Promise<void>((resolve) => {
+      attachStarted = resolve;
+    });
+    let releaseSlowRead!: (value: boolean) => void;
+    const slowRead = new Promise<boolean>((resolve) => {
+      releaseSlowRead = resolve;
+    });
+    let slowReadStarted!: () => void;
+    const slowReading = new Promise<void>((resolve) => {
+      slowReadStarted = resolve;
+    });
+    // The first read (V) is slow; the second (U) answers at once.
+    const reads: Array<() => Promise<boolean>> = [
+      async () => {
+        slowReadStarted();
+        return slowRead;
+      },
+      async () => true,
+    ];
+    // Stands in for `createPiAgentSession`: it installs this generation's MCP
+    // runtime, then the rebuild waits inside SDK construction.
+    installTestHooks({
+      createAgentSession: async () => {
+        generation += 1;
+        await preparePiMcp(state, { agentDir: sessionDirectory, cwd: workingDirectory, env: {} });
+        if (generation === 1) return first.session;
+        attachStarted();
+        await attachGate;
+        return second.session;
+      },
+      mcpConfigNeedsRefresh: async () => reads.shift()!(),
+    });
+    try {
+      await ensureSession(state);
+
+      const late = reconcileAgentMcp(state);
+      await slowReading;
+      await reconcileAgentMcp(state);
+      expect(state.session).toBeNull();
+      expect(closedBy).toEqual([1]);
+
+      // U's rebuild is in flight and has installed generation 2's runtime
+      // when V's read finally answers "changed".
+      const rebuilding = ensureSession(state);
+      await attachRunning;
+      releaseSlowRead(true);
+      await late;
+      releaseAttach();
+
+      expect(await rebuilding).toBe(second.session);
+      expect(state.session).toBe(second.session);
+      expect(second.disposed()).toBe(0);
+      expect(closedBy).toEqual([1]);
+      expect(publicPiMcpServers(state).map((server) => server.status)).toEqual(["connected"]);
+    } finally {
+      releaseAttach();
+      await detachSession(state);
+      setPiMcpTransportForTests();
+    }
+  });
 });
 
 /**

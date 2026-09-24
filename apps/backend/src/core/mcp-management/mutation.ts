@@ -46,6 +46,8 @@ export function definitionFromInput(
     if (input.cwd) definition.cwd = input.cwd;
   } else {
     definition.url = input.url;
+    // Carried so capability checks refuse it instead of it vanishing on save.
+    if (input.cwd) definition.cwd = input.cwd;
   }
   for (const { key, value } of input.env ?? []) definition.env[key] = value;
   for (const { key, value } of input.headers ?? []) definition.headers[key] = value;
@@ -218,11 +220,34 @@ export function capabilityErrors(
     if (!support.supported)
       errors.push({ field: "transport", message: support.reason ?? "Unsupported transport." });
   }
-  if (definition.cwd !== undefined && !capabilities.fields.cwd.supported) {
-    errors.push({ field: "cwd", message: capabilities.fields.cwd.reason ?? "Not supported." });
+  const remote = definition.transport === "http" || definition.transport === "sse";
+  // Codecs write only the fields of the entry's transport, so anything else
+  // would be dropped on save without a word. Refuse it; switching transport
+  // is the explicit way to exchange one set of fields for the other.
+  if (definition.transport === "stdio") {
+    if (definition.url !== undefined) {
+      errors.push({
+        field: "url",
+        message: "A stdio server has no URL; switch the transport to use one.",
+      });
+    }
+    if (Object.keys(definition.headers).length)
+      errors.push({ field: "headers", message: "A stdio server has no headers." });
   }
-  if (definition.transport === "stdio" && Object.keys(definition.headers).length) {
-    errors.push({ field: "headers", message: "A stdio server has no headers." });
+  if (remote) {
+    if (definition.command !== undefined) {
+      errors.push({
+        field: "command",
+        message: "A remote server has no command; switch the transport to stdio to use one.",
+      });
+    }
+    if (definition.args.length)
+      errors.push({ field: "args", message: "A remote server has no arguments." });
+    if (definition.cwd !== undefined)
+      errors.push({ field: "cwd", message: "A remote server has no working directory." });
+  }
+  if (!remote && definition.cwd !== undefined && !capabilities.fields.cwd.supported) {
+    errors.push({ field: "cwd", message: capabilities.fields.cwd.reason ?? "Not supported." });
   }
   return errors;
 }

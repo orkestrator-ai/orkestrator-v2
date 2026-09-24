@@ -32,6 +32,13 @@ export interface SourceFileSnapshot {
   state: SourceReadState;
   text: string | null;
   revision: string | null;
+  /**
+   * Unkeyed `sha256:<base64url>` of the exact bytes read, when they were read.
+   * Backend-only: it is what bridges report for the files a runtime loaded, so
+   * the apply scheduler can match the two. Never sent to the renderer, because
+   * an unkeyed digest lets a caller confirm a guess about a low-entropy secret.
+   */
+  contentDigest?: string;
   mode: number | null;
   /** Why the file cannot be written, when it can still be read. */
   writeBlock?: string;
@@ -48,7 +55,16 @@ export interface SourceWritePolicy {
 
 export const ABSENT_REVISION = "absent";
 
+/**
+ * The digest format bridges use for a configuration file they loaded:
+ * `sha256:` followed by the unpadded base64url SHA-256 of the exact bytes.
+ */
+export function contentDigest(bytes: Uint8Array): string {
+  return `sha256:${createHash("sha256").update(bytes).digest("base64url")}`;
+}
+
 const LOCK_WAIT_MS = 5_000;
+/** Age after which an unparseable lock body (a crashed creator) is taken over. */
 const LOCK_STALE_UNVERIFIABLE_MS = 10 * 60_000;
 
 function isErrno(error: unknown, ...codes: string[]): boolean {
@@ -94,6 +110,8 @@ export class McpSourceStore {
       /** Private file holding the revision HMAC key; created on first use. */
       keyFile: string;
       lockDir?: string;
+      /** How long to wait for another writer before reporting `busy`. */
+      lockWaitMs?: number;
     },
   ) {}
 
@@ -239,6 +257,7 @@ export class McpSourceStore {
           state: "invalid",
           text: null,
           revision: await this.revisionOf(bytes),
+          contentDigest: contentDigest(bytes),
           mode: stat.mode & 0o777,
           error: "Not valid UTF-8.",
         };
@@ -249,6 +268,7 @@ export class McpSourceStore {
         state: "ok",
         text,
         revision: await this.revisionOf(bytes),
+        contentDigest: contentDigest(bytes),
         mode: stat.mode & 0o777,
         writeBlock,
       };
@@ -347,7 +367,7 @@ export class McpSourceStore {
     if (this.selfStart === undefined) this.selfStart = await readProcStart(process.pid);
     const token = randomUUID();
     const body = JSON.stringify({ pid: process.pid, start: this.selfStart, token, at: Date.now() });
-    const deadline = Date.now() + LOCK_WAIT_MS;
+    const deadline = Date.now() + (this.options.lockWaitMs ?? LOCK_WAIT_MS);
     for (;;) {
       try {
         await fs.writeFile(lockPath, body, { flag: "wx", mode: 0o600 });
@@ -392,7 +412,10 @@ export class McpSourceStore {
       const current = await readProcStart(pid);
       if (current !== null) return current !== holder.start;
     }
-    return typeof holder.at === "number" && Date.now() - holder.at > LOCK_STALE_UNVERIFIABLE_MS;
+    // A live holder whose identity cannot be checked (no /proc) is never taken
+    // over on age alone: a slow write in another window is still a write, and
+    // breaking its lock could lose it. The caller reports `busy` instead.
+    return false;
   }
 
   /**

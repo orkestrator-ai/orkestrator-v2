@@ -1,6 +1,10 @@
 # 10 — Implement Grok configuration management and ACP application
 
-Status: done for native TOML CRUD and compatibility provenance; apply reports restart-required.
+Status: done for native TOML CRUD, `$GROK_HOME`, compatibility provenance in Grok's documented order and
+switches, managed files, folder trust, and saved-disabled display. The ACP bridge reports a process-level
+MCP inventory with unknown health and a config fingerprint; apply reports restart-required and becomes
+`applied` only after the bridge process restarts with the saved bytes. **Not done:** per-session ACP
+application and passing user servers at session load (undocumented collision rules).
 Depends on: 01–05. [Plan index](00-index.md).
 
 ## Existing owners

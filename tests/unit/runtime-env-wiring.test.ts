@@ -455,6 +455,45 @@ describe("container runtime environment wiring", () => {
     });
   });
 
+  test("Pi setup leaves a copied mcp.json owner-only", () => {
+    withTempDir((dir) => {
+      const agent = join(dir, ".pi", "agent");
+      mkdirSync(agent, { recursive: true });
+      const source = join(dir, "source");
+      mkdirSync(source);
+      // Server definitions may carry literal header or environment secrets.
+      writeFileSync(join(source, "mcp.json"), '{"mcpServers":{}}\n');
+      chmodSync(join(source, "mcp.json"), 0o644);
+      const piSection = section(
+        read("docker/entrypoint.sh"),
+        "if [ -d /pi-config/agent ]; then",
+        "report_agent_copy_skips Pi",
+      );
+      const guard = piSection.match(
+        /if \[ -f "\$HOME\/\.pi\/agent\/mcp\.json" \].*?\n    fi/s,
+      )?.[0];
+      expect(guard).toBeDefined();
+      const script = agentCopyHelperHarness(
+        `copy_agent_file ${shellQuote(source)} ${shellQuote(agent)} mcp.json Pi\n${guard}`,
+      );
+      const result = runShell(script, { ...process.env, HOME: dir } as Record<string, string>);
+      expect(result.exitCode).toBe(0);
+      const copied = join(agent, "mcp.json");
+      expect(readFileSync(copied, "utf8")).toBe('{"mcpServers":{}}\n');
+      expect(statSync(copied).mode & 0o777).toBe(0o600);
+
+      // The copy lands owner-only through its temporary file; the guard is
+      // what tightens a regular file already in place from an earlier start.
+      chmodSync(copied, 0o644);
+      const rerun = runShell(agentCopyHelperHarness(guard!), {
+        ...process.env,
+        HOME: dir,
+      } as Record<string, string>);
+      expect(rerun.exitCode).toBe(0);
+      expect(statSync(copied).mode & 0o777).toBe(0o600);
+    });
+  });
+
   test("Claude data copy takes config and skips host history", () => {
     withTempDir((dir) => {
       const source = join(dir, "source");

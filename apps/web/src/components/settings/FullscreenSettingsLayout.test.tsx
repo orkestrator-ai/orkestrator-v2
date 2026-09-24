@@ -44,6 +44,34 @@ describe("FullscreenSettingsLayout", () => {
     expect(screen.getByText("active:network")).toBeTruthy();
   });
 
+  test("a repeated request for the same section navigates every time", () => {
+    const view = (sectionRequest: number) => (
+      <FullscreenSettingsLayout
+        open
+        onOpenChange={() => undefined}
+        title="Settings"
+        menuItems={menuItems}
+        defaultSection="network"
+        sectionRequest={sectionRequest}
+      >
+        {(section) => <p>active:{section}</p>}
+      </FullscreenSettingsLayout>
+    );
+    const { rerender } = render(view(1));
+    expect(screen.getByText("active:network")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /General/ }));
+    expect(screen.getByText("active:general")).toBeTruthy();
+    rerender(view(2));
+    expect(screen.getByText("active:network")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /General/ }));
+    rerender(view(3));
+    expect(screen.getByText("active:network")).toBeTruthy();
+    // An unrelated re-render is not a request.
+    fireEvent.click(screen.getByRole("button", { name: /General/ }));
+    rerender(view(3));
+    expect(screen.getByText("active:general")).toBeTruthy();
+  });
+
   test("keeps the application surface independent of a light terminal background", () => {
     const originalConfig = useConfigStore.getState().config;
     useConfigStore.setState((state) => ({

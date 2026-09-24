@@ -24,6 +24,7 @@ import {
   PromptRejectedError,
   ProviderSessionFailedError,
   ProviderUnavailableError,
+  type ProviderMcpConfigEvidence,
   type ProviderRuntimeHealth,
   ProviderUnreachableError,
 } from "./agent-provider-contract.js";
@@ -44,6 +45,7 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import type { PromptAttachment } from "./prompt-attachments.js";
 import { bridgeRuntimeSummary, snapshotNotices } from "./http-bridge-runtime-health.js";
+import { readBridgeMcpConfigEvidence } from "./http-bridge-mcp-evidence.js";
 import {
   refreshHttpBridgeRuntimeMetadata,
   type HttpBridgeRuntimeMetadata,
@@ -615,6 +617,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     }
   }
 
+  /** Backend-only MCP apply evidence; see `http-bridge-mcp-evidence.ts`. */
+  mcpConfigEvidence(sessionId: string): Promise<ProviderMcpConfigEvidence | undefined> {
+    const { connection, fetchImpl, agent } = this;
+    return readBridgeMcpConfigEvidence({ connection, fetchImpl, agent, sessionId });
+  }
+
   private refreshRuntimeMetadata(sessionId: string): Promise<void> {
     return refreshHttpBridgeRuntimeMetadata({
       sessionId,
@@ -1149,6 +1157,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     action: Parameters<HttpBridgeCatalogAdapter["mcpServerAction"]>[2],
   ) {
     return this.catalogAdapter.mcpServerAction(sessionId, serverId, action);
+  }
+
+  reloadMcpConfiguration() {
+    return this.catalogAdapter.reloadMcpConfiguration();
   }
 
   authStatus() {

@@ -451,6 +451,50 @@ describe("successful lifecycle routes", () => {
     }
   });
 
+  test("a prompt adopts a config change at its own turn start and releases the claim if the rebuild fails", async () => {
+    installRuntime();
+    let disposed = 0;
+    const readsWhileClaimed: boolean[] = [];
+    setAgentSessionTestHooks({
+      hydrateComposer: async (composer) => composer,
+      // Reached only through `atTurnStart`: without it, the prompt's own
+      // `dispatching` claim makes the reconcile return before reading.
+      mcpConfigNeedsRefresh: async (target) => {
+        readsWhileClaimed.push(target.dispatching);
+        return true;
+      },
+      createAgentSession: async () => {
+        throw new Error("rebuild refused");
+      },
+    });
+    const state = seedSession();
+    state.session = fakeAgentSession({
+      dispose: () => {
+        disposed += 1;
+      },
+    });
+    try {
+      const response = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "go", requestId: "reattach-1" }),
+      });
+
+      expect(response.status).toBe(500);
+      expect(readsWhileClaimed).toEqual([true]);
+      expect(disposed).toBe(1);
+      expect(state.session).toBeNull();
+      // The turn provably never ran: the claim and the prepared record go, so
+      // the caller can retry under the same id.
+      expect(state.dispatching).toBe(false);
+      expect(state.promptJournal.has("reattach-1")).toBe(false);
+      expect(state.status).toBe("idle");
+      expect(state.messages).toHaveLength(0);
+    } finally {
+      sessions.delete(state.id);
+      resetTestDependencies();
+    }
+  });
+
   test("refuses attach and idempotent create from rotating MCP during a live turn", async () => {
     const {
       closePiMcp,
@@ -1068,6 +1112,41 @@ describe("session routes", () => {
 
     await call(`/session/${state.id}/status`);
     expect(state.lastAccessed).toBeGreaterThan(0);
+  });
+
+  test("reports the attached generation's MCP configuration without touching liveness", async () => {
+    const { preparePiMcp, closePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
+    setPiMcpTransportForTests({
+      connect: async () => ({ tools: [], call: async () => ({}), close: async () => {} }),
+    });
+    const root = await mkdtemp(join(tmpdir(), "pi-http-mcp-config-"));
+    try {
+      await writeFile(join(root, "mcp.json"), JSON.stringify({ mcpServers: {} }));
+      const state = seedSession();
+      state.lastAccessed = 0;
+      await preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
+      // Detached: nothing loaded, nothing reported.
+      expect(
+        (await (await call(`/session/${state.id}/runtime-health`)).json()).mcpConfig,
+      ).toBeUndefined();
+
+      state.session = {} as never;
+      const body = await (await call(`/session/${state.id}/runtime-health`)).json();
+      expect(body.mcpConfig).toMatchObject({
+        fingerprint: expect.any(String),
+        sources: {
+          user: expect.stringMatching(/^sha256:[A-Za-z0-9_-]{43}$/),
+          project: "excluded",
+        },
+        builtAt: expect.any(String),
+      });
+      expect(state.lastAccessed).toBe(0);
+      state.session = null;
+      await closePiMcp(state);
+    } finally {
+      setPiMcpTransportForTests();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("serves a message window anchored to the retained base index", async () => {

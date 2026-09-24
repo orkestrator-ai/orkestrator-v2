@@ -11,7 +11,8 @@ import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { McpManagementSnapshot, McpMutation } from "@orkestrator/protocol/mcp-management";
 
-import type { ApplySession, RuntimeProbe } from "./apply.js";
+import type { ApplySession, CodexReloadOutcome, RuntimeProbe } from "./apply.js";
+import type { RuntimeEvidenceRead } from "./evidence.js";
 import { McpManagementService } from "./service.js";
 
 export const SENTINEL = "SENTINEL-SECRET-7f3a";
@@ -27,6 +28,18 @@ export interface Fixture {
   reloads: string[];
   reloadFailure: { value: Error | null };
   reloadControl: { wait?: () => Promise<void> };
+  /** What the fake Codex bridge answers to a reload that does not fail. */
+  reloadOutcome: { value: CodexReloadOutcome };
+  /**
+   * What each session's bridge reports about its MCP configuration, keyed
+   * `environmentId:agent:logicalSessionKey`. Absent keys answer `none`; an
+   * Error value makes the read reject.
+   */
+  evidence: Map<string, RuntimeEvidenceRead | Error>;
+  /** Every evidence read, in order, as `environmentId:agent:logicalSessionKey`. */
+  evidenceReads: string[];
+  /** Stored rollout settings the service reads (`global.mcpManagement`). */
+  rollout: { value: unknown };
   environment: Record<string, unknown>;
   extraEnvironments: Record<string, unknown>[];
   /** Files inside the fake container, by absolute container path. */
@@ -53,6 +66,10 @@ export function createFixture(
   const reloads: string[] = [];
   const reloadFailure = { value: null as Error | null };
   const reloadControl: { wait?: () => Promise<void> } = {};
+  const reloadOutcome = { value: "reloaded" as CodexReloadOutcome };
+  const rollout = { value: undefined as unknown };
+  const evidence = new Map<string, RuntimeEvidenceRead | Error>();
+  const evidenceReads: string[] = [];
   const now = { value: Date.parse("2026-09-23T12:00:00Z") };
   const containerFiles = new Map<string, string>();
   const environment: Record<string, unknown> = {
@@ -81,15 +98,27 @@ export function createFixture(
           environmentType: environment.environmentType as "local" | "containerized",
           providerRunning: (provider: AgentPlatform) =>
             environment.status === "running" && provider !== ("none" as never),
+          bridgePid: (provider: AgentPlatform) => {
+            const pid = environment[`${provider}BridgePid`];
+            return typeof pid === "number" ? pid : undefined;
+          },
         };
       }),
     sessions: async () => sessions,
     activity: (environmentId, agent, key) =>
       activity.get(`${environmentId}:${agent}:${key}`) ?? "idle",
-    reloadCodex: async (environmentId, key) => {
+    reloadCodex: async (environmentId) => {
       await reloadControl.wait?.();
       if (reloadFailure.value) throw reloadFailure.value;
-      reloads.push(`${environmentId}:${key}`);
+      reloads.push(environmentId);
+      return reloadOutcome.value;
+    },
+    mcpConfigEvidence: async (environmentId, agent, key) => {
+      const id = `${environmentId}:${agent}:${key}`;
+      evidenceReads.push(id);
+      const answer = evidence.get(id);
+      if (answer instanceof Error) throw answer;
+      return answer ?? { state: "none" };
     },
   };
   const newService = () =>
@@ -109,6 +138,7 @@ export function createFixture(
       },
       emit: (event, payload) => events.push([event, payload]),
       probe,
+      loadRollout: async () => rollout.value,
       readContainerFile: async (_containerId, filePath) => {
         if (environment.status !== "running") return { state: "offline" };
         const text = containerFiles.get(filePath);
@@ -128,6 +158,10 @@ export function createFixture(
     reloads,
     reloadFailure,
     reloadControl,
+    reloadOutcome,
+    evidence,
+    evidenceReads,
+    rollout,
     environment,
     extraEnvironments,
     containerFiles,

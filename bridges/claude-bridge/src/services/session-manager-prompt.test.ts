@@ -4557,7 +4557,7 @@ describe("sendPrompt", () => {
       process.env.CWD || process.cwd(),
       process.env,
       undefined,
-      false,
+      "user",
     );
     expect(mockGetPluginsForSdk).toHaveBeenLastCalledWith(process.env.CWD || process.cwd(), false);
     expect(call.options.settingSources).toEqual(["user"]);

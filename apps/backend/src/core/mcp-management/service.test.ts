@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { MCP_MANAGEMENT_CHANGED_EVENT } from "@orkestrator/protocol/mcp-management";
+import { MCP_MANAGEMENT_CHANGED_EVENT, mcpFailure } from "@orkestrator/protocol/mcp-management";
 
 import {
   SENTINEL,
@@ -382,6 +382,65 @@ describe("McpManagementService — writes", () => {
     expect(JSON.parse(fixture.read("home/.claude.json")).mcpServers).toEqual({
       once: { type: "stdio", command: "x" },
     });
+  });
+
+  test("a retry that arrives while the original is still writing replays its result", async () => {
+    const targetId = await targetIdFor(fixture, "claude", "backend");
+    const request = mutation(targetId, {
+      kind: "add",
+      sourceId: "claude:user",
+      expectedRevision: null,
+      definition: { name: "slow", transport: "stdio", command: "x" },
+    });
+    const store = (
+      fixture.service as unknown as { store: { commit: (...args: never[]) => unknown } }
+    ).store;
+    const commit = store.commit.bind(store);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let entered!: () => void;
+    const inCommit = new Promise<void>((resolve) => (entered = resolve));
+    store.commit = async (...args: never[]) => {
+      entered();
+      await gate;
+      return commit(...args);
+    };
+    const first = fixture.service.mutate(request);
+    await inCommit;
+    // The operation record is `pending` now; the retry must wait, not fail.
+    const retry = fixture.service.mutate(request);
+    release();
+    const [original, replayed] = await Promise.all([first, retry]);
+    expect(replayed.replayed).toBe(true);
+    expect(replayed.operation.operationId).toBe(original.operation.operationId);
+    expect(replayed.operation.phase).toBe("saved");
+  });
+
+  test("a retry after a definite failure replays that failure; a new request id can succeed", async () => {
+    const targetId = await targetIdFor(fixture, "claude", "backend");
+    const add = (name: string) =>
+      mutation(targetId, {
+        kind: "add",
+        sourceId: "claude:user",
+        expectedRevision: null,
+        definition: { name, transport: "stdio", command: "x" },
+      });
+    const store = (
+      fixture.service as unknown as { store: { commit: (...args: never[]) => unknown } }
+    ).store;
+    const commit = store.commit.bind(store);
+    store.commit = async () => {
+      throw mcpFailure("internal", { message: "The disk is full; the file was left unchanged." });
+    };
+    const request = add("full");
+    await expect(fixture.service.mutate(request)).rejects.toThrow("disk is full");
+    store.commit = commit;
+    // Same id: the stored outcome is replayed, the change is never repeated silently.
+    await expect(fixture.service.mutate(request)).rejects.toThrow("disk is full");
+    const fresh = add("full");
+    const saved = await fixture.service.mutate(fresh);
+    expect(saved.replayed).toBe(false);
+    expect(JSON.parse(fixture.read("home/.claude.json")).mcpServers.full).toBeDefined();
   });
 
   test("duplicate names, protected names and unsupported transports are refused", async () => {

@@ -1328,12 +1328,38 @@ export class AppServerEngine implements CodexEngine {
   }
 
   async reconnectMcpServers(): Promise<void> {
-    const previous = new Set(
+    const previous = this.mcpStartupNotices();
+    await this.supervisor.request("config/mcpServer/reload", undefined);
+    this.dropNotices(previous);
+  }
+
+  /**
+   * Reload MCP configuration in an app-server that is already running. Never
+   * cold-starts one: configuration is read from disk when a process starts,
+   * so with nothing running there is nothing to reload.
+   */
+  async reloadMcpServersIfRunning(): Promise<{
+    reloaded: boolean;
+    generation?: EngineGeneration;
+  }> {
+    const previous = this.mcpStartupNotices();
+    const outcome = await this.supervisor.requestIfReady("config/mcpServer/reload", undefined);
+    if (!outcome) return { reloaded: false };
+    this.dropNotices(previous);
+    return { reloaded: true, generation: outcome.generation };
+  }
+
+  private mcpStartupNotices(): Set<RuntimeNotice> {
+    return new Set(
       this.runtimeNotices.filter((notice) => notice.method === "mcpServer/startupStatus/updated"),
     );
-    await this.supervisor.request("config/mcpServer/reload", undefined);
-    // Reload is authoritative only after it succeeds. Remove the snapshot that
-    // predates the request, while retaining fresh failures emitted in flight.
+  }
+
+  /**
+   * Reload is authoritative only after it succeeds. Remove the snapshot that
+   * predates the request, while retaining fresh failures emitted in flight.
+   */
+  private dropNotices(previous: Set<RuntimeNotice>): void {
     for (let index = this.runtimeNotices.length - 1; index >= 0; index -= 1) {
       const notice = this.runtimeNotices[index];
       if (notice && previous.has(notice)) this.runtimeNotices.splice(index, 1);

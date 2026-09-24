@@ -1,7 +1,9 @@
 # 07 — Implement Codex configuration management
 
-Status: done using the safe TOML file writer (not `config/batchWrite`) plus the existing process-wide reload;
-thread-level adoption is unverified. Depends on: 01–05. [Plan index](00-index.md).
+Status: done using the safe TOML file writer (not `config/batchWrite`) plus an environment-level reload
+route that never starts app-server; system and managed layers are shown read-only and project trust is read
+from Codex's config. Thread-level adoption is unverified, so Codex runtimes stay `pending-next-turn` after a
+reload (no `applied` evidence). Depends on: 01–05. [Plan index](00-index.md).
 
 ## Existing owners
 

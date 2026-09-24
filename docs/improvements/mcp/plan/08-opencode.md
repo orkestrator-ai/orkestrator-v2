@@ -1,6 +1,7 @@
 # 08 — Implement OpenCode configuration management
 
-Status: done for durable CRUD; apply reports restart-required (no directory reload implemented).
+Status: done for durable CRUD across every file layer the pinned binary reads (remote/org configuration
+not modelled); apply reports restart-required (no directory reload implemented, no `applied` evidence).
 Depends on: 01–05. [Plan index](00-index.md).
 
 ## Existing owners

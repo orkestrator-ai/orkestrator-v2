@@ -1,14 +1,19 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -174,4 +179,94 @@ describe("McpSourceStore", () => {
     );
     await store.withLock(file, async () => undefined);
   });
+
+  test("a live holder whose identity cannot be verified is never taken over on age", async () => {
+    const file = path.join(root, "a.json");
+    writeFileSync(file, "{}");
+    const lockDir = path.join(root, "locks");
+    mkdirSync(lockDir, { recursive: true });
+    const identity = realpathSync(file);
+    const lockPath = path.join(
+      lockDir,
+      `${createHash("sha256").update(identity).digest("hex").slice(0, 40)}.lock`,
+    );
+    const quick = new McpSourceStore({
+      keyFile: path.join(root, "data", "key"),
+      lockDir,
+      lockWaitMs: 100,
+    });
+    // Live pid (this process), no start time to verify, an hour old.
+    writeFileSync(
+      lockPath,
+      JSON.stringify({ pid: process.pid, token: "held", at: Date.now() - 60 * 60_000 }),
+    );
+    await expect(quick.withLock(file, async () => "ran")).rejects.toThrow("busy");
+    expect(readFileSync(lockPath, "utf8")).toContain("held");
+
+    // An unparseable body older than the takeover age is a crashed creator.
+    writeFileSync(lockPath, "{truncated");
+    const old = new Date(Date.now() - 11 * 60_000);
+    utimesSync(lockPath, old, old);
+    await expect(quick.withLock(file, async () => "ran")).resolves.toBe("ran");
+
+    // A fresh unparseable body is mid-write by its creator: wait, then busy.
+    writeFileSync(lockPath, "{truncated");
+    await expect(quick.withLock(file, async () => "ran")).rejects.toThrow("busy");
+  });
+});
+
+describe("McpSourceStore filesystem failures", () => {
+  async function commitWith(code: string) {
+    const file = path.join(root, "a.json");
+    writeFileSync(file, '{"a":1}');
+    const snapshot = await store.read(file, policy);
+    const failure = Object.assign(new Error(`${code}: simulated`), { code });
+    const rename = spyOn(fsPromises, "rename").mockImplementation(async () => {
+      throw failure;
+    });
+    try {
+      const error = await store
+        .withLock(file, () => store.commit(snapshot, snapshot.revision!, '{"a":2}', policy))
+        .catch((caught: unknown) => caught);
+      return { error: error as Error, file };
+    } finally {
+      rename.mockRestore();
+    }
+  }
+
+  test("a full disk leaves the file and no temporary behind", async () => {
+    const { error, file } = await commitWith("ENOSPC");
+    expect(error.message).toContain("internal");
+    expect(error.message).toContain("disk is full");
+    expect(readFileSync(file, "utf8")).toBe('{"a":1}');
+    expect(readdirSync(root).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test("a read-only file system is reported as a read-only source", async () => {
+    const { error, file } = await commitWith("EROFS");
+    expect(error.message).toContain("read-only-source");
+    expect(readFileSync(file, "utf8")).toBe('{"a":1}');
+    expect(readdirSync(root).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test.skipIf(process.getuid?.() === 0)(
+    "a directory the backend cannot write is refused without a partial file",
+    async () => {
+      const dir = path.join(root, "locked");
+      mkdirSync(dir);
+      const file = path.join(dir, "a.json");
+      writeFileSync(file, '{"a":1}');
+      const snapshot = await store.read(file, policy);
+      chmodSync(dir, 0o500);
+      try {
+        await expect(
+          store.withLock(file, () => store.commit(snapshot, snapshot.revision!, "{}", policy)),
+        ).rejects.toThrow("read-only-source");
+      } finally {
+        chmodSync(dir, 0o700);
+      }
+      expect(readFileSync(file, "utf8")).toBe('{"a":1}');
+      expect(readdirSync(dir)).toEqual(["a.json"]);
+    },
+  );
 });

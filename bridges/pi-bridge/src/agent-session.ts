@@ -365,8 +365,17 @@ export async function reconcileAgentMcp(
   const busy =
     state.status === "running" || state.compacting || (!options.atTurnStart && state.dispatching);
   if (busy) return;
+  // The read yields, so everything checked above can change underneath it.
+  // Another caller may already have detached this generation and started the
+  // replacement attach, whose MCP runtime is the one `detachSession` would now
+  // close — leaving the new session live without its tools. Only the caller
+  // that still sees the generation it read, with no attach in flight, owns
+  // the detach.
+  const live = state.session;
   if (
     (await (agentSessionTestHooks.mcpConfigNeedsRefresh ?? mcpConfigNeedsRefresh)(state)) &&
+    state.session === live &&
+    !state.attaching &&
     (options.atTurnStart || (state.status !== "running" && !state.compacting && !state.dispatching))
   ) {
     await detachSession(state);

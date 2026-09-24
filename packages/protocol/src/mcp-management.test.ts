@@ -12,6 +12,7 @@ import {
   mcpManagementErrorFromUnknown,
   parseMcpMutation,
   redactUrlForDisplay,
+  referencesInternalCredential,
   validateMcpDefinitionInput,
   validateMcpDefinitionPatch,
   visibleArgs,
@@ -105,6 +106,50 @@ describe("mcp-management protocol", () => {
     expect(messages).toContain("Duplicate key authorization");
     expect(messages).toContain("env.0.key:This key is reserved.");
     expect(messages).toContain("Orkestrator's own credentials");
+  });
+
+  test("refuses internal credential references in commands, arguments, URLs and advanced values", () => {
+    const fields = (errors: { field: string; message: string }[]) =>
+      errors
+        .filter((error) => error.message.includes("Orkestrator's own credentials"))
+        .map((error) => error.field);
+    expect(
+      fields(
+        validateMcpDefinitionInput({
+          name: "a",
+          transport: "stdio",
+          command: "$CODEX_BRIDGE_TOKEN",
+          args: ["--token", "${ORKESTRATOR_AGENT_MCP_TOKEN}", "plain"],
+          advanced: {
+            bearer_token_env_var: "ORKESTRATOR_AGENT_MCP_TOKEN",
+            tools: ["{env:PI_BRIDGE_TOKEN}"],
+          },
+        }),
+      ),
+    ).toEqual(["command", "args.1", "advanced.bearer_token_env_var", "advanced.tools.0"]);
+    expect(
+      fields(
+        validateMcpDefinitionInput({
+          name: "a",
+          transport: "http",
+          url: "https://example.com/mcp?t=${ORKESTRATOR_GATEWAY_TOKEN}",
+        }),
+      ),
+    ).toEqual(["url"]);
+    expect(
+      fields(
+        validateMcpDefinitionPatch({
+          args: [
+            { kind: "keep", index: 0 },
+            { kind: "set", value: "$CLAUDE_BRIDGE_TOKEN" },
+          ],
+          url: { kind: "set", value: "https://example.com/${ORKESTRATOR_AGENT_MCP_TOKEN}" },
+          advanced: { set: { bearer_token_env_var: "ORKESTRATOR_AGENT_MCP_TOKEN" } },
+        }),
+      ),
+    ).toEqual(["url", "args.1", "advanced.bearer_token_env_var"]);
+    expect(referencesInternalCredential("MY_SERVICE_TOKEN")).toBe(false);
+    expect(referencesInternalCredential("${GITHUB_TOKEN}")).toBe(false);
   });
 
   test("enforces byte limits rather than character counts", () => {
@@ -221,5 +266,45 @@ describe("mcp-management protocol", () => {
     expect(aggregateApplyState(["applied", "queued"])).toBe("queued");
     expect(aggregateApplyState(["applied", "failed"])).toBe("failed");
     expect(aggregateApplyState(["applied", "pending-next-turn"])).toBe("pending-next-turn");
+  });
+});
+
+describe("MCP management correlation ids and rollout settings", () => {
+  test("a correlation id survives string-only transports and is stripped from the message", async () => {
+    const { McpManagementFailure, mcpManagementError, mcpManagementErrorFromUnknown } =
+      await import("./mcp-management");
+    const failure = new McpManagementFailure(
+      mcpManagementError("busy", { correlationId: "mcpe-abc_123" }),
+    );
+    expect(failure.message).toContain("[ref:mcpe-abc_123]");
+    const flattened = mcpManagementErrorFromUnknown(new Error(failure.message));
+    expect(flattened).toMatchObject({ code: "busy", correlationId: "mcpe-abc_123" });
+    expect(flattened?.message).not.toContain("[ref:");
+    // A message without a reference parses exactly as before.
+    expect(
+      mcpManagementErrorFromUnknown(new Error("McpManagementError:busy: Retry shortly.")),
+    ).toMatchObject({ code: "busy", message: "Retry shortly." });
+    expect(
+      mcpManagementErrorFromUnknown(new Error("McpManagementError:busy: Retry shortly."))
+        ?.correlationId,
+    ).toBeUndefined();
+  });
+
+  test("rollout settings default to enabled and ignore malformed parts", async () => {
+    const { normalizeMcpManagementRolloutSettings } = await import("./mcp-management");
+    expect(normalizeMcpManagementRolloutSettings(undefined).enabled).toBe(true);
+    expect(normalizeMcpManagementRolloutSettings(undefined).writeProviders).toContain("pi");
+    expect(
+      normalizeMcpManagementRolloutSettings({
+        enabled: "no",
+        writeProviders: ["claude", "bogus"],
+        applyProviders: "all",
+      }),
+    ).toEqual({
+      enabled: true,
+      writeProviders: ["claude"],
+      applyProviders: expect.arrayContaining(["claude", "codex", "pi"]),
+    });
+    expect(normalizeMcpManagementRolloutSettings({ enabled: false }).enabled).toBe(false);
   });
 });

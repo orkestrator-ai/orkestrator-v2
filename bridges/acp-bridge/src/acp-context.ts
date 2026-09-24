@@ -26,6 +26,15 @@ import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
 import type { AcpNormalizedSessionConfig } from "./session-config.js";
 import { AcpClientMethods, UnsupportedClientMethodError } from "./acp-client-methods.js";
 import { loadAcpProviderConfig, providerArgv } from "./acp-provider-config.js";
+import {
+  GrokMcpConfigWatcher,
+  grokMcpConfigFiles,
+  grokMcpConfigFingerprint,
+  grokMcpConfigStatus,
+  vendorMcpInventory,
+  type GrokMcpConfigFingerprint,
+  type GrokMcpConfigStatus,
+} from "./acp-mcp-inventory.js";
 
 export type Provider = AgentPlatform;
 export type JsonObject = Record<string, unknown>;
@@ -552,6 +561,11 @@ export let catalogProbe: Promise<NativeAgentComposerState> | null = null;
 export const agentRuntime: {
   version?: string;
   mcp?: NativeAgentMcpServer[];
+  /**
+   * The native Grok MCP configuration the child that last reported `mcp`
+   * loaded at spawn. Process-level, like `mcp` itself.
+   */
+  mcpLoaded?: GrokMcpConfigFingerprint & { observedAt: string };
   authMethods?: Array<{ id: string; name: string }>;
   authenticated?: boolean;
   promptCapabilities?: InitializeResponse["agentCapabilities"] extends infer _Capabilities
@@ -783,6 +797,12 @@ const unattachedUpdate = (): void => undefined;
 
 export class AcpProcess {
   readonly child: ChildProcessWithoutNullStreams;
+  /**
+   * The native Grok MCP files as this child found them at spawn. Grok reads
+   * its MCP configuration once at startup, so this is what the child's
+   * `servers_updated` listing reflects. Never rejects.
+   */
+  readonly mcpConfigAtSpawn: Promise<GrokMcpConfigFingerprint | undefined>;
   readonly clientMethods = new AcpClientMethods(workingDirectory);
   #diagnostics?: BridgeRunDiagnostics;
   #nextId = 1;
@@ -826,6 +846,11 @@ export class AcpProcess {
       ...spawnOptions,
       approvals: spawnOptions.policy?.approvals,
     });
+    // Read before the child starts, so an edit racing the spawn is reported
+    // as a change rather than missed.
+    this.mcpConfigAtSpawn = grokMcpConfigFingerprint(currentGrokMcpConfigFiles()).catch(
+      () => undefined,
+    );
     this.child = spawn(executable, args, {
       cwd: workingDirectory,
       env: { ...process.env, ...providerConfig.env },
@@ -1134,7 +1159,7 @@ export class AcpProcess {
       // this child is attached to a session at all.
       this.#diagnostics?.activity("notification");
       this.#diagnostics?.count("notificationsReceived");
-      rememberVendorRuntime(message.method, params);
+      rememberVendorRuntime(message.method, params, this.mcpConfigAtSpawn);
       // Every vendor *notification* is then offered to the session handler,
       // which ignores the ones it does not model. Notifications expect no reply,
       // so forwarding one this bridge cannot act on costs nothing — unlike a
@@ -1325,27 +1350,48 @@ function isAcpClientMethod(method: string): boolean {
   return method.startsWith("fs/") || method.startsWith("terminal/");
 }
 
-function rememberVendorRuntime(method: string, params: JsonObject): void {
-  if (!method.endsWith("/mcp/servers_updated") || !Array.isArray(params.mcpServers)) return;
-  const mcp = params.mcpServers.slice(0, 64).flatMap((candidate, index) => {
-    if (!isObject(candidate)) return [];
-    const name =
-      typeof candidate.name === "string" && candidate.name.trim()
-        ? candidate.name.trim().slice(0, 128)
-        : `server-${index + 1}`;
-    return [
-      {
-        id: name,
-        name,
-        status: "connected" as const,
-        scope: name === "orkestrator" ? ("orkestrator" as const) : undefined,
-        actions: [],
-      },
-    ];
+/** Orders `mcpLoaded` writes: only the latest listing's child may set it. */
+let mcpReportGeneration = 0;
+
+function rememberVendorRuntime(
+  method: string,
+  params: JsonObject,
+  loadedConfig?: Promise<GrokMcpConfigFingerprint | undefined>,
+): void {
+  if (!method.endsWith("/mcp/servers_updated")) return;
+  const mcp = vendorMcpInventory(params);
+  if (!mcp) return;
+  // Which configuration this listing reflects. Settled off the stdout loop:
+  // the fingerprint read was started at spawn and is normally long done.
+  const generation = ++mcpReportGeneration;
+  const observedAt = new Date().toISOString();
+  void loadedConfig?.then((loaded) => {
+    if (generation !== mcpReportGeneration) return;
+    if (loaded) agentRuntime.mcpLoaded = { ...loaded, observedAt };
+    else delete agentRuntime.mcpLoaded;
   });
   if (JSON.stringify(agentRuntime.mcp) === JSON.stringify(mcp)) return;
   agentRuntime.mcp = mcp;
   for (const state of sessions.values()) state.revision += 1;
+}
+
+function currentGrokMcpConfigFiles(): { user: string; project: string } {
+  return grokMcpConfigFiles({
+    env: { ...process.env, ...providerConfig.env },
+    cwd: workingDirectory,
+  });
+}
+
+const grokMcpConfigWatcher = new GrokMcpConfigWatcher(currentGrokMcpConfigFiles);
+
+/**
+ * Process-level MCP status for `/mcp` and `/runtime-health`: which saved
+ * configuration the reporting child loaded, what is saved now, and whether
+ * they differ. Content-free; never a path.
+ */
+export async function publicMcpConfigStatus(): Promise<GrokMcpConfigStatus> {
+  const current = await grokMcpConfigWatcher.current().catch(() => undefined);
+  return grokMcpConfigStatus(agentRuntime.mcpLoaded, current);
 }
 
 export function publicRuntime(state: SessionState): NativeAgentRuntimeSummary {

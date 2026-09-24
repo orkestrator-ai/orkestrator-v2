@@ -25,7 +25,7 @@ import {
   type McpTargetCapabilities,
 } from "@orkestrator/protocol/mcp-management";
 
-import { PROVIDER_CODECS, piSanitizedName } from "./codecs.js";
+import { PI_SERVERS_PER_FILE, PROVIDER_CODECS, piLoadBlock, piSanitizedName } from "./codecs.js";
 import { parseSource, type ParsedSource } from "./document.js";
 import type { McpSourceStore, SourceFileSnapshot } from "./source-store.js";
 import type { CanonicalDefinition, ContainerFileReader, NativeEntry, SourceSpec } from "./types.js";
@@ -47,6 +47,17 @@ export interface LoadedEntry {
   /** Layout problem (duplicate key, inline TOML) that blocks editing. */
   issue?: string;
   injected: boolean;
+  /** Position within its source, in the order the provider reads it. */
+  order: number;
+  /**
+   * Several entries in one source reach the provider under the same runtime
+   * name (Pi normalizes names). Editing and renaming are blocked; removal is not.
+   */
+  conflict?: string;
+  /** The provider silently skips this entry when it loads the source. */
+  skipReason?: string;
+  /** Disabled by a setting outside the entry (Grok's `disabled_mcp_servers`). */
+  disabledReason?: string;
 }
 
 export interface LoadedCatalog {
@@ -151,12 +162,59 @@ async function loadContainerSource(
   }
 }
 
+/** Inline configuration: parsed like a file, never written. */
+async function loadInlineSource(
+  store: McpSourceStore,
+  spec: SourceSpec,
+  text: string,
+): Promise<LoadedSource> {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.byteLength > spec.maxBytes) {
+    return {
+      spec,
+      file: null,
+      parsed: null,
+      state: "oversized",
+      error: "Too large to read safely.",
+    };
+  }
+  const file: SourceFileSnapshot = {
+    path: spec.path,
+    realPath: spec.path,
+    mode: null,
+    writeBlock: spec.readOnlyReason ?? "This configuration is read-only.",
+    state: "ok",
+    text,
+    revision: await store.revisionOf(bytes),
+  };
+  try {
+    const parsed = parseSource(spec, text);
+    return {
+      spec,
+      file,
+      parsed,
+      state: parsed.addBlock ? "unsupported-layout" : "ok",
+      error: parsed.addBlock,
+    };
+  } catch {
+    // Never echo inline content: it may be a credential-bearing environment value.
+    return {
+      spec,
+      file,
+      parsed: null,
+      state: "invalid",
+      error: "The inline configuration could not be parsed.",
+    };
+  }
+}
+
 export async function loadSource(
   store: McpSourceStore,
   spec: SourceSpec,
   reader?: ContainerFileReader,
 ): Promise<LoadedSource> {
   if (spec.format === "runtime") return { spec, file: null, parsed: null, state: "ok" };
+  if (spec.inlineText !== undefined) return loadInlineSource(store, spec, spec.inlineText);
   if (spec.container) return loadContainerSource(store, spec, reader);
   let file: SourceFileSnapshot;
   try {
@@ -223,6 +281,7 @@ export async function loadCatalog(
           raw: null,
           definition: null,
           injected: true,
+          order: entries.length,
         });
       }
       continue;
@@ -237,6 +296,7 @@ export async function loadCatalog(
         definition: codec.decode(raw),
         issue: source.parsed.entryIssues.get(name),
         injected: false,
+        order: entries.length,
       });
     }
     for (const [name, issue] of source.parsed.entryIssues) {
@@ -249,11 +309,90 @@ export async function loadCatalog(
           definition: null,
           issue,
           injected: false,
+          order: entries.length,
         });
       }
     }
   }
+  markPiLoadRules(entries);
+  markGrokDisabledList(sources, entries);
   return { sources, entries };
+}
+
+/**
+ * Grok skips every server named in a top-level `disabled_mcp_servers` list of
+ * its user or managed configuration, whichever source defines the server.
+ */
+function markGrokDisabledList(sources: readonly LoadedSource[], entries: LoadedEntry[]): void {
+  const listedBy = new Map<string, string>();
+  for (const source of sources) {
+    const spec = source.spec;
+    if (spec.provider !== "grok" || spec.format !== "toml") continue;
+    if (spec.owner !== "native-user" && spec.owner !== "managed-policy") continue;
+    const document = source.parsed?.document as Record<string, unknown> | undefined;
+    const list = document?.disabled_mcp_servers;
+    if (!Array.isArray(list)) continue;
+    for (const name of list)
+      if (typeof name === "string" && !listedBy.has(name)) listedBy.set(name, spec.displayPath);
+  }
+  if (!listedBy.size) return;
+  for (const entry of entries) {
+    if (entry.injected || entry.source.spec.provider !== "grok") continue;
+    const where = listedBy.get(entry.name);
+    if (where) entry.disabledReason = `Disabled: listed in disabled_mcp_servers in ${where}.`;
+  }
+}
+
+/**
+ * Mirror how the Pi bridge reads one file: it skips entries it cannot
+ * normalize, stops after {@link PI_SERVERS_PER_FILE} accepted servers, and
+ * lets the last of several entries with the same normalized name win.
+ */
+function markPiLoadRules(entries: LoadedEntry[]): void {
+  const bySource = new Map<LoadedSource, LoadedEntry[]>();
+  for (const entry of entries) {
+    if (entry.injected || entry.source.spec.provider !== "pi") continue;
+    const list = bySource.get(entry.source) ?? [];
+    list.push(entry);
+    bySource.set(entry.source, list);
+  }
+  for (const list of bySource.values()) {
+    let accepted = 0;
+    const groups = new Map<string, LoadedEntry[]>();
+    for (const entry of list) {
+      entry.skipReason = piLoadBlock(entry.name, entry.raw);
+      const id = piSanitizedName(entry.name);
+      if (id) {
+        const group = groups.get(id) ?? [];
+        group.push(entry);
+        groups.set(id, group);
+      }
+      if (entry.skipReason || entry.raw?.disabled === true) continue;
+      if (id === "orkestrator") continue;
+      if (accepted >= PI_SERVERS_PER_FILE) {
+        entry.skipReason = `Pi loads at most ${PI_SERVERS_PER_FILE} servers from one file; this entry is past the limit.`;
+        continue;
+      }
+      accepted += 1;
+    }
+    for (const [id, group] of groups) {
+      if (group.length < 2) continue;
+      const names = group.map((entry) => `"${entry.name}"`).join(", ");
+      const used = [...group]
+        .reverse()
+        .find((entry) => !entry.skipReason && entry.raw?.disabled !== true);
+      for (const entry of group) {
+        const which = !used
+          ? "none of them is loaded"
+          : used === entry
+            ? "this is the one Pi uses, because it comes last"
+            : `Pi uses "${used.name}", which comes last`;
+        entry.conflict =
+          `Pi reads ${names} in this file as the same server "${id}"; ${which}. ` +
+          "Remove the duplicates so exactly one remains.";
+      }
+    }
+  }
 }
 
 /** The runtime identity two same-provider entries collide on. */
@@ -267,7 +406,16 @@ function isCandidate(entry: LoadedEntry): boolean {
   if (entry.source.spec.excludedReason) return false;
   // The Pi bridge skips a disabled entry entirely, so a lower one takes over.
   if (entry.source.spec.provider === "pi" && entry.definition?.enabled === false) return false;
+  if (entry.skipReason || entry.disabledReason) return false;
   return true;
+}
+
+/** Highest precedence first; within one source the later entry wins. */
+function byPriority(left: LoadedEntry, right: LoadedEntry): number {
+  return (
+    right.source.spec.precedence - left.source.spec.precedence ||
+    (left.source === right.source ? right.order - left.order : 0)
+  );
 }
 
 export interface EffectiveView {
@@ -289,7 +437,7 @@ export function computeEffective(entries: readonly LoadedEntry[]): EffectiveView
   const winners = new Map<string, LoadedEntry>();
   const shadows = new Map<string, LoadedEntry[]>();
   for (const [identity, group] of groups) {
-    group.sort((left, right) => right.source.spec.precedence - left.source.spec.precedence);
+    group.sort(byPriority);
     const winner = group[0]!;
     winners.set(identity, winner);
     shadows.set(winner.entryId, group.slice(1));
@@ -319,7 +467,7 @@ export function revealedBy(
     (candidate) =>
       candidate !== entry && isCandidate(candidate) && identityOf(candidate) === identity,
   );
-  remaining.sort((left, right) => right.source.spec.precedence - left.source.spec.precedence);
+  remaining.sort(byPriority);
   const view = computeEffective(entries);
   return view.winners.get(identity) === entry ? remaining[0] : undefined;
 }
@@ -348,6 +496,7 @@ export function entryEditBlock(
     return entry.source.spec.readOnlyReason ?? "This source is read-only.";
   if (entry.source.file?.writeBlock) return entry.source.file.writeBlock;
   if (entry.issue) return entry.issue;
+  if (entry.conflict) return entry.conflict;
   if (!entry.definition) return "The entry could not be read.";
   if (entry.definition.unsupportedReason) return entry.definition.unsupportedReason;
   if (entry.definition.invalidReason)
@@ -359,6 +508,16 @@ export function entryEditBlock(
     return capabilities.transports[entry.definition.transport].reason;
   }
   return undefined;
+}
+
+/**
+ * What blocks a rename beyond what blocks removal. Rename moves the native
+ * entry verbatim, so it needs everything removal needs; a same-source name
+ * conflict additionally blocks it, because renaming one duplicate silently
+ * changes which of them the provider loads.
+ */
+export function entryRenameBlock(entry: LoadedEntry): string | undefined {
+  return entry.conflict;
 }
 
 function entryActions(
@@ -376,8 +535,7 @@ function entryActions(
       : !entry.source.spec.writable
         ? (entry.source.spec.readOnlyReason ?? "This source is read-only.")
         : (entry.source.file?.writeBlock ?? entry.issue));
-  // Rename moves the native entry verbatim, so it needs exactly what removal needs.
-  const renameBlock = removeBlock;
+  const renameBlock = removeBlock ?? entryRenameBlock(entry);
   const setEnabled = !capabilities.operations.setEnabled.supported
     ? capabilities.operations.setEnabled
     : editBlock
@@ -437,12 +595,35 @@ export function summarizeEntries(
     } else if (!definition || entry.issue) {
       status = "invalid";
       statusReason = entry.issue ?? "The entry could not be read.";
+    } else if (entry.conflict) {
+      status = "invalid";
+      statusReason = entry.conflict;
     } else if (definition.invalidReason) {
       status = "invalid";
       statusReason = definition.invalidReason;
     } else if (definition.unsupportedReason) {
       status = "unsupported";
       statusReason = definition.unsupportedReason;
+    } else if (entry.disabledReason) {
+      status = "disabled";
+      statusReason = entry.disabledReason;
+    } else if (entry.source.spec.provider === "pi" && definition.enabled === false) {
+      // Pi drops a disabled entry before resolving names, so it never shadows
+      // anything; whichever entry wins is used in its place.
+      status = "disabled";
+      if (winner && winner !== entry) {
+        statusReason =
+          byPriority(entry, winner) < 0
+            ? `Disabled; the lower-priority entry in ${winner.source.spec.label} is used instead.`
+            : `Disabled; ${winner.source.spec.label} also defines this name and takes priority.`;
+      } else {
+        statusReason = "Disabled in the saved configuration.";
+      }
+    } else if (entry.skipReason) {
+      status = "invalid";
+      statusReason = entry.skipReason;
+      if (winner && winner !== entry && byPriority(entry, winner) < 0)
+        statusReason += ` The lower-priority entry in ${winner.source.spec.label} is used instead.`;
     } else if (winner && winner !== entry) {
       status = "shadowed";
       shadowedBy = winner.entryId;
@@ -450,12 +631,6 @@ export function summarizeEntries(
       const note = PROVIDER_CODECS[entry.source.spec.provider].mergeNote;
       if (note) statusReason += ` ${note}`;
     } else if (definition.enabled === false) {
-      status = "disabled";
-      statusReason =
-        entry.source.spec.provider === "pi" && winner && winner !== entry
-          ? "Disabled; a lower-priority entry with this name is used instead."
-          : "Disabled in the saved configuration.";
-    } else if (!winner && entry.source.spec.provider === "pi") {
       status = "disabled";
       statusReason = "Disabled in the saved configuration.";
     } else {
@@ -467,7 +642,7 @@ export function summarizeEntries(
       sourceId: entry.source.spec.sourceId,
       name: entry.name,
       transport: definition?.transport ?? (entry.injected ? "http" : "unknown"),
-      enabled: definition?.enabled ?? null,
+      enabled: entry.disabledReason ? false : (definition?.enabled ?? null),
       status,
       statusReason,
       shadowedBy,

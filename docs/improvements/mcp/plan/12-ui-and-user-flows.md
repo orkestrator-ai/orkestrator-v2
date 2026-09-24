@@ -1,6 +1,10 @@
 # 12 — Build provider settings, server editor and operation feedback
 
-Status: done — `apps/web/src/components/settings/mcp-servers/`; real-browser QA pending.
+Status: done — `apps/web/src/components/settings/mcp-servers/` with preview for every change (including
+enable/disable), local validation, focus return, conflict reload in every dialog, discard prompt, rollout
+gate, correlation references, per-server and per-platform deep links. Connection and sign-in health stay in
+the live agent panel (no new apply states). Real-browser QA recorded in the living doc's verification
+status; the agent-panel link and a post-fix browser pass remain.
 Depends on: 02–05 and verified adapter capabilities. [Plan index](00-index.md).
 
 ## Existing and proposed owners

@@ -1,7 +1,8 @@
 # 04 — Implement safe native persistence and secret editing
 
-Status: done (`source-store.ts`, `document.ts`, `json-edit.ts`, `toml-edit.ts`, `mutation.ts`). No backup
-generations are kept; recovery uses operation intent. Depends on: 01–03. [Plan index](00-index.md).
+Status: done (`source-store.ts`, `document.ts`, `json-edit.ts`, `toml-edit.ts`, `mutation.ts`,
+`references.ts`). Renames warn about settings that reference the old name but do not rewrite them. No
+backup generations are kept; recovery uses operation intent. Depends on: 01–03. [Plan index](00-index.md).
 
 ## Purpose
 

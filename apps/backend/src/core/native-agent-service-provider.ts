@@ -109,6 +109,7 @@ export type NativeAgentServiceLayerTypes = [
 ];
 
 import { NativeAgentServiceReconciliation } from "./native-agent-service-reconciliation.ts";
+import type { ProviderMcpConfigEvidenceRead } from "./agent-provider-contract.js";
 import { agentSessionOwnerKey } from "@orkestrator/protocol/coordinator";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import {
@@ -238,6 +239,55 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     });
     this.cacheProvider(cacheKey, provider, this.bridgeConnectionIdentity(connection));
     return provider;
+  }
+
+  /**
+   * Reload MCP configuration in an environment's *already running* bridge.
+   *
+   * Resolves the provider the way the activity sweep does, so it never starts
+   * a bridge, and calls a session-free bridge route, so it neither touches a
+   * session's liveness nor re-attaches an idle thread — and it still works
+   * after a bridge restart forgot every session. `not-running` is an answer:
+   * a process that is not running reads the saved file when it starts.
+   */
+  async reloadMcpConfigurationIfRunning(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+  ): Promise<"reloaded" | "not-running" | "unsupported"> {
+    const provider = await this.observeProvider({
+      environmentId,
+      agent,
+      logicalSessionKey: "mcp-configuration-reload",
+    });
+    if (!provider) return "not-running";
+    if (!provider.reloadMcpConfiguration) return "unsupported";
+    return provider.reloadMcpConfiguration();
+  }
+
+  /**
+   * Which saved MCP configuration a session's live runtime was built from,
+   * for the MCP apply scheduler only.
+   *
+   * Observation-only on every hop: the persisted mapping supplies the
+   * provider session id, the provider is resolved the way the activity sweep
+   * resolves it (never starting a bridge), and the bridge route read is
+   * `/runtime-health`, which touches no liveness, hydrates no transcript and
+   * re-attaches nothing. The answer is never projected to a renderer.
+   */
+  async mcpConfigEvidenceIfRunning(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): Promise<ProviderMcpConfigEvidenceRead> {
+    const session = await this.storage.getNativeAgentSession(
+      shared.nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+    );
+    if (!session?.providerSessionId) return { state: "none" };
+    const provider = await this.observeProvider({ environmentId, agent, logicalSessionKey });
+    if (!provider) return { state: "not-running" };
+    if (!provider.mcpConfigEvidence) return { state: "none" };
+    const evidence = await provider.mcpConfigEvidence(session.providerSessionId);
+    return evidence ? { state: "evidence", evidence } : { state: "none" };
   }
 
   /** Forget a provider whose environment is gone, along with its observer state. */

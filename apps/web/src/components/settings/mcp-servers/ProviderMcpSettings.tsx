@@ -1,13 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Loader2, Plus, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Loader2, Plus, RefreshCw } from "lucide-react";
 
 import {
   AGENT_PLATFORMS,
   AGENT_PLATFORM_LABELS,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
-import type { McpDefinitionSummary } from "@orkestrator/protocol/mcp-management";
-
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -26,7 +24,10 @@ import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 
 import { McpApplyStatus } from "./McpApplyStatus";
+import { McpDiscardDialog } from "./McpDiscardDialog";
 import { McpEntryDialog, type McpEntryAction } from "./McpEntryDialogs";
+import { McpErrorNotice } from "./McpErrorNotice";
+import { applyBlockedReason, writeBlockedReason } from "./mcp-rollout";
 import { McpServerEditor, type McpEditorMode } from "./McpServerEditor";
 import { McpSourceList } from "./McpSourceList";
 import { useMcpSnapshot, useMcpTargets } from "./useMcpManagement";
@@ -47,16 +48,56 @@ export function ProviderMcpSettings() {
   const [editor, setEditor] = useState<McpEditorMode | null>(null);
   const [entryAction, setEntryAction] = useState<McpEntryAction | null>(null);
   const environments = useEnvironmentStore((state) => state.environments);
+  // Whether the open editor/dialog holds unsaved input. A draft belongs to
+  // one exact target, so switching target must discard it — explicitly.
+  const dirtyRef = useRef(false);
+  const [pendingSwitch, setPendingSwitch] = useState<(() => void) | null>(null);
+  // Dialogs have no DialogTrigger, so Radix cannot restore focus on its own.
+  // The row action (or Add button) that opened one is remembered here.
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+
+  const closeDialogs = () => {
+    dirtyRef.current = false;
+    setEditor(null);
+    setEntryAction(null);
+  };
+  /** Run a target switch, confirming first when it would discard a draft. */
+  const guardSwitch = (apply: () => void) => {
+    const run = () => {
+      closeDialogs();
+      apply();
+    };
+    if (dirtyRef.current) setPendingSwitch(() => run);
+    else run();
+  };
+  const guardSwitchRef = useRef(guardSwitch);
+  guardSwitchRef.current = guardSwitch;
+  const restoreFocus = () => {
+    const element = returnFocusRef.current;
+    returnFocusRef.current = null;
+    const fallback = headingRef.current;
+    if (element?.isConnected && !(element as HTMLButtonElement).disabled) element.focus();
+    else fallback?.focus();
+  };
+  const openDialog = (trigger: HTMLElement, open: () => void) => {
+    returnFocusRef.current = trigger;
+    dirtyRef.current = false;
+    open();
+  };
+  const setDirty = (dirty: boolean) => {
+    dirtyRef.current = dirty;
+  };
 
   useEffect(
     () =>
-      onMcpSettingsIntent((intent) => {
-        if (intent.provider) setProvider(intent.provider);
-        setContextId(intent.environmentId ?? BACKEND_CONTEXT);
-        setHighlight(intent.serverName);
-        setEditor(null);
-        setEntryAction(null);
-      }),
+      onMcpSettingsIntent((intent) =>
+        guardSwitchRef.current(() => {
+          if (intent.provider) setProvider(intent.provider);
+          setContextId(intent.environmentId ?? BACKEND_CONTEXT);
+          setHighlight(intent.serverName);
+        }),
+      ),
     [],
   );
 
@@ -68,21 +109,19 @@ export function ProviderMcpSettings() {
     targetsState.status === "error"
       ? (targetsState.data ?? [])
       : [];
+  // Match the exact context, not just its kind: a list still loading for a
+  // previous environment must never supply that environment's target here.
   const target = targets.find(
     (candidate) =>
       candidate.provider === provider &&
-      candidate.context.kind === (environmentId ? "environment" : "backend"),
+      candidate.context.kind === (environmentId ? "environment" : "backend") &&
+      (candidate.context.environmentId ?? null) === environmentId,
   );
   const { state: snapshotState, reload } = useMcpSnapshot(target?.targetId ?? null);
   const snapshot = "data" in snapshotState ? snapshotState.data : null;
   const current = snapshot && snapshot.target.targetId === target?.targetId ? snapshot : null;
 
-  const selectContext = (next: string) => {
-    // Drafts belong to one exact target; switching discards open editors.
-    setEditor(null);
-    setEntryAction(null);
-    setContextId(next);
-  };
+  const selectContext = (next: string) => guardSwitch(() => setContextId(next));
 
   if (targetsState.status === "unsupported" || snapshotState.status === "unsupported") {
     return (
@@ -93,8 +132,11 @@ export function ProviderMcpSettings() {
     );
   }
 
+  const writeBlocked = current ? writeBlockedReason(current.target.capabilities) : null;
+  const applyBlocked = current ? applyBlockedReason(current.target.capabilities) : null;
   const canAdd =
     !!current &&
+    !writeBlocked &&
     current.target.capabilities.operations.add.supported &&
     current.sources.some((source) => source.writable && source.format !== "runtime");
 
@@ -123,11 +165,7 @@ export function ProviderMcpSettings() {
           <Label htmlFor="mcp-provider">Agent platform</Label>
           <Select
             value={provider}
-            onValueChange={(value) => {
-              setEditor(null);
-              setEntryAction(null);
-              setProvider(value as AgentPlatform);
-            }}
+            onValueChange={(value) => guardSwitch(() => setProvider(value as AgentPlatform))}
           >
             <SelectTrigger id="mcp-provider">
               <SelectValue />
@@ -175,9 +213,21 @@ export function ProviderMcpSettings() {
         </Button>
       </div>
 
-      {targetsState.status === "error" ? <ErrorNotice message={targetsState.message} /> : null}
+      {targetsState.status === "error" ? (
+        <McpErrorNotice
+          className="rounded-lg px-4 py-3"
+          problem={{ message: targetsState.message, reference: targetsState.reference }}
+        />
+      ) : null}
       {snapshotState.status === "error" ? (
-        <ErrorNotice message={snapshotState.message} onRetry={reload} />
+        <McpErrorNotice
+          className="rounded-lg px-4 py-3"
+          problem={{ message: snapshotState.message, reference: snapshotState.reference }}
+        >
+          <Button size="sm" variant="outline" onClick={reload}>
+            Try again
+          </Button>
+        </McpErrorNotice>
       ) : null}
 
       {!current ? (
@@ -203,6 +253,16 @@ export function ProviderMcpSettings() {
                 {current.target.readOnlyReason}
               </p>
             ) : null}
+            {writeBlocked ? (
+              <p className="text-xs text-amber-300" role="note">
+                {writeBlocked}
+              </p>
+            ) : null}
+            {applyBlocked && applyBlocked !== writeBlocked ? (
+              <p className="text-xs text-amber-300" role="note">
+                {applyBlocked}
+              </p>
+            ) : null}
             {current.freshness === "incomplete" ? (
               <p className="text-xs text-amber-300">
                 Some configuration could not be read
@@ -213,7 +273,13 @@ export function ProviderMcpSettings() {
           </div>
 
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-medium text-foreground">Configured servers</h2>
+            <h2
+              ref={headingRef}
+              tabIndex={-1}
+              className="text-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            >
+              Configured servers
+            </h2>
             <Button
               size="sm"
               className="gap-1.5"
@@ -221,10 +287,14 @@ export function ProviderMcpSettings() {
               title={
                 canAdd
                   ? undefined
-                  : (current.target.readOnlyReason ??
-                    "No writable configuration file is available.")
+                  : (writeBlocked ??
+                    current.target.readOnlyReason ??
+                    (current.target.capabilities.operations.add.supported
+                      ? "No writable configuration file is available."
+                      : current.target.capabilities.operations.add.reason) ??
+                    "Adding servers is not supported here.")
               }
-              onClick={() => setEditor({ kind: "add" })}
+              onClick={(event) => openDialog(event.currentTarget, () => setEditor({ kind: "add" }))}
             >
               <Plus className="h-4 w-4" /> Add server
             </Button>
@@ -233,14 +303,24 @@ export function ProviderMcpSettings() {
           <McpSourceList
             snapshot={current}
             highlightName={highlight}
-            onEdit={(definition: McpDefinitionSummary) =>
-              setEditor({ kind: "edit", entryId: definition.entryId })
+            onEdit={(definition, trigger) =>
+              openDialog(trigger, () => setEditor({ kind: "edit", entryId: definition.entryId }))
             }
-            onRename={(definition) => setEntryAction({ kind: "rename", entry: definition })}
-            onRemove={(definition) => setEntryAction({ kind: "remove", entry: definition })}
+            onRename={(definition, trigger) =>
+              openDialog(trigger, () => setEntryAction({ kind: "rename", entry: definition }))
+            }
+            onRemove={(definition, trigger) =>
+              openDialog(trigger, () => setEntryAction({ kind: "remove", entry: definition }))
+            }
+            onSetEnabled={(definition, trigger) =>
+              openDialog(trigger, () => setEntryAction({ kind: "set-enabled", entry: definition }))
+            }
           />
 
-          <McpApplyStatus operations={current.operations} />
+          <McpApplyStatus
+            operations={current.operations}
+            applyBlockedReason={applyBlocked ?? undefined}
+          />
 
           {editor ? (
             <McpServerEditor
@@ -248,7 +328,10 @@ export function ProviderMcpSettings() {
               mode={editor}
               snapshot={current}
               onReload={reload}
+              onDirtyChange={setDirty}
+              onRestoreFocus={restoreFocus}
               onClose={() => {
+                dirtyRef.current = false;
                 setEditor(null);
                 reload();
               }}
@@ -259,7 +342,14 @@ export function ProviderMcpSettings() {
               key={`${current.target.targetId}:${entryAction.kind}:${entryAction.entry.entryId}`}
               action={entryAction}
               snapshot={current}
-              onClose={() => {
+              onReload={reload}
+              onDirtyChange={setDirty}
+              onRestoreFocus={restoreFocus}
+              onClose={(done) => {
+                // A removed or renamed row is about to disappear from the
+                // list; focus the list heading rather than a vanishing button.
+                if (done && entryAction.kind !== "set-enabled") returnFocusRef.current = null;
+                dirtyRef.current = false;
                 setEntryAction(null);
                 reload();
               }}
@@ -267,25 +357,15 @@ export function ProviderMcpSettings() {
           ) : null}
         </>
       )}
-    </div>
-  );
-}
-
-function ErrorNotice({ message, onRetry }: { message: string; onRetry?: () => void }) {
-  return (
-    <div
-      className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm"
-      role="alert"
-    >
-      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-      <div className="space-y-2">
-        <p>{message}</p>
-        {onRetry ? (
-          <Button size="sm" variant="outline" onClick={onRetry}>
-            Try again
-          </Button>
-        ) : null}
-      </div>
+      <McpDiscardDialog
+        open={pendingSwitch !== null}
+        onKeep={() => setPendingSwitch(null)}
+        onDiscard={() => {
+          const run = pendingSwitch;
+          setPendingSwitch(null);
+          run?.();
+        }}
+      />
     </div>
   );
 }

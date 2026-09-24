@@ -155,6 +155,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const [globalSettingsOpen, setGlobalSettingsOpen] = useState(false);
   const [globalSettingsDefaultSection, setGlobalSettingsDefaultSection] =
     useState<GlobalSettingsSection>();
+  /** Bumped per section request so a repeat request for the same section navigates. */
+  const [globalSettingsSectionRequest, setGlobalSettingsSectionRequest] = useState(0);
   const [envSettingsEnvironmentId, setEnvSettingsEnvironmentId] = useState<string | null>(null);
   const [dockerStatsOpen, setDockerStatsOpen] = useState(false);
   const [isOpeningEditor, setIsOpeningEditor] = useState(false);
@@ -187,6 +189,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     () =>
       onGlobalSettingsRequest((section) => {
         setGlobalSettingsDefaultSection(section);
+        setGlobalSettingsSectionRequest((request) => request + 1);
         setGlobalSettingsOpen(true);
       }),
     [],
@@ -2252,6 +2255,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     setRepoSettingsProjectId,
     globalSettingsOpen,
     globalSettingsDefaultSection,
+    globalSettingsSectionRequest,
     setGlobalSettingsOpen: updateGlobalSettingsOpen,
     envSettingsEnvironmentId,
     setEnvSettingsEnvironmentId,

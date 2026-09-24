@@ -88,6 +88,11 @@ export interface SourceSpec {
   excludedReason?: string;
   /** Set when the file lives inside a container; `path` is then a container path. */
   container?: { containerId: string };
+  /**
+   * Configuration supplied inline (e.g. `OPENCODE_CONFIG_CONTENT`) rather than
+   * from a file. Always read-only; may carry secrets and is never logged.
+   */
+  inlineText?: string;
 }
 
 /** Bounded read of one file inside a container. Never runs a shell over the path. */

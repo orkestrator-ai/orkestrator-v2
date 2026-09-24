@@ -30,3 +30,11 @@
   --cwd apps/web ./src/components/design/DesignCanvasTab.test.tsx --parallel=1
   --only-failures` (0.2 s). Artifact:
   `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.4bbPpy/workspace-web-backend-desktop-web-public-cli-protocol.log.gz`.
+- **Recurrence (2026-09-24, Linux):** `mise run test` received `false` at the
+  same assertion twice while validating the MCP server management branch
+  (`implement-index-plan-244c1f885c7f-r1`), once at 58.59 ms. Web group: 7,174
+  passed, one failed; root, bridges and protocol groups passed. The change set
+  touches no design-canvas, shortcut or keybinding file. The owning file passed
+  alone with `mise run test:logged -- --name design-canvas-alone -- bun
+  --cwd=apps/web test ./src/components/design/DesignCanvasTab.test.tsx`.
+  Artifact: `/tmp/orkestrator-test-run.QcdF6x/workspace-web-backend-desktop-web-public-cli-protocol.log.gz`.

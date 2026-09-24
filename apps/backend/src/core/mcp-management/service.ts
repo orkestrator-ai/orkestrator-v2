@@ -19,11 +19,13 @@ import {
   aggregateApplyState,
   mcpFailure,
   parseMcpMutation,
+  utf8ByteLength,
   type McpDefinitionSummary,
   type McpEditableDefinition,
   type McpFieldError,
   type McpImpactPreview,
   type McpManagementChangedEvent,
+  type McpManagementRolloutSettings,
   type McpManagementSnapshot,
   type McpManagementTarget,
   type McpMutation,
@@ -40,9 +42,13 @@ import {
   type PlannedRuntime,
   type RuntimeProbe,
 } from "./apply.js";
+import { EvidenceScheduler, evidenceRole, type CurrentSourceState } from "./evidence.js";
+import { renameReferenceWarnings } from "./references.js";
+import { McpRolloutGate } from "./rollout.js";
 import {
   editableDefinition,
   entryEditBlock,
+  entryRenameBlock,
   loadCatalog,
   parseEntryId,
   publicSource,
@@ -55,7 +61,7 @@ import {
   type LoadedSource,
 } from "./catalog.js";
 import { PROVIDER_CODECS, piSanitizedName } from "./codecs.js";
-import { editSource, parseSource, type DocumentEdit } from "./document.js";
+import { editSource, parseSource, type DocumentEdit, type ParsedSource } from "./document.js";
 import {
   applyPatch,
   assertNoFieldErrors,
@@ -73,9 +79,11 @@ import {
   resolveProviderHomes,
   type ProviderHomes,
 } from "./providers.js";
-import { ABSENT_REVISION, McpSourceStore } from "./source-store.js";
+import { ABSENT_REVISION, McpSourceStore, contentDigest } from "./source-store.js";
 import {
   CONTAINER_READ_ONLY_REASON,
+  backendTargetId,
+  environmentTargetId,
   listTargets,
   resolveTarget,
   type ResolvedTarget,
@@ -100,6 +108,10 @@ export interface McpManagementServiceOptions {
   tickMs?: number;
   /** Reads container files for container targets' read-only catalogs. */
   readContainerFile?: ContainerFileReader;
+  /** Reads the stored rollout settings (`global.mcpManagement`). Absent: everything enabled. */
+  loadRollout?: () => Promise<unknown>;
+  /** How long a write waits for another Orkestrator writer before `busy`. */
+  lockWaitMs?: number;
 }
 
 interface Prepared {
@@ -113,6 +125,9 @@ interface Prepared {
   intendedEntry?: Record<string, unknown>;
 }
 
+/** Events name at most this many targets; beyond it they say "all" (`[]`). */
+const EVENT_TARGETS_MAX = 256;
+
 function nowIso(now: () => number): string {
   return new Date(now()).toISOString();
 }
@@ -122,19 +137,23 @@ export class McpManagementService {
   private readonly operations: McpOperationStore;
   private readonly now: () => number;
   private readonly homes: ProviderHomes;
+  private readonly gate: McpRolloutGate;
   private catalogRevision = 0;
   private eventRevision = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private ticking = false;
   private initialized: Promise<void> | null = null;
   private disposed = false;
+  private readonly evidence: EvidenceScheduler;
 
   constructor(private readonly options: McpManagementServiceOptions) {
     const dir = path.join(options.dataDir, "mcp-management");
     this.store = new McpSourceStore({
       keyFile: path.join(dir, "revision.key"),
       lockDir: options.lockDir,
+      lockWaitMs: options.lockWaitMs,
     });
+    this.gate = new McpRolloutGate(options.loadRollout);
     this.now = options.now ?? Date.now;
     this.operations = new McpOperationStore(
       path.join(dir, "operations.json"),
@@ -142,12 +161,21 @@ export class McpManagementService {
       this.now,
     );
     this.homes = resolveProviderHomes(options.env ?? process.env, options.home);
+    this.evidence = new EvidenceScheduler({
+      probe: options.probe,
+      now: this.now,
+      blocked: (provider) => !!this.gate.applyBlock(provider),
+      currentSource: (stored) => this.currentSource(stored),
+      commit: (stored) => this.finishApplyUpdate(stored),
+    });
   }
 
   init(): Promise<void> {
     this.initialized ??= (async () => {
       await this.operations.load();
+      await this.gate.refresh();
       await this.recover();
+      await this.retireGatedWork();
       this.scheduleTick();
     })();
     return this.initialized;
@@ -177,6 +205,7 @@ export class McpManagementService {
         target.provider,
         target.info.containerId,
         target.readOnlyReason ?? CONTAINER_READ_ONLY_REASON,
+        this.options.readContainerFile,
       );
     }
     return providerSources(target.provider, this.sourceContext(target.info));
@@ -191,22 +220,6 @@ export class McpManagementService {
           () => true,
           () => false,
         ),
-      grokCompatDisabled: async (name: "claude" | "cursor", worktree?: string) => {
-        for (const file of [
-          path.join(this.homes.home, ".grok", "config.toml"),
-          ...(worktree ? [path.join(worktree, ".grok", "config.toml")] : []),
-        ]) {
-          try {
-            const text = await fs.readFile(file, "utf8");
-            if (text.length > MCP_MANAGEMENT_LIMITS.sourceFileMaxBytes) continue;
-            const parsed = Bun.TOML.parse(text) as { compat?: Record<string, { mcps?: unknown }> };
-            if (parsed.compat?.[name]?.mcps === false) return true;
-          } catch {
-            // Missing or unreadable: the default (compat on) applies.
-          }
-        }
-        return false;
-      },
     };
   }
 
@@ -229,9 +242,22 @@ export class McpManagementService {
       providerLabel: providerLabel(target.provider),
       context: target.context,
       defaultSourceId: defaultSource?.sourceId ?? null,
-      capabilities: providerCapabilities(target.provider, target.readOnlyReason),
+      capabilities: this.capabilitiesFor(target),
       readOnlyReason: target.readOnlyReason,
     };
+  }
+
+  /** Provider capabilities with the rollout gate applied. */
+  private capabilitiesFor(target: ResolvedTarget): McpTargetCapabilities {
+    return this.gate.overlay(
+      target.provider,
+      providerCapabilities(target.provider, target.readOnlyReason),
+    );
+  }
+
+  /** Why every row of `target` is read-only: the target itself, or the gate. */
+  private rowReadOnly(target: ResolvedTarget): string | undefined {
+    return target.readOnlyReason ?? this.gate.writeBlock(target.provider);
   }
 
   async listTargets(args: { environmentId?: unknown }): Promise<McpTargetList> {
@@ -252,32 +278,37 @@ export class McpManagementService {
     const target = await resolveTarget(args.targetId, this.options.storage);
     const specs = await this.specsFor(target);
     const catalog = await loadCatalog(this.store, specs, this.options.readContainerFile);
-    const capabilities = providerCapabilities(target.provider, target.readOnlyReason);
+    const capabilities = this.capabilitiesFor(target);
     const { definitions, effective } = summarizeEntries(
       catalog,
       capabilities,
-      target.readOnlyReason,
+      this.rowReadOnly(target),
     );
     const sorted = sortDefinitions(definitions, catalog);
-    const limited = sorted.slice(0, MCP_MANAGEMENT_LIMITS.catalogRowsMax);
+    const rows = sorted.slice(0, MCP_MANAGEMENT_LIMITS.catalogRowsMax);
     const sourceErrors = catalog.sources.some(
       (source) =>
         source.state === "invalid" ||
         source.state === "permission-denied" ||
         source.state === "oversized",
     );
-    return {
+    const snapshot: McpManagementSnapshot = {
       protocolVersion: MCP_MANAGEMENT_PROTOCOL_VERSION,
       target: await this.publicTarget(target, specs),
       sources: catalog.sources.map(publicSource),
-      definitions: limited,
+      definitions: [],
       effective,
       operations: this.operations.forTarget(target.targetId),
       catalogRevision: this.catalogRevision,
-      freshness: limited.length < sorted.length || sourceErrors ? "incomplete" : "fresh",
-      truncated: sorted.length - limited.length,
+      freshness: "fresh",
+      truncated: 0,
       generatedAt: nowIso(this.now),
     };
+    const limited = fitSnapshotBudget(snapshot, rows);
+    snapshot.definitions = limited;
+    snapshot.truncated = sorted.length - limited.length;
+    snapshot.freshness = snapshot.truncated > 0 || sourceErrors ? "incomplete" : "fresh";
+    return snapshot;
   }
 
   async getDefinition(args: {
@@ -292,11 +323,7 @@ export class McpManagementService {
       this.options.readContainerFile,
     );
     const entry = findEntry(catalog, args.entryId);
-    return editableDefinition(
-      entry,
-      providerCapabilities(target.provider, target.readOnlyReason),
-      target.readOnlyReason,
-    );
+    return editableDefinition(entry, this.capabilitiesFor(target), this.rowReadOnly(target));
   }
 
   async getOperation(args: { operationId?: unknown }): Promise<McpOperationSnapshot> {
@@ -315,6 +342,7 @@ export class McpManagementService {
     await this.init();
     const { mutation, fieldErrors } = parseMcpMutation(args.mutation);
     const target = await resolveTarget(mutation.targetId, this.options.storage);
+    this.gate.assertWritable(target.provider);
     const specs = await this.specsFor(target);
     const catalog = await loadCatalog(this.store, specs, this.options.readContainerFile);
     if (fieldErrors.length) return { valid: false, fieldErrors, preview: null };
@@ -323,6 +351,7 @@ export class McpManagementService {
     if ((prepared.source.file?.revision ?? null) !== expectedRevision(mutation)) {
       throw mcpFailure("revision-conflict");
     }
+    if (!prepared.fieldErrors.length) nextSourceText(prepared);
     return {
       valid: !prepared.fieldErrors.length,
       fieldErrors: prepared.fieldErrors,
@@ -342,9 +371,13 @@ export class McpManagementService {
     const existing = this.operations.byRequest(mutation.targetId, mutation.requestId);
     if (existing) {
       if (existing.recovery.fingerprint !== fingerprint) throw mcpFailure("request-conflict");
-      return this.result(existing, true);
+      // A retry that arrives while the original is still writing waits for it
+      // under the file lock below and replays its outcome.
+      if (existing.snapshot.phase !== "pending" && existing.snapshot.phase !== "reconciling")
+        return this.result(existing, true);
     }
     const target = await resolveTarget(mutation.targetId, this.options.storage);
+    this.gate.assertWritable(target.provider);
     if (target.readOnlyReason)
       throw mcpFailure("read-only-source", { message: target.readOnlyReason });
     const specs = await this.specsFor(target);
@@ -363,6 +396,8 @@ export class McpManagementService {
       const source = prepared.source;
       const expected = expectedRevision(mutation);
       if ((source.file?.revision ?? null) !== expected) throw mcpFailure("revision-conflict");
+      // Limits are checked before the record exists: a refused change is not an operation.
+      const next = nextSourceText(prepared);
       const created = nowIso(this.now);
       const operation: StoredOperation = {
         snapshot: {
@@ -376,6 +411,7 @@ export class McpManagementService {
           phase: "pending",
           applyIntent: mutation.applyIntent,
           apply: { state: "not-requested", runtimes: [], omitted: 0 },
+          affectedEnvironments: prepared.preview.affectedEnvironments,
           createdAt: created,
           updatedAt: created,
         },
@@ -392,16 +428,27 @@ export class McpManagementService {
       await this.operations.put(operation);
       try {
         const text = source.file?.text ?? "";
-        const parsed = source.parsed ?? parseSource(spec, "");
-        const next = prepared.edit ? editSource(spec, text, parsed, prepared.edit) : text;
-        const written =
-          next === text && source.file?.state === "ok"
-            ? source.file
-            : await this.store.commit(source.file!, expected ?? ABSENT_REVISION, next, {
-                allowedRoot: spec.allowedRoot,
-                createMode: spec.createMode,
-                maxBytes: spec.maxBytes,
-              });
+        const unchanged = next === text && source.file?.state === "ok";
+        // Taken before the write: a runtime that read the file earlier cannot
+        // have loaded this save, whatever it reports.
+        const writeStartedAt = nowIso(this.now);
+        const written = unchanged
+          ? source.file!
+          : await this.store.commit(source.file!, expected ?? ABSENT_REVISION, next, {
+              allowedRoot: spec.allowedRoot,
+              createMode: spec.createMode,
+              maxBytes: spec.maxBytes,
+            });
+        // The exact bytes now in the file, in the format bridges report.
+        const savedDigest = unchanged
+          ? source.file!.contentDigest
+          : contentDigest(Buffer.from(next, "utf8"));
+        const role = evidenceRole(target.provider, spec.sourceId);
+        if (savedDigest && role) {
+          operation.recovery.savedDigest = savedDigest;
+          operation.recovery.writeStartedAt = writeStartedAt;
+          operation.recovery.evidenceRole = role;
+        }
         operation.snapshot.phase = "saved";
         operation.snapshot.savedRevision = written.revision ?? undefined;
         operation.snapshot.resultEntryId = prepared.resultName
@@ -423,7 +470,13 @@ export class McpManagementService {
     if (locked.replayed) return this.result(locked.stored, true);
     const stored = locked.stored;
     this.catalogRevision += 1;
-    if (mutation.applyIntent === "save-and-apply") {
+    const applyBlock = this.gate.applyBlock(target.provider);
+    if (mutation.applyIntent === "save-and-apply" && applyBlock) {
+      // Saved; the gate only withholds the runtime step, and says so.
+      stored.snapshot.message = `Saved. ${applyBlock}`;
+      stored.snapshot.updatedAt = nowIso(this.now);
+      await this.operations.put(stored);
+    } else if (mutation.applyIntent === "save-and-apply") {
       // The file is already saved; a scheduling failure is an apply outcome,
       // retryable from the operation, never a failed save.
       await this.startApply(stored, target).catch(async (error: unknown) => {
@@ -438,7 +491,7 @@ export class McpManagementService {
         await this.operations.put(stored);
       });
     }
-    this.publish([], [stored.snapshot.operationId]);
+    this.publish(await this.affectedTargetIds(target, spec), [stored.snapshot.operationId]);
     return this.result(stored, false);
   }
 
@@ -490,6 +543,7 @@ export class McpManagementService {
         entryName = operation.definition.name;
         resultName = entryName;
         assertNameFree(source, target.provider, entryName, undefined);
+        assertRoomForDefinition(source);
         intendedEntry = cleanEntry(codec.encode(definition, null));
         edit = { kind: "add", name: entryName, entry: intendedEntry };
         changedFields = ["new server"];
@@ -531,7 +585,11 @@ export class McpManagementService {
       case "rename": {
         requireFlag(capabilities.operations.rename, "unsupported-operation");
         entry = findEntry(catalog, operation.entryId, spec.sourceId);
-        const renameBlock = entry.injected ? entry.source.spec.readOnlyReason : removalBlock(entry);
+        // A same-source name collision (Pi's normalized names) blocks rename
+        // but not removal: removing one of the pair is how a user repairs it.
+        const renameBlock = entry.injected
+          ? entry.source.spec.readOnlyReason
+          : (removalBlock(entry) ?? entryRenameBlock(entry));
         if (renameBlock)
           throw mcpFailure(entry.injected ? "protected-entry" : "read-only-source", {
             message: renameBlock,
@@ -549,6 +607,7 @@ export class McpManagementService {
             ? null
             : { kind: "rename", name: entry.name, newName: operation.newName };
         changedFields = ["name"];
+        if (edit) warnings.push(...renameReferenceWarnings(catalog, source, entry.name));
         break;
       }
       case "remove": {
@@ -628,20 +687,27 @@ export class McpManagementService {
         : operation.kind === "update"
           ? (operation.patch.transport?.to ?? entry?.definition?.transport)
           : entry?.definition?.transport;
-    if (
-      definitionTransport === "stdio" &&
-      mutation.applyIntent === "save-and-apply" &&
-      operation.kind !== "remove"
-    ) {
+    if (definitionTransport === "stdio" && operation.kind !== "remove") {
+      // Shown for both intents: a save-only preview can still end in an apply,
+      // and any session that next loads the file starts the command anyway.
+      const location = target.context.locationLabel.toLowerCase();
       warnings.push(
-        `Applying starts this server's command on ${target.context.locationLabel.toLowerCase()} the next time a session loads it.`,
+        mutation.applyIntent === "save-and-apply"
+          ? `Applying starts this server's command on ${location} the next time a session loads it.`
+          : `If you apply, or when a session next loads this configuration, this server's command starts on ${location}.`,
       );
     }
     if (spec.trust && spec.trust !== "allowed" && spec.trustReason) warnings.push(spec.trustReason);
     if (spec.sharedWith.length)
-      warnings.push(`${spec.sharedWith.map(providerLabel).join(", ")} also read this file.`);
+      warnings.push(
+        `${spec.sharedWith.map(providerLabel).join(", ")} also ${spec.sharedWith.length === 1 ? "reads" : "read"} this file.`,
+      );
     if (spec.scope === "backend-user")
-      warnings.push("Existing container environments keep the copy they were created with.");
+      warnings.push(
+        target.provider === "cursor"
+          ? "Container environments do not receive Cursor's MCP configuration."
+          : "Existing container environments keep the copy they were created with.",
+      );
     if (capabilities.terminal.readsNativeConfig) warnings.push(capabilities.terminal.guidance);
     return {
       sourceId: spec.sourceId,
@@ -705,11 +771,51 @@ export class McpManagementService {
     if (stored.snapshot.phase !== "saved") {
       throw mcpFailure("unsupported-operation", { message: "Only a saved change can be applied." });
     }
+    this.gate.assertApplicable(stored.snapshot.provider);
     const target = await resolveTarget(stored.snapshot.targetId, this.options.storage);
     stored.snapshot.applyIntent = "save-and-apply";
     await this.startApply(stored, target);
-    this.publish([], [stored.snapshot.operationId]);
+    this.publish([stored.snapshot.targetId], [stored.snapshot.operationId]);
     return stored.snapshot;
+  }
+
+  // -------------------------------------------------------------------------
+  // Rollout gate
+  // -------------------------------------------------------------------------
+
+  rolloutSettings(): McpManagementRolloutSettings {
+    return this.gate.current();
+  }
+
+  /**
+   * Re-read the stored gate, then retire queued work it no longer allows.
+   * Never touches a saved file; in-flight reloads finish and report normally.
+   */
+  async refreshRollout(): Promise<McpManagementRolloutSettings> {
+    await this.init();
+    const settings = await this.gate.refresh();
+    await this.retireGatedWork();
+    // Capabilities changed for every target.
+    this.publish([], []);
+    this.scheduleTick();
+    return settings;
+  }
+
+  private async retireGatedWork(): Promise<void> {
+    for (const stored of Array.from(this.operations.list())) {
+      const block = this.gate.applyBlock(stored.snapshot.provider);
+      if (!block) continue;
+      const now = nowIso(this.now);
+      let touched = false;
+      for (const runtime of stored.snapshot.apply.runtimes) {
+        if (runtime.state !== "queued") continue;
+        runtime.state = "cancelled";
+        runtime.reason = `Cancelled: ${block} The saved configuration is unchanged.`;
+        runtime.updatedAt = now;
+        touched = true;
+      }
+      if (touched) await this.finishApplyUpdate(stored);
+    }
   }
 
   async cancelApply(args: { operationId?: unknown }): Promise<McpOperationSnapshot> {
@@ -757,6 +863,7 @@ export class McpManagementService {
       environmentIds,
       spec.excludedReason,
       now,
+      stored.snapshot.savedRevision,
     );
     const coveredRuntimeIds = new Set(
       planned.runtimes
@@ -788,6 +895,8 @@ export class McpManagementService {
       environmentId: runtime.environmentId ?? "",
       agent: runtime.agent,
       logicalSessionKey: runtime.logicalSessionKey,
+      ...(runtime.awaitsEvidence ? { awaitsEvidence: true } : {}),
+      ...(runtime.bridgePid !== undefined ? { bridgePid: runtime.bridgePid } : {}),
     }));
     stored.recovery.applyQueuedAt = now;
     stored.snapshot.updatedAt = now;
@@ -801,7 +910,7 @@ export class McpManagementService {
     );
     stored.snapshot.updatedAt = nowIso(this.now);
     await this.operations.put(stored);
-    if (publish) this.publish([], [stored.snapshot.operationId]);
+    if (publish) this.publish([stored.snapshot.targetId], [stored.snapshot.operationId]);
   }
 
   private hasQueuedWork(): boolean {
@@ -814,8 +923,16 @@ export class McpManagementService {
       );
   }
 
+  /**
+   * Queued reloads, or runtimes still inside their bounded evidence window.
+   * When neither remains the timer stops rearming and the scheduler is idle.
+   */
+  private hasScheduledWork(): boolean {
+    return this.hasQueuedWork() || this.evidence.hasWork(this.operations.list());
+  }
+
   private scheduleTick(delay = this.options.tickMs ?? 2_000): void {
-    if (this.disposed || this.timer || !this.hasQueuedWork()) return;
+    if (this.disposed || this.timer || !this.hasScheduledWork()) return;
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.tick()
@@ -830,7 +947,11 @@ export class McpManagementService {
     this.timer.unref?.();
   }
 
-  /** Advance queued runtimes. Runs on a timer, never on a request or event path. */
+  /**
+   * Advance queued runtimes. Runs on a timer, never on a request or event path.
+   * Serial by construction (`ticking`): at most one provider reload is in
+   * flight per backend, which is the whole apply-concurrency budget.
+   */
   async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
@@ -839,6 +960,8 @@ export class McpManagementService {
         const runtimes = stored.snapshot.apply.runtimes;
         if (!runtimes.some((runtime) => runtime.state === "queued" || runtime.state === "applying"))
           continue;
+        // The scheduler is paused for a gated provider; its queue was retired.
+        if (this.gate.applyBlock(stored.snapshot.provider)) continue;
         const planned: PlannedRuntime[] = runtimes.map((runtime) => {
           const recovery = stored.recovery.runtimes?.find(
             (candidate) => candidate.runtimeId === runtime.runtimeId,
@@ -866,8 +989,46 @@ export class McpManagementService {
         });
         await this.finishApplyUpdate(stored);
       }
+      // Proof of adoption for runtimes that apply on their own boundary.
+      await this.evidence.check(this.operations.list());
     } finally {
       this.ticking = false;
+    }
+  }
+
+  /**
+   * The saved source file as it is now: the digest of its bytes and whether
+   * the operation's change is still in it. Host files only — evidence is only
+   * awaited from local runtimes — and read-only.
+   */
+  private async currentSource(stored: StoredOperation): Promise<CurrentSourceState | undefined> {
+    const target = await resolveTarget(stored.snapshot.targetId, this.options.storage);
+    if (target.info.location === "container") return undefined;
+    const spec = (await this.specsFor(target)).find(
+      (candidate) => candidate.sourceId === stored.snapshot.sourceId,
+    );
+    if (!spec || spec.format === "runtime") return undefined;
+    const source = (await loadCatalog(this.store, [spec])).sources[0];
+    const digest = source?.file?.contentDigest;
+    if (!source?.parsed || !digest) return undefined;
+    return { digest, landed: await this.changeLanded(stored, source.parsed.entries) };
+  }
+
+  /** Whether `entries` carry exactly the outcome the operation intended. */
+  private async changeLanded(
+    stored: StoredOperation,
+    entries: ReadonlyMap<string, unknown>,
+  ): Promise<boolean> {
+    const { name, newName, entryDigest } = stored.recovery;
+    switch (stored.snapshot.kind) {
+      case "remove":
+        return !entries.has(name);
+      case "rename":
+        return !!newName && entries.has(newName) && !entries.has(name);
+      default: {
+        const raw = entries.get(name);
+        return !!raw && !!entryDigest && (await this.operations.digest(raw)) === entryDigest;
+      }
     }
   }
 
@@ -929,21 +1090,8 @@ export class McpManagementService {
       fail("Interrupted before saving; the file was not changed.");
       return;
     }
-    const entries = source.parsed?.entries ?? new Map();
-    const { name, newName, entryDigest } = stored.recovery;
-    let landed = false;
-    switch (snapshot.kind) {
-      case "remove":
-        landed = !entries.has(name);
-        break;
-      case "rename":
-        landed = !!newName && entries.has(newName) && !entries.has(name);
-        break;
-      default: {
-        const raw = entries.get(name);
-        landed = !!raw && !!entryDigest && (await this.operations.digest(raw)) === entryDigest;
-      }
-    }
+    const { newName } = stored.recovery;
+    const landed = await this.changeLanded(stored, source.parsed?.entries ?? new Map());
     if (landed) {
       snapshot.phase = "saved";
       snapshot.savedRevision = revision ?? undefined;
@@ -955,6 +1103,34 @@ export class McpManagementService {
         "conflict",
       );
     }
+  }
+
+  /**
+   * Targets whose catalog a write to `spec` can change: the provider and every
+   * provider sharing the file, seen from the backend and — for a backend-user
+   * file — from every environment. `[]` ("all targets") past the event bound.
+   */
+  private async affectedTargetIds(target: ResolvedTarget, spec: SourceSpec): Promise<string[]> {
+    const providers = Array.from(new Set([target.provider, ...spec.sharedWith]));
+    const ids = new Set<string>([target.targetId]);
+    try {
+      if (spec.scope === "backend-user") {
+        const { instanceId } = await this.options.storage.getPreviewBackendIdentity();
+        for (const provider of providers) ids.add(backendTargetId(provider, instanceId));
+        for (const known of await this.options.probe.environments()) {
+          const environment = await this.options.storage.getEnvironment(known.id);
+          if (!environment) continue;
+          for (const provider of providers) ids.add(environmentTargetId(provider, environment));
+          if (ids.size > EVENT_TARGETS_MAX) return [];
+        }
+      } else if (target.environment) {
+        for (const provider of providers)
+          ids.add(environmentTargetId(provider, target.environment));
+      }
+    } catch {
+      return [];
+    }
+    return Array.from(ids);
   }
 
   private publish(targetIds: string[], operationIds: string[]): void {
@@ -982,7 +1158,44 @@ function publicRuntime(
     state: runtime.state,
     reason: runtime.reason,
     updatedAt: runtime.updatedAt,
+    ...(runtime.savedRevision ? { savedRevision: runtime.savedRevision } : {}),
+    ...(runtime.generation ? { generation: runtime.generation } : {}),
   };
+}
+
+/** The source text after the edit, refused when the server map would outgrow its budget. */
+function nextSourceText(prepared: Prepared): string {
+  const { spec, source } = prepared;
+  const text = source.file?.text ?? "";
+  if (!prepared.edit) return text;
+  const parsed = source.parsed ?? parseSource(spec, "");
+  const next = editSource(spec, text, parsed, prepared.edit);
+  if (prepared.edit.kind !== "remove") {
+    const after = subtreeBytes(parseSource(spec, next));
+    // A file already over budget stays editable as long as the edit does not grow it.
+    if (after > MCP_MANAGEMENT_LIMITS.subtreeMaxBytes && after > subtreeBytes(parsed)) {
+      throw mcpFailure("oversized-source", {
+        message: `The server list in this file would exceed ${MCP_MANAGEMENT_LIMITS.subtreeMaxBytes / 1024 / 1024} MiB; the file was left unchanged.`,
+      });
+    }
+  }
+  return next;
+}
+
+function subtreeBytes(parsed: ParsedSource): number {
+  return utf8ByteLength(JSON.stringify(Object.fromEntries(parsed.entries)));
+}
+
+function assertRoomForDefinition(source: LoadedSource): void {
+  const names = new Set([
+    ...(source.parsed?.entries.keys() ?? []),
+    ...(source.parsed?.entryIssues.keys() ?? []),
+  ]);
+  if (names.size >= MCP_MANAGEMENT_LIMITS.definitionsPerSource) {
+    throw mcpFailure("oversized-source", {
+      message: `This source already holds ${MCP_MANAGEMENT_LIMITS.definitionsPerSource} servers, the most Orkestrator manages in one file. Remove one first.`,
+    });
+  }
 }
 
 function expectedRevision(mutation: McpMutation): string | null {
@@ -1099,4 +1312,32 @@ function sortDefinitions(
       (precedence.get(right.sourceId) ?? 0) - (precedence.get(left.sourceId) ?? 0) ||
       STATUS_ORDER[left.status] - STATUS_ORDER[right.status],
   );
+}
+
+/**
+ * Keep the response under `catalogMaxBytes`: trim the oldest listed operations
+ * if they alone overflow, then keep as many rows as fit. The caller reports the
+ * dropped rows as `truncated` with freshness `incomplete`.
+ */
+export function fitSnapshotBudget(
+  snapshot: McpManagementSnapshot,
+  rows: McpDefinitionSummary[],
+): McpDefinitionSummary[] {
+  const budget = MCP_MANAGEMENT_LIMITS.catalogMaxBytes;
+  // Room for the counters that are filled in after this measurement.
+  const reserve = 64;
+  let base = utf8ByteLength(JSON.stringify({ ...snapshot, definitions: [] })) + reserve;
+  while (base > budget && snapshot.operations.length) {
+    snapshot.operations = snapshot.operations.slice(0, -1);
+    base = utf8ByteLength(JSON.stringify({ ...snapshot, definitions: [] })) + reserve;
+  }
+  const kept: McpDefinitionSummary[] = [];
+  let used = base;
+  for (const row of rows) {
+    const bytes = utf8ByteLength(JSON.stringify(row)) + 1;
+    if (used + bytes > budget) break;
+    kept.push(row);
+    used += bytes;
+  }
+  return kept;
 }

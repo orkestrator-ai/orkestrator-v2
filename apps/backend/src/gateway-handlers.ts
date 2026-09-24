@@ -5,6 +5,7 @@ import {
   AUTH_COOKIE,
   API_PREFIX,
   MAX_INVOKE_BODY_BYTES,
+  INVOKE_COMMAND_BODY_LIMITS,
   DROPPABLE_EVENT_PREFIX,
   SSE_CLIENT_HARD_BUFFER_BYTES,
   MAX_CLIENT_METRICS_BODY_BYTES,
@@ -74,6 +75,16 @@ export abstract class GatewayHandlers extends GatewayAuth {
     const args = body.args;
     if (typeof command !== "string") {
       jsonResponse(response, 400, { error: "Expected command to be a string" });
+      return;
+    }
+    const commandLimit = Object.hasOwn(INVOKE_COMMAND_BODY_LIMITS, command)
+      ? INVOKE_COMMAND_BODY_LIMITS[command]
+      : undefined;
+    if (commandLimit !== undefined && requestBytes > commandLimit) {
+      // Structured so the MCP settings UI decodes a code rather than a transport failure.
+      jsonResponse(response, 413, {
+        error: `McpManagementError:invalid-request: The change is larger than ${Math.floor(commandLimit / 1024)} KiB.`,
+      });
       return;
     }
     const safeArgs =

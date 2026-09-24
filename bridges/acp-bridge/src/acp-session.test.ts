@@ -318,11 +318,32 @@ describe("ACP bridge", () => {
     ]);
     const mcp = await nativeFetch(`${first.base}/session/${created.id}/mcp`, {
       headers: first.headers,
-    }).then((response) => response.json() as Promise<{ servers: unknown[] }>);
+    }).then(
+      (response) =>
+        response.json() as Promise<{
+          servers: unknown[];
+          mcpConfig: { inventoryScope: string; loaded?: unknown };
+        }>,
+    );
+    // Listed is not connected: the vendor listing carries no health, and it
+    // is the process's inventory rather than this session's.
     expect(mcp.servers).toEqual([
-      { id: "context7", name: "context7", status: "connected", actions: [] },
-      { id: "playwright", name: "playwright", status: "connected", actions: [] },
+      { id: "context7", name: "context7", status: "unknown", transport: "stdio", actions: [] },
+      { id: "playwright", name: "playwright", status: "unknown", transport: "stdio", actions: [] },
     ]);
+    expect(mcp.mcpConfig.inventoryScope).toBe("process");
+    expect(JSON.stringify(mcp)).not.toContain("secret");
+    // The reporting child's spawn-time configuration, and no saved change since.
+    const health = await nativeFetch(`${first.base}/session/${created.id}/runtime-health`, {
+      headers: first.headers,
+    }).then(
+      (response) =>
+        response.json() as Promise<{
+          mcpConfig: { inventoryScope: string; loaded?: unknown; changedSinceLoad?: boolean };
+        }>,
+    );
+    expect(health.mcpConfig).toMatchObject({ inventoryScope: "process", changedSinceLoad: false });
+    expect(health.mcpConfig.loaded).toMatchObject({ sources: { user: "absent" } });
 
     expect(
       (

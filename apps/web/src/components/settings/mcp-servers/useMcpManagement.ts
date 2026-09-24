@@ -11,11 +11,13 @@ import {
 import * as backend from "@/lib/backend";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT, listen } from "@/lib/native/events";
 
+import { mcpErrorReference } from "./McpErrorNotice";
+
 export type LoadState<T> =
   | { status: "loading"; data: T | null }
   | { status: "ready"; data: T }
   | { status: "unsupported" }
-  | { status: "error"; message: string; data: T | null };
+  | { status: "error"; message: string; reference?: string; data: T | null };
 
 export function describeMcpError(error: unknown): string {
   const detail = mcpManagementErrorFromUnknown(error);
@@ -49,59 +51,86 @@ function useBackendInvalidation(refresh: () => void): void {
   }, []);
 }
 
+const LOADING = { status: "loading", data: null } as const;
+
+/**
+ * Targets for one context. State is keyed by the context it was loaded for,
+ * so the render right after a switch — before the new request even starts —
+ * never exposes the previous context's targets.
+ */
 export function useMcpTargets(environmentId: string | null): {
   state: LoadState<McpManagementTarget[]>;
   reload: () => void;
 } {
-  const [state, setState] = useState<LoadState<McpManagementTarget[]>>({
-    status: "loading",
-    data: null,
-  });
+  const [keyed, setKeyed] = useState<{
+    environmentId: string | null;
+    state: LoadState<McpManagementTarget[]>;
+  }>({ environmentId, state: LOADING });
   const generation = useRef(0);
   const load = useCallback(() => {
     const request = ++generation.current;
-    setState((current) => ({ status: "loading", data: "data" in current ? current.data : null }));
+    setKeyed((current) => ({
+      environmentId,
+      state: {
+        status: "loading",
+        data: current.environmentId === environmentId ? dataOf(current.state) : null,
+      },
+    }));
     backend
       .listMcpManagementTargets(environmentId ?? undefined)
       .then((list) => {
-        if (request === generation.current) setState({ status: "ready", data: list.targets });
+        if (request === generation.current)
+          setKeyed({ environmentId, state: { status: "ready", data: list.targets } });
       })
       .catch((error: unknown) => {
         if (request !== generation.current) return;
-        if (isUnknownMcpManagementCommandError(error)) setState({ status: "unsupported" });
-        else setState({ status: "error", message: describeMcpError(error), data: null });
+        setKeyed((current) => ({
+          environmentId,
+          state: isUnknownMcpManagementCommandError(error)
+            ? { status: "unsupported" }
+            : {
+                status: "error",
+                message: describeMcpError(error),
+                reference: mcpErrorReference(error),
+                data: current.environmentId === environmentId ? dataOf(current.state) : null,
+              },
+        }));
       });
   }, [environmentId]);
   useEffect(load, [load]);
-  return { state, reload: load };
+  return { state: keyed.environmentId === environmentId ? keyed.state : LOADING, reload: load };
+}
+
+function dataOf<T>(state: LoadState<T>): T | null {
+  return "data" in state ? state.data : null;
 }
 
 /**
  * Snapshot for exactly one target. A response for a target the user has
  * since switched away from is dropped, so it can never populate (or be
- * submitted against) the newly selected target.
+ * submitted against) the newly selected target. A failed refresh keeps the
+ * last snapshot of the same target, so an open editor and its draft survive
+ * a transient read failure; the error is still reported.
  */
 export function useMcpSnapshot(targetId: string | null): {
   state: LoadState<McpManagementSnapshot>;
   reload: () => void;
 } {
-  const [state, setState] = useState<LoadState<McpManagementSnapshot>>({
-    status: "loading",
-    data: null,
-  });
+  const [state, setState] = useState<LoadState<McpManagementSnapshot>>(LOADING);
   const generation = useRef(0);
   const currentTarget = useRef(targetId);
   currentTarget.current = targetId;
   const load = useCallback(() => {
     const request = ++generation.current;
     if (!targetId) {
-      setState({ status: "loading", data: null });
+      setState(LOADING);
       return;
     }
-    setState((current) => ({
-      status: "loading",
-      data: "data" in current && current.data?.target.targetId === targetId ? current.data : null,
-    }));
+    const sameTarget = (current: LoadState<McpManagementSnapshot>) => {
+      const data = dataOf(current);
+      return data?.target.targetId === targetId ? data : null;
+    };
+    setState((current) => ({ status: "loading", data: sameTarget(current) }));
     backend
       .getMcpManagementSnapshot(targetId)
       .then((snapshot) => {
@@ -111,7 +140,13 @@ export function useMcpSnapshot(targetId: string | null): {
       .catch((error: unknown) => {
         if (request !== generation.current) return;
         if (isUnknownMcpManagementCommandError(error)) setState({ status: "unsupported" });
-        else setState({ status: "error", message: describeMcpError(error), data: null });
+        else
+          setState((current) => ({
+            status: "error",
+            message: describeMcpError(error),
+            reference: mcpErrorReference(error),
+            data: sameTarget(current),
+          }));
       });
   }, [targetId]);
   useEffect(load, [load]);

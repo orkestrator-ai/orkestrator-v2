@@ -370,12 +370,24 @@ export const mockGetPluginsForSdk = mock(async () => [] as Array<{ type: "local"
  * as the seams tests already drive with `mockImplementationOnce`, composed
  * here into the shape the real function returns.
  */
-export const mockGetMcpRuntimeConfig = mock(async () => ({
-  servers: await mockGetMcpServersForSdk(),
-  names: await mockGetMcpServerNames(),
-}));
+export const MOCK_MCP_CONFIG_REVISION = Object.freeze({
+  fingerprint: "mock-mcp-fingerprint",
+  sources: Object.freeze({ user: "absent", project: "absent" }),
+  scope: "all",
+});
 
+export const mockGetMcpRuntimeConfig = mock(
+  async (_cwd?: string, _env?: unknown, _connection?: unknown, _sources?: unknown) => ({
+    servers: await mockGetMcpServersForSdk(),
+    names: await mockGetMcpServerNames(),
+    revision: MOCK_MCP_CONFIG_REVISION,
+  }),
+);
+
+// The pure helpers stay real (the policy-to-scope mapping is exactly what a
+// prompt test wants to observe through the mocked loader's arguments).
 mock.module("./mcp-config.js", () => ({
+  ...mcpConfigSnapshot,
   getMcpRuntimeConfig: mockGetMcpRuntimeConfig,
 }));
 

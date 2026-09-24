@@ -1,6 +1,4 @@
-import { useState } from "react";
 import { FileWarning, Lock, Pencil, Power, TextCursorInput, Trash2 } from "lucide-react";
-import { toast } from "sonner";
 
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import type {
@@ -12,10 +10,10 @@ import type {
 } from "@orkestrator/protocol/mcp-management";
 
 import { Button } from "@/components/ui/button";
-import * as backend from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
-import { describeMcpError, newRequestId } from "./useMcpManagement";
+/** Row actions report the button that opened them, so focus can return there. */
+export type McpRowAction = (definition: McpDefinitionSummary, trigger: HTMLElement) => void;
 
 const STATUS_TEXT: Record<McpDefinitionStatus, string> = {
   effective: "In use",
@@ -57,7 +55,7 @@ function ActionButton({
   flag: McpCapabilityFlag;
   label: string;
   icon: React.ReactNode;
-  onClick: () => void;
+  onClick: (trigger: HTMLElement) => void;
   highlight?: boolean;
 }) {
   if (!flag.supported && !flag.reason) return null;
@@ -70,7 +68,7 @@ function ActionButton({
       disabled={!flag.supported}
       title={flag.supported ? undefined : flag.reason}
       aria-label={flag.supported ? label : `${label} (unavailable: ${flag.reason})`}
-      onClick={onClick}
+      onClick={(event) => onClick(event.currentTarget)}
     >
       {icon}
       <span className="hidden sm:inline">{label.split(" ")[0]}</span>
@@ -85,19 +83,19 @@ function DefinitionRow({
   onEdit,
   onRename,
   onRemove,
+  onSetEnabled,
 }: {
   definition: McpDefinitionSummary;
   snapshot: McpManagementSnapshot;
   highlighted: boolean;
-  onEdit: () => void;
-  onRename: () => void;
-  onRemove: () => void;
+  onEdit: McpRowAction;
+  onRename: McpRowAction;
+  onRemove: McpRowAction;
+  onSetEnabled: McpRowAction;
 }) {
-  const [toggling, setToggling] = useState(false);
-  const source = snapshot.sources.find((candidate) => candidate.sourceId === definition.sourceId);
   const location =
     definition.transport === "stdio" && definition.command
-      ? `${definition.command.kind === "visible" ? definition.command.value : definition.command.display}${definition.argCount ? ` +${definition.argCount} args` : ""}`
+      ? `${definition.command.kind === "visible" ? definition.command.value : definition.command.display}${definition.argCount ? ` +${definition.argCount} ${definition.argCount === 1 ? "arg" : "args"}` : ""}`
       : definition.url
         ? definition.url.kind === "visible"
           ? definition.url.value
@@ -106,27 +104,6 @@ function DefinitionRow({
   const shadowedBy = definition.shadowedBy
     ? snapshot.definitions.find((candidate) => candidate.entryId === definition.shadowedBy)
     : undefined;
-  const toggle = async () => {
-    if (!source?.revision) return;
-    setToggling(true);
-    try {
-      await backend.mutateMcpDefinition({
-        requestId: newRequestId(),
-        targetId: snapshot.target.targetId,
-        applyIntent: "save",
-        operation: {
-          kind: "set-enabled",
-          entryId: definition.entryId,
-          expectedRevision: source.revision,
-          enabled: definition.enabled === false,
-        },
-      });
-    } catch (error) {
-      toast.error(describeMcpError(error));
-    } finally {
-      setToggling(false);
-    }
-  };
   return (
     <li
       className={cn(
@@ -157,7 +134,9 @@ function DefinitionRow({
           ) : null}
         </div>
         {location ? (
-          <p className="truncate font-mono text-xs text-muted-foreground">{location}</p>
+          <p className="truncate font-mono text-xs text-muted-foreground" title={location}>
+            {location}
+          </p>
         ) : null}
         {definition.statusReason && definition.status !== "effective" ? (
           <p className="text-xs text-muted-foreground">
@@ -172,29 +151,27 @@ function DefinitionRow({
             flag={definition.actions.edit}
             label={`Edit ${definition.name}`}
             icon={<Pencil className="h-3.5 w-3.5" />}
-            onClick={onEdit}
+            onClick={(trigger) => onEdit(definition, trigger)}
           />
           <ActionButton
             flag={definition.actions.rename}
             label={`Rename ${definition.name}`}
             icon={<TextCursorInput className="h-3.5 w-3.5" />}
-            onClick={onRename}
+            onClick={(trigger) => onRename(definition, trigger)}
           />
           {definition.enabled !== null ? (
             <ActionButton
-              flag={
-                toggling ? { supported: false, reason: "Saving…" } : definition.actions.setEnabled
-              }
+              flag={definition.actions.setEnabled}
               label={`${definition.enabled ? "Disable" : "Enable"} ${definition.name}`}
               icon={<Power className="h-3.5 w-3.5" />}
-              onClick={() => void toggle()}
+              onClick={(trigger) => onSetEnabled(definition, trigger)}
             />
           ) : null}
           <ActionButton
             flag={definition.actions.remove}
             label={`Remove ${definition.name}`}
             icon={<Trash2 className="h-3.5 w-3.5" />}
-            onClick={onRemove}
+            onClick={(trigger) => onRemove(definition, trigger)}
           />
         </div>
       ) : null}
@@ -208,14 +185,23 @@ export function McpSourceList({
   onEdit,
   onRename,
   onRemove,
+  onSetEnabled,
 }: {
   snapshot: McpManagementSnapshot;
   highlightName?: string;
-  onEdit: (definition: McpDefinitionSummary) => void;
-  onRename: (definition: McpDefinitionSummary) => void;
-  onRemove: (definition: McpDefinitionSummary) => void;
+  onEdit: McpRowAction;
+  onRename: McpRowAction;
+  onRemove: McpRowAction;
+  onSetEnabled: McpRowAction;
 }) {
   const sources = [...snapshot.sources].sort((left, right) => right.precedence - left.precedence);
+  if (!sources.length) {
+    return (
+      <p className="rounded-lg border border-white/10 px-3 py-4 text-sm text-muted-foreground">
+        No configuration files were found for this target, so there is nothing to list yet.
+      </p>
+    );
+  }
   return (
     <div className="space-y-3">
       {sources.map((source) => {
@@ -280,9 +266,10 @@ export function McpSourceList({
                     definition={definition}
                     snapshot={snapshot}
                     highlighted={highlightName === definition.name}
-                    onEdit={() => onEdit(definition)}
-                    onRename={() => onRename(definition)}
-                    onRemove={() => onRemove(definition)}
+                    onEdit={onEdit}
+                    onRename={onRename}
+                    onRemove={onRemove}
+                    onSetEnabled={onSetEnabled}
                   />
                 ))}
               </ul>

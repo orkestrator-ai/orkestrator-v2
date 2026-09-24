@@ -505,15 +505,18 @@ mock.module("@/components/settings", () => ({
     open,
     onOpenChange,
     defaultSection,
+    sectionRequest,
   }: {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     defaultSection?: string;
+    sectionRequest?: number;
   }) =>
     open ? (
       <div>
         Global settings dialog
         {defaultSection ? <span>Default settings section: {defaultSection}</span> : null}
+        <span>Settings section request: {sectionRequest}</span>
         <button onClick={() => onOpenChange(false)}>Close global settings</button>
       </div>
     ) : null,
@@ -2122,6 +2125,14 @@ describe("ActionBar toolbar interactions", () => {
 
     act(() => requestGlobalSettings("grok"));
     expect(await screen.findByText("Default settings section: grok")).toBeTruthy();
+    const firstRequest = screen.getByText(/Settings section request:/).textContent;
+
+    // Asking again for the same section is a new request, so the open page
+    // can return to it after the user moved elsewhere.
+    act(() => requestGlobalSettings("grok"));
+    await waitFor(() =>
+      expect(screen.getByText(/Settings section request:/).textContent).not.toBe(firstRequest),
+    );
   });
 
   test("closes Docker configuration and preserves local controls when Docker stops", async () => {

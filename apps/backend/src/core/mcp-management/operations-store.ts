@@ -4,7 +4,9 @@
  * A record is written *before* the native file is touched and updated after,
  * so a crash between the two leaves enough intent to find out what happened
  * without repeating the change. Records hold names, ids, revisions and states
- * only — never a value from a definition.
+ * only — never a value from a definition. The private recovery half also keeps
+ * one unkeyed digest of the saved file (see `savedDigest`), which is the format
+ * bridges report and so never leaves this file.
  */
 
 import { createHmac, randomUUID } from "node:crypto";
@@ -14,6 +16,7 @@ import path from "node:path";
 import {
   MCP_MANAGEMENT_LIMITS,
   isTerminalApplyState,
+  mcpFailure,
   utf8ByteLength,
   type McpOperationSnapshot,
 } from "@orkestrator/protocol/mcp-management";
@@ -28,12 +31,27 @@ export interface OperationRecovery {
   newName?: string;
   /** Keyed digest of the native entry that was intended, for update/add. */
   entryDigest?: string;
+  /**
+   * Unkeyed `sha256:<base64url>` of the bytes the save left in the source file
+   * — the format bridges report for the files a runtime loaded. Private: an
+   * unkeyed digest of a file holding a low-entropy secret lets whoever holds it
+   * confirm a guess, so it never leaves this record.
+   */
+  savedDigest?: string;
+  /** When the write began. Runtime evidence observed earlier cannot reflect it. */
+  writeStartedAt?: string;
+  /** Which of a bridge's reported files the saved source is (see `EvidenceRole`). */
+  evidenceRole?: "user" | "project" | "local";
   /** Runtimes that were chosen for apply, with the identity needed to act on them. */
   runtimes?: Array<{
     runtimeId: string;
     environmentId: string;
     agent: string;
     logicalSessionKey?: string;
+    /** The scheduler polls this runtime's bridge for proof it loaded the save. */
+    awaitsEvidence?: boolean;
+    /** The provider bridge's process id when apply was planned (Grok restart proof). */
+    bridgePid?: number;
   }>;
   applyQueuedAt?: string;
 }
@@ -48,9 +66,23 @@ interface StoreFile {
   operations: StoredOperation[];
 }
 
+/**
+ * Whether a record may be dropped by retention: its save is settled and no
+ * runtime is still waiting. Pending/reconciling saves are recovery evidence.
+ */
+export function isFinishedOperation(entry: StoredOperation): boolean {
+  return (
+    entry.snapshot.phase !== "pending" &&
+    entry.snapshot.phase !== "reconciling" &&
+    isTerminalApplyState(entry.snapshot.apply.state)
+  );
+}
+
 export class McpOperationStore {
   private operations: StoredOperation[] = [];
   private loaded = false;
+  /** Set when an unreadable file could not be moved aside; writes are refused. */
+  private writeBlocked = false;
   private writeChain: Promise<void> = Promise.resolve();
 
   constructor(
@@ -61,25 +93,47 @@ export class McpOperationStore {
 
   async load(): Promise<void> {
     if (this.loaded) return;
+    let text: string;
     try {
-      const text = await fs.readFile(this.filePath, "utf8");
-      const parsed = JSON.parse(text) as StoreFile;
-      if (parsed?.version === 1 && Array.isArray(parsed.operations)) {
-        this.operations = parsed.operations.filter(
-          (entry) =>
-            entry &&
-            typeof entry.snapshot?.operationId === "string" &&
-            typeof entry.recovery?.fingerprint === "string",
-        );
-      }
+      text = await fs.readFile(this.filePath, "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        // A newer or damaged file is left in place, never overwritten blindly.
-        const aside = `${this.filePath}.unreadable-${Date.now()}`;
-        await fs.rename(this.filePath, aside).catch(() => undefined);
-      }
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") await this.setAside("unreadable");
+      this.loaded = true;
+      return;
+    }
+    let parsed: Partial<StoreFile> | null = null;
+    try {
+      parsed = JSON.parse(text) as Partial<StoreFile>;
+    } catch {
+      parsed = null;
+    }
+    if (parsed && parsed.version === 1 && Array.isArray(parsed.operations)) {
+      this.operations = parsed.operations.filter(
+        (entry) =>
+          entry &&
+          typeof entry.snapshot?.operationId === "string" &&
+          typeof entry.recovery?.fingerprint === "string",
+      );
+    } else {
+      // A newer schema or a damaged file is moved aside, never overwritten in
+      // place: an older build must not destroy history a newer one wrote.
+      const newer = parsed && typeof parsed.version === "number" && (parsed.version as number) > 1;
+      await this.setAside(newer ? `v${parsed!.version}` : "unreadable");
     }
     this.loaded = true;
+  }
+
+  /**
+   * Move the current file aside. If that fails the store refuses to write, so
+   * the only copy of what it could not read is never replaced.
+   */
+  private async setAside(label: string): Promise<void> {
+    const aside = `${this.filePath}.${label}-${this.now()}`;
+    try {
+      await fs.rename(this.filePath, aside);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.writeBlocked = true;
+    }
   }
 
   async digest(value: unknown): Promise<string> {
@@ -128,32 +182,31 @@ export class McpOperationStore {
 
   private prune(): void {
     const cutoff = this.now() - MCP_MANAGEMENT_LIMITS.operationRetentionMs;
-    const finished = (entry: StoredOperation) =>
-      entry.snapshot.phase !== "pending" &&
-      entry.snapshot.phase !== "reconciling" &&
-      isTerminalApplyState(entry.snapshot.apply.state);
     this.operations = this.operations.filter(
-      (entry) => !finished(entry) || Date.parse(entry.snapshot.updatedAt) >= cutoff,
+      (entry) => !isFinishedOperation(entry) || Date.parse(entry.snapshot.updatedAt) >= cutoff,
     );
     // Oldest finished records go first; unfinished work is never dropped.
     while (this.operations.length > MCP_MANAGEMENT_LIMITS.retainedOperations) {
-      const index = this.operations.findIndex(finished);
+      const index = this.operations.findIndex(isFinishedOperation);
       if (index < 0) break;
       this.operations.splice(index, 1);
     }
   }
 
   private async persist(): Promise<void> {
-    const body = JSON.stringify({ version: 1, operations: this.operations } satisfies StoreFile);
-    if (utf8ByteLength(body) > MCP_MANAGEMENT_LIMITS.operationStoreMaxBytes) {
-      // Shed finished history until the file fits; never shed unfinished work.
-      const finishedIndex = this.operations.findIndex((entry) =>
-        isTerminalApplyState(entry.snapshot.apply.state),
-      );
-      if (finishedIndex >= 0) {
-        this.operations.splice(finishedIndex, 1);
-        return this.persist();
-      }
+    if (this.writeBlocked) {
+      throw mcpFailure("internal", {
+        message:
+          "The configuration operation history could not be read or moved aside, so it is left untouched and changes are refused.",
+      });
+    }
+    let body = JSON.stringify({ version: 1, operations: this.operations } satisfies StoreFile);
+    // Shed the oldest finished history until the file fits; never unfinished work.
+    while (utf8ByteLength(body) > MCP_MANAGEMENT_LIMITS.operationStoreMaxBytes) {
+      const finishedIndex = this.operations.findIndex(isFinishedOperation);
+      if (finishedIndex < 0) break;
+      this.operations.splice(finishedIndex, 1);
+      body = JSON.stringify({ version: 1, operations: this.operations } satisfies StoreFile);
     }
     const write = this.writeChain.then(async () => {
       await fs.mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });

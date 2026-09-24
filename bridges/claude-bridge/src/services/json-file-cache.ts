@@ -20,6 +20,7 @@
 //   `config.projects[cwd].plugins`, not the megabyte of unrelated project
 //   history sitting alongside them in `~/.claude.json`.
 
+import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 
 interface CacheEntry {
@@ -27,13 +28,32 @@ interface CacheEntry {
   fingerprint: string;
   /** Selected value, or null when the file was missing, unparseable, or the slice absent. */
   value: unknown;
+  /** sha256 (base64url) of the bytes the slice was parsed from; null if unreadable. */
+  digest: string | null;
+}
+
+/** A parsed document plus the digest of the exact bytes it came from. */
+interface ParsedDocument {
+  parsed: unknown;
+  digest: string | null;
+}
+
+/** A slice together with the content digest of the file it was read from. */
+export interface DigestedSlice<Slice> {
+  value: Slice | null;
+  /**
+   * sha256 (base64url) of the file bytes the value was selected from, or null
+   * when the file was missing or unreadable. A malformed file still has bytes,
+   * so it has a digest: an edit that fixes it must read as a change.
+   */
+  digest: string | null;
 }
 
 interface ReadCohort {
   /** Readers that joined before every member of this cohort settled. */
   readers: number;
   /** Parsed snapshots, bounded by the fingerprints observed by those readers. */
-  parses: Map<string, Promise<unknown>>;
+  parses: Map<string, Promise<ParsedDocument>>;
 }
 
 /** NUL cannot appear in a path, so it is a safe compound-key separator. */
@@ -98,17 +118,31 @@ function leaveReadCohort(filePath: string, cohort: ReadCohort): void {
  * persistently broken file is not re-parsed per prompt. The next write changes
  * the fingerprint and retries.
  */
-function parseOnce(filePath: string, fingerprint: string, cohort: ReadCohort): Promise<unknown> {
+function parseOnce(
+  filePath: string,
+  fingerprint: string,
+  cohort: ReadCohort,
+): Promise<ParsedDocument> {
   const existing = cohort.parses.get(fingerprint);
   if (existing) return existing;
 
-  const parse = (async () => {
+  const parse = (async (): Promise<ParsedDocument> => {
     parseCounts.set(filePath, (parseCounts.get(filePath) ?? 0) + 1);
+    let bytes: Buffer;
     try {
-      return JSON.parse(await readFile(filePath, "utf-8")) as unknown;
+      bytes = await readFile(filePath);
     } catch {
-      // Unreadable (the stat raced a permission change) or malformed.
-      return null;
+      // Unreadable (the stat raced a permission change).
+      return { parsed: null, digest: null };
+    }
+    // Hashed from the same bytes that are parsed, so the digest names exactly
+    // the configuration a caller acted on — never a later write.
+    const digest = createHash("sha256").update(bytes).digest("base64url");
+    try {
+      return { parsed: JSON.parse(bytes.toString("utf-8")) as unknown, digest };
+    } catch {
+      // Malformed.
+      return { parsed: null, digest };
     }
   })();
 
@@ -137,6 +171,21 @@ export async function readJsonSliceCached<Parsed, Slice>(
   sliceKey: string,
   select: (parsed: Parsed) => Slice | null | undefined,
 ): Promise<Slice | null> {
+  return (await readJsonSliceCachedWithDigest(filePath, sliceKey, select)).value;
+}
+
+/**
+ * `readJsonSliceCached`, plus the sha256 of the file bytes the slice came from.
+ *
+ * Costs nothing extra on a cache hit — the digest is taken once, when the file
+ * is actually read — so callers that need to say *which* configuration a turn
+ * started with can do so without a second read of a file that may be large.
+ */
+export async function readJsonSliceCachedWithDigest<Parsed, Slice>(
+  filePath: string,
+  sliceKey: string,
+  select: (parsed: Parsed) => Slice | null | undefined,
+): Promise<DigestedSlice<Slice>> {
   // Join synchronously, before the first filesystem await, so every read
   // started in one Promise.all remains part of the same bounded cohort even
   // when the host completes its metadata operations unevenly.
@@ -151,16 +200,16 @@ export async function readJsonSliceCached<Parsed, Slice>(
       // Missing or unreadable. Drop any stale slice so a file that reappears is
       // not served from a cache entry describing its previous life.
       forgetFile(filePath);
-      return null;
+      return { value: null, digest: null };
     }
 
     const key = `${filePath}${SEPARATOR}${sliceKey}`;
     const cached = slices.get(key);
     if (cached && cached.fingerprint === fingerprint) {
-      return cached.value as Slice | null;
+      return { value: cached.value as Slice | null, digest: cached.digest };
     }
 
-    const parsed = await parseOnce(filePath, fingerprint, cohort);
+    const { parsed, digest } = await parseOnce(filePath, fingerprint, cohort);
 
     let value: Slice | null = null;
     if (parsed !== null && parsed !== undefined) {
@@ -173,8 +222,8 @@ export async function readJsonSliceCached<Parsed, Slice>(
       }
     }
 
-    slices.set(key, { fingerprint, value });
-    return value;
+    slices.set(key, { fingerprint, value, digest });
+    return { value, digest };
   } finally {
     leaveReadCohort(filePath, cohort);
   }

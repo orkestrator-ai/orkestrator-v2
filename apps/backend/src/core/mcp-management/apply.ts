@@ -10,16 +10,20 @@
  *   until every session sharing the process is idle; "unknown" activity counts
  *   as busy, because idle-looking UI is not evidence.
  * - "applied" is only reported on evidence. A provider that reloads at its next
- *   message stays `pending-next-turn`; one that needs a restart says so.
+ *   message stays `pending-next-turn`; one that needs a restart says so. The
+ *   evidence itself is checked in `evidence.ts`.
  */
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import {
   MCP_MANAGEMENT_LIMITS,
   type McpApplyState,
   type McpConfigSource,
   type McpRuntimeApplyEntry,
 } from "@orkestrator/protocol/mcp-management";
+
+import { awaitsEvidenceIn, withTimeout, type RuntimeEvidenceRead } from "./evidence.js";
 
 export interface ApplyEnvironment {
   id: string;
@@ -28,6 +32,8 @@ export interface ApplyEnvironment {
   environmentType: "local" | "containerized";
   /** Whether the provider's bridge/server is known to be running there. */
   providerRunning: (provider: AgentPlatform) => boolean;
+  /** The provider bridge's recorded process id, when one is running. */
+  bridgePid?: (provider: AgentPlatform) => number | undefined;
 }
 
 export interface ApplySession {
@@ -47,16 +53,64 @@ export interface RuntimeProbe {
     agent: AgentPlatform,
     logicalSessionKey: string,
   ): "idle" | "working" | "waiting" | "unknown";
-  /** Ask the environment's Codex app-server to reload MCP configuration. */
-  reloadCodex(environmentId: string, logicalSessionKey: string): Promise<void>;
+  /**
+   * Ask the environment's Codex app-server to reload MCP configuration, only if
+   * one is already running. Never starts a bridge or an app-server:
+   * `not-running` means the next process start reads the saved file anyway, and
+   * `unsupported` means the bridge predates the reload route.
+   */
+  reloadCodex(environmentId: string): Promise<CodexReloadOutcome>;
+  /**
+   * What the session's bridge reports about the MCP configuration its live
+   * runtime was built from, read through the no-touch `/runtime-health`
+   * route. Never starts a bridge, touches liveness or re-attaches a session;
+   * `not-running` and `none` are answers, not failures.
+   */
+  mcpConfigEvidence(
+    environmentId: string,
+    agent: AgentPlatform,
+    logicalSessionKey: string,
+  ): Promise<RuntimeEvidenceRead>;
 }
+
+export type CodexReloadOutcome = "reloaded" | "not-running" | "unsupported";
 
 export interface PlannedRuntime extends McpRuntimeApplyEntry {
   agent: AgentPlatform;
   logicalSessionKey?: string;
+  /** A local runtime whose bridge may later prove it loaded the save. */
+  awaitsEvidence?: boolean;
+  /** Bridge process id at planning time, for providers that apply on restart. */
+  bridgePid?: number;
 }
 
 const NOT_RUNNING = "Loads when the environment next starts this provider.";
+export const ENVIRONMENT_DELETED = "The environment was deleted.";
+export const COORDINATOR_BLOCKED =
+  "Coordinator sessions use a private configuration home and do not load user MCP servers.";
+
+/**
+ * What a container runtime of `provider` does with a backend-user change.
+ * Containers copy provider configuration when they are created — except
+ * Cursor's, which `docker/entrypoint.sh` never copies at all.
+ */
+export function containerDelivery(provider: AgentPlatform): {
+  state: McpApplyState;
+  reason: string;
+} {
+  if (provider === "cursor") {
+    return {
+      state: "blocked-policy",
+      reason:
+        "Cursor's MCP configuration is not copied into containers, so this change never reaches container sessions.",
+    };
+  }
+  return {
+    state: "restart-required",
+    reason:
+      "This container copied its configuration when it was created; recreate the environment to use the change.",
+  };
+}
 
 function entry(
   session: ApplySession,
@@ -64,8 +118,11 @@ function entry(
   state: McpApplyState,
   reason: string,
   now: string,
+  savedRevision: string | undefined,
 ): PlannedRuntime {
-  const label = `${environment?.name ?? session.environmentId} · ${session.logicalSessionKey.split(":").pop() ?? "session"}`;
+  const place =
+    environment?.name ?? (isCoordinatorSession(session) ? "Coordinator" : session.environmentId);
+  const label = `${place} · ${session.logicalSessionKey.split(":").pop() ?? "session"}`;
   return {
     runtimeId: `${session.environmentId}\u0000${session.logicalSessionKey}`,
     environmentId: session.environmentId,
@@ -73,9 +130,43 @@ function entry(
     state,
     reason,
     updatedAt: now,
+    ...(savedRevision ? { savedRevision } : {}),
     agent: session.agent,
     logicalSessionKey: session.logicalSessionKey,
   };
+}
+
+function isCoordinatorSession(session: ApplySession): boolean {
+  return session.coordinator || coordinatorIdFromRuntimeId(session.environmentId) !== null;
+}
+
+/**
+ * Keep the first `limit` runtimes, but list one runtime from every environment
+ * before any environment's second: a queued Codex reload is per environment,
+ * so an environment with no listed runtime would never be reloaded.
+ */
+export function pageRuntimes(
+  runtimes: PlannedRuntime[],
+  limit: number,
+): { runtimes: PlannedRuntime[]; omitted: number } {
+  if (runtimes.length <= limit) return { runtimes, omitted: 0 };
+  const firsts = new Set<PlannedRuntime>();
+  const seen = new Set<string>();
+  for (const runtime of runtimes) {
+    if (runtime.state !== "queued") continue;
+    const key = runtime.environmentId ?? "";
+    if (seen.has(key)) continue;
+    seen.add(key);
+    firsts.add(runtime);
+  }
+  const chosen = new Set<PlannedRuntime>(Array.from(firsts).slice(0, limit));
+  for (const runtime of runtimes) {
+    if (chosen.size >= limit) break;
+    chosen.add(runtime);
+  }
+  // Preserve the original order for display.
+  const page = runtimes.filter((runtime) => chosen.has(runtime));
+  return { runtimes: page, omitted: runtimes.length - page.length };
 }
 
 /**
@@ -90,6 +181,7 @@ export async function planRuntimes(
   environmentIds: ReadonlySet<string> | null,
   sourceExcluded: string | undefined,
   now: string,
+  savedRevision?: string,
 ): Promise<{ runtimes: PlannedRuntime[]; omitted: number }> {
   const environments = new Map(
     (await probe.environments()).map((environment) => [environment.id, environment]),
@@ -99,123 +191,98 @@ export async function planRuntimes(
       session.agent === provider && (!environmentIds || environmentIds.has(session.environmentId)),
   );
   const runtimes: PlannedRuntime[] = [];
+  const add = (
+    session: ApplySession,
+    environment: ApplyEnvironment | undefined,
+    state: McpApplyState,
+    reason: string,
+    local = false,
+  ) => {
+    const planned = entry(session, environment, state, reason, now, savedRevision);
+    // Only a local runtime reads the host files the save wrote; a container's
+    // copy or a coordinator's private home can never carry that evidence.
+    if (local && awaitsEvidenceIn(provider, state)) {
+      planned.awaitsEvidence = true;
+      const pid = environment?.bridgePid?.(provider);
+      if (pid !== undefined) planned.bridgePid = pid;
+    }
+    runtimes.push(planned);
+  };
   for (const session of sessions) {
     const environment = environments.get(session.environmentId);
-    if (!environment) continue;
-    if (environment.environmentType === "containerized") {
-      runtimes.push(
-        entry(
-          session,
-          environment,
-          "restart-required",
-          "This container copied its configuration when it was created; recreate the environment to use the change.",
-          now,
-        ),
-      );
+    // Coordinators run under a runtime id, not an environment id, so they must
+    // be reported before the environment lookup rather than silently dropped.
+    if (isCoordinatorSession(session)) {
+      add(session, environment, "blocked-policy", COORDINATOR_BLOCKED);
       continue;
     }
-    if (session.coordinator) {
-      runtimes.push(
-        entry(
-          session,
-          environment,
-          "blocked-policy",
-          "Coordinator sessions use a private configuration home.",
-          now,
-        ),
-      );
+    if (!environment) continue;
+    if (environment.environmentType === "containerized") {
+      const delivery = containerDelivery(provider);
+      add(session, environment, delivery.state, delivery.reason);
       continue;
     }
     const projectScoped = scope === "project" || scope === "claude-local";
     if (projectScoped && (sourceExcluded || session.projectResources === false)) {
-      runtimes.push(
-        entry(
-          session,
-          environment,
-          "blocked-policy",
-          sourceExcluded ?? "This session excludes project servers.",
-          now,
-        ),
+      add(
+        session,
+        environment,
+        "blocked-policy",
+        sourceExcluded ?? "This session excludes project servers.",
       );
       continue;
     }
     if (environment.status !== "running" || !environment.providerRunning(provider)) {
-      runtimes.push(entry(session, environment, "pending-next-turn", NOT_RUNNING, now));
+      add(session, environment, "pending-next-turn", NOT_RUNNING, true);
       continue;
     }
     switch (provider) {
       case "claude":
-        runtimes.push(
-          entry(
-            session,
-            environment,
-            "pending-next-turn",
-            "Loads on the session's next message.",
-            now,
-          ),
+        add(
+          session,
+          environment,
+          "pending-next-turn",
+          "Loads on the session's next message.",
+          true,
         );
         break;
       case "cursor":
       case "pi":
-        runtimes.push(
-          entry(
-            session,
-            environment,
-            "pending-next-turn",
-            "Reconnects MCP servers before the session's next message.",
-            now,
-          ),
+        add(
+          session,
+          environment,
+          "pending-next-turn",
+          "Reconnects MCP servers before the session's next message.",
+          true,
         );
         break;
       case "codex":
-        runtimes.push(
-          entry(
-            session,
-            environment,
-            "queued",
-            "Waiting to reload Codex's MCP configuration.",
-            now,
-          ),
-        );
+        add(session, environment, "queued", "Waiting to reload Codex's MCP configuration.");
         break;
       case "opencode":
-        runtimes.push(
-          entry(
-            session,
-            environment,
-            "restart-required",
-            "OpenCode reads configuration when its server starts; stop and start the environment to load the change.",
-            now,
-          ),
+        add(
+          session,
+          environment,
+          "restart-required",
+          "OpenCode reads configuration when its server starts; stop and start the environment to load the change.",
         );
         break;
       case "grok":
-        runtimes.push(
-          entry(
-            session,
-            environment,
-            "restart-required",
-            "Grok Build loads MCP servers when it starts; stop and start the environment to load the change.",
-            now,
-          ),
+        add(
+          session,
+          environment,
+          "restart-required",
+          "Grok Build loads MCP servers when it starts; stop and start the environment to load the change.",
+          true,
         );
         break;
     }
   }
-  const limit = MCP_MANAGEMENT_LIMITS.runtimesPerOperation;
-  return { runtimes: runtimes.slice(0, limit), omitted: Math.max(0, runtimes.length - limit) };
+  return pageRuntimes(runtimes, MCP_MANAGEMENT_LIMITS.runtimesPerOperation);
 }
 
 export const CODEX_APPLY_WAIT_MS = 30 * 60_000;
 const CODEX_RELOAD_TIMEOUT_MS = 30_000;
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("timed out")), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
 
 /**
  * Advance queued Codex runtimes. Returns the updated list and whether any are
@@ -255,7 +322,12 @@ export async function advanceCodexRuntimes(
   };
   for (const [environmentId, list] of byEnvironment) {
     const environment = environments.get(environmentId);
-    if (!environment || environment.status !== "running" || !environment.providerRunning("codex")) {
+    if (!environment) {
+      // Deleted (or being deleted): there is nothing left to apply to.
+      set(list, "cancelled", ENVIRONMENT_DELETED);
+      continue;
+    }
+    if (environment.status !== "running" || !environment.providerRunning("codex")) {
       set(list, "pending-next-turn", NOT_RUNNING);
       continue;
     }
@@ -284,22 +356,26 @@ export async function advanceCodexRuntimes(
       }
       continue;
     }
-    const via = shared[0] ?? list[0];
-    if (!via?.logicalSessionKey) {
-      set(list, "pending-next-turn", "New Codex threads read configuration when they start.");
-      continue;
-    }
     set(list, "applying", "Reloading Codex's MCP configuration.");
     try {
-      await withTimeout(
-        probe.reloadCodex(environmentId, via.logicalSessionKey),
-        CODEX_RELOAD_TIMEOUT_MS,
-      );
-      set(
-        list,
-        "pending-next-turn",
-        "Codex reloaded its MCP configuration; each thread uses it from its next turn.",
-      );
+      // Environment-level and no-spawn: a bridge restart that forgot every
+      // session still reloads, and a stopped app-server is never cold-started.
+      const outcome = await withTimeout(probe.reloadCodex(environmentId), CODEX_RELOAD_TIMEOUT_MS);
+      if (outcome === "unsupported") {
+        set(
+          list,
+          "restart-required",
+          "This Codex bridge predates on-request reload; stop and start the environment to load the change.",
+        );
+      } else {
+        set(
+          list,
+          "pending-next-turn",
+          outcome === "reloaded"
+            ? "Codex reloaded its MCP configuration; each thread uses it from its next turn."
+            : "Codex is not running; it reads the saved configuration when it next starts.",
+        );
+      }
     } catch {
       set(list, "failed", "Codex did not accept the reload request; retry apply.");
     }

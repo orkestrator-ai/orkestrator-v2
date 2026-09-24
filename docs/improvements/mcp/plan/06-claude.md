@@ -1,7 +1,9 @@
 # 06 — Implement Claude configuration management
 
-Status: done for durable CRUD and next-query application; optional `setMcpServers` replacement not implemented.
-Depends on: 01–05. [Plan index](00-index.md).
+Status: done for durable CRUD and next-query application: the bridge reports the digests of the MCP
+files each query read and the backend marks `applied` on that evidence; coordinators load no user servers.
+The CLI's own MCP loading (no `strictMcpConfig`, because it would drop plugin servers) is recorded in the
+living doc. Optional `setMcpServers` replacement not implemented. Depends on: 01–05. [Plan index](00-index.md).
 
 ## Existing owners
 

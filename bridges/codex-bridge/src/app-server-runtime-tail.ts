@@ -317,6 +317,15 @@ export class AppServerRuntimeTail extends AppServerRuntimePrompt {
     };
   }
 
+  /**
+   * Process-wide MCP configuration reload for the management apply path.
+   * Session-free on purpose: it must work after a bridge restart that forgot
+   * every session, and it must not touch liveness or re-attach a thread.
+   */
+  reloadMcpConfigurationIfRunning(): ReturnType<AppServerEngine["reloadMcpServersIfRunning"]> {
+    return this.options.engine.reloadMcpServersIfRunning();
+  }
+
   getHealth(): ReturnType<AppServerEngine["getHealth"]> & {
     activeThreads: number;
     activeTurns: number;

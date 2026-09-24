@@ -63,6 +63,8 @@ export abstract class BuildPipelineServiceBase {
   protected timer: ReturnType<typeof setInterval> | null = null;
   protected readonly locks = new Map<string, Promise<void>>();
   protected readonly providers = new Map<string, BuildPipelineProvider>();
+  /** In-flight creations by provider key, so concurrent callers share one instance. */
+  protected readonly providerCreations = new Map<string, Promise<BuildPipelineProvider>>();
   /**
    * The harness whose provider each pipeline last resolved.
    *
@@ -420,6 +422,9 @@ export abstract class BuildPipelineServiceBase {
     while (this.locks.size > 0) {
       await Promise.allSettled(this.locks.values());
     }
+    // A creation still in flight caches its provider when it settles; wait for
+    // it so the disposal below reaches that instance too.
+    await Promise.allSettled(this.providerCreations.values());
     await Promise.allSettled(
       [...this.providers.values()].map(async (provider) => {
         const disposable = provider as BuildPipelineProvider & {

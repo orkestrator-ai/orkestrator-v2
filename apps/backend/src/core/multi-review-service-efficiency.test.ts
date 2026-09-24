@@ -110,9 +110,16 @@ async function setup(reviewerCount: number) {
     setupScriptsComplete: true,
   });
   const commands: string[] = [];
+  const controls = { failVerifications: 0 };
   const invoke = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
     commands.push(command);
-    if (command === "verify_looped_review_package") return { valid: true } as T;
+    if (command === "verify_looped_review_package") {
+      if (controls.failVerifications > 0) {
+        controls.failVerifications -= 1;
+        throw new Error("package read failed");
+      }
+      return { valid: true } as T;
+    }
     if (command === "generate_looped_review_package") return testGeneratedReviewPackage(args!) as T;
     if (command === "get_environment_uncommitted_paths") {
       return { head: HEAD, paths: [], fingerprint: "a".repeat(64) } as T;
@@ -172,6 +179,7 @@ async function setup(reviewerCount: number) {
     storage,
     provider,
     commands,
+    controls,
     efficiency,
     createService,
     workflowId: workflow.id,
@@ -206,6 +214,36 @@ test("an evidence permit survives a retrying pass but never a service restart", 
       (await env.snapshot()).reviewers.every((reviewer) => reviewer.dispatchState === "sent"),
     ).toBe(true);
     await second.shutdown();
+  } finally {
+    await env.cleanup();
+  }
+});
+
+test("a transient admission verification failure fails the workflow before any dispatch", async () => {
+  const env = await setup(3);
+  try {
+    env.controls.failVerifications = 1;
+    const service = env.createService();
+    await service.advanceNow(env.workflowId);
+    // Admission is verified once for the whole generation, so a failed check
+    // is workflow-fatal: no reviewer session is opened on unverified evidence.
+    const failed = await env.snapshot();
+    expect(failed.phase).toBe("failed");
+    expect(failed.error).toContain("package read failed");
+    expect(env.provider.sessions).toBe(0);
+    expect(env.provider.sends).toEqual([]);
+    expect(failed.reviewers.some((reviewer) => reviewer.providerSessionId !== undefined)).toBe(
+      false,
+    );
+
+    // The failed check left no permit behind: the retry verifies afresh.
+    await service.retry(env.workflowId);
+    await service.advanceNow(env.workflowId);
+    expect(env.verifications()).toBe(2);
+    expect(
+      (await env.snapshot()).reviewers.every((reviewer) => reviewer.dispatchState === "sent"),
+    ).toBe(true);
+    await service.shutdown();
   } finally {
     await env.cleanup();
   }

@@ -49,3 +49,9 @@
   passes alone in 1.2 s. The harness does not scrub them. (2) Once in a
   `--parallel=2` bridge run with the variables unset, at host load average
   35–41, and not in a later identical run; the file passed alone.
+  It failed the same way again in the bridges group of `mise run test:changed`
+  (variables unset; acp-bridge 408 passed, 1 failed), and
+  `bun test ./src/acp-http.test.ts` then passed alone. In every failure the
+  wait that expired is the one for the fake agent's `start:` line, which comes
+  *before* the client disconnects, so the disconnect-detection change is not
+  on the failing path.

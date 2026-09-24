@@ -45,6 +45,7 @@
     "./parent-watchdog": "./src/parent-watchdog.ts",
     "./bridge-lifecycle": "./src/bridge-lifecycle.ts",
     "./fake-intervals": "./src/fake-intervals.ts",
+    "./reconnect-backoff": "./src/reconnect-backoff.ts",
     "./plan-usage": "./src/plan-usage.ts",
     "./pr-monitor": "./src/pr-monitor.ts",
     "./preview-access": "./src/preview-access.ts",

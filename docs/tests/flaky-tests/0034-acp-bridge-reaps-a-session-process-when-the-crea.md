@@ -39,3 +39,13 @@
 - **Verification:** `bun test bridges/acp-bridge/src/acp-http.test.ts` passed 6
   tests with 40 assertions in 589 ms under Bun 1.4.0. The subsequent complete
   `bun run test` passed all four concurrent groups in 87.3 s.
+- **Recurrence (recurring-processes step 10, 2026-09-25):** failed with the
+  same `Timed out waiting for ACP state: ""` in two ways, neither the fixed
+  Happy DOM signal defect. (1) Deterministically when run from inside an
+  Orkestrator agent environment: the spawned bridge inherits the ambient
+  `ORKESTRATOR_AGENT_MCP_URL`/`ORKESTRATOR_AGENT_MCP_TOKEN`/
+  `ORKESTRATOR_PARENT_PID`, and the fake agent never starts. It fails the same
+  way against the unmodified `acp-server.ts`; with those variables unset it
+  passes alone in 1.2 s. The harness does not scrub them. (2) Once in a
+  `--parallel=2` bridge run with the variables unset, at host load average
+  35–41, and not in a later identical run; the file passed alone.

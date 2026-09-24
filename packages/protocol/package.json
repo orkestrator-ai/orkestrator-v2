@@ -77,6 +77,7 @@
     "./tmux-observation": "./src/tmux-observation.ts",
     "./transcript-part-ids": "./src/transcript-part-ids.ts",
     "./transcript-window": "./src/transcript-window.ts",
+    "./view-sync": "./src/view-sync.ts",
     "./web-client": "./src/web-client.ts",
     "./design-canvas": "./src/design-canvas.ts",
     "./design-runtime": "./src/design-runtime.ts"

@@ -14,6 +14,12 @@
  * still refetch, and are served from the same cached scan.
  */
 
+import {
+  hasValidOptionalViewStamp,
+  type ViewGeneration,
+  type ViewSnapshotOutcome,
+} from "./view-sync.js";
+
 /** SSE/IPC event name carrying an {@link EnvironmentDiffStatsEvent}. */
 export const DIFF_STATS_CHANGED_EVENT = "environment-diff-stats-changed";
 
@@ -31,7 +37,19 @@ export interface EnvironmentDiffStats {
   truncated: boolean;
 }
 
-export interface EnvironmentDiffStatsChange {
+/**
+ * Optional owner ordering carried by current backends (see `view-sync.ts`).
+ *
+ * `generation` identifies one lifetime of the backend diff-stats service and
+ * `revision` increases by one per announced change or removal within it. Both
+ * are absent from legacy backends and from snapshot entries.
+ */
+export interface EnvironmentDiffStatsRevisionFields {
+  generation?: ViewGeneration;
+  revision?: number;
+}
+
+export interface EnvironmentDiffStatsChange extends EnvironmentDiffStatsRevisionFields {
   environmentId: string;
   /** The git ref the counts were measured against. */
   comparisonRef: string;
@@ -46,7 +64,7 @@ export interface EnvironmentDiffStatsChange {
  * comparison ref. A removal is deliberately distinct from zero counts: zero is
  * a measured result, while removal means there is no current result to show.
  */
-export interface EnvironmentDiffStatsRemoval {
+export interface EnvironmentDiffStatsRemoval extends EnvironmentDiffStatsRevisionFields {
   environmentId: string;
   /** The comparison ref for which a replacement scan is being attempted. */
   comparisonRef: string;
@@ -57,10 +75,23 @@ export interface EnvironmentDiffStatsRemoval {
 
 export type EnvironmentDiffStatsEvent = EnvironmentDiffStatsChange | EnvironmentDiffStatsRemoval;
 
-/** Full snapshot returned by the `get_environment_diff_stats` command. */
-export interface EnvironmentDiffStatsSnapshot {
+/**
+ * Full snapshot returned by the `get_environment_diff_stats` command.
+ *
+ * On a current backend the top-level `generation`/`revision` identify the
+ * captured state: every announced change or removal up to `revision` is
+ * reflected in `entries`, and none after it.
+ */
+export interface EnvironmentDiffStatsSnapshot extends EnvironmentDiffStatsRevisionFields {
   entries: EnvironmentDiffStatsChange[];
 }
+
+/**
+ * Answer to `get_environment_diff_stats` called with `knownGeneration` and
+ * `knownRevision`. Legacy backends ignore those arguments and return a plain
+ * {@link EnvironmentDiffStatsSnapshot}.
+ */
+export type EnvironmentDiffStatsSnapshotOutcome = ViewSnapshotOutcome<EnvironmentDiffStatsSnapshot>;
 
 export const EMPTY_DIFF_STATS: EnvironmentDiffStats = {
   additions: 0,
@@ -87,7 +118,8 @@ export function isEnvironmentDiffStatsChange(value: unknown): value is Environme
     isNonBlankString(candidate.environmentId) &&
     isNonBlankString(candidate.comparisonRef) &&
     isIsoTimestamp(candidate.computedAt) &&
-    isEnvironmentDiffStats(candidate.stats)
+    isEnvironmentDiffStats(candidate.stats) &&
+    hasValidOptionalViewStamp(candidate, "event")
   );
 }
 
@@ -100,7 +132,8 @@ export function isEnvironmentDiffStatsRemoval(
     candidate.removed === true &&
     isNonBlankString(candidate.environmentId) &&
     isNonBlankString(candidate.comparisonRef) &&
-    isIsoTimestamp(candidate.computedAt)
+    isIsoTimestamp(candidate.computedAt) &&
+    hasValidOptionalViewStamp(candidate, "event")
   );
 }
 
@@ -113,7 +146,11 @@ export function isEnvironmentDiffStatsSnapshot(
 ): value is EnvironmentDiffStatsSnapshot {
   if (typeof value !== "object" || value === null) return false;
   const entries = (value as Record<string, unknown>).entries;
-  return Array.isArray(entries) && entries.every(isEnvironmentDiffStatsChange);
+  return (
+    Array.isArray(entries) &&
+    entries.every(isEnvironmentDiffStatsChange) &&
+    hasValidOptionalViewStamp(value, "snapshot")
+  );
 }
 
 function isCount(value: unknown): value is number {

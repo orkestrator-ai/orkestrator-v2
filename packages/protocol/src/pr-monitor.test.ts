@@ -152,3 +152,26 @@ describe("isPrMonitorSnapshot", () => {
     expect(isPrMonitorSnapshot(null)).toBe(false);
   });
 });
+
+describe("optional revision metadata", () => {
+  test("accepts stamped and legacy events, rejecting a partial or malformed stamp", () => {
+    const base = { environmentId: "env-1", state: state() };
+    expect(isPrMonitorEvent(base)).toBe(true);
+    expect(isPrMonitorEvent({ ...base, generation: "gen-1", revision: 4 })).toBe(true);
+    expect(
+      isPrMonitorEvent({ environmentId: "env-1", removed: true, generation: "g", revision: 5 }),
+    ).toBe(true);
+    expect(isPrMonitorEvent({ ...base, generation: "gen-1" })).toBe(false);
+    expect(isPrMonitorEvent({ ...base, generation: "gen-1", revision: 0 })).toBe(false);
+    expect(isPrMonitorEvent({ environmentId: "env-1", removed: true, revision: 5 })).toBe(false);
+  });
+
+  test("accepts a stamped snapshot at revision zero and rejects a malformed stamp", () => {
+    expect(isPrMonitorSnapshot({ entries: [], generation: "gen-1", revision: 0 })).toBe(true);
+    expect(isPrMonitorSnapshot({ entries: [state()], generation: "gen-1", revision: 12 })).toBe(
+      true,
+    );
+    expect(isPrMonitorSnapshot({ entries: [], generation: "gen 1", revision: 0 })).toBe(false);
+    expect(isPrMonitorSnapshot({ entries: [], revision: 3 })).toBe(false);
+  });
+});

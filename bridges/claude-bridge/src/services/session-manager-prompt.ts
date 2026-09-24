@@ -69,7 +69,11 @@ import {
 import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
 import { debugLog, flushDebugLogs, isDebugLoggingEnabled } from "./logger.js";
 import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
-import { AGENT_MCP_SERVER_NAME, getMcpRuntimeConfig } from "./mcp-config.js";
+import {
+  AGENT_MCP_SERVER_NAME,
+  getMcpRuntimeConfig,
+  mcpSourceScopeForPolicy,
+} from "./mcp-config.js";
 import {
   claudeDeniedTools,
   claudeReadOnlyAllowedTools,
@@ -749,10 +753,15 @@ export async function sendPrompt(
     const includeProjectResources = policy?.projectResources !== false;
     // Load MCP servers and plugins from config files. Both resolutions read
     // the same on-disk config, so they run concurrently and each merges once.
-    const [{ servers: mcpServers, names: mcpServerNames }, plugins] = await Promise.all([
-      getMcpRuntimeConfig(cwd, process.env, options?.agentMcp, includeProjectResources),
-      getPluginsForSdk(cwd, includeProjectResources),
-    ]);
+    // A coordinator's inline set is the injected Orkestrator server(s) only:
+    // `mcpSourceScopeForPolicy` answers `none` for it, so a user-scope stdio
+    // server cannot ride in through the one channel the CLI still honours
+    // when `settingSources` is empty.
+    const [{ servers: mcpServers, names: mcpServerNames, revision: mcpConfigRevision }, plugins] =
+      await Promise.all([
+        getMcpRuntimeConfig(cwd, process.env, options?.agentMcp, mcpSourceScopeForPolicy(policy)),
+        getPluginsForSdk(cwd, includeProjectResources),
+      ]);
 
     const mcpServerCount = Object.keys(mcpServers).length;
     const pluginCount = plugins.length;
@@ -1207,7 +1216,14 @@ export async function sendPrompt(
         // Fast mode is a Claude Code setting (Opus 4.6 priority service tier).
         // Pass it through the flag-layer settings so the user can opt in per prompt.
         ...(fastMode && { settings: { fastMode: true } }),
-        // Also pass MCP servers explicitly for any project-local .mcp.json overrides
+        // Also pass MCP servers explicitly for any project-local .mcp.json overrides.
+        // The CLI (2.1.280) also loads the servers of every enabled settings
+        // source itself — `user` reads `$CLAUDE_CONFIG_DIR/.claude.json` (else
+        // `~/.claude.json`), `project` reads `.mcp.json`, `local` reads
+        // `projects[cwd]` — and an inline entry wins over a same-named native
+        // one. `strictMcpConfig` is deliberately NOT set: it would also drop
+        // every plugin-provided MCP server. The coordinator boundary instead
+        // rests on `settingSources: []` plus an inline set of `none` scope.
         mcpServers: mcpServerCount > 0 ? mcpServers : undefined,
         // Load plugins from user config
         plugins: pluginCount > 0 ? plugins : undefined,
@@ -1539,6 +1555,16 @@ export async function sendPrompt(
     session.queryControl = liveQuery;
     queryIteratorControl = liveQuery;
     queryStarted = true;
+    // The configuration this query actually started with, recorded only once
+    // the query exists: a save made while the previous turn ran is "pending"
+    // until here, and one made after here is pending for the next query.
+    if (mcpConfigRevision) {
+      session.mcpConfigRevision = {
+        ...mcpConfigRevision,
+        sources: { ...mcpConfigRevision.sources },
+        queryStartedAt: new Date().toISOString(),
+      };
+    }
     testHooks?.onQueryStarted?.();
     // One control read per turn, off the message path, so the inventory a
     // selected command is validated against is the session's own.

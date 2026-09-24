@@ -46,6 +46,7 @@ import {
 } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
 import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
+import { McpServersSettingsLink } from "../mcp-servers/McpServersSettingsLink";
 import { INHERIT, OptionCards } from "./InheritedValue";
 
 export interface AgentPlatformPaneProps {
@@ -66,6 +67,8 @@ export interface AgentPlatformPaneProps {
   refreshingModels?: boolean;
   refreshModelsDisabled?: boolean;
   modelCatalogScopeDescription?: string;
+  /** Show the entry point into this platform's saved MCP servers. */
+  showMcpServersLink?: boolean;
   /** Tier-specific extras, e.g. API keys and provider lists at the app tier. */
   children?: React.ReactNode;
 }
@@ -122,6 +125,7 @@ export function AgentPlatformPane({
   refreshingModels = false,
   refreshModelsDisabled = false,
   modelCatalogScopeDescription,
+  showMcpServersLink = false,
   children,
 }: AgentPlatformPaneProps) {
   const favorites = useAgentModelFavorites();
@@ -482,6 +486,8 @@ export function AgentPlatformPane({
           </div>
         </div>
       )}
+
+      {showMcpServersLink ? <McpServersSettingsLink platform={platform} /> : null}
 
       {children}
     </div>

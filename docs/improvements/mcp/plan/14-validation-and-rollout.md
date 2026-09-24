@@ -1,6 +1,9 @@
 # 14 — Verify behavior, migrate safely and release in stages
 
-Status: planned. Depends on: 01–13. [Plan index](00-index.md).
+Status: partly done — automated coverage listed in
+[mcp-management.md](../../../architecture/mcp-management.md#verification-status); the rollout switch and kill switch
+(`global.mcpManagement`) exist with everything enabled by default. The provider completion matrix, live-provider
+evidence and container QA are outstanding. Depends on: 01–13. [Plan index](00-index.md).
 
 ## Source of truth for test execution
 

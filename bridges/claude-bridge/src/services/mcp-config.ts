@@ -8,9 +8,12 @@
  * Project-specific configs override global configs for servers with the same name.
  */
 
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { claudeJsonPath } from "./claude-home.js";
-import { readJsonSliceCached } from "./json-file-cache.js";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { readJsonSliceCached, readJsonSliceCachedWithDigest } from "./json-file-cache.js";
+import { isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
 import type {
   ClaudeJsonConfig,
   McpJsonConfig,
@@ -274,6 +277,118 @@ export async function getMcpServerInfo(cwd: string): Promise<McpServerInfo[]> {
 }
 
 /**
+ * Which configured MCP sources a query may load.
+ *
+ * - `all`: user, private local (`projects[cwd]`) and project `.mcp.json`.
+ * - `user`: the user's own servers only. A session without project resources
+ *   must not run a program a cloned repository declares, but the user's own
+ *   servers are theirs to run.
+ * - `none`: no configured server at all, only the injected Orkestrator
+ *   server(s). A coordinator's boundary excludes every program it did not
+ *   choose, and a user-scope stdio server is still a program — the CLI itself
+ *   loads nothing for a coordinator (`settingSources: []`), so the inline set
+ *   is the only way one could arrive.
+ */
+export type McpSourceScope = "all" | "user" | "none";
+
+/** Content-free identity of one MCP source a query read. */
+export type McpSourceDigest = string | "absent" | "excluded";
+
+/**
+ * Which saved MCP configuration a query started with.
+ *
+ * Digests are sha256 (base64url) of the exact file bytes the bridge parsed for
+ * that query, so a caller that knows what it wrote can tell whether a query has
+ * picked it up by hashing the same bytes. Never a path, never a server body:
+ * the files hold headers and env values.
+ */
+export interface McpConfigRevision {
+  /** One opaque value over every source below; changes when any of them does. */
+  fingerprint: string;
+  sources: {
+    /** `~/.claude.json` — holds both user and private-local entries. */
+    user: McpSourceDigest;
+    /** `<cwd>/.mcp.json`. */
+    project: McpSourceDigest;
+  };
+  scope: McpSourceScope;
+}
+
+function sourceDigest(digest: string | null): McpSourceDigest {
+  return digest === null ? "absent" : `sha256:${digest}`;
+}
+
+/** Map the legacy boolean form onto a scope, keeping `true` as the default. */
+function normalizeScope(scope: McpSourceScope | boolean): McpSourceScope {
+  if (scope === true) return "all";
+  if (scope === false) return "user";
+  return scope;
+}
+
+/**
+ * The MCP source scope a turn under `policy` is allowed to load.
+ *
+ * Kept beside `claudeSettingSources` in spirit: a coordinator loads nothing,
+ * a session without project resources loads only the user's own.
+ */
+export function mcpSourceScopeForPolicy(
+  policy: NativeAgentExecutionPolicy | undefined,
+): McpSourceScope {
+  if (isCoordinatorReadOnlyPolicy(policy)) return "none";
+  if (policy?.projectResources === false) return "user";
+  return "all";
+}
+
+async function loadScopedMcpServers(
+  cwd: string,
+  scope: McpSourceScope,
+): Promise<{ configs: McpServersConfig; revision: McpConfigRevision }> {
+  if (scope === "none") {
+    const sources = { user: "excluded", project: "excluded" } as const;
+    return { configs: {}, revision: { fingerprint: revisionFingerprint(sources), sources, scope } };
+  }
+  const path = claudeJsonPath();
+  const [global, projectGlobal, projectLocal] = await Promise.all([
+    readJsonSliceCachedWithDigest<ClaudeJsonConfig, McpServersConfig>(
+      path,
+      "mcpServers",
+      (config) => config?.mcpServers,
+    ),
+    scope === "all"
+      ? readJsonSliceCachedWithDigest<ClaudeJsonConfig, McpServersConfig>(
+          path,
+          `projects:${cwd}:mcpServers`,
+          (config) => config?.projects?.[cwd]?.mcpServers,
+        )
+      : null,
+    scope === "all"
+      ? readJsonSliceCachedWithDigest<McpJsonConfig, McpServersConfig>(
+          join(cwd, ".mcp.json"),
+          "mcpServers",
+          (config) => config?.mcpServers,
+        )
+      : null,
+  ]);
+  // Same precedence as `getMergedMcpServers`: local > projectGlobal > global.
+  const configs: McpServersConfig = {
+    ...global.value,
+    ...projectGlobal?.value,
+    ...projectLocal?.value,
+  };
+  const sources = {
+    user: sourceDigest(global.digest),
+    project: projectLocal ? sourceDigest(projectLocal.digest) : "excluded",
+  };
+  return { configs, revision: { fingerprint: revisionFingerprint(sources), sources, scope } };
+}
+
+function revisionFingerprint(sources: McpConfigRevision["sources"]): string {
+  return createHash("sha256")
+    .update(`user=${sources.user}\u0000project=${sources.project}`)
+    .digest("base64url");
+}
+
+/**
  * Everything `sendPrompt` needs from MCP config, resolved from a single merge.
  *
  * This replaced a pair of calls (`getMcpServersForSdk` + `getMcpServerNames`)
@@ -281,19 +396,21 @@ export async function getMcpServerInfo(cwd: string): Promise<McpServerInfo[]> {
  * reads `~/.claude.json` twice, so the file was touched four times for one
  * turn. It is the only entry point into this module that `sendPrompt` uses;
  * keep the translation in `toSdkServers` so there is exactly one copy of it.
+ *
+ * `sources` accepts the older boolean (`true` = all, `false` = user only) so
+ * existing callers keep their meaning; pass `"none"` for a coordinator.
  */
 export async function getMcpRuntimeConfig(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
   connection?: AgentMcpConnection,
-  includeProjectSources = true,
+  sources: McpSourceScope | boolean = "all",
 ): Promise<{
   servers: SdkMcpServersConfig;
   names: Set<string>;
+  revision: McpConfigRevision;
 }> {
-  const configs = includeProjectSources
-    ? await getMergedMcpServers(cwd)
-    : await loadGlobalMcpServers();
+  const { configs, revision } = await loadScopedMcpServers(cwd, normalizeScope(sources));
   const agentServer =
     getOrkestratorAgentMcpServerFromConnection(connection) ?? getOrkestratorAgentMcpServer(env);
   const servers = toSdkServers(configs);
@@ -320,5 +437,6 @@ export async function getMcpRuntimeConfig(
         ? [AGENT_MCP_SERVER_NAME, ...(connection?.design ? ["orkestrator-design"] : [])]
         : []),
     ]),
+    revision,
   };
 }

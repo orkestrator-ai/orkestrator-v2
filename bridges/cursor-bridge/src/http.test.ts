@@ -8,7 +8,16 @@
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createServer, type Server } from "node:http";
-import { useCursorAgentForTests } from "./agent-session.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  detachAgent,
+  ensureAgent,
+  setCursorMcpConfigHomeForTests,
+  setCursorMcpFingerprintForTests,
+  useCursorAgentForTests,
+} from "./agent-session.js";
 import { authToken } from "./config.js";
 import { route } from "./http.js";
 import { resetPlanAccountWindowsForTests, seedPlanAccountWindowsForTests } from "./plan-usage.js";
@@ -403,6 +412,36 @@ describe("liveness routes", () => {
     await call(`/session/${state.id}/status`);
     expect(state.lastAccessed).toBeGreaterThan(0);
   });
+
+  test("runtime health reports the attached agent's MCP configuration without attaching", async () => {
+    const home = await mkdtemp(join(tmpdir(), "cursor-http-mcp-config-"));
+    setCursorMcpConfigHomeForTests(home);
+    const { restore } = stubEnsureAgentResume(fakeAgent());
+    try {
+      const state = await createSession();
+      await detachAgent(state);
+      state.agentId = "kept-conversation";
+      state.lastAccessed = 0;
+      const detached = await (await call(`/session/${state.id}/runtime-health`)).json();
+      expect(detached.mcpConfig).toBeUndefined();
+      // The read attached nothing and refreshed nothing.
+      expect(state.agent).toBeNull();
+      expect(state.lastAccessed).toBe(0);
+
+      await ensureAgent(state);
+      const attached = await (await call(`/session/${state.id}/runtime-health`)).json();
+      expect(attached.mcpConfig).toMatchObject({
+        fingerprint: expect.any(String),
+        sources: { user: "absent" },
+        builtAt: expect.any(String),
+      });
+      expect(state.lastAccessed).toBe(0);
+    } finally {
+      restore();
+      setCursorMcpConfigHomeForTests();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("prompt dispatch", () => {
@@ -664,6 +703,57 @@ describe("prompt dispatch", () => {
       expect(state.messages[0]).toMatchObject({ role: "user", content: "hi" });
     } finally {
       restore();
+    }
+  });
+
+  test("a prompt adopts a config change at its own turn start and releases the claim if the resume fails", async () => {
+    const state = await createSession();
+    state.agentId = "kept-conversation";
+    const first = fakeAgent();
+    const { restore, resumed } = stubEnsureAgentResume(first);
+    const readsWhileClaimed: boolean[] = [];
+    let fingerprint = "before";
+    setCursorMcpFingerprintForTests(async (target) => {
+      readsWhileClaimed.push(target.dispatching);
+      return fingerprint;
+    });
+    const refuseResume = useCursorAgentForTests({
+      resume: async (agentId: string) => {
+        resumed.push(agentId);
+        if (resumed.length > 1) throw new Error("resume unavailable");
+        return first;
+      },
+      create: async () => {
+        throw new Error("a configuration change must never start a new conversation");
+      },
+    } as Parameters<typeof useCursorAgentForTests>[0]);
+    try {
+      expect(await ensureAgent(state)).toBe(first);
+      readsWhileClaimed.length = 0;
+      fingerprint = "after";
+
+      const response = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "go", requestId: "config-1" }),
+      });
+
+      expect(response.status).toBe(500);
+      // Read under the prompt's own claim: only `atTurnStart` gets that far.
+      expect(readsWhileClaimed[0]).toBe(true);
+      expect(resumed).toEqual(["kept-conversation", "kept-conversation"]);
+      expect(first.sends).toHaveLength(0);
+      expect(state.agent).toBeNull();
+      expect(state.agentId).toBe("kept-conversation");
+      expect(state.configResumePending).toBe(true);
+      // The turn provably never ran: the claim and the prepared record go.
+      expect(state.dispatching).toBe(false);
+      expect(state.promptJournal.has("config-1")).toBe(false);
+      expect(state.status).toBe("idle");
+      expect(state.messages).toEqual([]);
+    } finally {
+      refuseResume();
+      restore();
+      setCursorMcpFingerprintForTests();
     }
   });
 

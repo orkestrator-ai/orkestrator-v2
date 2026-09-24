@@ -1,4 +1,5 @@
 import { registerDesignCommands } from "./commands-registry-design.js";
+import { registerMcpManagementCommands } from "./commands-registry-mcp.js";
 import { registerPreviewCommands } from "./commands-registry-previews.js";
 import type {
   AwaitBridgeReadyResult,
@@ -242,6 +243,7 @@ export function createCommandRegistry(
 
   registerDesignCommands(register, dependencies);
   registerPreviewCommands(register);
+  registerMcpManagementCommands(register);
   registerProjectCommands(register, dependencies);
   registerControlCommands(register, dependencies);
   registerCoordinatorCommands(register, dependencies);

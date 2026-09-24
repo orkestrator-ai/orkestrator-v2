@@ -150,6 +150,17 @@ export const MAX_BROWSER_PREVIEW_BODY_BYTES = 8 * 1024 * 1024;
  * request actually approaches it.
  */
 export const MAX_INVOKE_BODY_BYTES = 48 * 1024 * 1024;
+/**
+ * Tighter per-command caps, checked after the body is read and before the
+ * command runs. The command name travels inside the JSON body, so the shared
+ * cap above still bounds what is buffered; this only stops an oversized
+ * request from reaching a command whose own contract is far smaller. The
+ * slack covers the `{command, args}` envelope around the mutation.
+ */
+export const INVOKE_COMMAND_BODY_LIMITS: Readonly<Record<string, number>> = Object.freeze({
+  validate_mcp_mutation: 256 * 1024 + 4 * 1024,
+  mutate_mcp_definition: 256 * 1024 + 4 * 1024,
+});
 export const KEEPALIVE_MS = 25_000;
 export const IMMUTABLE_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
 export const REVALIDATED_DOCUMENT_CACHE_CONTROL = "no-cache";

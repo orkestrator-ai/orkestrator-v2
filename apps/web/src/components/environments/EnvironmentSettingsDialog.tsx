@@ -120,7 +120,7 @@ const AGENT_EXTENSION_COPY: Record<
   },
   pi: {
     label: "Pi",
-    mcpConfig: "Pi does not include a built-in MCP client",
+    mcpConfig: "~/.pi/agent/mcp.json (native Pi sessions; containers also read .pi/mcp.json)",
     pluginConfig: ".pi/ or ~/.pi/agent",
   },
 };

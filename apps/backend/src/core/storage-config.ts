@@ -528,6 +528,10 @@ export abstract class StorageConfig extends StorageProjects {
           config.global.coordinatorProviderTierDefaultVersion,
         ),
       );
+      // Backend-owned rollout gate: a renderer settings save that does not
+      // carry it must not silently re-enable a switched-off feature.
+      if (validated.mcpManagement === undefined && config.global.mcpManagement !== undefined)
+        validated.mcpManagement = config.global.mcpManagement;
       config.global = options.preserveCredentials
         ? {
             ...validated,
@@ -541,6 +545,19 @@ export abstract class StorageConfig extends StorageProjects {
               : {}),
           }
         : validated;
+      await this.saveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return config;
+    });
+  }
+
+  /** Atomically replace the backend-owned MCP management rollout gate. */
+  async updateMcpManagementRollout(
+    settings: import("@orkestrator/protocol/mcp-management").McpManagementRolloutSettings,
+  ): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      config.global = { ...config.global, mcpManagement: settings };
       await this.saveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;

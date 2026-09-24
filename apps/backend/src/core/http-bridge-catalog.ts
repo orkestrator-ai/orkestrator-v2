@@ -193,6 +193,28 @@ export class HttpBridgeCatalogAdapter {
     return url ? { url: url.slice(0, 4096) } : {};
   }
 
+  /**
+   * `POST /global/mcp/reload`: reload MCP configuration in an already-running
+   * agent process only. A 404 is a bridge that predates the route.
+   */
+  async reloadMcpConfiguration(): Promise<"reloaded" | "not-running" | "unsupported"> {
+    const response = await bridgeFetch(
+      this.connection,
+      "/global/mcp/reload",
+      { method: "POST" },
+      this.fetchImpl,
+    );
+    if (response.status === 404) {
+      await response.body?.cancel().catch(() => undefined);
+      return "unsupported";
+    }
+    await assertOkWithErrorDetail(response, `${this.agent} MCP reload`);
+    const body = asRecord(
+      await boundedJson(response, `${this.agent} MCP reload`, { remaining: 16 * 1024 }),
+    );
+    return body?.reloaded === true ? "reloaded" : "not-running";
+  }
+
   async authStatus(): Promise<NativeAgentAuthStatus> {
     const response = await bridgeFetch(this.connection, "/global/auth", {}, this.fetchImpl);
     if (response.status === 404) return { state: "unknown", signIn: { kind: "none" } };

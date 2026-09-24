@@ -639,7 +639,10 @@ When touching the Pi bridge:
   an MCP client (`src/mcp.ts`) and registers tools through the inline
   `orkestrator-mcp` extension: Orkestrator from env / per-tab `agentMcp`,
   user servers from `~/.pi/agent/mcp.json`, and project `.pi/mcp.json` only
-  when the execution policy opts into project resources. Settings-pane
+  when the execution policy opts into project resources. A session records
+  a fingerprint of the MCP files it was built from and rebuilds at the next
+  turn start when they change (never mid-turn), which is how saved edits from
+  the MCP servers settings reach a live session. Settings-pane
   discovery still reports an empty MCP list (pre-session fallback). The
   composer reports `mode: false` because plan/build is still something an
   extension adds. `agentMailCapabilities("agent-native", "pi")` is on;

@@ -1,6 +1,8 @@
 # 13 — Deliver configuration to containers, remote backends and terminals
 
-Status: planned. Depends on: 03–11. [Plan index](00-index.md).
+Status: partly done — Pi `mcp.json` container delivery and read-only container catalogs. The durable
+environment overlay (container-private writes) is **not** implemented; container targets stay read-only.
+Depends on: 03–11. [Plan index](00-index.md).
 
 ## Purpose and existing owners
 

@@ -460,6 +460,7 @@ count.
 | Topic | Document |
 | --- | --- |
 | Agent-to-agent mail, inject, and provider flags | [`docs/architecture/agent-messaging.md`](./agent-messaging.md) |
+| Editing the MCP servers each platform loads, and how saved edits reach a live session | [`docs/architecture/mcp-management.md`](./mcp-management.md) |
 | Bumping any agent SDK, CLI, or pinned binary | [`docs/development/upgrade-agents.md`](../development/upgrade-agents.md) |
 | Background-reliability and transport invariants | [`AGENTS.md`](../../AGENTS.md) |
 | Agent-driven real-stack QA | [`docs/development/agent-testing.md`](../development/agent-testing.md) |

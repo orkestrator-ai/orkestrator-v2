@@ -805,6 +805,12 @@ export interface AppConfig {
      * affect attempts admitted after the change only.
      */
     workflowResultTools?: import("@orkestrator/protocol/workflow-results").WorkflowResultToolsSettings;
+    /**
+     * Backend-owned rollout gate and kill switch for MCP configuration
+     * management. Absent means everything enabled. Turning it off never edits
+     * a saved provider file.
+     */
+    mcpManagement?: import("@orkestrator/protocol/mcp-management").McpManagementRolloutSettings;
   };
   repositories: Record<string, RepositoryConfig>;
 }

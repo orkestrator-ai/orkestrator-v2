@@ -92,6 +92,7 @@ import {
 } from "@orkestrator/protocol/agent-platforms";
 import { agentMailCapabilities } from "@orkestrator/protocol/agent-mail";
 import { openAgentMailForTab } from "@/components/agent-mail/AgentMailButton";
+import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
 
 interface AgentInfoButtonProps {
   activeTab: TabInfo | null;
@@ -175,7 +176,6 @@ import {
   codexLimitsFromHealth,
   describeRewindTarget,
   formatCount,
-  McpServersPanel,
   readOpenCodeShareUrl,
   summarizeRewindPreview,
 } from "./AgentInfoButton.panels";
@@ -1858,26 +1858,27 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                     ) : null}
                   </div>
                 ) : null}
-                {(neutralProjection?.runtime?.mcp?.length ?? 0) > 0 ? (
-                  <McpServersPanel
-                    servers={neutralProjection!.runtime!.mcp!}
-                    busyAction={busyAction}
-                    onAction={(server, action) =>
-                      void runAction(`mcp-${server.id}-${action}`, async () => {
-                        const result = await performNativeAgentMcpAction({
-                          environmentId: activeSession.environmentId,
-                          agent: activeSession.provider,
-                          logicalSessionKey: activeSession.sessionKey,
-                          serverId: server.id,
-                          action,
-                        });
-                        if (result.url) {
-                          window.open(result.url, "_blank", "noopener,noreferrer");
-                        }
-                      })
-                    }
-                  />
-                ) : null}
+                <AgentInfoMcpSection
+                  environmentId={activeSession.environmentId}
+                  provider={activeSession.provider}
+                  sessionKey={activeSession.sessionKey}
+                  servers={neutralProjection?.runtime?.mcp}
+                  busyAction={busyAction}
+                  onAction={(server, action) =>
+                    void runAction(`mcp-${server.id}-${action}`, async () => {
+                      const result = await performNativeAgentMcpAction({
+                        environmentId: activeSession.environmentId,
+                        agent: activeSession.provider,
+                        logicalSessionKey: activeSession.sessionKey,
+                        serverId: server.id,
+                        action,
+                      });
+                      if (result.url) {
+                        window.open(result.url, "_blank", "noopener,noreferrer");
+                      }
+                    })
+                  }
+                />
                 {activeSession.provider === "claude" ? (
                   <div className="grid grid-cols-3 gap-2 text-center text-xs">
                     <Metric

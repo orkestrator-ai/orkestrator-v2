@@ -1,6 +1,11 @@
 # 05 — Add backend-owned save/apply operations and reconciliation
 
-Status: planned. Depends on: 02–04. [Plan index](00-index.md).
+Status: done (`service.ts`, `operations-store.ts`, `apply.ts`, `evidence.ts`, `rollout.ts`,
+`commands-registry-mcp.ts`): durable operations with newer-schema protection, coordinator and
+deleted-environment runtimes, rollout gate and kill switch, targeted invalidation events, evidence-based
+`applied` for Claude, Cursor, Pi and Grok. **Not done:** session generations (the backend has none to
+record), older Pi/Cursor bridge detection, flagging an external edit made after scheduling, and reloads for
+more than 64 Codex environments in one operation. Depends on: 02–04. [Plan index](00-index.md).
 
 ## Integration points
 

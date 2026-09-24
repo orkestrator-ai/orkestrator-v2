@@ -535,6 +535,12 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
     serverId: string,
     action: NativeAgentMcpServerAction,
   ): Promise<{ url?: string }>;
+  /**
+   * Bridge-level MCP configuration reload that never starts an agent process:
+   * `not-running` when nothing is running to reload, `unsupported` when the
+   * bridge predates the route. Session-free, so it survives a bridge restart.
+   */
+  reloadMcpConfiguration?(): Promise<"reloaded" | "not-running" | "unsupported">;
   authStatus?(): Promise<NativeAgentAuthStatus>;
   beginSignIn?(): Promise<{ url?: string; code?: string }>;
   signOut?(): Promise<void>;
@@ -563,7 +569,34 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * returns an empty summary rather than omitting the method.
    */
   runtimeHealth?(sessionId: string): Promise<ProviderRuntimeHealth>;
+  /**
+   * Which saved MCP configuration the session's live runtime was built from,
+   * read from the same no-touch `/session/:id/runtime-health` route. Backend
+   * only: the digests are unkeyed hashes of files that can hold secrets, so
+   * this never feeds a projection. `undefined` when the bridge reports none —
+   * an older bridge, or nothing loaded yet.
+   */
+  mcpConfigEvidence?(sessionId: string): Promise<ProviderMcpConfigEvidence | undefined>;
 }
+
+/** See {@link NativeAgentRuntimeProvider.mcpConfigEvidence}. */
+export interface ProviderMcpConfigEvidence {
+  /**
+   * `sha256:<base64url>`, `absent` or `excluded` per reported file. `local`
+   * repeats Claude's `user` digest only when that query also loaded the
+   * private-local map inside the same file (its source scope was `all`).
+   */
+  sources: { user?: string; project?: string; local?: string };
+  /** When the runtime read that configuration. */
+  observedAt: string;
+  /** `process` when the bridge reports one load for every session (Grok). */
+  scope: "session" | "process";
+}
+
+export type ProviderMcpConfigEvidenceRead =
+  | { state: "evidence"; evidence: ProviderMcpConfigEvidence }
+  | { state: "none" }
+  | { state: "not-running" };
 
 export interface ProviderCommandCatalogue {
   /** Descriptors carry execution identity negotiated with this provider. */

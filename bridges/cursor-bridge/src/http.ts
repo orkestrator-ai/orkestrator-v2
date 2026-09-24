@@ -65,6 +65,7 @@ import {
   ensureAgent,
   listResumableSessions,
   parseComposerPatch,
+  publicCursorMcpConfig,
   rewindSessionHistory,
   resumeSession,
 } from "./agent-session.js";
@@ -373,8 +374,15 @@ async function routeSession(
     return json(response, 200, publicActivity(state));
   }
   if (action === "runtime-health" && request.method === "GET") {
-    // A read, like `/activity`: no liveness touch, no attach.
-    return json(response, 200, { summary: publicRuntime(state), ...state.health.snapshot() });
+    // A read, like `/activity`: no liveness touch, no attach. `mcpConfig`
+    // names the saved MCP files the attached agent was created from (digests
+    // only), so the backend reports a change as applied on evidence.
+    const mcpConfig = publicCursorMcpConfig(state);
+    return json(response, 200, {
+      summary: publicRuntime(state),
+      ...state.health.snapshot(),
+      ...(mcpConfig ? { mcpConfig } : {}),
+    });
   }
   if (action === "dispatch" && request.method === "GET") {
     return json(response, 200, publicDispatch(state, url.searchParams.get("requestId") || ""));
@@ -753,7 +761,7 @@ async function handlePrompt(
       await detachAgent(state);
       state.readOnly = readOnly;
     }
-    agent = await ensureAgent(state);
+    agent = await ensureAgent(state, { atTurnStart: true });
   } catch (error) {
     // The turn provably did not run, so release the claim and let the caller
     // retry under the same request id.

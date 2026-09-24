@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
+import { sessionRuntimeHealthBody } from "./runtime-health-body.js";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import {
   commandUnavailableResponse,
@@ -1133,10 +1133,7 @@ session.get("/:id/activity", async (c) => {
  * Registered as a two-segment path so the `/:id` route above cannot shadow it.
  */
 session.get("/:id/runtime-health", (c) => {
-  const sessionData = peekSession(c.req.param("id"));
-  if (!sessionData?.health) return c.json(emptyRuntimeHealth());
-  const { drift, notices } = sessionData.health.snapshot();
-  return c.json({ summary: drift ? { drift } : {}, notices });
+  return c.json(sessionRuntimeHealthBody(peekSession(c.req.param("id"))));
 });
 
 /**

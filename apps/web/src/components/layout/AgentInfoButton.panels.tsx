@@ -1434,11 +1434,14 @@ function McpServerRow({
   server,
   busyAction,
   onAction,
+  onManage,
 }: {
   server: NativeAgentMcpServer;
   busyAction: string | null;
   onAction: (server: NativeAgentMcpServer, action: NativeAgentMcpServerAction) => void;
+  onManage?: (server: NativeAgentMcpServer) => void;
 }) {
+  const nameId = useId();
   const actions = orderedMcpActions(server);
   const primary = primaryMcpAction(server);
   const secondary = actions.filter((action) => action !== primary);
@@ -1467,7 +1470,9 @@ function McpServerRow({
         className={cn("h-1.5 w-1.5 shrink-0 rounded-full", MCP_STATUS_DOT[server.status])}
         aria-hidden="true"
       />
-      <span className="truncate text-foreground">{server.name}</span>
+      <span id={nameId} className="truncate text-foreground">
+        {server.name}
+      </span>
       <span className="ml-auto shrink-0 font-mono tabular-nums text-muted-foreground">
         {detail}
       </span>
@@ -1507,6 +1512,21 @@ function McpServerRow({
             {mcpActionLabel(action)}
           </button>
         ))}
+        {/* Orkestrator's own server is not user configuration. */}
+        {onManage && server.scope !== "orkestrator" ? (
+          <button
+            type="button"
+            // Named by what it opens and described by the row's server name,
+            // so the name itself stays unique to the row's runtime controls.
+            aria-label="Saved configuration"
+            aria-describedby={nameId}
+            title="Edit this server's saved configuration"
+            className="shrink-0 rounded px-1.5 py-0.5 text-blue-300 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            onClick={() => onManage(server)}
+          >
+            Config
+          </button>
+        ) : null}
       </div>
       {server.error ? (
         <p className="break-words px-2.5 pb-1 pl-6 text-destructive">{server.error}</p>
@@ -1527,10 +1547,13 @@ export function McpServersPanel({
   servers,
   busyAction,
   onAction,
+  onManageServer,
 }: {
   servers: NativeAgentMcpServer[];
   busyAction: string | null;
   onAction: (server: NativeAgentMcpServer, action: NativeAgentMcpServerAction) => void;
+  /** Opens saved-configuration management for one row; runtime actions never edit files. */
+  onManageServer?: (server: NativeAgentMcpServer) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   if (servers.length === 0) return null;
@@ -1575,6 +1598,7 @@ export function McpServersPanel({
               server={server}
               busyAction={busyAction}
               onAction={onAction}
+              onManage={onManageServer}
             />
           ))}
         </div>

@@ -12,8 +12,9 @@
  * independent of Bun's process-wide module registry.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { Agent, type CursorAgentPlatform, type LocalAgentStore } from "@cursor/sdk";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { Agent, type LocalAgentStore } from "@cursor/sdk";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -102,7 +103,7 @@ const createTestPlatform = async (options: Record<string, unknown>) => {
   };
 };
 
-const testAgent = {
+const testAgentShape = {
   create: async (options: Record<string, unknown>) => {
     created.push(options);
     return fakeSdkAgent("created-agent");
@@ -118,7 +119,8 @@ const testAgent = {
     if (listRunsFails) throw new Error("history unavailable");
     return runs;
   },
-} as unknown as typeof Agent;
+};
+const testAgent = testAgentShape as unknown as typeof Agent;
 
 const { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_TITLE_BYTES, workingDirectory } =
   await import("./config.js");
@@ -134,6 +136,10 @@ const {
   resumeSession,
   rewindSessionHistory,
   SessionConflictError,
+  setCursorMcpConfigHomeForTests,
+  cursorMcpConfigFingerprint,
+  publicCursorMcpConfig,
+  setCursorMcpFingerprintForTests,
   useCursorAgentForTests,
 } = await import("./agent-session.js");
 const { refreshAgentUsage } = await import("./prompt.js");
@@ -178,7 +184,13 @@ beforeAll(() => {
   });
 });
 
-beforeEach(() => {
+const configHome = join(bridgeStateRoot, "config-home");
+
+beforeEach(async () => {
+  // The MCP configuration fingerprint must never read the operator's home.
+  await rm(configHome, { recursive: true, force: true });
+  setCursorMcpConfigHomeForTests(configHome);
+  setCursorMcpFingerprintForTests();
   resetPlanAccountWindowsForTests();
   // The barrier is primed once per process by design, so without this only
   // the first attaching test could observe whether an attach primes it.
@@ -906,6 +918,302 @@ describe("ensureAgent", () => {
         },
       },
     });
+  });
+
+  test("a saved MCP configuration change resumes the same agent at the next boundary", async () => {
+    const state = newSessionState();
+    await ensureAgent(state);
+    const agentId = state.agentId;
+    await mkdir(join(configHome, ".cursor"), { recursive: true });
+    await writeFile(
+      join(configHome, ".cursor", "mcp.json"),
+      JSON.stringify({ mcpServers: { added: { url: "https://a.example/mcp" } } }),
+    );
+
+    // A running turn keeps its agent and tools.
+    state.status = "running";
+    await ensureAgent(state);
+    expect(resumed).toEqual([]);
+    state.status = "idle";
+
+    await ensureAgent(state, { atTurnStart: true });
+    expect(resumed).toEqual([agentId]);
+    expect(state.agentId).toBe(agentId);
+
+    // Unchanged configuration: no further reattach.
+    await ensureAgent(state);
+    expect(resumed).toEqual([agentId]);
+  });
+
+  test("a turn starting during a config read keeps the attached agent", async () => {
+    const state = newSessionState();
+    const original = await ensureAgent(state);
+    let release!: (value: string) => void;
+    let started!: () => void;
+    const reading = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const fingerprint = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    setCursorMcpFingerprintForTests(async () => {
+      started();
+      return fingerprint;
+    });
+    const pending = ensureAgent(state);
+    await reading;
+    state.status = "running";
+    release("changed");
+    expect(await pending).toBe(original);
+    expect(state.agent).toBe(original);
+    expect(resumed).toEqual([]);
+    setCursorMcpFingerprintForTests();
+  });
+
+  test("a failed resume for a configuration change keeps the conversation", async () => {
+    const state = newSessionState();
+    await ensureAgent(state);
+    const agentId = state.agentId;
+    await mkdir(join(configHome, ".cursor"), { recursive: true });
+    await writeFile(join(configHome, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: {} }));
+    resumeFails = true;
+    await expect(ensureAgent(state)).rejects.toThrow("conversation was kept");
+    expect(state.agentId).toBe(agentId);
+    expect(created).toHaveLength(1);
+  });
+
+  test("a retry after a failed configuration resume reopens the conversation and clears the mark", async () => {
+    const state = newSessionState();
+    await ensureAgent(state);
+    const agentId = state.agentId!;
+    await mkdir(join(configHome, ".cursor"), { recursive: true });
+    await writeFile(join(configHome, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: {} }));
+    resumeFails = true;
+    await expect(ensureAgent(state)).rejects.toThrow("conversation was kept");
+    expect(state.configResumePending).toBe(true);
+
+    resumeFails = false;
+    const reopened = await ensureAgent(state);
+    expect(reopened).toMatchObject({ agentId });
+    expect(resumed).toEqual([agentId, agentId]);
+    expect(created).toHaveLength(1);
+    expect(state.configResumePending).toBeUndefined();
+
+    // Cleared: a later unrelated resume failure may fall back to a new agent.
+    await detachAgent(state);
+    resumeFails = true;
+    expect(await ensureAgent(state)).toMatchObject({ agentId: "created-agent" });
+  });
+
+  test("a pending configuration resume survives a bridge restart", async () => {
+    const { loadPersistedState, persistBarrier } = await import("./persistence.js");
+    const state = newSessionState();
+    sessions.set(state.id, state);
+    await ensureAgent(state);
+    const agentId = state.agentId!;
+    await mkdir(join(configHome, ".cursor"), { recursive: true });
+    await writeFile(join(configHome, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: {} }));
+    resumeFails = true;
+    await expect(ensureAgent(state)).rejects.toThrow("conversation was kept");
+    await persistBarrier();
+
+    sessions.clear();
+    await loadPersistedState();
+    const restored = sessions.get(state.id)!;
+    expect(restored).not.toBe(state);
+    expect(restored.agentId).toBe(agentId);
+    expect(restored.configResumePending).toBe(true);
+
+    // The restarted bridge must not trade the conversation for a fresh agent.
+    await expect(ensureAgent(restored)).rejects.toThrow("conversation was kept");
+    expect(created).toHaveLength(1);
+    expect(restored.agentId).toBe(agentId);
+
+    resumeFails = false;
+    await ensureAgent(restored);
+    expect(restored.configResumePending).toBeUndefined();
+    await persistBarrier();
+    sessions.clear();
+    await loadPersistedState();
+    expect(sessions.get(state.id)?.configResumePending).toBeUndefined();
+  });
+
+  test("a claimed dispatch that is not this turn's start defers the configuration change", async () => {
+    const state = newSessionState();
+    const original = await ensureAgent(state);
+    await mkdir(join(configHome, ".cursor"), { recursive: true });
+    await writeFile(join(configHome, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: {} }));
+    state.dispatching = true;
+    try {
+      expect(await ensureAgent(state)).toBe(original);
+      expect(resumed).toEqual([]);
+      expect(state.configResumePending).toBeUndefined();
+
+      // The prompt that holds the claim is the boundary.
+      await ensureAgent(state, { atTurnStart: true });
+      expect(resumed).toEqual([state.agentId]);
+    } finally {
+      state.dispatching = false;
+    }
+  });
+
+  test("a read-only coordinator never reattaches for a configuration change", async () => {
+    const state = newSessionState(undefined, {
+      id: "pipeline",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "full",
+    });
+    state.readOnly = true;
+    const original = await ensureAgent(state);
+    const before = await cursorMcpConfigFingerprint(state);
+    await mkdir(join(configHome, ".cursor"), { recursive: true });
+    await writeFile(
+      join(configHome, ".cursor", "mcp.json"),
+      JSON.stringify({ mcpServers: { added: { url: "https://a.example/mcp" } } }),
+    );
+
+    // It loads no settings sources, so no edit can change what it runs with.
+    expect(await cursorMcpConfigFingerprint(state)).toBe(before);
+    expect(await ensureAgent(state, { atTurnStart: true })).toBe(original);
+    expect(resumed).toEqual([]);
+    expect(created).toHaveLength(1);
+  });
+
+  test("exposes the digests of the MCP files the attached agent was created from", async () => {
+    const state = newSessionState();
+    // Detached: nothing has loaded, so there is no evidence to report.
+    expect(publicCursorMcpConfig(state)).toBeUndefined();
+    const before = Date.now();
+    await ensureAgent(state);
+    expect(publicCursorMcpConfig(state)).toMatchObject({
+      sources: { user: "absent", project: "excluded" },
+      builtAt: expect.any(String),
+    });
+    expect(Date.parse(publicCursorMcpConfig(state)!.builtAt)).toBeGreaterThanOrEqual(before - 1);
+
+    const file = join(configHome, ".cursor", "mcp.json");
+    await mkdir(join(configHome, ".cursor"), { recursive: true });
+    await writeFile(file, JSON.stringify({ mcpServers: { a: { url: "https://a.example/mcp" } } }));
+    // The evidence names the attached agent, not the file now.
+    expect(publicCursorMcpConfig(state)?.sources.user).toBe("absent");
+
+    // The next turn boundary adopts the change, and the evidence follows it.
+    await ensureAgent(state, { atTurnStart: true });
+    const digest = `sha256:${createHash("sha256")
+      .update(await readFile(file))
+      .digest("base64url")}`;
+    const exposed = publicCursorMcpConfig(state)!;
+    expect(exposed.sources).toEqual({ user: digest, project: "excluded" });
+    expect(exposed.fingerprint).toBe(await cursorMcpConfigFingerprint(state));
+    // Content-free: no path and no server body.
+    expect(JSON.stringify(exposed)).not.toContain(configHome);
+    expect(JSON.stringify(exposed)).not.toContain("a.example");
+
+    await detachAgent(state);
+    expect(publicCursorMcpConfig(state)).toBeUndefined();
+  });
+
+  test("the project MCP file counts only when project resources are enabled", async () => {
+    const projectDirectory = join(workingDirectory, ".cursor");
+    const projectFile = join(projectDirectory, "mcp.json");
+    // Never clobber a real project file the checkout may carry.
+    if (await Bun.file(projectFile).exists()) return;
+    const withoutProject = newSessionState(undefined, {
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "ask",
+      projectResources: false,
+      networkAccess: "full",
+    });
+    const withProject = newSessionState(undefined, containerPolicy);
+    const before = {
+      without: await cursorMcpConfigFingerprint(withoutProject),
+      with: await cursorMcpConfigFingerprint(withProject),
+    };
+    const createdDirectory = await mkdir(projectDirectory, { recursive: true });
+    try {
+      await writeFile(
+        projectFile,
+        JSON.stringify({ mcpServers: { repo: { url: "https://r.example/mcp" } } }),
+      );
+      expect(await cursorMcpConfigFingerprint(withoutProject)).toBe(before.without);
+      expect(await cursorMcpConfigFingerprint(withProject)).not.toBe(before.with);
+    } finally {
+      // Leave the checkout exactly as it was: remove the directory only if this test made it.
+      await rm(createdDirectory ?? projectFile, { recursive: true, force: true });
+    }
+  });
+
+  test("a late config read never detaches the agent a concurrent reattach produced", async () => {
+    const state = newSessionState();
+    const original = await ensureAgent(state);
+    const agentId = state.agentId!;
+    expect(warmWorkspaceReleases).toBe(0);
+    let releaseSlowRead!: (value: string) => void;
+    const slowRead = new Promise<string>((resolve) => {
+      releaseSlowRead = resolve;
+    });
+    let slowReadStarted!: () => void;
+    const slowReading = new Promise<void>((resolve) => {
+      slowReadStarted = resolve;
+    });
+    // V's boundary read is slow; U's, and the one inside U's attach, are not.
+    const reads: Array<() => Promise<string>> = [
+      async () => {
+        slowReadStarted();
+        return slowRead;
+      },
+    ];
+    setCursorMcpFingerprintForTests(async () => reads.shift()?.() ?? "changed");
+    // U's reattach waits inside the SDK resume, after it has warmed the
+    // replacement's workspace: the state a stray detach would tear down.
+    let releaseResume!: () => void;
+    const resumeGate = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    let resumeStarted!: () => void;
+    const resuming = new Promise<void>((resolve) => {
+      resumeStarted = resolve;
+    });
+    const restore = useCursorAgentForTests({
+      ...testAgentShape,
+      resume: async (id: string, options: Record<string, unknown>) => {
+        resumeStarted();
+        await resumeGate;
+        return testAgentShape.resume(id, options);
+      },
+    } as unknown as typeof Agent);
+    try {
+      const late = ensureAgent(state);
+      await slowReading;
+      const rebuilding = ensureAgent(state);
+      await resuming;
+      expect(state.agent).toBeNull();
+      expect(warmWorkspaceReleases).toBe(1);
+
+      releaseSlowRead("changed");
+      // A macrotask drains V's microtask chain while U's attach is in flight.
+      await Bun.sleep(0);
+      releaseResume();
+      const replacement = await rebuilding;
+      expect(await late).toBe(replacement);
+
+      expect(replacement).not.toBe(original);
+      expect(state.agent).toBe(replacement);
+      // Only U's detach released a workspace; the replacement's is still held.
+      expect(warmWorkspaceReleases).toBe(1);
+      expect(state.workspaceWarmRelease).toBeDefined();
+      expect(state.agentLocalOptions).toBeDefined();
+      expect(resumed).toEqual([agentId]);
+      expect(created).toHaveLength(1);
+      expect(state.configResumePending).toBeUndefined();
+    } finally {
+      releaseResume();
+      restore();
+      setCursorMcpFingerprintForTests();
+    }
   });
 
   test("an environment-only agent survives a second ensureAgent", async () => {

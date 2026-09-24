@@ -23,6 +23,7 @@ import {
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { streamSSE } from "hono/streaming";
 import { readCachedTranscript } from "./transcript-cache.js";
+import { registerMcpReloadRoute } from "./mcp-reload-route.js";
 import {
   applyCodexCollabStateToSubagentParts,
   CODEX_TIMELINE_ITEM_PREFIX,
@@ -1773,6 +1774,8 @@ app.get("/session/:id/mcp", async (c) => {
   });
   return c.json({ servers });
 });
+
+registerMcpReloadRoute(app, appServerRuntime);
 
 app.post("/session/:id/mcp/:name/:action", async (c) => {
   const action = c.req.param("action");

@@ -239,6 +239,12 @@ export interface SessionState {
   clientSessionKey?: string;
   /** The SDK's own agent id. Stable across bridge restarts; what resume takes. */
   agentId?: string;
+  /**
+   * Detached to adopt an MCP configuration change and not yet reattached. The
+   * next attach must resume `agentId` or fail; it may never quietly start a
+   * new conversation. Persisted, because a restart does not change that.
+   */
+  configResumePending?: boolean;
   status: SessionStatus;
   error?: string;
   messages: BridgeMessage[];
@@ -378,6 +384,19 @@ export interface SessionState {
    */
   observedMcpTools: Set<string>;
   /**
+   * MCP evidence from before the last configuration reattach: qualified names
+   * this session called under a previous MCP configuration. A saved edit may
+   * have removed their server, so they keep the server listed but can no
+   * longer say it is connected. Runtime-only, bounded like `observedMcpTools`.
+   */
+  retiredMcpTools?: Set<string>;
+  /**
+   * The `runTools` array the previous configuration's agent advertised. Held
+   * by identity: the next run assigns a fresh array, which is when the
+   * advertised inventory becomes evidence about the current configuration.
+   */
+  retiredRunTools?: string[];
+  /**
    * What this bridge saw and did not understand, and what the SDK reported.
    *
    * `@cursor/sdk` is a fast-moving dependency whose update and tool-call unions
@@ -393,6 +412,7 @@ export interface PersistedSession {
   readOnly?: boolean;
   clientSessionKey?: string;
   agentId?: string;
+  configResumePending?: boolean;
   status: SessionStatus;
   error?: string;
   messages: BridgeMessage[];

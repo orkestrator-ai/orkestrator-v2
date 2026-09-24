@@ -7,7 +7,11 @@
  * restart, an idle detach or a crashed child all recover without the renderer
  * seeing anything other than a session that was briefly connecting.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import {
   Agent,
   type AgentOptions,
@@ -20,6 +24,7 @@ import {
 import { CATALOG_TIMEOUT_MS, MAX_RESUME_ENTRIES, workingDirectory } from "./config.js";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, resolveCredential } from "./credentials.js";
+import { schedulePersist } from "./persistence.js";
 import { schedulePlanAccountRefresh } from "./plan-usage.js";
 import { emptyComposer, hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
@@ -27,6 +32,7 @@ import {
   cursorMcpServers,
   hostOrkestratorCustomTools,
   mcpConnectionKey,
+  retireMcpObservations,
   type AgentMcpConnection,
 } from "./mcp.js";
 import {
@@ -161,9 +167,55 @@ export async function createSession(
  * config route and the explicit attach route, so that race is ordinary
  * concurrency rather than a corner case.
  */
-export async function ensureAgent(state: SessionState): Promise<SDKAgent> {
+export async function ensureAgent(
+  state: SessionState,
+  options: { atTurnStart?: boolean } = {},
+): Promise<SDKAgent> {
   if (state.agent && (state.attachedMcpKey ?? "") !== mcpConnectionKey(state.agentMcp)) {
-    await detachAgent(state);
+    // A rotated tab token detaches whatever the turn state. If the saved MCP
+    // files also changed, this detach is adopting a configuration change too,
+    // and a failed resume must not quietly become a new conversation — the
+    // branch below never sees it, because the agent is already gone.
+    const agent = state.agent;
+    const attached = attachedConfigKeys.get(state);
+    const configChanged =
+      attached !== undefined && attached !== (await cursorMcpConfigFingerprint(state));
+    // The fingerprint read yields. Only a caller that still sees the agent it
+    // read, still on the old credential, owns this detach.
+    if (
+      state.agent === agent &&
+      (state.attachedMcpKey ?? "") !== mcpConnectionKey(state.agentMcp)
+    ) {
+      if (configChanged) {
+        markConfigResumePending(state, true);
+        retireMcpObservations(state);
+      }
+      await detachAgent(state);
+    }
+  }
+  // A saved MCP configuration change is adopted only between turns: the SDK
+  // reads settings sources when an agent is created or resumed, so the live
+  // agent is released and resumed on the same conversation. The prompt path
+  // has already claimed `dispatching` for the turn it is starting.
+  const idle = state.status !== "running" && (options.atTurnStart || !state.dispatching);
+  const agent = state.agent;
+  if (agent && !state.attaching && idle) {
+    const attached = attachedConfigKeys.get(state);
+    // The fingerprint read yields. A concurrent caller may have detached this
+    // agent and started the replacement attach meanwhile; detaching again
+    // would tear down the agent that attach is about to publish. Only a caller
+    // that still sees the agent it read, with no attach in flight, owns it.
+    if (
+      attached !== undefined &&
+      attached !== (await cursorMcpConfigFingerprint(state)) &&
+      state.agent === agent &&
+      !state.attaching &&
+      (options.atTurnStart || (state.status !== "running" && !state.dispatching))
+    ) {
+      markConfigResumePending(state, true);
+      retireMcpObservations(state);
+      await detachAgent(state);
+    }
   }
   if (state.agent) return state.agent;
   state.attaching ??= attach(state).finally(() => {
@@ -244,7 +296,130 @@ function cursorAllowedTools(
   return Array.from(tools);
 }
 
+let configHomeForTests: string | undefined;
+
+/** Point the configuration fingerprint at a temporary home; never the operator's. */
+export function setCursorMcpConfigHomeForTests(home?: string): void {
+  configHomeForTests = home;
+}
+
+/** Fingerprints of the MCP files each attached agent was created from. */
+const attachedConfigKeys = new WeakMap<SessionState, string>();
+/** The per-file digests behind each attached agent's fingerprint, and when they were read. */
+const attachedConfigRevisions = new WeakMap<
+  SessionState,
+  CursorMcpConfigRevision & { builtAt: string }
+>();
+let fingerprintForTests: ((state: SessionState) => Promise<string>) | undefined;
+
+export function setCursorMcpFingerprintForTests(
+  fingerprint?: (state: SessionState) => Promise<string>,
+): void {
+  fingerprintForTests = fingerprint;
+}
+/**
+ * Record that a session was detached to adopt a configuration change. Its next
+ * attach must resume the same conversation: silently starting a new one to
+ * apply a settings edit would drop the model's context without the user
+ * choosing it. Persisted with the session, so a bridge restart between the
+ * detach and a successful resume cannot turn the next failed resume into a
+ * fresh conversation.
+ */
+function markConfigResumePending(state: SessionState, pending: boolean): void {
+  if ((state.configResumePending === true) === pending) return;
+  if (pending) state.configResumePending = true;
+  else delete state.configResumePending;
+  schedulePersist();
+}
+
+/**
+ * Content-free identity of the MCP files an agent was created from.
+ *
+ * Each source is `sha256:<base64url>` of the file's exact bytes, `absent`, or
+ * `excluded` when the session's policy does not load it — so the backend,
+ * which knows what it wrote, can tell whether an attached agent picked a save
+ * up. Never a path and never a server body: the files hold headers and env.
+ */
+export interface CursorMcpConfigRevision {
+  /** One opaque value over both sources; `read-only` for a coordinator. */
+  fingerprint: string;
+  sources: {
+    /** `~/.cursor/mcp.json`. */
+    user: string;
+    /** `<cwd>/.cursor/mcp.json`. */
+    project: string;
+  };
+}
+
+async function fileDigest(file: string): Promise<string> {
+  try {
+    return `sha256:${createHash("sha256")
+      .update(await readFile(file))
+      .digest("base64url")}`;
+  } catch {
+    return "absent";
+  }
+}
+
+/**
+ * Per-file digests of the MCP files a session's settings sources read.
+ * Read-only coordinators load no settings sources, so their configuration
+ * never changes and both sources are `excluded`.
+ */
+export async function cursorMcpConfigRevision(
+  state: SessionState,
+): Promise<CursorMcpConfigRevision> {
+  const policy = resolveCursorExecutionPolicy(state.readOnly ? undefined : state.policy);
+  if (state.readOnly || policy.id === "coordinator-read-only") {
+    return { fingerprint: "read-only", sources: { user: "excluded", project: "excluded" } };
+  }
+  const [user, project] = await Promise.all([
+    fileDigest(join(configHomeForTests ?? homedir(), ".cursor", "mcp.json")),
+    policy.projectResources
+      ? fileDigest(join(workingDirectory, ".cursor", "mcp.json"))
+      : Promise.resolve("excluded"),
+  ]);
+  return {
+    fingerprint: createHash("sha256")
+      .update(`user=${user}\u0000project=${project}`)
+      .digest("base64url"),
+    sources: { user, project },
+  };
+}
+
+/** Fingerprint of the MCP files a session's settings sources read. */
+export async function cursorMcpConfigFingerprint(state: SessionState): Promise<string> {
+  if (fingerprintForTests) return fingerprintForTests(state);
+  return (await cursorMcpConfigRevision(state)).fingerprint;
+}
+
+/**
+ * Which saved MCP configuration the attached agent was created from, for
+ * `/session/:id/runtime-health`. Absent while no agent is attached: a
+ * detached session has loaded nothing, which is how the backend tells "not
+ * yet applied" from "applied". Content-free digests only.
+ */
+export function publicCursorMcpConfig(
+  state: SessionState,
+): (CursorMcpConfigRevision & { builtAt: string }) | undefined {
+  if (!state.agent) return undefined;
+  const revision = attachedConfigRevisions.get(state);
+  return revision ? structuredClone(revision) : undefined;
+}
+
 async function attach(state: SessionState): Promise<SDKAgent> {
+  // Fingerprint before reading any configuration, so an edit racing this
+  // attach is seen as a change at the next boundary rather than missed.
+  // `builtAt` is taken before the read too: a lower bound on when the bytes
+  // behind the reported digests were read.
+  const builtAt = new Date().toISOString();
+  const revision = fingerprintForTests ? undefined : await cursorMcpConfigRevision(state);
+  const configKey = revision?.fingerprint ?? (await cursorMcpConfigFingerprint(state));
+  const recordAttachedConfig = () => {
+    attachedConfigKeys.set(state, configKey);
+    if (revision) attachedConfigRevisions.set(state, { ...revision, builtAt });
+    else attachedConfigRevisions.delete(state);
+  };
   const sessionPolicy = state.policy;
   const policy = resolveCursorExecutionPolicy(
     state.readOnly
@@ -348,9 +523,17 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       try {
         const resumed = await cursorAgent.resume(state.agentId, options);
         state.agent = resumed;
+        recordAttachedConfig();
+        markConfigResumePending(state, false);
         schedulePlanAccountRefresh();
         return resumed;
-      } catch {
+      } catch (error) {
+        if (state.configResumePending) {
+          throw new Error(
+            "Cursor could not reopen this conversation with the updated MCP configuration. The conversation was kept; retry, or start a new session to use the new servers.",
+            { cause: error },
+          );
+        }
         state.agentId = undefined;
       }
     }
@@ -365,6 +548,8 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     if (clearAgentScopedUsage(state)) state.revision += 1;
     state.agent = created;
     state.agentId = created.agentId;
+    recordAttachedConfig();
+    markConfigResumePending(state, false);
     schedulePlanAccountRefresh();
     return created;
   } catch (error) {
@@ -490,6 +675,8 @@ export async function detachAgent(state: SessionState): Promise<void> {
   const hostedMcpClose = state.hostedMcpClose;
   state.agent = null;
   state.attachedMcpKey = undefined;
+  attachedConfigKeys.delete(state);
+  attachedConfigRevisions.delete(state);
   state.workspaceWarmRelease = undefined;
   state.hostedMcpClose = undefined;
   state.hostedMcpTools = undefined;

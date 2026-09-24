@@ -1,6 +1,6 @@
 # 05 — Safe saving and export
 
-Status: Planned.  
+Status: Implemented (2026-09-24) — see the [implementation record](00-index.md#implementation-record).  
 Dependencies: [02](02-operation-contracts-and-durability.md),
 [03](03-client-controller-and-reconciliation.md).  
 Findings: R3.
@@ -119,3 +119,10 @@ Treat export as its own recoverable operation:
 Review slices: save metadata/preview; local atomic writer; container parity;
 receipt recovery; UI Save As and revision status. Do not announce container
 parity until the real isolated-container failure cases have run.
+
+## Implementation notes (2026-09-24)
+
+- `design-export-writer.ts`: repository-root paths only; same-directory temp file, `link()` for atomic no-clobber creation, fingerprint-checked `rename()` for explicit replacement (documented as check-then-rename), symlink refusal, per-destination serialization, bounded bytes; container parity through an owned `node` helper streamed over stdin.
+- `design-exports.ts`: preview (suggested `name-<id8>.orkdes`, collision reasons), save of one exact committed revision, recorded intent, digest-based reconciliation, non-regressing association, private backups of replaced files; startup turns a dead process's "writing" export into "unknown".
+- UI: `DesignExportDialog.tsx` (Save As, collision choices, wait-for-pending vs export committed revision, outcome check); footer shows the exported revision separately from workspace saving.
+- Not run: real-container export failure cases (helper-level tests only).

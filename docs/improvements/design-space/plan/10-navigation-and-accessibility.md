@@ -1,6 +1,6 @@
 # 10 — Canvas navigation and accessibility
 
-Status: Planned.  
+Status: Implemented (2026-09-24) — see the [implementation record](00-index.md#implementation-record).  
 Dependencies: [03](03-client-controller-and-reconciliation.md),
 [08](08-entry-readiness-and-library.md),
 [09](09-selection-and-inspector.md).  
@@ -106,3 +106,10 @@ testable without building a second canvas rendering engine.
 
 Review slices: math/view commands; pending gestures/numeric controls; keyboard
 and undo routing; responsive panels; preview input routing and isolation tests.
+
+## Implementation notes (2026-09-24)
+
+- `design-viewport.ts`: conversions, pointer-anchored zoom, fit all/selection, 100%, restore validation, wheel modifier handling, presets and clamps; view preferences per backend/environment/canvas (`design-view-prefs.ts`).
+- Gestures keep samples in refs and render once per animation frame; optimistic previews persist until the committed revision is installed; pointercancel/Escape before submission discard; keyboard move/resize (collapsed per burst); numeric frame fields.
+- Shortcuts with ownership rules and an accessible help dialog; live-region announcements; Inspector drawer in narrow panes; Preview mode (scroll/hover in the frame, navigation/scripts/network still blocked, Escape returns).
+- Not performed: manual screen-reader pass and Electron window QA.

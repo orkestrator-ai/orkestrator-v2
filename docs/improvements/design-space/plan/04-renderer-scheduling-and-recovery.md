@@ -1,6 +1,6 @@
 # 04 — Renderer scheduling and failure containment
 
-Status: Planned.  
+Status: Implemented (2026-09-24) — see the [implementation record](00-index.md#implementation-record).  
 Dependencies: [02](02-operation-contracts-and-durability.md).  
 Findings: R4.
 
@@ -111,3 +111,10 @@ real process terminates.
 
 Review slices: per-canvas commit lanes; immutable render/final-CAS boundary;
 bounded scheduler; supervised deadline/cleanup; real-browser fault qualification.
+
+## Implementation notes (2026-09-24)
+
+- Per-canvas commit lanes and a global guard in `design-service.ts` (compute outside locks, re-verify and commit under the lane).
+- `design-renderer.ts` / `design-render-queue.ts`: one worker, ≤16 admitted jobs, fairness across environment/canvas with priority aging, phase deadlines (queue 15 s, launch 15 s, context 5 s, run 15 s, cleanup 3 s, overall 45 s), browser generations, bounded close, deterministic capture inputs, health states and a cached on-demand probe.
+- Limitation: Playwright exposes no browser process handle, so a hung close is bounded by the deadline, not killed. A second worker was not evaluated.
+- Tests: `design-renderer.test.ts` (24, incl. one real-Chromium test), `design-operations.test.ts` (blocked render on one canvas does not block another).

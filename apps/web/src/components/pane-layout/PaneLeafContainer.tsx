@@ -282,6 +282,12 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   environmentId={environmentId}
                   isActive={isTabActive && isActive}
                   ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
+                  onClose={() => {
+                    // Closing the tab never deletes the design.
+                    const layoutStore = usePaneLayoutStore.getState();
+                    const owner = layoutStore.findPaneWithTab(tab.id, environmentId);
+                    if (owner) layoutStore.removeTab(owner.id, tab.id, environmentId);
+                  }}
                 />
               </LazyLoadBoundary>
             );

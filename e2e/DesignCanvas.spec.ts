@@ -1,16 +1,38 @@
 import { expect, test } from "@playwright/test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import {
+  registerDesignCommandHandlers,
+  type DesignCommandContext,
+} from "../apps/backend/src/core/design-commands";
+import { planDefaultDesignExportPath } from "../apps/backend/src/core/design-export-writer";
 import { DesignService } from "../apps/backend/src/core/design-service";
 import { runDesignAction } from "../apps/backend/src/core/design-tools";
 import { DESIGN_EVENT } from "@orkestrator/protocol/design-canvas";
+
+type Handler = (args: Record<string, unknown>, context: DesignCommandContext) => unknown;
 
 test("canvas edits, script isolation, missed events, conflict and reload", async ({
   page,
 }, testInfo) => {
   const dir = await mkdtemp(join(tmpdir(), "ork-design-browser-"));
+  const worktree = join(dir, "worktree");
+  await mkdir(worktree);
   const service = new DesignService(dir, () => {});
+  // The browser drives the real design command registry (v2 protocol) against
+  // a real service, runtime and repository worktree.
+  const handlers = new Map<string, Handler>();
+  registerDesignCommandHandlers((name, handler) => handlers.set(name, handler));
+  const context = {
+    design: service,
+    storage: {
+      getEnvironment: async (id: string) =>
+        id === "design-fixture"
+          ? { id, environmentType: "local", worktreePath: worktree }
+          : undefined,
+    },
+  } as unknown as DesignCommandContext;
   try {
     const canvas = await service.create("design-fixture", "Design QA");
     const { frame } = await service.createFrame(canvas.id, "design-fixture", 1, {
@@ -21,22 +43,16 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
       height: 400,
       html: `<style>body{margin:0;padding:24px;font-family:system-ui}h1{color:rgb(20,30,40);background-color:rgba(10,20,30,.4)}</style><h1 id="title">A better workspace</h1><script>document.body.textContent="EXECUTED"</script><img onerror="document.body.textContent='EXECUTED'" src="https://example.invalid/x"><template id="nested"><script>bad()</script><iframe src="data:text/html,bad"></iframe><frame src="bad"></frame></template><div id="target"></div>`,
     });
-    const changeGenerations: Array<string | undefined> = [];
-    await page.exposeFunction("designInvoke", (command: string, args: Record<string, unknown>) => {
-      if (command === "design_changes") {
-        changeGenerations.push(args.generation as string | undefined);
-        return service.changes(
-          String(args.canvasId),
-          "design-fixture",
-          args.generation as string | undefined,
-          args.after as number,
-        );
-      }
-      if (command === "design_action")
-        return runDesignAction(service, "design-fixture", args.action as string, args.input);
-      if (command === "design_save") return { filePath: args.filePath, revision: 1 };
-      throw new Error("Unexpected fixture command");
-    });
+    let snapshots = 0;
+    await page.exposeFunction(
+      "designInvoke",
+      async (command: string, args: Record<string, unknown>) => {
+        if (command === "design_snapshot") snapshots++;
+        const handler = handlers.get(command);
+        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        return handler(args, context);
+      },
+    );
     await page.goto(`/design-canvas?canvasId=${canvas.id}`);
     await expect(page.getByRole("button", { name: "title", exact: true })).toBeVisible();
     const hierarchy = page.getByRole("navigation", { name: "Design hierarchy" });
@@ -165,7 +181,11 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
     await expect(embedded.getByRole("heading")).toHaveCSS("position", "relative");
     await expect(embedded.getByRole("heading")).toHaveCSS("text-align", "center");
     await expect(embedded.getByRole("heading")).toHaveCSS("font-weight", "450");
-    expect((await service.getFrame(canvas.id, "design-fixture", frame.id)).revision).toBe(2);
+    // Local preview can show the styles before the backend commit is acknowledged.
+    await expect
+      .poll(async () => (await service.getFrame(canvas.id, "design-fixture", frame.id)).revision)
+      .toBe(2);
+    await expect(page.getByText("Saved in workspace")).toBeVisible();
     await page.getByRole("button", { name: "Switch tab" }).click();
     await service.mutate(canvas.id, "design-fixture", frame.id, 2, {
       html: "<h1 id='title'>Changed while away</h1>",
@@ -181,13 +201,12 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
       { event: DESIGN_EVENT, canvasId: canvas.id, revision: 3 },
     );
     await expect(embedded.getByRole("heading")).toHaveText("Changed while away");
-    const undefinedGenerations = changeGenerations.filter((value) => value === undefined).length;
+    // Reconnection discards the generation and repairs from an authoritative snapshot.
+    const snapshotsBeforeReconnect = snapshots;
     await page.evaluate(() =>
       window.dispatchEvent(new CustomEvent("orkestrator-fixture:native-event-stream-connected")),
     );
-    await expect
-      .poll(() => changeGenerations.filter((value) => value === undefined).length)
-      .toBeGreaterThan(undefinedGenerations);
+    await expect.poll(() => snapshots).toBeGreaterThan(snapshotsBeforeReconnect);
     await page.reload();
     await expect(embedded.getByRole("heading")).toHaveText("Changed while away");
     await page.getByRole("button", { name: "title", exact: true }).click();
@@ -196,7 +215,11 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
       html: "<h1 id='title'>Agent's newer edit</h1>",
     });
     await page.getByRole("button", { name: "Apply styles" }).click();
-    await expect(page.getByRole("alert")).toContainText("Design revision conflict:");
+    // The stale selector edit is rejected, never retargeted; the draft stays for review.
+    await expect(
+      page.getByRole("alert").filter({ hasText: "Design revision conflict:" }).first(),
+    ).toBeVisible();
+    await expect(page.getByRole("region", { name: "Edits needing review" })).toBeVisible();
     expect((await service.getFrame(canvas.id, "design-fixture", frame.id)).html).toContain(
       "Agent's newer edit",
     );
@@ -230,6 +253,10 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
     expect(inspected).toMatchObject({ revision: 7, element: { tag: "strong", text: "Replaced" } });
     await page.getByRole("button", { name: "Switch tab" }).click();
     await page.getByRole("button", { name: "Close inspector" }).click();
+    await expect(page.getByRole("complementary", { name: "Element inspector" })).toBeHidden();
+    await expect(hierarchy).toBeVisible();
+    // Branches load lazily: expand the section to reach the moved element.
+    await page.getByRole("treeitem", { name: "parent (section)" }).press("ArrowRight");
     await page.getByRole("button", { name: "replacement", exact: true }).click();
     await page.getByRole("button", { name: "Resize selected element" }).press("ArrowRight");
     await expect
@@ -239,8 +266,36 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
     expect((await service.getFrame(canvas.id, "design-fixture", frame.id)).html).toContain(
       "box-sizing: border-box",
     );
-    await page.getByRole("button", { name: "Save design to repository" }).click();
-    await expect(page.getByText("Saved Design-QA.orkdes", { exact: true })).toBeVisible();
+    // Export writes the exact committed revision to a collision-safe default path.
+    const exportPath = planDefaultDesignExportPath("Design QA", canvas.id);
+    // Canvas revision (frame creation also advanced it), not the frame revision.
+    const exportRevision = (await service.get(canvas.id, "design-fixture")).revision;
+    await page.getByRole("button", { name: "Export design to repository" }).click();
+    const exportDialog = page.getByRole("dialog", { name: "Export design to repository" });
+    await expect(exportDialog.getByText(`New file: ${exportPath} will be created.`)).toBeVisible();
+    await exportDialog.getByRole("button", { name: `Export revision ${exportRevision}` }).click();
+    await expect(
+      exportDialog.getByText(`Exported revision ${exportRevision} to ${exportPath}`),
+    ).toBeVisible();
+    expect(JSON.parse(await readFile(join(worktree, exportPath), "utf8"))).toMatchObject({
+      format: "orkdes",
+      version: 1,
+      id: canvas.id,
+      revision: exportRevision,
+    });
+    await exportDialog.getByRole("button", { name: "Done" }).click();
+    // The footer keeps workspace saving and repository export states separate.
+    const footer = page.getByRole("contentinfo");
+    await expect(
+      footer.getByText(`Exported revision ${exportRevision} to ${exportPath}`),
+    ).toBeVisible();
+    // The earlier rejected style draft still needs review until it is discarded.
+    await expect(footer.getByText("Needs review")).toBeVisible();
+    await page
+      .getByRole("region", { name: "Edits needing review" })
+      .getByRole("button", { name: "Discard draft" })
+      .click();
+    await expect(footer.getByText("Saved in workspace")).toBeVisible();
     const downloadPromise = page.waitForEvent("download");
     await page.getByRole("button", { name: "Download orkdes" }).click();
     const download = await downloadPromise;

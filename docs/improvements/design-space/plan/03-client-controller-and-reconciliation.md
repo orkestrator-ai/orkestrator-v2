@@ -1,6 +1,6 @@
 # 03 — Client controller and reconciliation
 
-Status: Planned.  
+Status: Implemented (2026-09-24) — see the [implementation record](00-index.md#implementation-record).  
 Dependencies: [02](02-operation-contracts-and-durability.md).  
 Findings: R1, R2, E1.
 
@@ -120,3 +120,10 @@ them to recover.
 Review in slices: controller extraction with behavior parity; awaitable sync
 and stale-response tests; new mutation flow; durable token/draft recovery; UI
 status states. Retain the old backend fallback until step 15 compatibility QA.
+
+## Implementation notes (2026-09-24)
+
+- `design-controller.ts` + `stores/designStore.ts`: one projection, hint listener and intent queue per backend/environment/canvas; eviction of clean inactive projections (16 / 32 MiB); generation/epoch guards; bounded exponential backoff with jitter.
+- Tokens are persisted with drafts before execution (`design-drafts.ts`, `localStorage`, 8/canvas, 32/client, 2 MiB — a deviation from backend compose-draft storage). Restored drafts need an explicit Resume; lost execute responses reconcile by status.
+- UI states: Saving / Saved in workspace / Needs review / Offline, with Retry, Apply to current frame, Reselect, Cancel queued edit and Discard draft (`DesignStatus.tsx`).
+- Tests: `design-controller.test.ts`, `design-drafts.test.ts`, `DesignCanvasTab.test.tsx`.

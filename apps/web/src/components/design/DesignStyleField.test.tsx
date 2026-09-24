@@ -115,3 +115,88 @@ test("custom input mode resets to the stylesheet preset when the selected elemen
   );
   expect(screen.getByRole("combobox", { name: "font-weight" })).toBeTruthy();
 });
+
+test("the color picker starts from the computed value when there is no inline value", () => {
+  setSupports(() => true);
+  setContext({
+    fillStyle: "",
+    fillRect: mock(() => undefined),
+    getImageData: mock(() => ({ data: new Uint8ClampedArray([10, 20, 30, 102]) })),
+  });
+  const onChange = mock((_value: string) => undefined);
+  render(
+    <DesignStyleField
+      property={{ name: "background-color", label: "Background", color: true }}
+      value=""
+      computed="rgba(10, 20, 30, .4)"
+      onChange={onChange}
+    />,
+  );
+  expect(
+    (screen.getByRole("textbox", { name: "background-color" }) as HTMLInputElement).placeholder,
+  ).toBe("rgba(10, 20, 30, .4)");
+  fireEvent.change(screen.getByLabelText("Pick background-color"), {
+    target: { value: "#336699" },
+  });
+  expect(onChange).toHaveBeenCalledWith("rgba(51, 102, 153, 0.4)");
+});
+
+test("the stylesheet choice names the computed value", () => {
+  render(
+    <DesignStyleField
+      property={{ name: "position", label: "Position", options: ["static", "relative"] }}
+      value=""
+      computed="static"
+      onChange={() => undefined}
+    />,
+  );
+  expect(screen.getByRole("combobox", { name: "position" }).textContent).toContain(
+    "Use stylesheet (static)",
+  );
+});
+
+test("errors, notes, and change state are associated with the field", () => {
+  const onReset = mock(() => undefined);
+  const onRevert = mock(() => undefined);
+  const view = render(
+    <DesignStyleField
+      property={{ name: "width", label: "Width" }}
+      value="bogus"
+      computed="100px"
+      inline
+      changed
+      error="Not a valid value for width"
+      note="hidden while invalid"
+      onChange={() => undefined}
+      onReset={onReset}
+      onRevert={onRevert}
+    />,
+  );
+  const input = screen.getByRole("textbox", { name: "width" });
+  expect(input.getAttribute("aria-invalid")).toBe("true");
+  expect(input.getAttribute("data-changed")).toBe("true");
+  const described = input
+    .getAttribute("aria-describedby")!
+    .split(" ")
+    .map((id) => document.getElementById(id)?.textContent);
+  expect(described).toContain("Not a valid value for width");
+  expect(described.some((text) => text?.includes("computed 100px"))).toBe(true);
+  expect(screen.queryByText("hidden while invalid") === null).toBe(true);
+  expect(screen.getByText("inline")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Reset width" }));
+  fireEvent.click(screen.getByRole("button", { name: "Revert width" }));
+  expect(onReset).toHaveBeenCalledTimes(1);
+  expect(onRevert).toHaveBeenCalledTimes(1);
+
+  view.rerender(
+    <DesignStyleField
+      property={{ name: "width", label: "Width" }}
+      value=""
+      computed="100px"
+      disabled
+      onChange={() => undefined}
+    />,
+  );
+  expect(screen.getByRole("textbox", { name: "width" }).getAttribute("aria-invalid")).toBeNull();
+  expect((screen.getByRole("textbox", { name: "width" }) as HTMLInputElement).disabled).toBe(true);
+});

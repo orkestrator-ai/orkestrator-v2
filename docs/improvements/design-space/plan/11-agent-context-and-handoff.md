@@ -1,6 +1,6 @@
 # 11 — Agent context and implementation handoff
 
-Status: Planned.  
+Status: Implemented (2026-09-24) — see the [implementation record](00-index.md#implementation-record).  
 Dependencies: [02](02-operation-contracts-and-durability.md),
 [07](07-history-and-document-lifecycle.md),
 [08](08-entry-readiness-and-library.md),
@@ -121,3 +121,10 @@ Define a versioned, bounded `DesignContextReference` containing:
 Review slices: persistent associations; resume UI; structured composer context;
 checkpoint comparison; handoff; real-agent qualification. Do not expand provider
 support as incidental work in this step.
+
+## Implementation notes (2026-09-24)
+
+- Session links in the private record (≤8; environment + tab id, platform, role) via `design_session_link`/`unlink`; the launch links its design conversation.
+- `DesignAgentDialog.tsx` + `design-agent-context.ts`: revisioned, bounded design-context annotations (new `design` annotation source) added to a draft without sending; resume/focus linked conversations; closed tabs reported as ended; implementation handoff drafts (≤8 frames, 32 KiB) that ask the agent to inspect the existing architecture and never auto-approve, commit or deploy.
+- Limitation: a brand-new native tab's composer shows annotations as text only, so context is inserted as visible text there.
+- Not run: live Claude/Codex design-tool cycle.

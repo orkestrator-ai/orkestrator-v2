@@ -22,7 +22,7 @@ Refreshed 2026-09-17 against the current tree.
 | --- | --- | --- |
 | [agent-engines.md](architecture/agent-engines.md) | Living | Six-engine architecture. Coordinator tiers match `coordinator-providers.ts`. |
 | [coordinator.md](architecture/coordinator.md) | Living | Current Coordinator: ownership, tiers, async delegation, MCP actions. Remaining work is `todo/coordinator-to-implement.md`. |
-| [design-canvas.md](architecture/design-canvas.md) | Living | HTML/CSS canvas, revisions, design MCP and .orkdes files. |
+| [design-canvas.md](architecture/design-canvas.md) | Living | HTML/CSS canvas, recoverable operations, private records, history, sync, safe export, design MCP and .orkdes files. |
 | [control-mcp.md](architecture/control-mcp.md) | Living | Control MCP operator guide. |
 | [mcp-management.md](architecture/mcp-management.md) | Living | Per-provider MCP server management: sources, precedence, safe writes, secrets, apply states, evidence. |
 | [remote-gateway.md](architecture/remote-gateway.md) | Living | Standalone backend, Tailscale Serve, flags, troubleshooting. |
@@ -64,6 +64,7 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 | Document | Status | Notes |
 | --- | --- | --- |
 | [sdk-coverage/00-index.md](plans/sdk-coverage/00-index.md) | Active | Living index. 01–03 Done; 04–10 and 14–15 Active; 11–13 code done, QA leftover. |
+| [design-space/plan/00-index.md](improvements/design-space/plan/00-index.md) | Active | Design canvas plan. Steps 01–14 implemented (recoverable operations, private records, history, safe export, deltas, library, inspector, navigation, agent handoff); step 15 partly qualified. The isolated real-stack run is blocked by a pre-existing Electron startup failure; live agents, Docker export and manual accessibility passes are outstanding. Findings: [design-space.md](improvements/design-space.md). |
 | [Web page annotations](improvements/web-page-annotations/plan/00-index.md) | Active | Detailed implementation plan; all steps not started. Findings in [web-page-annotations.md](improvements/web-page-annotations.md). |
 | [improvements/browser/plan/00-index.md](improvements/browser/plan/00-index.md) | Active | Browser preview plan. 01–13 implemented behind disabled-by-default capabilities; 14–15 partly evidenced. Browser, Safari/iOS, two-machine, and Docker Desktop runs are outstanding. |
 | [mcp/plan/00-index.md](improvements/mcp/plan/00-index.md) | Active | MCP server management plan. Steps 02–12 implemented; container-private writes (13) and live-probe/real-stack evidence (01, 14) outstanding. Findings: [mcp.md](improvements/mcp.md). |

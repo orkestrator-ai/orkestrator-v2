@@ -32,6 +32,7 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
+import { openDesignCanvasTab } from "@/components/design/design-open-tab";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
 import { agentSettingsTiers } from "@/lib/agent-settings";
@@ -1249,6 +1250,19 @@ export function TerminalContainer({
         }
       }
 
+      if (type === "design-canvas")
+        return openDesignCanvasTab({
+          environmentId,
+          canvasId: options?.canvasId,
+          placement: options?.designPlacement,
+          requestedTabId: options?.tabId,
+          allTabs,
+          activePaneId,
+          maxTabs: MAX_TABS,
+          addTab,
+          onTabLimit: () => showTabLimitReachedToast(MAX_TABS),
+        });
+
       // Selected durable workflows use caller-owned ids as idempotent focus
       // intents. Other callers retain collision reporting so they can roll back
       // any state they created specifically for a new tab.
@@ -1272,20 +1286,6 @@ export function TerminalContainer({
         rendererDebugLog("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
         showTabLimitReachedToast(MAX_TABS);
         return false;
-      }
-
-      if (type === "design-canvas") {
-        if (
-          !options?.canvasId ||
-          usePaneLayoutStore.getState().hydration.get(environmentId) !== "done"
-        )
-          return false;
-        const newTab: TabInfo = {
-          id: createUniqueTabId("design"),
-          type: "design-canvas",
-          designCanvasData: { canvasId: options.canvasId },
-        };
-        return usePaneLayoutStore.getState().addTabInSplit(activePaneId, newTab, environmentId);
       }
 
       if (type === "browser") {

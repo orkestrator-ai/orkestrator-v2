@@ -1,4 +1,5 @@
 import { createDesignMcp } from "./design-tools.js";
+import { resolveDesignDestination } from "./design-exports.js";
 import type { DesignService } from "./design-service.js";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -757,7 +758,9 @@ export class AgentToolsServer {
       const handler = createMcpHandler(
         () =>
           url.pathname === "/design-mcp" && this.design
-            ? createDesignMcp(this.design, scope.environmentId)
+            ? createDesignMcp(this.design, scope.environmentId, () =>
+                resolveDesignDestination(this.storage, scope.environmentId),
+              )
             : createAgentToolServer(
                 this.storage,
                 scope,

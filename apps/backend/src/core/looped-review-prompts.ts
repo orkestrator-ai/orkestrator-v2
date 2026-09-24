@@ -5,6 +5,7 @@ import {
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import {
+  buildReviewAnalysisSections,
   buildReviewInstructionBlock,
   buildStructuredReviewOutputGuide,
   type PersistedReviewPackage,
@@ -377,8 +378,6 @@ export function createDiscoveryPrompt(input: {
 
 ${buildReviewInstructionBlock(input.reviewPackage.targetBranch, input.reviewInstruction)}
 
-${buildStructuredReviewOutputGuide()}
-
 ## Review package
 
 ${
@@ -387,7 +386,20 @@ ${
     : JSON.stringify(input.reviewPackage, null, 2)
 }
 
-${reference ? PACKAGED_REVIEW_WORKING_RULES : INLINE_REVIEW_WORKING_RULES}`;
+${reference ? PACKAGED_REVIEW_WORKING_RULES : INLINE_REVIEW_WORKING_RULES}
+
+${buildReviewAnalysisSections({
+  codeReviewHeading: "## Code review",
+  coverageHeading: "## Test coverage review",
+  scopeStep:
+    "Review the complete range the package pins, obtained as described under How to work above.",
+  clarifyingStep:
+    "Do not ask clarifying questions — this is an automated review. Make your best judgment for any ambiguous points and record the assumption as a limitation.",
+  validationStep:
+    "Incorporate the package's validation evidence as described under How to work above; do not rerun the full test suite, typecheck, or build.",
+})}
+
+${buildStructuredReviewOutputGuide()}`;
 }
 
 /**

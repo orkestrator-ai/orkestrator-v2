@@ -1,16 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-interface ReadRecord {
-  name: string;
-  reason: string;
-  at: number;
-}
-
-declare global {
-  interface Window {
-    readCoordinatorProbe?: { reads: ReadRecord[] };
-  }
-}
+// `window.readCoordinatorProbe` is declared by the fixture.
 
 /**
  * Headless Chromium keeps every page `visible`, even behind another tab, so

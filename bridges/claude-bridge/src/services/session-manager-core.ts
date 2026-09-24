@@ -149,6 +149,29 @@ export class ContextUsageRequestTimeoutError extends Error {
   }
 }
 
+/**
+ * Race an SDK control request against a deadline. The SDK exposes no way to
+ * cancel a pending control request, so a late answer is simply discarded; the
+ * timer is unref'd and always cleared so it never holds the process open.
+ */
+export async function withControlRequestTimeout<T>(
+  request: Promise<T>,
+  timeoutMs: number,
+  createTimeoutError: () => Error,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(createTimeoutError()), timeoutMs);
+    timeout.unref?.();
+  });
+
+  try {
+    return await Promise.race([request, timeoutPromise]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 /** Record that a caller read or hydrated this session's state. */
 export function touchSession(session: SessionState): void {
   session.lastAccessedAt = Date.now();
@@ -559,19 +582,11 @@ export async function getStructuredUsageWithTimeout(
   getStructuredUsage: () => Promise<unknown>,
   queryControl: NonNullable<SessionState["queryControl"]>,
 ): Promise<unknown> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
-      reject(new StructuredUsageRequestTimeoutError());
-    }, STRUCTURED_USAGE_REQUEST_TIMEOUT_MS);
-    timeout.unref?.();
-  });
-
-  try {
-    return await Promise.race([getStructuredUsage.call(queryControl), timeoutPromise]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
+  return withControlRequestTimeout(
+    getStructuredUsage.call(queryControl),
+    STRUCTURED_USAGE_REQUEST_TIMEOUT_MS,
+    () => new StructuredUsageRequestTimeoutError(),
+  );
 }
 
 export type StructuredUsageRefreshResult = "updated" | "unchanged" | "timed-out";
@@ -935,23 +950,12 @@ export async function buildClaudeUsageSnapshot(
       // unlike the full form it does not issue token-counting API requests.
       // It is still a control round trip the CLI may never answer, so it is
       // bounded; see `CONTEXT_USAGE_REQUEST_TIMEOUT_MS`.
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new ContextUsageRequestTimeoutError()),
-          CONTEXT_USAGE_REQUEST_TIMEOUT_MS,
-        );
-        timeout.unref?.();
-      });
-      try {
-        const raw = await Promise.race([
-          queryControl.getContextUsage({ detail: "summary" }),
-          timeoutPromise,
-        ]);
-        context = parseClaudeContextUsage(raw);
-      } finally {
-        if (timeout) clearTimeout(timeout);
-      }
+      const raw = await withControlRequestTimeout(
+        queryControl.getContextUsage({ detail: "summary" }),
+        CONTEXT_USAGE_REQUEST_TIMEOUT_MS,
+        () => new ContextUsageRequestTimeoutError(),
+      );
+      context = parseClaudeContextUsage(raw);
     } catch (error) {
       debugLog("[session-manager] Context usage control request failed:", error);
     }

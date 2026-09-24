@@ -26,6 +26,7 @@ import {
   sendPrompt,
   track,
   waitFor,
+  withControlRequestTimeout,
 } from "./session-manager-test-harness.js";
 
 // ---------------------------------------------------------------------------
@@ -1716,5 +1717,81 @@ describe("claude usage snapshot", () => {
     );
     expect(session.status).toBe("idle");
     expect(session.usage).toMatchObject({ usedTokens: 205, estimated: true });
+  });
+
+  test("discards a context report that arrives after the deadline", async () => {
+    let answerLate: ((value: unknown) => void) | undefined;
+    queryControlOverrides.getContextUsage = mock(
+      () =>
+        new Promise<unknown>((resolve) => {
+          answerLate = resolve;
+        }),
+    );
+
+    const { session } = await runPromptWithMessages([
+      {
+        type: "result",
+        subtype: "success",
+        modelUsage: {
+          "claude-opus-5": { inputTokens: 5, outputTokens: 200, contextWindow: 200000 },
+        },
+      },
+    ]);
+    const settledUsage = session.usage;
+    expect(settledUsage).toMatchObject({ usedTokens: 205, estimated: true });
+
+    answerLate?.({ totalTokens: 51_200, maxTokens: 200_000, percentage: 25.6 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(session.status).toBe("idle");
+    expect(session.usage).toBe(settledUsage);
+  });
+});
+
+describe("withControlRequestTimeout", () => {
+  class TestTimeoutError extends Error {}
+
+  test("returns the answer when the request settles before the deadline", async () => {
+    await expect(
+      withControlRequestTimeout(Promise.resolve("answer"), 1_000, () => new TestTimeoutError()),
+    ).resolves.toBe("answer");
+  });
+
+  test("propagates a request failure that beats the deadline", async () => {
+    await expect(
+      withControlRequestTimeout(
+        Promise.reject(new Error("control channel closed")),
+        1_000,
+        () => new TestTimeoutError(),
+      ),
+    ).rejects.toThrow("control channel closed");
+  });
+
+  test("rejects with the caller's error when the request never answers", async () => {
+    await expect(
+      withControlRequestTimeout(new Promise(() => {}), 5, () => new TestTimeoutError()),
+    ).rejects.toBeInstanceOf(TestTimeoutError);
+  });
+
+  test("ignores a late rejection without surfacing an unhandled rejection", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      let failLate: ((error: Error) => void) | undefined;
+      const request = new Promise<never>((_, reject) => {
+        failLate = reject;
+      });
+
+      await expect(
+        withControlRequestTimeout(request, 5, () => new TestTimeoutError()),
+      ).rejects.toBeInstanceOf(TestTimeoutError);
+
+      failLate?.(new Error("query closed"));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 });

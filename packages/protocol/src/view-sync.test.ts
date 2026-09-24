@@ -175,12 +175,11 @@ describe("capability fallback", () => {
       kind: "outcome",
       outcome: { status: "unchanged", generation: "g", revision: 1 },
     });
-    expect(
-      classifyViewSnapshotResponse({ entries: ["a"], generation: "g", revision: 0 }, isBody),
-    ).toEqual({
+    const stampedBody = { entries: ["a"], generation: "g", revision: 0 };
+    expect(classifyViewSnapshotResponse(stampedBody, isBody)).toEqual({
       kind: "stamped",
       stamp: { generation: "g", revision: 0 },
-      snapshot: { entries: ["a"], generation: "g", revision: 0 },
+      snapshot: stampedBody,
     });
     expect(classifyViewSnapshotResponse({ entries: [] }, isBody)).toEqual({
       kind: "legacy",

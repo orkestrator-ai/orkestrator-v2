@@ -1,10 +1,16 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { builtinModules } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
-import { bundleElectron, ELECTRON_ENTRYPOINTS, formatBuildLogs } from "./electron-bundle.js";
+import {
+  bundleElectron,
+  ELECTRON_ENTRYPOINTS,
+  formatBuildLogs,
+  runElectronBundleCli,
+} from "./electron-bundle.js";
+import { buildDesktop } from "./build.js";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
 const builtins = new Set(builtinModules);
@@ -50,4 +56,79 @@ describe("Electron bundle", () => {
     }
     expect(unresolvable).toEqual([]);
   }, 60_000);
+
+  test("lists every hard-coded BrowserWindow preload as a bundle entrypoint", async () => {
+    const electronRoot = path.join(packageRoot, "electron");
+    const sources = (await readdir(electronRoot, { recursive: true })).filter(
+      (file) => file.endsWith(".ts") && !file.endsWith(".test.ts"),
+    );
+    const loaded = new Set<string>();
+    for (const source of sources) {
+      const text = await readFile(path.join(electronRoot, source), "utf8");
+      for (const match of text.matchAll(
+        /preload:\s*path\.join\(\s*options\.dirname,\s*["']([^"']+\.js)["']/g,
+      )) {
+        loaded.add(`electron/${match[1]!.replace(/\.js$/, ".ts")}`);
+      }
+    }
+    expect(loaded.size).toBeGreaterThan(0);
+    expect([...loaded].sort()).toEqual(
+      ELECTRON_ENTRYPOINTS.filter((entrypoint) => entrypoint !== "electron/main.ts").sort(),
+    );
+  });
+
+  test("reports a failed bundle with source position through the CLI path", async () => {
+    const fixture = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-bundle-failure-"));
+    try {
+      const electron = path.join(fixture, "electron");
+      await mkdir(electron);
+      await writeFile(path.join(electron, "main.ts"), 'import "./missing.js";\n');
+      await writeFile(path.join(electron, "preload.ts"), "export {};\n");
+      await writeFile(path.join(electron, "toolchain-bootstrap-preload.ts"), "export {};\n");
+      const errors: string[] = [];
+      expect(
+        await runElectronBundleCli(fixture, path.join(fixture, "dist"), (message) =>
+          errors.push(message),
+        ),
+      ).toBe(false);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatch(/error: .*main\.ts:1:\d+: .*missing/);
+    } finally {
+      await rm(fixture, { recursive: true, force: true });
+    }
+  });
+
+  test("production build reports a failed bundle and exits unsuccessfully", async () => {
+    const errors: string[] = [];
+    let removedOutput = false;
+    const status = await buildDesktop({
+      typecheck: () => 0,
+      removeOutput: () => {
+        removedOutput = true;
+      },
+      bundle: async () =>
+        ({
+          success: false,
+          outputs: [],
+          logs: [{ level: "error", message: "bundle failure", position: null }],
+        }) as unknown as Bun.BuildOutput,
+      reportError: (message) => errors.push(message),
+    });
+    expect(removedOutput).toBe(true);
+    expect(status).toBe(1);
+    expect(errors).toEqual(["error: bundle failure"]);
+  });
+
+  test("formats positioned warnings", () => {
+    const output = {
+      logs: [
+        {
+          level: "warning",
+          message: "check this import",
+          position: { file: "/src/main.ts", line: 4, column: 7 },
+        },
+      ],
+    } as unknown as Bun.BuildOutput;
+    expect(formatBuildLogs(output)).toBe("warning: /src/main.ts:4:7: check this import");
+  });
 });

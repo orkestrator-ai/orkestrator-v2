@@ -50,9 +50,9 @@ describe("monorepo orchestration scripts", () => {
     const bundle = read("apps/desktop/scripts/electron-bundle.ts");
     const dev = read("apps/desktop/scripts/dev.ts");
     const lifecycle = read("apps/desktop/scripts/dev/lifecycle.ts");
-    expect(build).toContain("result.status !== 0");
+    expect(build).toContain("result.status ?? 1");
     expect(build).toContain('run("bunx", ["tsc", "--noEmit"');
-    expect(build).toContain("const result = await bundleElectron(");
+    expect(build).toContain("dependencies.bundle ?? bundleElectron");
     expect(build).toContain("if (!result.success)");
     expect(bundle).toContain("Bun.build(");
     expect(bundle).toContain('"electron/main.ts"');
@@ -62,8 +62,10 @@ describe("monorepo orchestration scripts", () => {
     expect(build).toContain("rmSync(output");
     // Development must bundle like production: a `tsc` emit leaves workspace
     // imports pointing at raw `.ts` sources that Electron's Node cannot run.
-    expect(lifecycle).toContain("await bundleElectron(");
-    expect(lifecycle).not.toMatch(/["']tsc["']/);
+    expect(lifecycle).toContain('spawnSync("bunx", ["tsc", "--noEmit"');
+    expect(lifecycle).toContain(
+      "await compileElectronForDevelopment(profile.logDir, dependencies)",
+    );
     expect(dev).toContain("await startDevelopment");
     expect(dev).toContain("process.exitCode = 1");
     expect(lifecycle).toContain("killOwnedChild(electron");

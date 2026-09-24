@@ -12,20 +12,42 @@ if (process.platform === "win32") {
 const packageRoot = path.resolve(import.meta.dir, "..");
 const output = path.join(packageRoot, "dist");
 
-function run(command: string, args: string[]): void {
+function run(command: string, args: string[]): number {
   const result = spawnSync(command, args, { cwd: packageRoot, stdio: "inherit", env: process.env });
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  return result.status ?? 1;
 }
 
-run("bunx", ["tsc", "--noEmit", "-p", "tsconfig.electron.json"]);
-rmSync(output, { recursive: true, force: true });
+export async function buildDesktop(
+  dependencies: {
+    typecheck?: () => number;
+    removeOutput?: () => void;
+    bundle?: typeof bundleElectron;
+    reportError?: (message: string) => void;
+    reportArtifact?: (message: string) => void;
+  } = {},
+): Promise<number> {
+  const status = (
+    dependencies.typecheck ??
+    (() => run("bunx", ["tsc", "--noEmit", "-p", "tsconfig.electron.json"]))
+  )();
+  if (status !== 0) return status;
+  (dependencies.removeOutput ?? (() => rmSync(output, { recursive: true, force: true })))();
 
-const result = await bundleElectron(packageRoot, path.join(output, "electron"));
-if (!result.success) {
-  console.error(formatBuildLogs(result));
-  process.exit(1);
+  const result = await (dependencies.bundle ?? bundleElectron)(
+    packageRoot,
+    path.join(output, "electron"),
+  );
+  if (!result.success) {
+    (dependencies.reportError ?? console.error)(formatBuildLogs(result));
+    return 1;
+  }
+
+  for (const artifact of result.outputs) {
+    (dependencies.reportArtifact ?? console.log)(
+      `${path.relative(packageRoot, artifact.path)} ${artifact.size} bytes`,
+    );
+  }
+  return 0;
 }
 
-for (const artifact of result.outputs) {
-  console.log(`${path.relative(packageRoot, artifact.path)} ${artifact.size} bytes`);
-}
+if (import.meta.main) process.exitCode = await buildDesktop();

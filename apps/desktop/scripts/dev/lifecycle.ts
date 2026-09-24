@@ -7,6 +7,7 @@ import {
   resolveRuntimeProfile,
   statusManifestPath,
   type RuntimeProfile,
+  type RuntimeProfileRoots,
   type RuntimeProcessName,
   type RuntimeStatusManifest,
 } from "../../electron/runtime-profile.js";
@@ -129,6 +130,7 @@ async function waitForUrl(url: string, timeoutMs = 45_000): Promise<void> {
 async function resolveStoredProfile(
   args: DevArguments,
   flavor: "development" | "agent-test",
+  roots?: RuntimeProfileRoots,
 ): Promise<RuntimeProfile> {
   const provisional = resolveRuntimeProfile({
     repositoryRoot,
@@ -136,6 +138,7 @@ async function resolveStoredProfile(
     flavor,
     credentialSources: args.credentialSources,
     agentPlatforms: args.agentPlatforms,
+    roots,
   });
   const stored = path.join(provisional.profileRoot, "profile.json");
   return readProfile(stored).catch(() => provisional);
@@ -361,11 +364,55 @@ export function assertElectronReadiness(
   }
 }
 
+type ElectronCompilationDependencies = {
+  typecheck?: () => {
+    status: number | null;
+    stdout?: string | null;
+    stderr?: string | null;
+    error?: Error;
+  };
+  bundle?: typeof bundleElectron;
+};
+
+export async function compileElectronForDevelopment(
+  logDir: string,
+  dependencies: ElectronCompilationDependencies = {},
+): Promise<void> {
+  const logPath = path.join(logDir, "build.log");
+  const log = createBoundedLogWriter(logPath);
+  const checked = (
+    dependencies.typecheck ??
+    (() =>
+      spawnSync("bunx", ["tsc", "--noEmit", "-p", "tsconfig.electron.json"], {
+        cwd: packageRoot,
+        encoding: "utf8",
+      }))
+  )();
+  await log.write(
+    `${checked.stdout ?? ""}${checked.stderr ?? ""}${checked.error ? `${checked.error.message}\n` : ""}`,
+  );
+  if (checked.status !== 0) throw new Error(`Electron compilation failed; see ${logPath}`);
+
+  // Bundle exactly as production does. A `tsc` emit leaves workspace
+  // imports bare, and Electron's Node cannot run their raw `.ts` sources.
+  const build = await (dependencies.bundle ?? bundleElectron)(
+    packageRoot,
+    path.join(packageRoot, "dist", "electron"),
+  );
+  await log.write(
+    build.success
+      ? build.outputs.map((artifact) => `${path.relative(packageRoot, artifact.path)}\n`).join("")
+      : `${formatBuildLogs(build)}\n`,
+  );
+  if (!build.success) throw new Error(`Electron compilation failed; see ${logPath}`);
+}
+
 export async function startDevelopment(
   args: DevArguments,
   flavor: "development" | "agent-test",
+  dependencies: ElectronCompilationDependencies & { roots?: RuntimeProfileRoots } = {},
 ): Promise<void> {
-  const existingProfile = await resolveStoredProfile(args, flavor);
+  const existingProfile = await resolveStoredProfile(args, flavor, dependencies.roots);
   const existingStatusPath = statusManifestPath(existingProfile);
   const existingStatus = await readStatus(existingStatusPath);
   const existingLive = existingStatus ? liveness(existingStatus) : null;
@@ -390,6 +437,7 @@ export async function startDevelopment(
     gatewayPort,
     credentialSources: args.credentialSources,
     agentPlatforms: args.agentPlatforms,
+    roots: dependencies.roots,
   });
   const profilePath = await initializeProfile(profile);
   await seedAgentTestProfileState(profile, flavor);
@@ -415,16 +463,7 @@ export async function startDevelopment(
   await atomicWriteJson(statusPath, status);
 
   try {
-    // Bundle exactly as production does. A `tsc` emit leaves workspace
-    // imports bare, and Electron's Node cannot run their raw `.ts` sources.
-    const build = await bundleElectron(packageRoot, path.join(packageRoot, "dist", "electron"));
-    await createBoundedLogWriter(path.join(profile.logDir, "build.log")).write(
-      build.success
-        ? build.outputs.map((artifact) => `${path.relative(packageRoot, artifact.path)}\n`).join("")
-        : `${formatBuildLogs(build)}\n`,
-    );
-    if (!build.success)
-      throw new Error(`Electron compilation failed; see ${path.join(profile.logDir, "build.log")}`);
+    await compileElectronForDevelopment(profile.logDir, dependencies);
 
     if (args.fixtureEnvironments.includes("container")) {
       const inspected = spawnSync("docker", ["image", "inspect", profile.dockerImage], {

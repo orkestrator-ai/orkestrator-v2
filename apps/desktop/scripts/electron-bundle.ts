@@ -51,13 +51,20 @@ export function formatBuildLogs(result: Bun.BuildOutput): string {
     .join("\n");
 }
 
+export async function runElectronBundleCli(
+  packageRoot: string,
+  outdir: string,
+  reportError: (message: string) => void = console.error,
+): Promise<boolean> {
+  const result = await bundleElectron(packageRoot, outdir);
+  if (!result.success) reportError(formatBuildLogs(result));
+  return result.success;
+}
+
 // `bun scripts/electron-bundle.ts` bundles into dist/electron for callers that
 // cannot run Bun.build themselves, such as the Node-hosted Playwright suites.
 if (import.meta.main) {
   const packageRoot = path.resolve(import.meta.dir, "..");
-  const result = await bundleElectron(packageRoot, path.join(packageRoot, "dist", "electron"));
-  if (!result.success) {
-    console.error(formatBuildLogs(result));
+  if (!(await runElectronBundleCli(packageRoot, path.join(packageRoot, "dist", "electron"))))
     process.exit(1);
-  }
 }

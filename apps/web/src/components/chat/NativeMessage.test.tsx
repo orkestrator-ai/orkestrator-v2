@@ -6169,4 +6169,24 @@ describe("NativeMessage permission-denied tool rows", () => {
     expect(container.textContent).not.toContain("failure");
     expect(container.textContent).toContain("Denied (rule): Bash(rm:*) is denied by settings");
   });
+
+  test.each(["Write", "Edit", "MultiEdit", "EnterPlanMode", "TodoWrite"])(
+    "shows a denied %s call with its reason",
+    (toolName) => {
+      const message = makeMessage([
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName,
+          toolState: "failure",
+          toolError: "Permission denied",
+          toolDenied: { reason: "Blocked by workspace rule", source: "rule" },
+        },
+      ]);
+      const { container } = render(<NativeMessage message={message} />);
+      expect(container.textContent).toContain("denied");
+      expect(container.textContent).toContain("Denied (rule): Blocked by workspace rule");
+      expect(container.textContent).not.toContain("failure");
+    },
+  );
 });

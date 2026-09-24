@@ -277,6 +277,34 @@ import {
 } from "./native-agent-service-projection-test-support.js";
 
 describe("NativeAgentService", () => {
+  test("full projection carries turn activity only while Claude is running", async () => {
+    let status: "running" | "idle" = "running";
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({
+        status,
+        messages: [],
+        turnActivity: { compacting: true, thinkingTokens: 1_200 },
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-full-turn-activity-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:turn-activity",
+        };
+        await service.ensureSession(identity);
+        expect((await service.getProjection(identity))?.turn.activity).toEqual({
+          compacting: true,
+          thinkingTokens: 1_200,
+        });
+        status = "idle";
+        expect((await service.getProjection(identity))?.turn.activity).toBeUndefined();
+      },
+    );
+  });
+
   test("joins equivalent progressive transcript reads at the provider boundary", async () => {
     let releaseTranscript!: () => void;
     const transcriptHeld = new Promise<void>((resolve) => {

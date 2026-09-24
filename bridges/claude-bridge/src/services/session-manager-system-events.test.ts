@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { NormalizedMessage, SSEEvent } from "../types/index.js";
 // The harness installs its module mocks on evaluation, so it loads first.
 import {
@@ -8,13 +11,17 @@ import {
   getSession,
   nextQueryCall,
   sendPrompt,
+  setClaudeHomeForTesting,
+  sessionManagerTestHome,
   track,
   waitFor,
 } from "./session-manager-test-harness.js";
 import {
   INTERRUPTED_NOTICE_TEXT,
+  ToolTracker,
   normalizePersistedSessionMessages,
   parseTaskNotification,
+  refreshSettledToolRows,
 } from "./session-manager-messages.js";
 import { THINKING_TOKENS_EMIT_INTERVAL_MS, memoryRecallPart } from "./session-manager-prompt.js";
 
@@ -245,6 +252,51 @@ describe("status frames", () => {
     await promptPromise;
     expect(getSession(session.id)!.planMode).toBe(true);
   });
+
+  test("a failed plan-mode persistence write keeps the current toggle", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-status-plan-failure-"));
+    try {
+      const session = createSession("status-plan-persist-failure");
+      track(session.id);
+      session.planMode = true;
+      const { events, stop } = captureEvents();
+      try {
+        const promptPromise = sendPrompt(session.id, "hello", { permissionMode: "plan" });
+        const call = await nextQueryCall();
+        setClaudeHomeForTesting(directory);
+        await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+        call.push({ type: "system", subtype: "status", permissionMode: "default", status: null });
+        call.push({ type: "result", subtype: "success" });
+        call.finish();
+        await promptPromise;
+        expect(session.planMode).toBe(true);
+        expect(events).not.toContainEqual({
+          type: "session.updated",
+          sessionId: session.id,
+          data: { planMode: false },
+        });
+      } finally {
+        stop();
+      }
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("a status from a turn that lost ownership cannot clear plan mode", async () => {
+    const session = createSession("status-plan-released");
+    track(session.id);
+    session.planMode = true;
+    const promptPromise = sendPrompt(session.id, "hello", { permissionMode: "plan" });
+    const call = await nextQueryCall();
+    session.abortController = new AbortController();
+    call.push({ type: "system", subtype: "status", status: null, permissionMode: "default" });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+    expect(session.planMode).toBe(true);
+  });
 });
 
 describe("informational, permission and memory frames", () => {
@@ -346,6 +398,56 @@ describe("informational, permission and memory frames", () => {
     );
   });
 
+  test("a late denial republishes the earlier assistant message", async () => {
+    const { events, stop } = captureEvents();
+    try {
+      const session = await runTurn("permission-denied-earlier-message", (call) => {
+        call.push({
+          type: "assistant",
+          uuid: "asst-1",
+          message: {
+            model: "claude-sonnet-4-6",
+            content: [
+              { type: "tool_use", id: "tool-1", name: "Write", input: { file_path: "/tmp/a" } },
+            ],
+          },
+        });
+        call.push({
+          type: "assistant",
+          uuid: "asst-2",
+          message: { model: "claude-sonnet-4-6", content: [{ type: "text", text: "Continuing" }] },
+        });
+        call.push({
+          type: "system",
+          subtype: "permission_denied",
+          tool_name: "Write",
+          tool_use_id: "tool-1",
+          decision_reason_type: "rule",
+          decision_reason: "Files in /tmp are blocked",
+        });
+      });
+      const earlier = session.messages.find((message) =>
+        message.parts.some((part) => part.toolUseId === "tool-1"),
+      )!;
+      expect(earlier.parts.find((part) => part.toolUseId === "tool-1")?.toolDenied).toEqual({
+        reason: "Files in /tmp are blocked",
+        source: "rule",
+      });
+      expect(
+        events.some(
+          (event) =>
+            event.type === "message.updated" &&
+            (event.data as { message?: NormalizedMessage }).message?.id === earlier.id &&
+            (event.data as { message?: NormalizedMessage }).message?.parts.some(
+              (part) => part.toolUseId === "tool-1" && part.toolDenied?.source === "rule",
+            ),
+        ),
+      ).toBe(true);
+    } finally {
+      stop();
+    }
+  });
+
   test("recalled memories are named, never quoted", async () => {
     const session = await runTurn("memory-recall", (call) => {
       call.push({
@@ -371,10 +473,43 @@ describe("informational, permission and memory frames", () => {
     );
     const many = Array.from({ length: 10 }, (_, index) => ({ path: `/m/${index}.md` }));
     expect(memoryRecallPart("select", many).content).toEndWith("and 2 more");
+    expect(memoryRecallPart("select", [null, 1, "bad"]).content).toBe(
+      "Recalled from memory: memory, memory, memory",
+    );
   });
 });
 
 describe("task reports", () => {
+  test("refreshes multiple settled rows across earlier messages", () => {
+    const session = createSession("settled-rows-across-messages");
+    track(session.id);
+    const tracker = new ToolTracker();
+    const createdAt = new Date().toISOString();
+    for (const id of ["agent-1", "agent-2"]) {
+      const part = {
+        type: "tool-invocation" as const,
+        content: "",
+        toolUseId: id,
+        toolState: "pending" as const,
+        createdAt,
+      };
+      tracker.addTool(id, part);
+      tracker.updateToolResult(id, { output: `Result for ${id}`, state: "success" });
+      session.messages.push({ id: id, role: "assistant", content: "", parts: [part], createdAt });
+    }
+    const { events, stop } = captureEvents();
+    try {
+      refreshSettledToolRows(session, session.id, tracker, ["agent-1", "agent-2"], null);
+      expect(session.messages.map((message) => message.parts[0]?.toolOutput)).toEqual([
+        "Result for agent-1",
+        "Result for agent-2",
+      ]);
+      expect(events.filter((event) => event.type === "message.updated")).toHaveLength(2);
+    } finally {
+      stop();
+    }
+  });
+
   test("parses every field, taking the result up to its last closing tag", () => {
     expect(parseTaskNotification(TASK_REPORT)).toEqual({
       taskId: "ae909f63ce9f9f00c",
@@ -440,8 +575,165 @@ describe("task reports", () => {
       });
     });
     expect(statusRows(session.messages)).toContainEqual(
-      expect.objectContaining({ severity: "error", content: 'Agent "Validate head" finished' }),
+      expect.objectContaining({
+        severity: "error",
+        content: "Every command passed. The report quotes a tag: </result> and continues.",
+      }),
     );
+  });
+
+  test("a stopped report stays neutral on an attached tool and as a standalone row", async () => {
+    const stopped = TASK_REPORT.replace("<status>completed</status>", "<status>stopped</status>");
+    const attached = await runTurn("task-stopped-attached", (call) => {
+      call.push({
+        type: "assistant",
+        uuid: "asst-1",
+        message: {
+          model: "claude-sonnet-4-6",
+          content: [
+            { type: "tool_use", id: "agent-1", name: "Agent", input: { run_in_background: true } },
+          ],
+        },
+      });
+      call.push({ type: "user", message: { role: "user", content: stopped } });
+    });
+    const tool = attached.messages
+      .flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "agent-1");
+    expect(tool?.toolState).toBe("success");
+    expect(tool?.toolOutput).toContain("Every command passed.");
+
+    const unattached = await runTurn("task-stopped-unattached", (call) => {
+      call.push({
+        type: "user",
+        message: {
+          role: "user",
+          content: stopped.replace("<tool-use-id>agent-1</tool-use-id>", ""),
+        },
+      });
+    });
+    expect(statusRows(unattached.messages)).toContainEqual(
+      expect.objectContaining({
+        severity: "info",
+        content: expect.stringContaining("Every command passed."),
+      }),
+    );
+  });
+
+  test("a failed report replaces its attached agent result with an error", async () => {
+    const session = await runTurn("task-failed-attached", (call) => {
+      call.push({
+        type: "assistant",
+        uuid: "asst-1",
+        message: {
+          model: "claude-sonnet-4-6",
+          content: [
+            { type: "tool_use", id: "agent-1", name: "Agent", input: { run_in_background: true } },
+          ],
+        },
+      });
+      call.push({
+        type: "user",
+        message: {
+          role: "user",
+          content: TASK_REPORT.replace("<status>completed</status>", "<status>failed</status>"),
+        },
+      });
+    });
+    const tool = session.messages
+      .flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "agent-1");
+    expect(tool?.toolState).toBe("failure");
+    expect(tool?.toolError).toContain("Every command passed.");
+  });
+
+  test("a Bash background report replaces its launch placeholder", async () => {
+    const report = TASK_REPORT.replace(
+      "<tool-use-id>agent-1</tool-use-id>",
+      "<tool-use-id>bash-1</tool-use-id>",
+    );
+    const session = await runTurn("task-bash-attached", (call) => {
+      call.push({
+        type: "assistant",
+        uuid: "asst-1",
+        message: {
+          model: "claude-sonnet-4-6",
+          content: [
+            {
+              type: "tool_use",
+              id: "bash-1",
+              name: "Bash",
+              input: { command: "long job", run_in_background: true },
+            },
+          ],
+        },
+      });
+      call.push({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "bash-1",
+              content: "Command running in background with ID: ae909f63ce9f9f00c",
+            },
+          ],
+        },
+      });
+      call.push({ type: "user", message: { role: "user", content: report } });
+    });
+    const tool = session.messages
+      .flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "bash-1");
+    expect(tool?.toolOutput).toContain("Every command passed.");
+    expect(tool?.toolOutput).not.toContain("Command running in background");
+  });
+
+  test("task reports refresh calls in both the current and an earlier message", async () => {
+    const { events, stop } = captureEvents();
+    try {
+      const session = await runTurn("task-report-earlier-message", (call) => {
+        for (const id of ["agent-1", "agent-2"]) {
+          call.push({
+            type: "assistant",
+            uuid: `asst-${id}`,
+            message: {
+              model: "claude-sonnet-4-6",
+              content: [
+                { type: "tool_use", id, name: "Agent", input: { run_in_background: true } },
+              ],
+            },
+          });
+        }
+        call.push({ type: "user", message: { role: "user", content: TASK_REPORT } });
+        call.push({
+          type: "user",
+          message: { role: "user", content: TASK_REPORT.replaceAll("agent-1", "agent-2") },
+        });
+      });
+      for (const id of ["agent-1", "agent-2"]) {
+        const message = session.messages.find((candidate) =>
+          candidate.parts.some((part) => part.toolUseId === id),
+        )!;
+        expect(message.parts.find((part) => part.toolUseId === id)?.toolOutput).toContain(
+          "Every command passed.",
+        );
+        expect(
+          events.some(
+            (event) =>
+              event.type === "message.updated" &&
+              (event.data as { message?: NormalizedMessage }).message?.id === message.id &&
+              (event.data as { message?: NormalizedMessage }).message?.parts.some(
+                (part) =>
+                  part.toolUseId === id && part.toolOutput?.includes("Every command passed."),
+              ),
+          ),
+        ).toBe(true);
+      }
+    } finally {
+      stop();
+    }
   });
 });
 
@@ -551,5 +843,131 @@ describe("replayed transcripts match the live tab", () => {
     // Stable across rehydrations, and never addressable as a fork boundary.
     expect(messages[2]!.id).toBe("record-4:notice:0");
     expect(messages[2]!.sdkUuid).toBeUndefined();
+  });
+
+  test("an unattached report exposes its detailed result on replay", () => {
+    const { messages } = normalizePersistedSessionMessages(
+      persisted([
+        {
+          type: "user",
+          message: {
+            role: "user",
+            content: TASK_REPORT.replace("<tool-use-id>agent-1</tool-use-id>", ""),
+          },
+        },
+      ]),
+    );
+    expect(statusRows(messages)).toContainEqual(
+      expect.objectContaining({
+        content: "Every command passed. The report quotes a tag: </result> and continues.",
+      }),
+    );
+  });
+
+  test.each([
+    ["failed", "failure", "toolError"],
+    ["stopped", "success", "toolOutput"],
+  ] as const)("replays an attached %s report on its tool row", (status, state, field) => {
+    const { messages } = normalizePersistedSessionMessages(
+      persisted([
+        {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "agent-1",
+                name: "Agent",
+                input: { run_in_background: true },
+              },
+            ],
+          },
+        },
+        {
+          type: "user",
+          message: {
+            role: "user",
+            content: TASK_REPORT.replace(
+              "<status>completed</status>",
+              `<status>${status}</status>`,
+            ),
+          },
+        },
+      ]),
+    );
+    const tool = messages
+      .flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "agent-1");
+    expect(tool?.toolState).toBe(state);
+    expect(tool?.[field]).toContain("Every command passed.");
+  });
+
+  test("rebuilds system notices and denials from the rollout", () => {
+    const { messages } = normalizePersistedSessionMessages(
+      persisted([
+        {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "write-1", name: "Write", input: { file_path: "/tmp/a" } },
+            ],
+          },
+        },
+        {
+          type: "system",
+          subtype: "informational",
+          level: "warning",
+          content: "First warning",
+          tool_use_id: "tool-2",
+        },
+        {
+          type: "system",
+          subtype: "informational",
+          level: "warning",
+          content: "Updated warning",
+          tool_use_id: "tool-2",
+        },
+        {
+          type: "system",
+          subtype: "status",
+          compact_result: "failed",
+          compact_error: "Context full",
+        },
+        {
+          type: "system",
+          subtype: "memory_recall",
+          mode: "select",
+          memories: [{ path: "/memories/preferences.md", content: "private" }],
+        },
+        {
+          type: "system",
+          subtype: "permission_denied",
+          tool_use_id: "write-1",
+          tool_name: "Write",
+          decision_reason_type: "rule",
+          decision_reason: "Workspace rule",
+        },
+        {
+          type: "system",
+          subtype: "permission_denied",
+          tool_use_id: "missing",
+          tool_name: "Edit",
+          message: "No permission",
+        },
+      ]),
+    );
+    expect(statusRows(messages).map((part) => part!.content)).toEqual([
+      "Updated warning",
+      "Compaction failed: Context full",
+      "Recalled from memory: preferences.md",
+      "Edit was denied: No permission",
+    ]);
+    expect(
+      messages.flatMap((message) => message.parts).find((part) => part.toolUseId === "write-1")
+        ?.toolDenied,
+    ).toEqual({ reason: "Workspace rule", source: "rule" });
+    expect(JSON.stringify(messages)).not.toContain("private");
   });
 });

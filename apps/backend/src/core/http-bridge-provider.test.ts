@@ -15,6 +15,7 @@ import {
   piConnection,
 } from "./agent-provider-test-support.js";
 import { normalizeProviderReadiness } from "./http-bridge-transport.js";
+import { readHttpBridgeSessionState } from "./http-bridge-progressive.js";
 
 describe("HTTP bridge provider", () => {
   const operations = {
@@ -789,6 +790,24 @@ describe("HTTP bridge provider", () => {
       thinkingTokens: 1_200,
     });
     // A leftover estimate must never decorate an idle tab.
+    expect((await read("idle")).turnActivity).toBeUndefined();
+  });
+
+  test("the progressive Claude state read maps activity and clears it when idle", async () => {
+    const read = (status: string) =>
+      readHttpBridgeSessionState({
+        agent: "claude",
+        connection: claudeConnection,
+        sessionId: "session-1",
+        fetchImpl: Object.assign(
+          async () => Response.json({ status, activity: "compacting", thinkingTokens: 1_249 }),
+          { preconnect: fetch.preconnect },
+        ),
+      });
+    expect((await read("running")).turnActivity).toEqual({
+      compacting: true,
+      thinkingTokens: 1_200,
+    });
     expect((await read("idle")).turnActivity).toBeUndefined();
   });
 

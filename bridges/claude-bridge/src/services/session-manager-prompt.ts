@@ -241,13 +241,16 @@ import {
   bashToolResultOutcomes,
   bashToolUseIdsFromAssistantMessage,
   appendInterruptedNotice,
+  boundedNoticeText,
   buildMessageParts,
+  memoryRecallPart,
   parseMessageContent,
   provisionalBackgroundTaskId,
   provisionalBackgroundTaskLaunchesFromAssistantMessage,
   refreshSettledToolRows,
   taskNotificationNoticePart,
 } from "./session-manager-messages.js";
+export { memoryRecallPart } from "./session-manager-messages.js";
 import {
   ClaudeAttachmentError,
   attachmentTag,
@@ -444,56 +447,6 @@ function recordSystemMessageNotice(session: SessionState, message: SdkSystemMess
  * times a second reads as live; one frame per delta is only load.
  */
 export const THINKING_TOKENS_EMIT_INTERVAL_MS = 500;
-
-/** Bound on provider-authored text copied into a status row. */
-const MAX_NOTICE_TEXT_LENGTH = 2_000;
-
-/** Trimmed, bounded provider text for a status row, or `undefined` when empty. */
-function boundedNoticeText(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const text = value.trim();
-  if (text.length === 0) return undefined;
-  return text.length > MAX_NOTICE_TEXT_LENGTH
-    ? `${text.slice(0, MAX_NOTICE_TEXT_LENGTH - 1)}…`
-    : text;
-}
-
-/** How many recalled memories a row names before summarizing the rest. */
-const MAX_RECALLED_MEMORY_NAMES = 8;
-
-/**
- * The row for memories the CLI surfaced into the turn.
- *
- * Names, not bodies: a memory body can be long and is already in the model's
- * context, and the row only has to say that recall happened and from where.
- */
-export function memoryRecallPart(
-  mode: unknown,
-  memories: ReadonlyArray<{ path?: unknown; scope?: unknown }>,
-): NormalizedPart {
-  const names = memories
-    .map((memory) => {
-      const path = typeof memory.path === "string" ? memory.path : "";
-      // `<synthesis:DIR>` sentinels and organization URLs have no file name.
-      if (path.startsWith("<synthesis:")) return "synthesized summary";
-      const segments = path.split(/[\\/]/).filter(Boolean);
-      return segments.at(-1) ?? "memory";
-    })
-    .slice(0, MAX_RECALLED_MEMORY_NAMES);
-  const remainder = memories.length - names.length;
-  const listed = remainder > 0 ? `${names.join(", ")} and ${remainder} more` : names.join(", ");
-  return {
-    type: "status",
-    severity: "info",
-    // A synthesis distills many small memories into one paragraph; its entry
-    // names a directory sentinel, not anything the user would recognise.
-    content:
-      mode === "synthesize"
-        ? "Recalled from memory (synthesized summary)"
-        : `Recalled from memory: ${listed}`,
-    createdAt: new Date().toISOString(),
-  };
-}
 
 function boundedPlan(content: unknown): Pick<PlanApprovalRequest, "plan" | "planTruncated"> {
   if (typeof content !== "string" || content.trim().length === 0) return {};
@@ -2276,7 +2229,16 @@ export async function sendPrompt(
               toolTracker,
             );
             stream.emitCurrentAssistantMessage();
-          } else if (!marked) {
+          }
+          if (marked) {
+            refreshSettledToolRows(
+              session,
+              sessionId,
+              toolTracker,
+              [denial.tool_use_id],
+              stream.currentAssistantMessage,
+            );
+          } else {
             // A call this turn never saw (a subagent's, or one from before a
             // reconnect) still deserves to say it was refused.
             const toolName = boundedNoticeText(denial.tool_name) ?? "A tool call";

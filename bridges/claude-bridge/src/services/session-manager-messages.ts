@@ -298,6 +298,74 @@ export function interruptedNoticePart(createdAt: string): NormalizedPart {
   return { type: "status", content: INTERRUPTED_NOTICE_TEXT, severity: "info", createdAt };
 }
 
+/** Bound provider text copied into a transcript status row. */
+export function boundedNoticeText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  if (!text) return undefined;
+  return text.length > 2_000 ? `${text.slice(0, 1_999)}…` : text;
+}
+
+/** Name recalled memories without exposing their bodies. */
+export function memoryRecallPart(
+  mode: unknown,
+  memories: ReadonlyArray<unknown>,
+  createdAt = new Date().toISOString(),
+): NormalizedPart {
+  const names = memories.slice(0, 8).map((memory) => {
+    if (!memory || typeof memory !== "object") return "memory";
+    const path = (memory as { path?: unknown }).path;
+    if (typeof path !== "string") return "memory";
+    if (path.startsWith("<synthesis:")) return "synthesized summary";
+    return path.split(/[\\/]/).filter(Boolean).at(-1) ?? "memory";
+  });
+  const remainder = memories.length - names.length;
+  const listed = remainder > 0 ? `${names.join(", ")} and ${remainder} more` : names.join(", ");
+  return {
+    type: "status",
+    severity: "info",
+    content:
+      mode === "synthesize"
+        ? "Recalled from memory (synthesized summary)"
+        : `Recalled from memory: ${listed}`,
+    createdAt,
+  };
+}
+
+/** Rebuild status rows written by system frames when loading a rollout. */
+function persistedSystemNoticePart(
+  raw: Record<string, unknown>,
+  createdAt: string,
+): NormalizedPart | undefined {
+  if (raw.subtype === "status" && raw.compact_result === "failed") {
+    const reason = boundedNoticeText(raw.compact_error);
+    return {
+      type: "status",
+      severity: "warning",
+      content: reason ? `Compaction failed: ${reason}` : "Compaction failed",
+      createdAt,
+    };
+  }
+  if (raw.subtype === "informational") {
+    const content = boundedNoticeText(raw.content);
+    if (
+      !content ||
+      (raw.prevent_continuation !== true && raw.level !== "warning" && raw.level !== "suggestion")
+    )
+      return undefined;
+    return {
+      type: "status",
+      severity: raw.prevent_continuation === true || raw.level === "warning" ? "warning" : "info",
+      content,
+      createdAt,
+    };
+  }
+  if (raw.subtype === "memory_recall" && Array.isArray(raw.memories) && raw.memories.length > 0) {
+    return memoryRecallPart(raw.mode, raw.memories, createdAt);
+  }
+  return undefined;
+}
+
 /**
  * Append the interruption row to a live transcript and publish it.
  *
@@ -378,8 +446,8 @@ export function taskNotificationNoticePart(
   createdAt: string,
 ): NormalizedPart {
   const text =
-    report.summary ??
     report.result ??
+    report.summary ??
     (report.status ? `Background task ${report.status}` : "Background task finished");
   return {
     type: "status",
@@ -406,7 +474,7 @@ function applyTaskNotificationToTool(
   if (!toolTracker || !report.toolUseId || !toolTracker.getTool(report.toolUseId)) return false;
   const text = report.result ?? report.summary;
   if (!text) return true;
-  const failed = report.status === "failed" || report.status === "stopped";
+  const failed = report.status === "failed";
   toolTracker.updateToolResult(report.toolUseId, {
     ...applyToolResultBudget({
       output: failed ? undefined : text,
@@ -1313,6 +1381,7 @@ export function normalizePersistedSessionMessages(
     /** Status rows this record stands for instead of, or beside, a bubble. */
     notices: NormalizedPart[];
   }> = [];
+  const informationalRowsByToolUse = new Map<string, number>();
 
   // Older emitters omitted record timestamps. Give every such record one
   // clock for this materialization and use that same value both while parsing
@@ -1340,6 +1409,7 @@ export function normalizePersistedSessionMessages(
     const positionAt = syntheticEpochBase + index;
     const timestamp = providerTimestamp ?? new Date(positionAt).toISOString();
     if (raw.type === "system") {
+      const system = raw as unknown as Record<string, unknown>;
       const taskMessage = persistedBackgroundTaskMessage(raw);
       if (taskMessage) {
         backgroundTasks = reducePersistedBackgroundTaskMessage(
@@ -1353,6 +1423,41 @@ export function normalizePersistedSessionMessages(
           // to now rather than to the value it just refused.
           persistedRecordTime(raw, providerTimestamp === undefined ? positionAt : undefined),
         );
+      }
+      let notice = persistedSystemNoticePart(system, timestamp);
+      if (system.subtype === "permission_denied") {
+        const reason = boundedNoticeText(system.decision_reason ?? system.message);
+        const toolUseId = typeof system.tool_use_id === "string" ? system.tool_use_id : undefined;
+        const attached =
+          toolUseId &&
+          toolTracker.recordDenial(toolUseId, {
+            reason,
+            ...(typeof system.decision_reason_type === "string"
+              ? { source: system.decision_reason_type.slice(0, 64) }
+              : {}),
+          });
+        if (!attached) {
+          const toolName = boundedNoticeText(system.tool_name) ?? "A tool call";
+          notice = {
+            type: "status",
+            severity: "warning",
+            content: reason ? `${toolName} was denied: ${reason}` : `${toolName} was denied`,
+            createdAt: timestamp,
+          };
+        }
+      }
+      if (notice) {
+        const toolUseId =
+          system.subtype === "informational" && typeof system.tool_use_id === "string"
+            ? system.tool_use_id
+            : undefined;
+        const earlierIndex = toolUseId ? informationalRowsByToolUse.get(toolUseId) : undefined;
+        if (earlierIndex !== undefined) {
+          parsed[earlierIndex]!.notices = [notice];
+        } else {
+          if (toolUseId) informationalRowsByToolUse.set(toolUseId, parsed.length);
+          parsed.push({ raw, content: "", orderedParts: [], timestamp, notices: [notice] });
+        }
       }
       continue;
     }
@@ -1396,6 +1501,7 @@ export function normalizePersistedSessionMessages(
         createdAt: entry.timestamp,
       });
     });
+    if (entry.raw.type === "system") continue;
     const parts = buildMessageParts(entry.orderedParts, toolTracker);
     if (entry.raw.type === "user" && !entry.content.trim()) continue;
     if (entry.raw.type === "assistant" && parts.length === 0 && !entry.content.trim()) {

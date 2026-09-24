@@ -375,6 +375,9 @@ export interface LoopedReviewStructuredWait {
   dispatchId: string;
   startedAt: string;
   idlePolls: number;
+  progressAt?: string;
+  progressDigest?: string;
+  lastProbeAt?: string;
 }
 
 export interface LoopedReviewWorkflow {
@@ -1148,7 +1151,16 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
       (!isRecord(workflow.structuredWait) ||
         !isBoundedNonEmptyString(workflow.structuredWait.dispatchId, LOOPED_REVIEW_MAX_ID_LENGTH) ||
         typeof workflow.structuredWait.startedAt !== "string" ||
-        !isNonNegativeInteger(workflow.structuredWait.idlePolls))) ||
+        !isNonNegativeInteger(workflow.structuredWait.idlePolls) ||
+        (workflow.structuredWait.progressAt !== undefined &&
+          (typeof workflow.structuredWait.progressAt !== "string" ||
+            !Number.isFinite(Date.parse(workflow.structuredWait.progressAt)))) ||
+        (workflow.structuredWait.progressDigest !== undefined &&
+          (typeof workflow.structuredWait.progressDigest !== "string" ||
+            !/^[0-9a-f]{64}$/.test(workflow.structuredWait.progressDigest))) ||
+        (workflow.structuredWait.lastProbeAt !== undefined &&
+          (typeof workflow.structuredWait.lastProbeAt !== "string" ||
+            !Number.isFinite(Date.parse(workflow.structuredWait.lastProbeAt)))))) ||
     (workflow.failure !== undefined && !isFailure(workflow.failure)) ||
     !isRecord(workflow.pr) ||
     (workflow.pr.status !== "pending" &&
@@ -1367,6 +1379,79 @@ The provider-enforced JSON Schema is authoritative. Silently check the complete 
 - Do not emit a near-match and rely on repair. Check every enum member, required key, null, count, and additional-properties constraint before sending the result.`;
 }
 
+export type ReviewAnalysisOptions = {
+  codeReviewHeading: string;
+  coverageHeading: string;
+  /** How this reviewer obtains the reviewed change; rendered as step 1. */
+  scopeStep: string;
+  clarifyingStep: string;
+  /** How this reviewer uses validation evidence; rendered as the final step. */
+  validationStep: string;
+};
+
+/**
+ * The code-review rubric and coverage review every native reviewer applies,
+ * whether it establishes its own snapshot or reads a prepared package. Only
+ * scope, clarification, and validation differ between those paths. Automated
+ * reviewers once received a one-line mandate instead of this rubric and
+ * reported a fraction of the issues the same model found in an interactive
+ * review of the same change.
+ */
+export function buildReviewAnalysisSections(opts: ReviewAnalysisOptions): string {
+  return `${opts.codeReviewHeading}
+
+1. ${opts.scopeStep}
+2. Before judging the change, establish what it actually does from the diff:
+   - Identify the problem or need the change addresses.
+   - Describe the relevant behaviour before this change and after it.
+   - Trace the main implementation path across the changed files.
+   - Distinguish user-visible behaviour from internal refactors, tests, documentation, or build changes.
+3. Review the diff. Apply this rubric:
+
+   - **Bugs and correctness**: Does the code actually do what it is intended to do? Look for logic flaws where the intended consequence does not arise — wrong conditionals, inverted booleans, off-by-one errors, incorrect operator precedence, wrong variable used, early returns that skip required work, missing \`await\`, swapped arguments, mishandled return values, broken state transitions, and any case where the code's behaviour does not match the apparent intent.
+   - **Edge cases**: empty inputs, single-element collections, boundary values (0, -1, max int, max length), nulls/undefined, missing optional fields, unicode/emoji, very large or very small inputs, duplicate inputs, malformed inputs, network failures, timeouts, partial failures, retries, cancellation, and "what happens the second time this runs" (idempotency).
+   - **Concurrency and race conditions**: shared mutable state, missing locks, check-then-act races (TOCTOU), unawaited promises, parallel writes to the same resource, event-handler reentrancy, stale closures over changing state, ordering assumptions between async operations, and races between background jobs or SSE/event streams and user actions.
+   - **Error handling**: missing handling for failure cases, swallowed exceptions, inconsistent error patterns, missing validation at trust boundaries.
+   - **Naming and organization, coupling and cohesion, abstraction quality, DRY, performance** (only if measurable impact).
+
+4. Security review — only flag items relevant to the diff with clear evidence. Do not list generic security advice that does not apply.
+   - Authentication, session handling, authorization, tenant isolation
+   - Input validation at trust boundaries
+   - Injection risks: XSS, SQL, command, template, path traversal
+   - CSRF, CORS, cookies, security headers, browser trust boundaries
+   - SSRF, unsafe external URL fetching
+   - Unsafe deserialization or parsing
+   - File upload, file read/write, path handling
+   - Secrets, credentials, tokens, API keys, env vars
+   - Sensitive data exposure in logs, errors, telemetry, analytics
+   - Privacy / PII / data retention
+   - Cryptography, randomness, hashing, password storage, TLS
+   - Dependency, lockfile, build script, supply-chain changes
+   - Database migrations that could expose, corrupt, or delete data
+   - Background jobs, webhooks, queues, retry/idempotency
+   - LLM-specific risks where applicable: prompt injection, tool permission misuse, data exfiltration, unsafe model output handling
+
+5. Skip:
+   - Style/formatting issues handled by linters
+   - Issues a typechecker, compiler, or configured linter will catch
+   - Generated or vendored code
+   - Performance micro-optimisations without measured impact
+
+6. Confidence gating: only report issues with confidence >= 75. Apply the rubric to every changed file and path in scope, and report every distinct issue that clears this threshold. Do not stop after the first finding, fold separate defects into one, or drop a qualifying finding to keep the report short.
+7. Severity: P0 (broken/crash/data-loss/security), P1 (real bug, will bite in practice), P2 (quality, polish).
+8. ${opts.clarifyingStep}
+9. ${opts.validationStep}
+
+${opts.coverageHeading}
+
+Review coverage for behavior changed or affected by the diff:
+1. Identify changed production behavior, relevant callers, trust boundaries, failure paths, and corresponding tests.
+2. Inspect complete implementation or test files when needed to understand that behavior; do not read every impacted file in full by default.
+3. Verify meaningful coverage for changed behavior, edge cases, error paths, and complex branches.
+4. Report gaps introduced by the change or required to validate affected behavior.
+5. Do not report unrelated pre-existing gaps, and do not require dedicated tests for documentation, generated code, static data, or configuration with no executable behavior.`;
+}
+
 export function buildReviewBody(opts: ReviewBodyOptions): string {
   const {
     targetBranch,
@@ -1383,9 +1468,9 @@ export function buildReviewBody(opts: ReviewBodyOptions): string {
   // (`isStartLoopedReviewInput`), inside the persisted workflow, and again
   // inside the persisted package, so no unsafe branch can reach here from it.
 
-  const clarifyingLine = allowClarifyingQuestions
-    ? "8. Ask a clarifying question only when the answer would materially change whether a high-confidence issue exists. Otherwise state the assumption or limitation and continue."
-    : "8. Do not ask clarifying questions — this is an automated pipeline. Make your best judgment for any ambiguous points.";
+  const clarifyingStep = allowClarifyingQuestions
+    ? "Ask a clarifying question only when the answer would materially change whether a high-confidence issue exists. Otherwise state the assumption or limitation and continue."
+    : "Do not ask clarifying questions — this is an automated pipeline. Make your best judgment for any ambiguous points.";
 
   const outputContract =
     outputFormat === "markdown" ? "required Markdown report" : "provider-enforced JSON Schema";
@@ -1426,8 +1511,8 @@ The change under review may be committed, entirely uncommitted, or a mix of both
   // uncommitted in the worktree.
   const reviewScopeStep =
     preparationMode === "commit"
-      ? `1. Review the diff between the immutable base and head commits captured in Step 1. \`git diff origin/${targetBranch}...HEAD\` may be used only while those refs still resolve to the captured commits.`
-      : `1. Review the complete snapshot captured in Step 1: the diff between the immutable base and head commits, plus every uncommitted change it includes. \`git diff origin/${targetBranch}...HEAD\` covers only the committed part, and may be used only while those refs still resolve to the captured commits; use \`git diff HEAD\` for uncommitted tracked edits and read each in-scope untracked file in full.`;
+      ? `Review the diff between the immutable base and head commits captured in Step 1. \`git diff origin/${targetBranch}...HEAD\` may be used only while those refs still resolve to the captured commits.`
+      : `Review the complete snapshot captured in Step 1: the diff between the immutable base and head commits, plus every uncommitted change it includes. \`git diff origin/${targetBranch}...HEAD\` covers only the committed part, and may be used only while those refs still resolve to the captured commits; use \`git diff HEAD\` for uncommitted tracked edits and read each in-scope untracked file in full.`;
 
   const outputSection =
     outputFormat === "structured"
@@ -1531,58 +1616,14 @@ Plan validation for the ${preparationMode === "commit" ? "fixed head commit" : "
 6. If any tests fail, record every available failure with the test name, file, and error message.
 7. Await all validation before producing the final report.
 
-## Step 3: Code Review
-
-${reviewScopeStep}
-2. Before judging the change, establish what it actually does from the diff:
-   - Identify the problem or need the change addresses.
-   - Describe the relevant behaviour before this change and after it.
-   - Trace the main implementation path across the changed files.
-   - Distinguish user-visible behaviour from internal refactors, tests, documentation, or build changes.
-3. Review the diff. Apply this rubric:
-
-   - **Bugs and correctness**: Does the code actually do what it is intended to do? Look for logic flaws where the intended consequence does not arise — wrong conditionals, inverted booleans, off-by-one errors, incorrect operator precedence, wrong variable used, early returns that skip required work, missing \`await\`, swapped arguments, mishandled return values, broken state transitions, and any case where the code's behaviour does not match the apparent intent.
-   - **Edge cases**: empty inputs, single-element collections, boundary values (0, -1, max int, max length), nulls/undefined, missing optional fields, unicode/emoji, very large or very small inputs, duplicate inputs, malformed inputs, network failures, timeouts, partial failures, retries, cancellation, and "what happens the second time this runs" (idempotency).
-   - **Concurrency and race conditions**: shared mutable state, missing locks, check-then-act races (TOCTOU), unawaited promises, parallel writes to the same resource, event-handler reentrancy, stale closures over changing state, ordering assumptions between async operations, and races between background jobs or SSE/event streams and user actions.
-   - **Error handling**: missing handling for failure cases, swallowed exceptions, inconsistent error patterns, missing validation at trust boundaries.
-   - **Naming and organization, coupling and cohesion, abstraction quality, DRY, performance** (only if measurable impact).
-
-4. Security review — only flag items relevant to the diff with clear evidence. Do not list generic security advice that does not apply.
-   - Authentication, session handling, authorization, tenant isolation
-   - Input validation at trust boundaries
-   - Injection risks: XSS, SQL, command, template, path traversal
-   - CSRF, CORS, cookies, security headers, browser trust boundaries
-   - SSRF, unsafe external URL fetching
-   - Unsafe deserialization or parsing
-   - File upload, file read/write, path handling
-   - Secrets, credentials, tokens, API keys, env vars
-   - Sensitive data exposure in logs, errors, telemetry, analytics
-   - Privacy / PII / data retention
-   - Cryptography, randomness, hashing, password storage, TLS
-   - Dependency, lockfile, build script, supply-chain changes
-   - Database migrations that could expose, corrupt, or delete data
-   - Background jobs, webhooks, queues, retry/idempotency
-   - LLM-specific risks where applicable: prompt injection, tool permission misuse, data exfiltration, unsafe model output handling
-
-5. Skip:
-   - Style/formatting issues handled by linters
-   - Issues a typechecker, compiler, or configured linter will catch
-   - Generated or vendored code
-   - Performance micro-optimisations without measured impact
-
-6. Confidence gating: only report issues with confidence >= 75.
-7. Severity: P0 (broken/crash/data-loss/security), P1 (real bug, will bite in practice), P2 (quality, polish).
-${clarifyingLine}
-9. Incorporate the validation result from Step 2; do not rerun an unchanged command for the same head.
-
-## Step 4: Test Coverage Review
-
-Review coverage for behavior changed or affected by the diff:
-1. Identify changed production behavior, relevant callers, trust boundaries, failure paths, and corresponding tests.
-2. Inspect complete implementation or test files when needed to understand that behavior; do not read every impacted file in full by default.
-3. Verify meaningful coverage for changed behavior, edge cases, error paths, and complex branches.
-4. Report gaps introduced by the change or required to validate affected behavior.
-5. Do not report unrelated pre-existing gaps, and do not require dedicated tests for documentation, generated code, static data, or configuration with no executable behavior.
+${buildReviewAnalysisSections({
+  codeReviewHeading: "## Step 3: Code Review",
+  coverageHeading: "## Step 4: Test Coverage Review",
+  scopeStep: reviewScopeStep,
+  clarifyingStep,
+  validationStep:
+    "Incorporate the validation result from Step 2; do not rerun an unchanged command for the same head.",
+})}
 
 ${outputSection}`;
 }

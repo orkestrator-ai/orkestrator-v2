@@ -12,12 +12,12 @@ import {
 import { MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE } from "@orkestrator/protocol/multi-review";
 import {
   isProviderSlashCommand,
+  parseCommandToken,
   resolveSessionActionCommand,
 } from "@orkestrator/protocol/agent-slash-commands";
 import { Button } from "@/components/ui/button";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
-import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
 import type { MentionableInputRef } from "@/components/chat/MentionableInput";
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
 import { NativeComposeBar } from "@/components/chat/NativeComposeBar";
@@ -46,7 +46,6 @@ import { useNativeAgentSession, type NativeAgentSendOptions } from "@/hooks/useN
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { useEscapeToStop } from "@/hooks/useEscapeToStop";
 import { useManualSessionRefresh } from "@/hooks/useManualSessionRefresh";
-import { useSlashCommandMenu } from "@/hooks/useSlashCommandMenu";
 import {
   useVirtuosoScrollState,
   clearPersistedVirtuosoState,
@@ -126,6 +125,12 @@ import {
   useNativeAgentActivityAnnouncement,
 } from "./AgentNativeTab.helpers";
 import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
+import {
+  commandSubmissionIntent,
+  draftCommandBusyTitle,
+  type NativeCommandSubmission,
+} from "./native-command-submission";
+import { useNativeCommandComposer } from "./useNativeCommandComposer";
 import { NativeAgentQuestionCard } from "./NativeAgentQuestionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
 import { nativeMessageHasPlanTool } from "@/lib/plan-tool";
@@ -367,6 +372,7 @@ export function SharedNativeAgentController({
     fork,
     performAction,
     refreshModels,
+    refreshCommands,
     loadToolDetails,
     loadEarlierMessages,
   } = useNativeAgentSession<NativeMessage>({
@@ -482,19 +488,23 @@ export function SharedNativeAgentController({
     serializeForLLM,
     createMention,
   } = useFileMentions({ searchFiles: fileSearch.searchFiles });
-  const {
-    isOpen: slashCommandMenuOpen,
-    selectedIndex: slashCommandSelectedIndex,
-    filteredCommands,
-    selectCommand,
-    closeMenu: closeSlashCommandMenu,
-    handleKeyDown: handleSlashCommandKeyDown,
-  } = useSlashCommandMenu({
-    commands: projection?.slashCommands ?? [],
-    text: draft.text,
-    setText: (text) => updateDraft(sessionKey, { text }),
-    focusInputAtEnd: (expectedValue) => inputRef.current?.focusAtEnd(expectedValue),
+  // Bound after `submit` exists; the menu's "Send as text" only needs a stable handle.
+  const sendAsTextRef = useRef<() => void>(() => {});
+  const sendDraftAsText = useCallback(() => sendAsTextRef.current(), []);
+  const commandComposer = useNativeCommandComposer({
+    platform,
+    agentLabel: label,
+    sessionKey,
+    sessionId: projection?.sessionId,
+    slashCommands: projection?.slashCommands,
+    catalogue: projection?.slashCommandCatalogue,
+    draft,
+    updateDraft,
+    inputRef,
+    refreshCommands,
+    onSendAsText: sendDraftAsText,
   });
+  const classifyCommand = commandComposer.classify;
   const backendOwnsStartupPrompt =
     tabId === "startup-agent" &&
     (environment?.pendingAgentLaunch === true || environment?.startupAgentSession !== undefined);
@@ -1066,6 +1076,7 @@ export function SharedNativeAgentController({
       requestId?: string,
       preparedPrompt = false,
       modeOverride?: "build" | "plan",
+      submitOptions?: { literal?: boolean },
     ) => {
       const restoreComposerFocus = Boolean(
         inputContainerRef.current?.contains(document.activeElement),
@@ -1093,18 +1104,53 @@ export function SharedNativeAgentController({
       const submittedBrowserAnnotationIds = draft.annotations
         .filter((annotation) => annotation.source === "browser")
         .map((annotation) => annotation.id);
-      const basePrompt = preparedPrompt
-        ? text.trim()
-        : buildInitialPromptWithAttachmentReferences(
-            serializeForLLM(text.trim(), draft.mentions),
-            submittedAttachments.map(({ name, path }) => ({ name, path })),
-          );
-      const userPrompt = preparedPrompt
-        ? basePrompt
-        : buildPromptWithTranscriptAnnotations(basePrompt, draft.annotations);
-      if (!userPrompt) return false;
       if (submitInFlightRef.current) return false;
+      const literal = submitOptions?.literal === true;
+      if (literal && draft.commandSelection) {
+        updateDraft(sessionKey, { commandSelection: undefined });
+      }
+      /*
+       * Classify before any shaping. Mentions, annotations, attachment
+       * references and handoff history all rewrite text, and a command's
+       * arguments must reach its executor exactly as typed. Prepared prompts
+       * (launch and review prompts) are never commands.
+       */
+      const commandSubmission: NativeCommandSubmission = preparedPrompt
+        ? { kind: "prompt" }
+        : classifyCommand({
+            text,
+            literal,
+            attachments: submittedAttachments,
+            annotationCount: draft.annotations.length,
+            pendingHandoff: Boolean(handoff.pendingHistory),
+            busy: isRunning,
+          });
+      if (commandSubmission.kind === "rejected") {
+        setSendError(commandSubmission.message);
+        return false;
+      }
+      const rawCommand = commandSubmission.kind !== "prompt";
+      const commandIntent = commandSubmissionIntent(commandSubmission);
+      const commandToken = rawCommand ? parseCommandToken(text, ["/", "$"]) : null;
+      const basePrompt = rawCommand
+        ? commandToken
+          ? text.slice(0, commandToken.argumentsStart) +
+            serializeForLLM(text.slice(commandToken.argumentsStart), draft.mentions)
+          : text
+        : preparedPrompt
+          ? text.trim()
+          : buildInitialPromptWithAttachmentReferences(
+              serializeForLLM(text.trim(), draft.mentions),
+              submittedAttachments.map(({ name, path }) => ({ name, path })),
+            );
+      const userPrompt =
+        rawCommand || preparedPrompt
+          ? basePrompt
+          : buildPromptWithTranscriptAnnotations(basePrompt, draft.annotations);
+      if (!userPrompt.trim()) return false;
       if (
+        !rawCommand &&
+        !literal &&
         handoff.pendingHistory &&
         isProviderSlashCommand(
           userPrompt,
@@ -1122,11 +1168,13 @@ export function SharedNativeAgentController({
        * prompt: queueing it would run it after the turn it was meant to redirect.
        * Capability-gated, so any provider that reports the action gets it.
        */
-      const sessionAction = resolveSessionActionCommand(
-        text.trim(),
-        projection?.capabilities,
-        isRunning && !recoverableDispatch,
-      );
+      const sessionAction = literal
+        ? null
+        : resolveSessionActionCommand(
+            text.trim(),
+            projection?.capabilities,
+            isRunning && !recoverableDispatch,
+          );
       if (sessionAction) {
         if (sessionAction.error) {
           setSendError(sessionAction.error);
@@ -1173,7 +1221,43 @@ export function SharedNativeAgentController({
         });
         return false;
       }
-      const prompt = prependAgentHandoffHistory(handoff.pendingHistory, userPrompt);
+      /*
+       * Orkestrator's `/compact` is a session action, not a prompt: it runs
+       * now or not at all, and never joins the prompt queue.
+       */
+      if (commandSubmission.kind === "compact") {
+        if (recoverableDispatch || !sessionStateAuthoritative || sendLocked || isDispatching) {
+          setSendError(
+            `${commandSubmission.command.name} can't run right now. Wait until ${label} is idle and retry.`,
+          );
+          return false;
+        }
+        setSendError(null);
+        submitInFlightRef.current = true;
+        setIsSubmitting(true);
+        try {
+          const outcome = await performAction({ kind: "compact" });
+          if (outcome.outcome === "applied") {
+            clearDraft(sessionKey);
+            discardProvisionalDraft();
+            return true;
+          }
+          if (outcome.outcome !== "unknown") {
+            setSendError(
+              `${label} did not compact the conversation. Retry once the current turn has finished.`,
+            );
+          }
+        } catch (error) {
+          setSendError(error instanceof Error ? error.message : String(error));
+        } finally {
+          submitInFlightRef.current = false;
+          setIsSubmitting(false);
+        }
+        return false;
+      }
+      const prompt = rawCommand
+        ? userPrompt
+        : prependAgentHandoffHistory(handoff.pendingHistory, userPrompt);
       // `sendLocked` covers this too, but silently swallowing the keystroke would
       // leave the user pressing Enter at a composer that never responds.
       if (recoverableDispatch) {
@@ -1228,6 +1312,7 @@ export function SharedNativeAgentController({
           path: attachment.path,
           filename: attachment.name,
         })),
+        ...(commandIntent ? { command: commandIntent } : {}),
       };
       const transcriptConfirmation =
         dispatchRequestId && projection?.sessionId
@@ -1256,7 +1341,15 @@ export function SharedNativeAgentController({
           clearDraft(sessionKey);
           consumeBrowserAnnotations(data.environmentId, submittedBrowserAnnotationIds);
           discardProvisionalDraft();
-          if (agentHandoffId) consumeTabAgentHandoff(tabId, data.environmentId);
+          if (agentHandoffId && !rawCommand) consumeTabAgentHandoff(tabId, data.environmentId);
+          if (
+            commandSubmission.kind === "command" &&
+            commandSubmission.command?.inputPolicy?.busy === "idle"
+          ) {
+            toast.info(
+              `${commandSubmission.command.name} is queued and runs when ${label} is idle`,
+            );
+          }
           return true;
         }
         const outcome = await send(prompt, options);
@@ -1268,7 +1361,7 @@ export function SharedNativeAgentController({
           clearDraft(sessionKey);
           consumeBrowserAnnotations(data.environmentId, submittedBrowserAnnotationIds);
           discardProvisionalDraft();
-          if (agentHandoffId) consumeTabAgentHandoff(tabId, data.environmentId);
+          if (agentHandoffId && !rawCommand) consumeTabAgentHandoff(tabId, data.environmentId);
           return true;
         }
         if (outcome.outcome === "rejected") setOptimisticPrompt(null);
@@ -1322,6 +1415,7 @@ export function SharedNativeAgentController({
       composer?.includeLocalSettings,
       composer?.promptSuggestionsEnabled,
       canQueue,
+      classifyCommand,
       agentHandoffId,
       consumeTabAgentHandoff,
       consumeBrowserAnnotations,
@@ -1329,6 +1423,7 @@ export function SharedNativeAgentController({
       discardProvisionalDraft,
       draft.attachments,
       draft.annotations,
+      draft.commandSelection,
       draft.mentions,
       draft.requestId,
       enqueue,
@@ -1356,6 +1451,13 @@ export function SharedNativeAgentController({
     ],
   );
 
+  useEffect(() => {
+    sendAsTextRef.current = () => {
+      const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+      void submit(current.text, undefined, false, undefined, { literal: true });
+    };
+  }, [sessionKey, submit]);
+
   /**
    * Provider entries mapped to the shared picker's neutral row shape. Sorting
    * and current-session exclusion belong to the dialog and the backend, not to
@@ -1372,6 +1474,12 @@ export function SharedNativeAgentController({
       })),
     [listResumable],
   );
+
+  const draftCommandSendTitle = draftCommandBusyTitle(commandComposer.draftCommand, {
+    running: isRunning,
+    canQueue,
+    agentLabel: label,
+  });
 
   /** What the send button would do with the draft as typed. */
   const draftSessionAction = useMemo(
@@ -1431,6 +1539,7 @@ export function SharedNativeAgentController({
     isActive: ownsGlobalShortcuts ?? isActive,
     isLoading: isTurnActive,
     onStop: stopSafely,
+    scopeRef: inputContainerRef,
   });
   useManualSessionRefresh({
     refreshRequestId,
@@ -1993,9 +2102,14 @@ export function SharedNativeAgentController({
     sendError && !authenticationRequired ? (
       <div
         key="send-error"
-        className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+        className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
       >
-        {sendError}
+        <span>{sendError}</span>
+        {commandComposer.offerLiteralForDraft ? (
+          <Button type="button" size="sm" variant="outline" onClick={sendDraftAsText}>
+            Send as text
+          </Button>
+        ) : null}
       </div>
     ) : null,
   ].filter(Boolean);
@@ -2227,7 +2341,7 @@ export function SharedNativeAgentController({
             if (fileMentionMenuOpen && handleFileMentionKeyDown(event, handleFileMentionSelect)) {
               return;
             }
-            if (slashCommandMenuOpen && handleSlashCommandKeyDown(event)) return;
+            if (commandComposer.menuOpen && commandComposer.handleMenuKeyDown(event)) return;
             // Shift+Tab cycles conversation mode for any provider that reports
             // one, rather than only where a provider tab implemented it.
             if (event.key === "Tab" && event.shiftKey && cycleMode) {
@@ -2239,6 +2353,7 @@ export function SharedNativeAgentController({
             event.preventDefault();
             void submit(draft.text);
           }}
+          inputComboboxAria={commandComposer.inputComboboxAria}
           placeholder={`Message ${label}`}
           disabled={isSubmitting || draft.submissionPending === true}
           isSending={isDispatching || isSubmitting}
@@ -2251,14 +2366,9 @@ export function SharedNativeAgentController({
                 onSelect={handleFileMentionSelect}
                 onClose={closeFileMentionMenu}
               />
-            ) : slashCommandMenuOpen ? (
-              <SlashCommandMenu
-                commands={filteredCommands}
-                selectedIndex={slashCommandSelectedIndex}
-                onSelect={selectCommand}
-                onClose={closeSlashCommandMenu}
-              />
-            ) : null
+            ) : (
+              commandComposer.menuElement
+            )
           }
           primaryControls={
             composer ? (
@@ -2502,14 +2612,16 @@ export function SharedNativeAgentController({
               ? `Sign in to ${label} before sending`
               : draftSessionAction
                 ? (draftSessionAction.error ?? `Send to the current ${label} turn`)
-                : canQueue
-                  ? // A coordinator turn is short by design — it delegates and
-                    // ends — so "queue" understates what happens: the message
-                    // runs as the next turn, usually within seconds.
-                    isReadOnlyCoordinator
-                    ? "Send after this turn"
-                    : "Add to queue"
-                  : "Send"
+                : draftCommandSendTitle
+                  ? draftCommandSendTitle
+                  : canQueue
+                    ? // A coordinator turn is short by design — it delegates and
+                      // ends — so "queue" understates what happens: the message
+                      // runs as the next turn, usually within seconds.
+                      isReadOnlyCoordinator
+                      ? "Send after this turn"
+                      : "Add to queue"
+                    : "Send"
           }
           onSend={() => {
             void submit(draft.text);

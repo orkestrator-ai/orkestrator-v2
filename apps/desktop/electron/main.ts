@@ -14,7 +14,7 @@ import {
 } from "electron";
 import path from "node:path";
 import os from "node:os";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { LOCAL_CONNECTION_ID } from "@orkestrator/protocol/connections";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
@@ -43,15 +43,27 @@ import {
   loadAgentPlatformSelection,
   saveAgentPlatformSelection,
 } from "./agent-platform-selection.js";
-import type { BrowserPreviewManager } from "./browser-preview-manager.js";
+import type {
+  BrowserPreviewManager,
+  BrowserPreviewServiceTransport,
+} from "./browser-preview-manager.js";
+import { PreviewTransportManager } from "./preview-transport-manager.js";
+import { createPreviewPortHints } from "./preview-port-hints.js";
+import { PreviewExternalHandoff } from "./preview-external-handoff.js";
+import type { PreviewAttachmentDescriptor } from "@orkestrator/protocol/preview-access";
 import {
+  configurePreviewServiceSession,
   createBrowserPreviewAddressFocusHandler,
   initializeBrowserPreviews,
   registerBrowserPreviewWindowActivation,
 } from "./browser-preview-startup.js";
 import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapters.js";
 import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
-import { registerWindowAllClosedQuit } from "./quit-policy.js";
+import {
+  handleStartupFailure,
+  registerQuitReopenRelaunch,
+  registerWindowAllClosedQuit,
+} from "./quit-policy.js";
 import { createApplicationMenuTemplate } from "./application-menu.js";
 import {
   applyWindowTitle,
@@ -66,9 +78,11 @@ import {
 } from "./application-logging.js";
 import {
   browserPreviewPartitionForWindow,
+  browserPreviewServicePartition,
   cleanupFailedDesktopWindow,
   DesktopWindowRequestGate,
   DesktopWindowSlotAllocator,
+  releaseBoundWindowIfQuitting,
   rendererPartitionForWindow,
 } from "./desktop-window-lifecycle.js";
 import {
@@ -106,7 +120,10 @@ type DesktopWindowContext = {
   scope: string;
   slot: number;
   browserPreviewManager: BrowserPreviewManager;
+  previewTransport: PreviewTransportManager;
 };
+let previewPortHints: ReturnType<typeof createPreviewPortHints> | null = null;
+const previewExternalHandoff = new PreviewExternalHandoff((url) => shell.openExternal(url));
 const windowContexts = new Map<number, DesktopWindowContext>();
 const MAX_DESKTOP_WINDOWS = 32;
 const windowSlots = new DesktopWindowSlotAllocator(MAX_DESKTOP_WINDOWS);
@@ -127,6 +144,11 @@ const windowAllClosedQuit = registerWindowAllClosedQuit({
   platform: process.platform,
   alwaysQuit: runtimeFlavor === "agent-test",
 });
+const quitReopen = registerQuitReopenRelaunch({
+  app,
+  allowRelaunch: runtimeFlavor !== "agent-test",
+});
+let startupComplete = false;
 const toolchainProgress = createToolchainProgressController({
   createWindow: () =>
     createToolchainBootstrapWindow({
@@ -193,8 +215,41 @@ function focusDesktopWindow(id: number): void {
 function createWindowBrowserPreviews(
   createdWindow: BrowserWindow,
   scope: string,
-  partition: string,
+  slot: number,
+  connectionId: string,
 ) {
+  const partition = browserPreviewPartitionForWindow(slot, connectionId);
+  let manager: BrowserPreviewManager | null = null;
+  previewPortHints ??= createPreviewPortHints(
+    path.join(app.getPath("userData"), "preview-ports.json"),
+  );
+  // Service previews: a loopback ingress per service over the authenticated
+  // tunnel of *this window's* connection. Never borrows another window's backend.
+  const previewTransport = new PreviewTransportManager({
+    invoke: <T>(command: string, args: Record<string, unknown>) => {
+      if (!connectionManager) throw new Error("Connections are not initialized");
+      return connectionManager.invoke<T>(command, args, scope);
+    },
+    tunnelUrl: () => connectionManager?.getPreviewTunnelUrl(scope) ?? null,
+    isRemote: () => connectionManager?.getConnectionId(scope) !== LOCAL_CONNECTION_ID,
+    partitionFor: (target) => browserPreviewServicePartition(slot, connectionId, target),
+    sessionFor: (partitionName) => session.fromPartition(partitionName),
+    clientKey: createHash("sha256").update(scope).digest("hex").slice(0, 24),
+    portHints: previewPortHints,
+    onStateChange: (serviceKey) => manager?.refreshService(serviceKey),
+    logger: console,
+  });
+  const transport: BrowserPreviewServiceTransport = {
+    acquire: (target, holderId) => previewTransport.acquire(target, holderId),
+    release: (serviceKey, holderId) => previewTransport.release(serviceKey, holderId),
+    scopeFor: (url) => previewTransport.scopeFor(url),
+    describe: (url) => previewTransport.describe(url),
+    target: (serviceKey) => previewTransport.target(serviceKey),
+    transportState: (serviceKey) => previewTransport.transportState(serviceKey),
+    resetSiteData: (target) => previewTransport.resetSiteData(target),
+    sessionFor: (partitionName) =>
+      configurePreviewServiceSession(session.fromPartition(partitionName), () => manager),
+  };
   const emitToOwner = (event: string, payload: unknown) =>
     emitToWindow(createdWindow, event, payload);
   const browserPreviewMainAdapters = createBrowserPreviewMainAdapters({
@@ -203,7 +258,7 @@ function createWindowBrowserPreviews(
     writeClipboardText: (text) => clipboard.writeText(text),
     logError: (message, error) => console.error(message, error),
   });
-  return initializeBrowserPreviews({
+  const runtime = initializeBrowserPreviews({
     fromPartition: (partitionName) => session.fromPartition(partitionName),
     partition,
     WebContentsViewCtor: WebContentsView,
@@ -216,7 +271,30 @@ function createWindowBrowserPreviews(
     }),
     getAuthorization: (url) =>
       connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
+    transport,
+    // External browsers never inherit Electron's request hooks: they sign in
+    // through the private preview origin with a one-use grant POSTed by a
+    // loopback handoff page. The grant is never part of a URL.
+    openServiceExternally: async (target) => {
+      if (!connectionManager) throw new Error("Connections are not initialized");
+      const attachment = await connectionManager.invoke<PreviewAttachmentDescriptor>(
+        "create_preview_attachment",
+        {
+          serviceId: target.serviceId,
+          surface: "browser-top-level",
+          path: target.path,
+          clientKey: createHash("sha256").update(scope).digest("hex").slice(0, 24),
+        },
+        scope,
+      );
+      if (attachment.backendInstanceId !== target.backendInstanceId || !attachment.bootstrap) {
+        throw new Error("This backend cannot publish the preview to an external browser.");
+      }
+      await previewExternalHandoff.open(attachment.attachmentId, attachment.bootstrap);
+    },
   });
+  manager = runtime.manager;
+  return { ...runtime, previewTransport };
 }
 
 function createMenu(): void {
@@ -237,6 +315,7 @@ function createMenu(): void {
 
 async function createWindow(connectionId?: string): Promise<void> {
   if (!connectionManager) throw new Error("Connections are not initialized");
+  if (quitReopen.isQuitting()) throw new Error(`${productName} is quitting`);
   const currentContext = focusedContext();
   const inheritedConnectionId =
     connectionId ??
@@ -251,6 +330,16 @@ async function createWindow(connectionId?: string): Promise<void> {
   } catch (error) {
     windowSlots.release(slot);
     throw error;
+  }
+  // A quit may have stopped the Local backend while the binding was pending.
+  if (
+    releaseBoundWindowIfQuitting({
+      isQuitting: quitReopen.isQuitting,
+      releaseScope: () => connectionManager?.release(scope),
+      releaseSlot: () => windowSlots.release(slot),
+    })
+  ) {
+    throw new Error(`${productName} is quitting`);
   }
   const activeConnection = connectionList.connections.find((connection) => connection.active);
   const activeConnectionId = activeConnection?.id ?? LOCAL_CONNECTION_ID;
@@ -281,7 +370,8 @@ async function createWindow(connectionId?: string): Promise<void> {
         const browserPreviewRuntime = createWindowBrowserPreviews(
           createdWindow,
           scope,
-          browserPreviewPartitionForWindow(slot, activeConnectionId),
+          slot,
+          activeConnectionId,
         );
         const webContentsId = createdWindow.webContents.id;
         windowContexts.set(webContentsId, {
@@ -289,6 +379,7 @@ async function createWindow(connectionId?: string): Promise<void> {
           scope,
           slot,
           browserPreviewManager: browserPreviewRuntime.manager,
+          previewTransport: browserPreviewRuntime.previewTransport,
         });
         lastFocusedWindowId = webContentsId;
         registered = true;
@@ -308,7 +399,13 @@ async function createWindow(connectionId?: string): Promise<void> {
           createMenu();
         });
         createdWindow.once("closed", () => {
-          windowContexts.get(webContentsId)?.browserPreviewManager.destroyAll();
+          const closing = windowContexts.get(webContentsId);
+          closing?.browserPreviewManager.destroyAll();
+          // Owned local listeners and tunnel connections end with the window;
+          // the backend's services and applications keep running.
+          void closing?.previewTransport.disposeAll().catch((error: unknown) => {
+            console.warn("[Previews] Failed to close preview transport:", error);
+          });
           windowContexts.delete(webContentsId);
           connectionManager?.release(scope);
           windowSlots.release(slot);
@@ -362,7 +459,11 @@ function registerIpc(): void {
     clipboardApi: clipboard,
     dialogApi: dialog,
     shellApi: shell,
-    appApi: app,
+    appApi: {
+      exit: (code) => app.exit(code),
+      quit: () => app.quit(),
+      relaunch: () => quitReopen.scheduleRelaunch(),
+    },
     nativeImageApi: nativeImage,
     getMacOsPermissions,
     listConnections: (event) => manager().getList(scopeForEvent(event)),
@@ -385,17 +486,24 @@ function registerIpc(): void {
       const nextPreviewRuntime = createWindowBrowserPreviews(
         context.window,
         context.scope,
-        browserPreviewPartitionForWindow(context.slot, connectionId),
+        context.slot,
+        connectionId,
       );
       let list: ReturnType<ConnectionManager["getList"]>;
       try {
         list = await manager().use(connectionId, context.scope);
       } catch (error) {
         nextPreviewRuntime.manager.destroyAll();
+        void nextPreviewRuntime.previewTransport.disposeAll().catch(() => undefined);
         throw error;
       }
       context.browserPreviewManager.destroyAll();
+      // A connection change cancels transport owned for the previous backend.
+      void context.previewTransport.disposeAll().catch((error: unknown) => {
+        console.warn("[Previews] Failed to close preview transport:", error);
+      });
       context.browserPreviewManager = nextPreviewRuntime.manager;
+      context.previewTransport = nextPreviewRuntime.previewTransport;
       updateWindowTitle(event);
       publishConnectionLists();
       return list;
@@ -535,6 +643,7 @@ async function startApplication(): Promise<void> {
     await createWindow();
   }
   await toolchainProgress.close();
+  startupComplete = true;
 
   if (runtimeProfile) {
     const info = backendProcess.getInfo();
@@ -550,21 +659,28 @@ async function startApplication(): Promise<void> {
       })}\n`,
     );
   }
+}
 
+if (isPrimaryInstance) {
   registerBrowserPreviewWindowActivation({
     onActivate: (listener) => app.on("activate", listener),
+    // Startup owns its first window. A quit-time reopen must be handled even
+    // while a window exists or another activation is creating one.
+    handleActivate: () => quitReopen.deferReopenWhileQuitting() || !startupComplete,
     getWindowCount: () => BrowserWindow.getAllWindows().length,
     createWindow,
     onCreateError: (error) => console.error("[Desktop] Failed to recreate the main window:", error),
   });
-}
-
-if (isPrimaryInstance) {
+  // Registered first: a launch during quit relaunches instead of reaching
+  // windows that are closing or bound to the stopped Local backend.
+  app.on("second-instance", () => {
+    quitReopen.deferReopenWhileQuitting();
+  });
   registerSecondInstanceFocus(
     app,
-    () => focusedContext()?.window ?? null,
+    () => (quitReopen.isQuitting() ? null : (focusedContext()?.window ?? null)),
     () => {
-      if (!windowRequestGate.request()) return;
+      if (quitReopen.isQuitting() || !windowRequestGate.request()) return;
       void createWindow().catch((error) =>
         console.error("[Desktop] Failed to create a window for a second launch:", error),
       );
@@ -575,12 +691,18 @@ if (isPrimaryInstance) {
     .whenReady()
     .then(startApplication)
     .catch((error: unknown) => {
-      console.error("[Desktop] Startup failed:", error);
-      dialog.showErrorBox(
-        `${productName} failed to start`,
-        error instanceof Error ? error.message : String(error),
-      );
-      app.quit();
+      handleStartupFailure({
+        isQuitting: quitReopen.isQuitting,
+        error,
+        report: (failure) => {
+          console.error("[Desktop] Startup failed:", failure);
+          dialog.showErrorBox(
+            `${productName} failed to start`,
+            failure instanceof Error ? failure.message : String(failure),
+          );
+        },
+        quit: () => app.quit(),
+      });
     });
 } else {
   console.error(
@@ -589,4 +711,8 @@ if (isPrimaryInstance) {
 }
 
 registerBackendShutdown(app, backendProcess);
+// The loopback handoff page only exists while a sign-in is pending.
+app.on("will-quit", () => {
+  void previewExternalHandoff.close().catch(() => undefined);
+});
 registerApplicationLoggingShutdown(app, applicationLogging);

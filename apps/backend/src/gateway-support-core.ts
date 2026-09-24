@@ -94,6 +94,10 @@ export interface OrkestratorGatewayOptions {
   compression?: GatewayCompressionMode;
   keepaliveMs?: number;
   proxyBodyIdleTimeoutMs?: number;
+  /** Legacy browser-preview connect+headers deadline (default 30 s). */
+  browserPreviewHeadersTimeoutMs?: number;
+  /** Backend preview services; enables the desktop preview tunnel. */
+  previews?: import("./core/preview-runtime.js").PreviewRuntime;
   eventReplay?: {
     frameCapacity?: number;
     maxBytes?: number;

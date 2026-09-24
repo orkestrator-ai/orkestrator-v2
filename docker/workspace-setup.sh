@@ -328,7 +328,7 @@ if [ -n "$GIT_URL" ]; then
 fi
 
 # Configure GitHub token if provided (avoid interactive prompts)
-TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 # Host git configs can contain absolute credential helper paths copied from
 # macOS, such as /opt/homebrew/bin/gh, which do not exist in containers.
 git config --global --replace-all credential.helper "" 2>/dev/null || true

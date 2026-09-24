@@ -2,6 +2,7 @@ import * as shared from "./native-agent-service-shared.js";
 import {
   coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
+  stripCoordinatorContext,
 } from "@orkestrator/protocol/coordinator";
 import type { MailboxPresence } from "@orkestrator/protocol/agent-mail";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
@@ -25,6 +26,9 @@ import {
   readProviderStatus,
   AmbiguousPromptDispatchError,
   PendingNativeAgentDispatchError,
+  PARKED_DISPATCH_CONFLICT_MESSAGE,
+  PromptRejectedError,
+  nativeCapabilities,
 } from "./native-agent-service-shared.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
 type PipelineSessionPhase = shared.PipelineSessionPhase;
@@ -123,6 +127,16 @@ export type NativeAgentServiceLayerTypes = [
 ];
 
 import { NativeAgentServiceProjection } from "./native-agent-service-projection.ts";
+import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
+import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
+import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
+import type { NativeAgentCommandIntent } from "@orkestrator/protocol/native-agent";
+import { commandCatalogueKey } from "./native-agent-command-catalogue.js";
+import {
+  commandDispatchNeedsCatalogue,
+  planCommandDispatch,
+  type CommandDispatchPlan,
+} from "./native-agent-command-dispatch.js";
 
 export abstract class NativeAgentServicePrompt extends NativeAgentServiceProjection {
   sessionActivitySnapshot(
@@ -333,6 +347,24 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         phase: input.phase,
       });
       /*
+       * Decide what this submission executes before anything is journaled or
+       * attached. A command that no longer exists, changed, or cannot accept
+       * this input is refused here with the draft intact; it is never sent as
+       * ordinary text instead.
+       */
+      const commandPlan = await this.planDispatchCommand(input, session, provider);
+      if (commandPlan.kind === "rejected") throw new PromptRejectedError(commandPlan.message);
+      if (commandPlan.kind === "session-action") {
+        const result = await this.storage.dispatchNativeAgentPromptOnce(
+          session.key,
+          input.requestId,
+          async (durable) => {
+            await this.performCommandSessionAction(input, durable, provider, commandPlan.action);
+          },
+        );
+        return result.session;
+      }
+      /*
        * Attach the provider before the at-most-once window opens.
        *
        * A cold agent process is the single most expensive thing the dispatch
@@ -446,9 +478,10 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
             await provider.send(durable.providerSessionId, preparation.prompt ?? input.prompt, {
               requestId: input.requestId,
               // Only a person typing into the composer can mean "run this
-              // command"; workflow-authored prompts are literal text.
-              allowProviderCommands:
-                input.allowProviderCommands ?? durable.origin === "interactive-native",
+              // command"; workflow-authored prompts are literal text. The plan
+              // above already applied that default and resolved any command.
+              allowProviderCommands: commandPlan.allowProviderCommands,
+              ...(commandPlan.command ? { command: commandPlan.command } : {}),
               images: input.images,
               attachments: input.attachments,
               schema: input.schema,
@@ -474,7 +507,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
             });
           },
           persistAmbiguousDispatch && session.origin === "interactive-native"
-            ? this.persistedPendingDispatch(input)
+            ? this.persistedPendingDispatch({ ...input, command: commandPlan.persistedIntent })
             : undefined,
         );
         if (
@@ -571,8 +604,118 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       promptSuggestions: input.promptSuggestions,
       model: input.model,
       reasoningEffort: input.reasoningEffort,
+      ...(input.command ? { command: input.command } : {}),
       createdAt: new Date(this.now()).toISOString(),
     };
+  }
+
+  /**
+   * Resolve command intent against this session's authoritative catalogue.
+   *
+   * Absent intent keeps the historical default: an interactive composer's
+   * text may invoke a command, anything a workflow, mail or schema authored is
+   * literal. A selection that is not found gets one forced catalogue re-read,
+   * because a list refreshed since the user picked it may simply be newer.
+   */
+  protected async planDispatchCommand(
+    input: DispatchNativeAgentPromptInput,
+    session: PersistedNativeAgentSession,
+    provider: NativeAgentRuntimeProvider,
+  ): Promise<CommandDispatchPlan> {
+    const intent: NativeAgentCommandIntent =
+      input.allowProviderCommands === false
+        ? { kind: "literal" }
+        : (input.command ??
+          (input.allowProviderCommands === true || session.origin === "interactive-native"
+            ? { kind: "typed" }
+            : { kind: "literal" }));
+    const planInput = {
+      platform: input.agent,
+      agentLabel: AGENT_PLATFORM_LABELS[input.agent] ?? input.agent,
+      prompt:
+        input.owner?.kind === "coordinator" ? stripCoordinatorContext(input.prompt) : input.prompt,
+      intent,
+      structuredOutput: input.schema !== undefined,
+      attachments: [
+        ...(input.attachments ?? []).map((attachment) => ({ type: attachment.type })),
+        ...(input.images ?? []).map(() => ({ type: "image" as const })),
+      ],
+    };
+    const capabilities = nativeCapabilities(input.agent);
+    if (!commandDispatchNeedsCatalogue(input.agent, planInput.prompt, intent)) {
+      return planCommandDispatch({
+        ...planInput,
+        commands: [],
+        catalogue: { status: "ready", revision: 0, enhanced: false },
+      });
+    }
+    const supported =
+      capabilities.slashCommands && Boolean(provider.slashCommands || provider.commandCatalogue);
+    const key = commandCatalogueKey(input.environmentId, input.agent, session.providerSessionId);
+    const read = async (force: boolean) =>
+      supported
+        ? this.commandCatalogues.readForDispatch(
+            key,
+            input.environmentId,
+            provider,
+            session.providerSessionId,
+            force,
+          )
+        : { commands: [], state: unsupportedCommandCatalogueState() };
+    let snapshot = await read(false);
+    const busy = (await readProviderStatus(provider, session.providerSessionId)).status !== "idle";
+    let plan = planCommandDispatch({
+      ...planInput,
+      busy,
+      commands: withSessionActionSlashCommands(snapshot.commands, capabilities),
+      catalogue: snapshot.state,
+    });
+    if (plan.kind === "rejected" && plan.staleSelection && supported) {
+      snapshot = await read(true);
+      plan = planCommandDispatch({
+        ...planInput,
+        busy,
+        commands: withSessionActionSlashCommands(snapshot.commands, capabilities),
+        catalogue: snapshot.state,
+      });
+    }
+    return plan;
+  }
+
+  /** Run a command that resolved to an Orkestrator session action. */
+  protected async performCommandSessionAction(
+    input: DispatchNativeAgentPromptInput,
+    session: PersistedNativeAgentSession,
+    provider: NativeAgentRuntimeProvider,
+    action: "compact",
+  ): Promise<void> {
+    const label = AGENT_PLATFORM_LABELS[input.agent] ?? input.agent;
+    if (!nativeCapabilities(input.agent).actions?.compact || !provider.performSessionAction) {
+      throw new PromptRejectedError(`${label} does not support /compact here.`);
+    }
+    if (session.pendingDispatch || session.pendingSteer) {
+      throw new PromptRejectedError(PARKED_DISPATCH_CONFLICT_MESSAGE);
+    }
+    // Compacting mid-turn would rewrite the context a running turn is using.
+    // The provider's own compact guard is the atomic fence; this check only
+    // gives the common case a clear message before asking it.
+    const { status } = await readProviderStatus(provider, session.providerSessionId);
+    if (status === "running" || status === "blocked") {
+      throw new PromptRejectedError(
+        `/compact runs when ${label} is idle. Try again after this turn.`,
+      );
+    }
+    const outcome = await provider.performSessionAction(session.providerSessionId, {
+      kind: action,
+    });
+    this.invalidateProjection(session.key);
+    if (outcome.outcome !== "applied") {
+      throw new PromptRejectedError(
+        outcome.outcome === "idle"
+          ? `${label} had nothing to compact.`
+          : `${label} did not confirm the compaction. Check the transcript before retrying.`,
+      );
+    }
   }
 
   async claimOpenCodeManualPrompt(input: {
@@ -679,7 +822,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     await Promise.allSettled([
       ...this.projectionRefreshes.values(),
       ...[...this.modelCatalogRefreshes.values()].map((entry) => entry.operation),
-      ...[...this.slashCommandRefreshes.values()].map((entry) => entry.operation),
+      this.commandCatalogues.settle(),
     ]);
     await this.settleAndClearProgressiveReads();
     await Promise.allSettled(this.scanTasks);
@@ -702,10 +845,9 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     this.providers.clear();
     this.providerConnections.clear();
     this.modelCatalogCache.clear();
-    this.slashCommandCache.clear();
+    this.commandCatalogues.clear();
     this.authStatusCache.clear();
     this.modelCatalogRefreshes.clear();
-    this.slashCommandRefreshes.clear();
     this.projectionCache.clear();
     this.projectionSync.clear();
     this.projectionSyncBytes = 0;

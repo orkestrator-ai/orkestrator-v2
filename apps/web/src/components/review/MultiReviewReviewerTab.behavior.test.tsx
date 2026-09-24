@@ -261,7 +261,11 @@ describe("MultiReviewReviewerTab", () => {
       />,
     );
 
-    await waitFor(() => expect(loadTranscript).toHaveBeenCalledWith("multi-1", "reviewer-1"));
+    await waitFor(() =>
+      expect(loadTranscript).toHaveBeenCalledWith("multi-1", "reviewer-1", {
+        knownSourceToken: undefined,
+      }),
+    );
     expect(await screen.findByRole("article", { name: "Reviewer report" })).toBeTruthy();
     expect(screen.getByText(/Ready: with-fixes · 1 issue · 1 coverage gap/)).toBeTruthy();
     expect(document.body.textContent).not.toContain(finalJson);

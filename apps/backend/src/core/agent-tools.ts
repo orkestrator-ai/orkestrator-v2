@@ -486,6 +486,11 @@ async function createAgentToolServer(
 export class AgentToolsServer {
   private server: Server | null = null;
   private port: number | null = null;
+
+  /** Bound port, so preview resolution can refuse it as a target. */
+  listeningPort(): number | null {
+    return this.port;
+  }
   private readonly credentialsByEnvironment = new Map<string, StoredCredential>();
   private readonly scopesByDigest = new Map<string, AgentToolScope>();
   private lifecycle: Promise<void> = Promise.resolve();

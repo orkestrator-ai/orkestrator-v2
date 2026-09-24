@@ -1448,6 +1448,7 @@ export async function deleteEnvironment(
       await cleanupEnvironmentTmux(environmentId, context).catch((error: unknown) => {
         console.warn("[backend] claude-tmux cleanup failed during environment deletion:", error);
       });
+      context.previews?.registry.beforeEnvironmentTargetChange(environmentId);
       if (environment?.containerId) {
         // Retire state polling before removing the container, or the next tick
         // execs into something that no longer exists.
@@ -1503,6 +1504,7 @@ export async function deleteEnvironment(
             error instanceof Error ? error.message : error,
           );
         });
+      context.nativeAgents?.forgetEnvironmentCommandCatalogues?.(environmentId);
       await storage.deleteComposeDraftsByEnvironment(environmentId);
       await storage.deleteFileDraftsByEnvironment(environmentId);
       await storage.deleteAgentHandoffsByEnvironment(environmentId);

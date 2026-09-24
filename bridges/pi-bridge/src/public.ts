@@ -35,12 +35,27 @@ export function publicSession(state: SessionState): JsonObject {
     // to.
     baseIndex: state.droppedMessages,
     revision: state.revision,
+    ...publicCommandRevision(state),
     sessionId: state.id,
     composer: state.composer,
     ...(state.policy ? { policy: state.policy } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
   };
+}
+
+/**
+ * The command inventory's revision, as `GET /session/:id/commands` reports it.
+ *
+ * Carried on the polled status so the backend can revalidate its cached
+ * catalogue only when the inventory actually changed, without a second read.
+ * In memory only. Omitted until this process has published a list: a restored
+ * list has no revision of this process's to compare against.
+ */
+function publicCommandRevision(state: SessionState): { commandRevision?: number } {
+  return state.commandCatalogue.revision > 0
+    ? { commandRevision: state.commandCatalogue.revision }
+    : {};
 }
 
 /** Mutation acknowledgement; transcript hydration has its own bounded route. */
@@ -58,6 +73,7 @@ export function publicStatus(state: SessionState): JsonObject {
     ...(state.status === "running" ? { turnId: piRunId(state) } : {}),
     error: state.error,
     revision: state.revision,
+    ...publicCommandRevision(state),
     ...(state.sessionFile ? { resumableSessionId: state.sessionFile } : {}),
     // The backend reads the title from this route and no other — `/session/:id`
     // carries one too, but nothing calls it for Pi. Omitting it here left the

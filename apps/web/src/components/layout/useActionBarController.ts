@@ -1,3 +1,5 @@
+import { environmentBrowserTarget } from "@/lib/preview-service-entry";
+import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
 import {
   agentSettingsTiers,
   resolvedActionDefault,
@@ -20,7 +22,7 @@ import {
 } from "@/stores";
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalContext, MAX_TABS, type AgentLaunchModeOverride } from "@/contexts";
-import type { DefaultAgent } from "@/types";
+import type { DefaultAgent, Environment } from "@/types";
 import type {
   ActionDefaultKey,
   ResolvedActionDefault,
@@ -159,6 +161,15 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const [editorError, setEditorError] = useState<string | null>(null);
   const [runCommands, setRunCommands] = useState<string[] | null>(null);
   const [isLoadingRunCommands, setIsLoadingRunCommands] = useState(false);
+  /** Bumped to re-read orkestrator-ai.json without changing the environment. */
+  const [runCommandsRescanToken, setRunCommandsRescanToken] = useState(0);
+  /** Source of the last run-command load; a repeat read of it refreshes quietly. */
+  const runCommandsSourceRef = useRef<string | null>(null);
+  const agentActivityObservationRef = useRef<{
+    environmentId: string | null;
+    state: Environment["agentActivityState"];
+    completedAt: Environment["agentSessionCompletedAt"];
+  }>({ environmentId: null, state: undefined, completedAt: undefined });
   const [cleanupDialogOpen, setCleanupDialogOpen] = useState(false);
   const [cleanupTarget, setCleanupTarget] = useState<{
     environmentId: string;
@@ -491,7 +502,16 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       (!isLocalEnvironment && !!selectedEnvironment?.containerId));
   const environmentPortAddress = getEnvironmentPortAddress(selectedEnvironment);
   const environmentBrowserUrl = getEnvironmentBrowserUrl(selectedEnvironment);
-  const browserPreviewSupported = isGatewayBrowserPreviewSupported();
+  // Web and iOS clients can preview registered services through private
+  // preview origins (opened top-level), even though they have no native view.
+  const previewPublicationAvailable = usePreviewServiceStore(
+    (state) => state.capabilities?.surfaces.browserTopLevel.available === true,
+  );
+  useEffect(() => {
+    ensurePreviewServiceSync();
+    void usePreviewServiceStore.getState().loadCapabilities();
+  }, []);
+  const browserPreviewSupported = isGatewayBrowserPreviewSupported() || previewPublicationAvailable;
   const canCopyEnvironmentUrl = !!environmentPortAddress;
 
   // The object test only narrows the type: no environment means no
@@ -1128,12 +1148,20 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     const hasWorktree = isLocalEnvironment && !!worktreePath;
 
     if ((!hasContainer && !hasWorktree) || !isRunning || !workspaceReady) {
+      runCommandsSourceRef.current = null;
       setRunCommands(null);
       return;
     }
 
     let cancelled = false;
-    setIsLoadingRunCommands(true);
+    // Re-reading the same source (after an agent finishes) keeps the current
+    // commands usable instead of flashing the run button disabled.
+    const source = hasContainer
+      ? `${selectedEnvironmentId}:container:${containerId}`
+      : `${selectedEnvironmentId}:local:${worktreePath}`;
+    const isRescan = runCommandsSourceRef.current === source;
+    runCommandsSourceRef.current = source;
+    if (!isRescan) setIsLoadingRunCommands(true);
 
     const readConfigPromise =
       isLocalEnvironment && worktreePath
@@ -1164,12 +1192,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             setRunCommands(null);
           }
         } catch {
-          setRunCommands(null);
+          if (!isRescan) setRunCommands(null);
         }
       })
       .catch((error) => {
         console.error("[ActionBar] Failed to read orkestrator-ai.json:", error);
-        if (!cancelled) {
+        if (!cancelled && !isRescan) {
           setRunCommands(null);
         }
       })
@@ -1183,12 +1211,36 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       cancelled = true;
     };
   }, [
+    selectedEnvironmentId,
     selectedEnvironment?.containerId,
     selectedEnvironment?.worktreePath,
     isLocalEnvironment,
     isRunning,
     workspaceReady,
+    runCommandsRescanToken,
   ]);
+
+  // A native session can finish while another one keeps the aggregate working.
+  // The backend's per-session completion token catches that case; the aggregate
+  // edge still covers other agent sources.
+  const selectedAgentActivityState = selectedEnvironment?.agentActivityState;
+  const selectedAgentSessionCompletedAt = selectedEnvironment?.agentSessionCompletedAt;
+  useEffect(() => {
+    const previous = agentActivityObservationRef.current;
+    agentActivityObservationRef.current = {
+      environmentId: selectedEnvironmentId,
+      state: selectedAgentActivityState,
+      completedAt: selectedAgentSessionCompletedAt,
+    };
+    if (
+      previous.environmentId === selectedEnvironmentId &&
+      ((previous.state === "working" && selectedAgentActivityState !== "working") ||
+        (selectedAgentSessionCompletedAt !== undefined &&
+          previous.completedAt !== selectedAgentSessionCompletedAt))
+    ) {
+      setRunCommandsRescanToken((token) => token + 1);
+    }
+  }, [selectedAgentActivityState, selectedAgentSessionCompletedAt, selectedEnvironmentId]);
 
   // Handler for run commands
   const handleRun = useCallback(async () => {
@@ -1338,8 +1390,16 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   const handleCreateBrowserTab = useCallback(() => {
     if (!createTab || !canCreateTab) return;
-    createTab("browser", { initialUrl: environmentBrowserUrl ?? undefined });
-  }, [canCreateTab, createTab, environmentBrowserUrl]);
+    if (!selectedEnvironment) {
+      createTab("browser", { initialUrl: environmentBrowserUrl ?? undefined });
+      return;
+    }
+    // Prefer the registered entry service: the tab then follows the service
+    // across container recreation instead of pinning today's host port.
+    void environmentBrowserTarget(selectedEnvironment, environmentBrowserUrl)
+      .catch(() => environmentBrowserUrl ?? undefined)
+      .then((initialUrl) => createTab("browser", { initialUrl }));
+  }, [canCreateTab, createTab, environmentBrowserUrl, selectedEnvironment]);
 
   const hasRunCommands = runCommands && runCommands.length > 0;
   const canRunCommands =

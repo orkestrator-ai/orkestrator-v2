@@ -492,6 +492,9 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
         promptSuggestions: pending.promptSuggestions,
         model: pending.model,
         reasoningEffort: pending.reasoningEffort,
+        // The same resolved intent, never re-derived from the text: a retry of
+        // a command must run that command or fail, not become a prompt.
+        ...(pending.command ? { command: pending.command } : {}),
       },
       true,
     );

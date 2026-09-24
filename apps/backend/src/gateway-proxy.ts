@@ -122,12 +122,26 @@ export class GatewayProxy extends GatewayHandlers {
     browserPreview = false,
     stripOrigin = false,
   ): Promise<void> {
+    // Legacy path previews address arbitrary loopback ports, so bound their
+    // concurrency explicitly (per port and overall) before connecting.
+    let releaseLegacySlot = () => {};
+    if (browserPreview) {
+      const slot = this.legacyPreviewAdmission.tryAcquire(target.port || "80");
+      if (!slot) {
+        jsonResponse(response, 503, { error: "Browser preview is at capacity; retry shortly" });
+        return;
+      }
+      releaseLegacySlot = () => slot.release();
+    }
     await new Promise<void>((resolve) => {
       let settled = false;
       let activeProxyResponse: IncomingMessage | null = null;
+      let headersTimer: ReturnType<typeof setTimeout> | null = null;
       const finish = () => {
         if (settled) return;
         settled = true;
+        if (headersTimer) clearTimeout(headersTimer);
+        releaseLegacySlot();
         // Keep-alive sockets outlive individual requests; drop this
         // request's disconnect handler so they do not accumulate.
         request.socket.removeListener("close", cancelProxyForDisconnect);
@@ -156,6 +170,7 @@ export class GatewayProxy extends GatewayHandlers {
           headers: targetHeaders,
         },
         (proxyResponse) => {
+          if (headersTimer) clearTimeout(headersTimer);
           activeProxyResponse = proxyResponse;
           const responseHeaders = sanitizeProxyResponseHeaders(
             proxyResponse.headers,
@@ -194,8 +209,10 @@ export class GatewayProxy extends GatewayHandlers {
             }
           }
 
+          // `Cache-Control: no-transform` forbids the body rewrite; such
+          // responses stream through unchanged with the documented limitation.
           const previewContentKind =
-            browserPreview && proxyPrefix && transformableRepresentation
+            browserPreview && proxyPrefix && transformableRepresentation && transformAllowed
               ? browserPreviewContentKind(proxyResponse.headers["content-type"])
               : null;
           if (browserPreview && proxyPrefix && previewContentKind) {
@@ -250,6 +267,26 @@ export class GatewayProxy extends GatewayHandlers {
               proxyResponse.destroy();
               fail(error);
             };
+
+            // A stalled rewrite would hold its decode budget indefinitely:
+            // bound the time between upstream chunks, not the whole body.
+            let rewriteIdle: ReturnType<typeof setTimeout> | null = null;
+            const resetRewriteIdle = () => {
+              if (rewriteIdle) clearTimeout(rewriteIdle);
+              rewriteIdle = setTimeout(
+                () => abortBody(new Error("Browser preview response stalled")),
+                this.proxyBodyIdleTimeoutMs,
+              );
+              rewriteIdle.unref?.();
+            };
+            resetRewriteIdle();
+            releaseReservationOnResponseSettled(response, () => {
+              if (rewriteIdle) clearTimeout(rewriteIdle);
+            });
+            proxyResponse.on("data", resetRewriteIdle);
+            proxyResponse.once("end", () => {
+              if (rewriteIdle) clearTimeout(rewriteIdle);
+            });
 
             if (decoder) {
               proxyResponse.on("data", (chunk: Buffer | string) => {
@@ -575,6 +612,14 @@ export class GatewayProxy extends GatewayHandlers {
       });
 
       proxyRequest.once("error", fail);
+      if (browserPreview) {
+        // Covers both connect and response headers: Bun's client does not
+        // expose a separate connect phase.
+        headersTimer = setTimeout(() => {
+          proxyRequest.destroy(new Error("Browser preview upstream did not respond in time"));
+        }, this.browserPreviewHeadersTimeoutMs);
+        headersTimer.unref?.();
+      }
 
       const cancelProxyForDisconnect = () => {
         if (!settled && !response.writableFinished) {

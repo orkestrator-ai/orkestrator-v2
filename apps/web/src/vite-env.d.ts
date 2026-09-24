@@ -126,6 +126,14 @@ interface Window {
       ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewAnnotationStatus>;
       cancelAnnotation(tabId: string): Promise<void>;
       destroy(tabId: string): Promise<void>;
+      /** Present on desktop builds with service previews. */
+      resetServiceSiteData?(
+        target: import("@orkestrator/protocol/browser-preview").BrowserPreviewServiceTarget,
+      ): Promise<void>;
+      /** Present on desktop builds with private preview publication (step 11). */
+      openServiceExternally?(
+        target: import("@orkestrator/protocol/browser-preview").BrowserPreviewServiceTarget,
+      ): Promise<void>;
     };
   };
 }

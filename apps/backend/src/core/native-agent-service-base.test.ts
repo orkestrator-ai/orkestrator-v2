@@ -3832,6 +3832,32 @@ describe("NativeAgentService", () => {
         "Orkestrator worker controls are unavailable in this session",
       );
       expect(sentWithoutDelegation).toContain("do not report them as workers");
+      provider.provider.commandCatalogue = async () => ({
+        enhanced: true,
+        status: "ready",
+        commands: [
+          {
+            name: "/review",
+            source: "project",
+            id: "codex:/review",
+            executionKind: "provider-prompt",
+            bindingRevision: "review-1",
+          },
+        ],
+      });
+      await service.dispatchPrompt({
+        environmentId: runtimeId,
+        agent: "codex",
+        logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+        requestId: "request-command",
+        prompt: "/review  src/a.ts\n second line  ",
+        command: { kind: "selected", commandId: "codex:/review", bindingRevision: "review-1" },
+      });
+      expect(provider.send.mock.calls[4]![1]).toContain("<orkestrator-coordinator-context>");
+      expect(provider.send.mock.calls[4]![2].command).toMatchObject({
+        id: "codex:/review",
+        arguments: "src/a.ts\n second line  ",
+      });
       await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,
         lifecycleState: "paused",
@@ -3845,7 +3871,7 @@ describe("NativeAgentService", () => {
           prompt: "Do not send",
         }),
       ).rejects.toThrow("not ready");
-      expect(admit).toHaveBeenCalledTimes(5);
+      expect(admit).toHaveBeenCalledTimes(6);
 
       await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,

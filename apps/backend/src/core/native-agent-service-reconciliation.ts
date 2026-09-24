@@ -1,3 +1,4 @@
+import { parseNativeAgentCommandIntent } from "@orkestrator/protocol/agent-command-catalogue";
 import * as shared from "./native-agent-service-shared.js";
 import { nativeAsyncQuestionItemId } from "@orkestrator/protocol/native-agent";
 import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
@@ -1192,6 +1193,11 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         attachments,
         prompt: message.text,
         requestId: reservation.requestId,
+        // Revalidated now, at dequeue: a selection whose binding changed while
+        // queued fails with its reason instead of running something else.
+        ...(parseNativeAgentCommandIntent(message.command)
+          ? { command: parseNativeAgentCommandIntent(message.command) }
+          : {}),
       });
       await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
       this.clearQueueBackoff(queueKey);

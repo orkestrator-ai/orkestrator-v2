@@ -24,11 +24,39 @@ export interface InitializeBrowserPreviewsOptions {
   writeClipboardText: (text: string) => void;
   focusAddressBar: (tabId: string) => void;
   getAuthorization: (url: string) => string | null;
+  transport?: BrowserPreviewManagerOptions["transport"];
+  openServiceExternally?: BrowserPreviewManagerOptions["openServiceExternally"];
 }
 
 export interface BrowserPreviewRuntime {
   manager: BrowserPreviewManager;
   browserSession: Session;
+}
+
+/**
+ * Apply the preview permission policy to a service partition: deny every
+ * permission except a user-activated clipboard write inside the preview's own
+ * scope. Request hooks are installed separately by the transport manager.
+ *
+ * Partitions outlive a window runtime (the same slot, connection, and service
+ * map to the same session after a connection switch or window reopen), so the
+ * handlers are replaced on every call and always consult the latest manager.
+ */
+export function configurePreviewServiceSession(
+  serviceSession: Session,
+  getManager: () => Pick<BrowserPreviewManager, "consumeClipboardWriteUserActivation"> | null,
+): Session {
+  serviceSession.setPermissionCheckHandler(() => false);
+  serviceSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const manager = getManager();
+    callback(
+      Boolean(manager) &&
+        permission === CLIPBOARD_WRITE_PERMISSION &&
+        details.isMainFrame &&
+        manager!.consumeClipboardWriteUserActivation(webContents, details.requestingUrl),
+    );
+  });
+  return serviceSession;
 }
 
 export interface BrowserPreviewAddressFocusOptions {
@@ -61,6 +89,8 @@ export function initializeBrowserPreviews({
   writeClipboardText,
   focusAddressBar,
   getAuthorization,
+  transport,
+  openServiceExternally,
 }: InitializeBrowserPreviewsOptions): BrowserPreviewRuntime {
   const browserSession = fromPartition(partition);
   const manager = new BrowserPreviewManager({
@@ -73,6 +103,8 @@ export function initializeBrowserPreviews({
     openExternal,
     writeClipboardText,
     focusAddressBar,
+    ...(transport ? { transport } : {}),
+    ...(openServiceExternally ? { openServiceExternally } : {}),
   });
   browserSession.setPermissionCheckHandler(() => false);
   browserSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
@@ -112,6 +144,8 @@ export function registerBrowserPreviewWindowCleanup({
 
 export interface BrowserPreviewWindowActivationOptions {
   onActivate: (listener: () => void) => void;
+  /** Runs before window-count and in-flight checks; true consumes the reopen. */
+  handleActivate?: () => boolean;
   getWindowCount: () => number;
   createWindow: () => Promise<void>;
   onCreateError: (error: unknown) => void;
@@ -119,12 +153,14 @@ export interface BrowserPreviewWindowActivationOptions {
 
 export function registerBrowserPreviewWindowActivation({
   onActivate,
+  handleActivate,
   getWindowCount,
   createWindow,
   onCreateError,
 }: BrowserPreviewWindowActivationOptions): void {
   let windowCreation: Promise<void> | null = null;
   onActivate(() => {
+    if (handleActivate?.()) return;
     if (getWindowCount() !== 0 || windowCreation) return;
     const attempt = Promise.resolve().then(createWindow);
     windowCreation = attempt;

@@ -1,6 +1,6 @@
 import { AgentDefaultsPane } from "@/components/settings/agent/AgentDefaultsPane";
 import { AgentPlatformPane } from "@/components/settings/agent/AgentPlatformPane";
-import { SlidersHorizontal } from "lucide-react";
+import { Globe2, SlidersHorizontal } from "lucide-react";
 import { agentSettingsTiers } from "@/lib/agent-settings";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import {
@@ -62,6 +62,7 @@ import { SkillsSettings } from "@/components/settings/SkillsSettings";
 import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
 import type { DomainTestResult, Environment, PortMapping, PortProtocol } from "@/types";
+import { EnvironmentPreviewServices } from "./EnvironmentPreviewServices";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 
 // Domain validation regex
@@ -564,7 +565,8 @@ export function EnvironmentSettingsDialog({
       setPortError("Container port must be between 1 and 65535");
       return;
     }
-    if (newPortMapping.hostPort < 1 || newPortMapping.hostPort > 65535) {
+    const automatic = newPortMapping.hostPortMode === "auto";
+    if (!automatic && (newPortMapping.hostPort < 1 || newPortMapping.hostPort > 65535)) {
       setPortError("Host port must be between 1 and 65535");
       return;
     }
@@ -584,7 +586,10 @@ export function EnvironmentSettingsDialog({
     }
 
     setPortError(null);
-    setPortMappings([...portMappings, { ...newPortMapping }]);
+    setPortMappings([
+      ...portMappings,
+      automatic ? { ...newPortMapping, hostPort: 0, hostPortMode: "auto" } : { ...newPortMapping },
+    ]);
     setShowAddPortForm(false);
     setNewPortMapping({ containerPort: 3000, hostPort: 3000, protocol: "tcp" });
   };
@@ -726,6 +731,7 @@ export function EnvironmentSettingsDialog({
           { id: "ports", label: "Ports", icon: <Network className="h-4 w-4" /> },
         ]
       : []),
+    { id: "previews", label: "Preview services", icon: <Globe2 className="h-4 w-4" /> },
     { id: "extensions", label: "Extensions", icon: <Puzzle className="h-4 w-4" /> },
   ];
 
@@ -1063,7 +1069,9 @@ export function EnvironmentSettingsDialog({
                     className="flex items-center justify-between p-2 rounded-md bg-zinc-800/50 border border-zinc-700"
                   >
                     <span className="text-sm font-mono">
-                      {mapping.containerPort}:{mapping.hostPort}/{mapping.protocol}
+                      {mapping.containerPort}:
+                      {mapping.hostPortMode === "auto" ? "auto" : mapping.hostPort}/
+                      {mapping.protocol}
                     </span>
                     <Button
                       type="button"
@@ -1118,7 +1126,9 @@ export function EnvironmentSettingsDialog({
                     <Input
                       type="number"
                       placeholder="Host"
-                      value={newPortMapping.hostPort}
+                      aria-label="Host port"
+                      disabled={newPortMapping.hostPortMode === "auto"}
+                      value={newPortMapping.hostPortMode === "auto" ? "" : newPortMapping.hostPort}
                       onChange={(e) =>
                         setNewPortMapping({
                           ...newPortMapping,
@@ -1130,6 +1140,32 @@ export function EnvironmentSettingsDialog({
                       max={65535}
                     />
                   </div>
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={newPortMapping.hostPortMode === "auto"}
+                      onChange={(event) =>
+                        setNewPortMapping(
+                          event.target.checked
+                            ? { ...newPortMapping, hostPort: 0, hostPortMode: "auto" }
+                            : {
+                                containerPort: newPortMapping.containerPort,
+                                hostPort: newPortMapping.containerPort,
+                                protocol: newPortMapping.protocol,
+                              },
+                        )
+                      }
+                    />
+                    Let Docker choose a free host port (environments never collide; preview tabs
+                    follow it)
+                  </label>
+                  {environment.entryPort === newPortMapping.containerPort &&
+                    newPortMapping.protocol === "tcp" && (
+                      <p className="text-xs text-muted-foreground">
+                        This is the entry port. An explicit mapping replaces its automatic
+                        publication.
+                      </p>
+                    )}
                   <Select
                     value={newPortMapping.protocol}
                     onValueChange={(value: PortProtocol) =>
@@ -1158,7 +1194,10 @@ export function EnvironmentSettingsDialog({
                     type="button"
                     size="sm"
                     onClick={handleAddPortMapping}
-                    disabled={newPortMapping.containerPort < 1 || newPortMapping.hostPort < 1}
+                    disabled={
+                      newPortMapping.containerPort < 1 ||
+                      (newPortMapping.hostPortMode !== "auto" && newPortMapping.hostPort < 1)
+                    }
                   >
                     Add
                   </Button>
@@ -1166,6 +1205,32 @@ export function EnvironmentSettingsDialog({
               </div>
             )}
           </div>
+        );
+      case "previews":
+        return (
+          <EnvironmentPreviewServices
+            environment={environment}
+            onAddPortMapping={
+              isLocalEnvironment
+                ? undefined
+                : (containerPort) => {
+                    if (
+                      portMappings.some(
+                        (mapping) =>
+                          mapping.containerPort === containerPort && mapping.protocol === "tcp",
+                      )
+                    )
+                      return;
+                    setPortMappings([
+                      ...portMappings,
+                      { containerPort, hostPort: 0, protocol: "tcp", hostPortMode: "auto" },
+                    ]);
+                    toast.info(
+                      `Port ${containerPort} will be published when you save and recreate the container.`,
+                    );
+                  }
+            }
+          />
         );
       case "extensions": {
         const activeCatalog =

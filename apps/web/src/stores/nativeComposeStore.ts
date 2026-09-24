@@ -1,10 +1,30 @@
 import { create } from "zustand";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentConversationMode } from "@orkestrator/protocol/native-agent";
+import { parseNativeAgentCommandIntent } from "@orkestrator/protocol/agent-command-catalogue";
+import { parseCommandToken } from "@orkestrator/protocol/agent-slash-commands";
 import type { FileMention } from "@/types";
 import type { WorkspaceAttachment } from "@/components/chat/NativeAttachmentMenu";
 import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
+
+/**
+ * The command a user picked from the `/` menu for this draft.
+ *
+ * Identity, not a hint: while the leading token is exactly the one inserted,
+ * the draft executes this descriptor (argument edits keep it). Editing the
+ * token, choosing literal text, or a provider/session change drops it. Only
+ * opaque lookup keys are stored, never a binding.
+ */
+export interface NativeCommandSelection {
+  commandId: string;
+  bindingRevision?: string;
+  /** The leading token exactly as inserted, sigil included. */
+  token: string;
+  platform?: AgentPlatform;
+  /** Provider session the selection was made against, when one was known. */
+  sessionId?: string;
+}
 
 export interface NativeComposeDraft {
   text: string;
@@ -39,6 +59,7 @@ export interface NativeComposeDraft {
    * narrowed to the two the launcher offers by default.
    */
   executionProfileId?: string;
+  commandSelection?: NativeCommandSelection;
 }
 
 const EMPTY_DRAFT: NativeComposeDraft = {
@@ -77,6 +98,7 @@ const VALID_AGENT_PLATFORMS = new Set<AgentPlatform>([
   "opencode",
   "cursor",
   "grok",
+  "pi",
 ]);
 
 const DRAFT_METADATA_CACHE = new WeakMap<NativeComposeDraft, Readonly<Record<string, unknown>>>();
@@ -107,6 +129,54 @@ function restorePendingTranscriptConfirmation(
   };
 }
 
+const COMMAND_TOKEN_SIGILS = ["/", "$"] as const;
+const MAX_COMMAND_TOKEN_LENGTH = 256;
+
+/** True while `text` still leads with exactly the token that was selected. */
+export function commandSelectionMatchesText(
+  selection: NativeCommandSelection,
+  text: string,
+): boolean {
+  return parseCommandToken(text, [...COMMAND_TOKEN_SIGILS])?.token === selection.token;
+}
+
+function restoreCommandSelection(value: unknown): NativeCommandSelection | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const intent = parseNativeAgentCommandIntent({
+    kind: "selected",
+    commandId: record.commandId,
+    ...(record.bindingRevision === undefined ? {} : { bindingRevision: record.bindingRevision }),
+  });
+  if (intent?.kind !== "selected") return undefined;
+  const token = record.token;
+  if (
+    typeof token !== "string" ||
+    token.length < 2 ||
+    token.length > MAX_COMMAND_TOKEN_LENGTH ||
+    /\s/.test(token) ||
+    !COMMAND_TOKEN_SIGILS.includes(token[0] as "/" | "$")
+  ) {
+    return undefined;
+  }
+  const platform =
+    typeof record.platform === "string" &&
+    VALID_AGENT_PLATFORMS.has(record.platform as AgentPlatform)
+      ? (record.platform as AgentPlatform)
+      : undefined;
+  const sessionId =
+    typeof record.sessionId === "string" && record.sessionId.length <= 200
+      ? record.sessionId
+      : undefined;
+  return {
+    commandId: intent.commandId,
+    ...(intent.bindingRevision ? { bindingRevision: intent.bindingRevision } : {}),
+    token,
+    ...(platform ? { platform } : {}),
+    ...(sessionId ? { sessionId } : {}),
+  };
+}
+
 function persistedDraftMetadata(draft: NativeComposeDraft): Readonly<Record<string, unknown>> {
   const cached = DRAFT_METADATA_CACHE.get(draft);
   if (cached) return cached;
@@ -121,6 +191,7 @@ function persistedDraftMetadata(draft: NativeComposeDraft): Readonly<Record<stri
     fastMode: draft.fastMode,
     mode: draft.mode,
     ...(draft.executionProfileId ? { executionProfileId: draft.executionProfileId } : {}),
+    ...(draft.commandSelection ? { commandSelection: draft.commandSelection } : {}),
   });
   DRAFT_METADATA_CACHE.set(draft, metadata);
   return metadata;
@@ -133,7 +204,8 @@ function hasPersistableDraftMetadata(draft: NativeComposeDraft): boolean {
     draft.reasoningId ||
     draft.requestId ||
     draft.pendingTranscriptConfirmation ||
-    draft.executionProfileId,
+    draft.executionProfileId ||
+    draft.commandSelection,
   );
 }
 
@@ -188,6 +260,7 @@ function restoreDraftMetadata(value: unknown): Partial<NativeComposeDraft> | und
   const pendingTranscriptConfirmation = restorePendingTranscriptConfirmation(
     metadata.pendingTranscriptConfirmation,
   );
+  const commandSelection = restoreCommandSelection(metadata.commandSelection);
   if (
     !platform &&
     !modelId &&
@@ -196,7 +269,8 @@ function restoreDraftMetadata(value: unknown): Partial<NativeComposeDraft> | und
     !pendingTranscriptConfirmation &&
     fastMode === undefined &&
     !mode &&
-    !executionProfileId
+    !executionProfileId &&
+    !commandSelection
   )
     return undefined;
   return {
@@ -208,6 +282,7 @@ function restoreDraftMetadata(value: unknown): Partial<NativeComposeDraft> | und
     fastMode,
     mode,
     executionProfileId,
+    ...(commandSelection ? { commandSelection } : {}),
   };
 }
 
@@ -241,6 +316,16 @@ export const useNativeComposeStore = create<NativeComposeState>()((set) => ({
       ) {
         delete next.requestId;
         delete next.pendingTranscriptConfirmation;
+      }
+      // A selection lasts exactly as long as its token: argument edits keep
+      // it, any edit to the token itself makes the text a different command.
+      if (
+        update.text !== undefined &&
+        !("commandSelection" in update) &&
+        next.commandSelection &&
+        !commandSelectionMatchesText(next.commandSelection, next.text)
+      ) {
+        delete next.commandSelection;
       }
       drafts.set(sessionKey, next);
       return { drafts };

@@ -28,6 +28,7 @@ import type {
   TaskListSnapshot,
   MessagePatchEventData,
   SessionUsageSnapshot,
+  ClaudeCumulativeUsage,
   BackgroundTaskSnapshot,
   SessionRateLimitWindow,
   StopBackgroundTaskResult,
@@ -780,11 +781,98 @@ export async function refreshClaudeContextUsage(
   return usage;
 }
 
+/**
+ * The first Claude Code release whose resumed `query()` continues the running
+ * cost and usage totals its transcript saved instead of starting from zero.
+ */
+const RESUMED_USAGE_CONTINUES_FROM = [2, 1, 277] as const;
+
+/**
+ * Whether a `query()` run by this CLI version picks up where the previous
+ * one's totals left off. An unparseable version is assumed current: the
+ * managed CLI always is, and a count that restarts is caught by
+ * `claudeTurnUsageDelta` either way.
+ */
+export function claudeCliContinuesResumedUsage(version: unknown): boolean {
+  if (typeof version !== "string") return true;
+  const parts = version.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!parts) return true;
+  for (let index = 0; index < RESUMED_USAGE_CONTINUES_FROM.length; index += 1) {
+    const difference = Number(parts[index + 1]) - RESUMED_USAGE_CONTINUES_FROM[index]!;
+    if (difference !== 0) return difference > 0;
+  }
+  return true;
+}
+
+/**
+ * Called on each `system/init`, which opens every `query()`. A CLI older than
+ * 2.1.277 restarts its totals at zero for a resumed query, so the previous
+ * query's totals are no longer the baseline its first result is measured from.
+ */
+export function beginClaudeUsageQuery(session: SessionState, cliVersion: unknown): void {
+  if (!claudeCliContinuesResumedUsage(cliVersion)) session.claudeUsageBaseline = undefined;
+}
+
+const CUMULATIVE_USAGE_KEYS = ["input", "output", "cacheRead", "cacheWrite", "cost"] as const;
+
+/**
+ * Turn one result's running totals into what this turn alone added.
+ *
+ * A total that went down means the provider restarted its count — a mid-session
+ * `/clear`, or a resumed transcript that saved no totals — so the result is
+ * already this turn's own. An all-zero result (crash and startup-error results
+ * may carry zeroed values) contributes nothing and leaves the baseline alone,
+ * or the next real result would be counted from zero a second time.
+ */
+export function claudeTurnUsageDelta(
+  session: SessionState,
+  cumulative: ClaudeCumulativeUsage,
+  bootstrapTurnTokens?: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  },
+): ClaudeCumulativeUsage {
+  if (CUMULATIVE_USAGE_KEYS.every((key) => cumulative[key] === 0)) return cumulative;
+  const baseline = session.claudeUsageBaseline;
+  if (!baseline && bootstrapTurnTokens) {
+    return {
+      input: bootstrapTurnTokens.inputTokens,
+      output: bootstrapTurnTokens.outputTokens,
+      cacheRead: bootstrapTurnTokens.cacheReadTokens,
+      cacheWrite: bootstrapTurnTokens.cacheWriteTokens,
+      // Stream frames carry no billing amount. Counting the cumulative
+      // transcript cost here would charge all pre-attach turns as this turn.
+      cost: 0,
+    };
+  }
+  if (!baseline || CUMULATIVE_USAGE_KEYS.some((key) => cumulative[key] < baseline[key])) {
+    return cumulative;
+  }
+  return {
+    input: cumulative.input - baseline.input,
+    output: cumulative.output - baseline.output,
+    cacheRead: cumulative.cacheRead - baseline.cacheRead,
+    cacheWrite: cumulative.cacheWrite - baseline.cacheWrite,
+    cost: cumulative.cost - baseline.cost,
+  };
+}
+
 export async function buildClaudeUsageSnapshot(
   session: SessionState,
   result: SdkResultMessage,
   queryControl: SessionState["queryControl"],
   fallbackModel?: string,
+  options?: {
+    bootstrapTurnTokens?: {
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheWriteTokens: number;
+    };
+    stillOwnsTurn?: () => boolean;
+  },
 ): Promise<SessionUsageSnapshot | undefined> {
   const modelEntries = Object.entries(result.modelUsage ?? {});
   const modelTotals = modelEntries.reduce(
@@ -798,7 +886,7 @@ export async function buildClaudeUsageSnapshot(
     { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
   );
   const rawUsage = result.usage ?? {};
-  const totals =
+  const cumulativeTotals: ClaudeCumulativeUsage =
     modelEntries.length > 0
       ? modelTotals
       : {
@@ -820,6 +908,8 @@ export async function buildClaudeUsageSnapshot(
             0,
           cost: 0,
         };
+  if (result.total_cost_usd !== undefined) cumulativeTotals.cost = result.total_cost_usd;
+  const totals = claudeTurnUsageDelta(session, cumulativeTotals, options?.bootstrapTurnTokens);
 
   let context: ClaudeContextUsage | undefined;
   if (queryControl?.getContextUsage) {
@@ -834,7 +924,20 @@ export async function buildClaudeUsageSnapshot(
     }
   }
 
-  const heuristic = extractContextUsageFromUnknown(result, fallbackModel);
+  // Ownership can change while the control request is pending. A released or
+  // aborted query must not move the shared cumulative origin underneath its
+  // successor, even when its result itself was valid.
+  if (options?.stillOwnsTurn && !options.stillOwnsTurn()) return undefined;
+  if (!CUMULATIVE_USAGE_KEYS.every((key) => cumulativeTotals[key] === 0)) {
+    session.claudeUsageBaseline = cumulativeTotals;
+  }
+
+  // With no pre-attach baseline, the result's raw counters describe the whole
+  // transcript. They are not a safe context estimate for this turn either;
+  // prefer the streamed calls below, or retain the previous/zero context.
+  const heuristic = options?.bootstrapTurnTokens
+    ? undefined
+    : extractContextUsageFromUnknown(result, fallbackModel);
   // The heuristic BFS walks into `result.modelUsage[model]`, where it can only
   // reach `inputTokens + outputTokens` — cache reads are invisible to it. On a
   // resumed turn that is the whole context (120k of cache read reported as
@@ -880,7 +983,7 @@ export async function buildClaudeUsageSnapshot(
     `claude-turn-${session.latestTurnGeneration ?? updatedAt}`;
   const turn = {
     turnId,
-    costUsd: result.total_cost_usd ?? totals.cost,
+    costUsd: totals.cost,
     inputTokens: totals.input,
     outputTokens: totals.output,
     cacheReadTokens: totals.cacheRead,
@@ -934,7 +1037,7 @@ export async function buildClaudeUsageSnapshot(
     cacheWriteTokens: (previous?.cacheWriteTokens ?? 0) + totals.cacheWrite,
     lastTurnTokens,
     sessionTokens: (previous?.sessionTokens ?? 0) + lastTurnTokens,
-    costUsd: (previous?.costUsd ?? 0) + (result.total_cost_usd ?? totals.cost),
+    costUsd: (previous?.costUsd ?? 0) + totals.cost,
     durationMs: (previous?.durationMs ?? 0) + (result.duration_ms ?? 0),
     apiDurationMs: (previous?.apiDurationMs ?? 0) + (result.duration_api_ms ?? 0),
     ...(previous?.linesAdded !== undefined ? { linesAdded: previous.linesAdded } : {}),

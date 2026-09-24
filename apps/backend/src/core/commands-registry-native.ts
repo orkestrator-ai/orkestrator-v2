@@ -331,6 +331,17 @@ export function registerNativeAgentCommands(
     });
   });
 
+  register("refresh_native_agent_commands", async (args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    return context.nativeAgents.refreshProjectionCommands({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+    });
+  });
+
   register("stop_native_agent_session", async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");

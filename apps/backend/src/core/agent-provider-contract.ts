@@ -32,6 +32,8 @@ import type {
   NativeAgentTurnPhase,
 } from "@orkestrator/protocol/native-agent";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import type { NativeAgentBridgeCommandInvocation } from "@orkestrator/protocol/agent-command-catalogue";
+import type { NativeAgentCommandRefreshOutcome } from "@orkestrator/protocol/native-agent";
 import type { PromptAttachment } from "./prompt-attachments.js";
 
 export type ProviderStatus = "running" | "blocked" | "idle" | "error" | "missing";
@@ -55,6 +57,14 @@ export interface ProviderSessionObservation {
   contextUsage?: NativeAgentContextUsage;
   /** A terminal provider is still reconciling its exact cumulative total. */
   usagePending?: boolean;
+  /**
+   * This idle turn still has live background work or a retained continuation
+   * for the current request. The composer can take input, but a workflow
+   * awaiting this turn's result must keep supervising it.
+   */
+  backgroundWorkLive?: boolean;
+  /** Released Claude dispatches whose query is still awaiting its root continuation. */
+  retainedContinuationRequestIds?: string[];
 }
 
 export interface ProviderPromptImage {
@@ -158,6 +168,13 @@ export async function readProviderStatus(
     const observation = provider.observeSession
       ? await provider.observeSession(sessionId)
       : { status: await provider.status(sessionId) };
+    if (
+      requestId &&
+      observation.status === "idle" &&
+      observation.retainedContinuationRequestIds?.includes(requestId)
+    ) {
+      return { ...observation, backgroundWorkLive: true };
+    }
     // Only workflow owners supply a durable request id. UI/status observers
     // must never change another caller's turn permissions.
     if (requestId && (observation.status === "idle" || observation.status === "error")) {
@@ -262,7 +279,19 @@ export interface ProviderSendOptions {
   effort?: string;
   parameterValues?: Record<string, string | boolean>;
   persistDefaults?: boolean;
+  /**
+   * False is literal intent: the provider must not interpret the prompt as a
+   * command. Providers without a native suppression mechanism are guarded by
+   * the backend before dispatch (see `literalCommandSuppression`).
+   */
   allowProviderCommands?: boolean;
+  /**
+   * The command the backend resolved against this provider's own enhanced
+   * catalogue. Only ever set for a descriptor that came from that catalogue;
+   * the provider revalidates it against its private registry and refuses
+   * (never downgrades to plain text) when it no longer matches.
+   */
+  command?: NativeAgentBridgeCommandInvocation;
   /** Scoped Orkestrator MCP connection for providers with a qualified delivery path. */
   agentMcp?: {
     design?: boolean;
@@ -306,6 +335,12 @@ export interface ProviderInteractiveSnapshot {
   controls?: NativeAgentControlUpdate;
   providerRevision?: number;
   providerGeneration?: string | number;
+  /**
+   * The bridge's own command-inventory revision, when it tracks one. A change
+   * tells the backend its cached catalogue is out of date — push freshness
+   * carried by a read the projection already makes, never a new poll.
+   */
+  commandCatalogueRevision?: number;
   phase?: NativeAgentTurnPhase;
   turnStartedAt?: number;
   contextUsage?: NativeAgentContextUsage;
@@ -335,6 +370,8 @@ export interface ProviderTranscriptSnapshot {
   messages: unknown[];
   /** Absolute position of the first message within the current history epoch. */
   historyStartIndex?: number;
+  /** Parts omitted from the first retained message by the provider's byte bound. */
+  omittedParts?: number;
   /** False when the provider supplied only a bounded retained tail. */
   complete?: boolean;
   title?: string;
@@ -484,6 +521,14 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
   ): Promise<string>;
   forkSession?(sessionId: string, messageId?: string): Promise<NativeAgentForkOutcome>;
   slashCommands?(sessionId?: string): Promise<NativeAgentSlashCommand[]>;
+  /**
+   * Catalogue read with freshness and execution identity. Preferred over
+   * {@link slashCommands}. Must never touch liveness, hydrate a transcript or
+   * re-attach an idle session.
+   */
+  commandCatalogue?(sessionId?: string): Promise<ProviderCommandCatalogue>;
+  /** Explicit command refresh; reports what it actually did. */
+  refreshCommands?(sessionId?: string): Promise<ProviderCommandRefreshResult>;
   mcpServers?(sessionId: string): Promise<NativeAgentMcpServer[]>;
   mcpServerAction?(
     sessionId: string,
@@ -518,6 +563,27 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * returns an empty summary rather than omitting the method.
    */
   runtimeHealth?(sessionId: string): Promise<ProviderRuntimeHealth>;
+}
+
+export interface ProviderCommandCatalogue {
+  /** Descriptors carry execution identity negotiated with this provider. */
+  enhanced: boolean;
+  commands: NativeAgentSlashCommand[];
+  /**
+   * `ready` is authoritative (including empty). `stale` is a retained list the
+   * provider could not refresh. `unsupported` means the integration exposes no
+   * provider commands. `missing` means the provider does not hold the session.
+   */
+  status: "ready" | "stale" | "unsupported" | "missing";
+  truncated?: boolean;
+  revision?: number;
+  generation?: string;
+  freshness?: "push" | "ttl";
+}
+
+export interface ProviderCommandRefreshResult {
+  outcome: NativeAgentCommandRefreshOutcome;
+  message?: string;
 }
 
 export interface ProviderRuntimeHealth {

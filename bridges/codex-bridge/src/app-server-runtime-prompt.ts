@@ -103,17 +103,17 @@ import {
   type NormalizedPart,
 } from "./messages/types.js";
 import { appendAttachmentTags } from "./messages/attachment-tags.js";
+import { parseCodexSteerCommand, wrapPromptForConversationMode } from "./prompts/slash-commands.js";
+import type { CommandPlan } from "./commands/codex-command-catalogue.js";
 import {
-  buildPromptInput,
-  expandPromptTemplate,
-  getAvailableSlashCommandDefinitions,
-  isCodexCliNativeSlashCommand,
-  parseCodexSteerCommand,
-  parseSlashCommandPrompt,
-  wrapPromptForConversationMode,
-  type ConversationMode,
-  type PromptSlashCommand,
-} from "./prompts/slash-commands.js";
+  NATIVE_AGENT_COMMAND_CATALOGUE_VERSION,
+  type BridgeCommandCatalogueResponse,
+  type NativeAgentBridgeCommandInvocation,
+} from "@orkestrator/protocol/agent-command-catalogue";
+import type {
+  NativeAgentCommandRefreshOutcome,
+  NativeAgentSlashCommand,
+} from "@orkestrator/protocol/native-agent";
 import {
   getWorkingDirectory,
   hydrateMessagesFromPersistedSession,
@@ -137,7 +137,21 @@ import {
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
 import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
-import { toEngineInput } from "./app-server-runtime-helpers.js";
+import { toEngineInput, withSkillInput } from "./app-server-runtime-helpers.js";
+
+/**
+ * `422` is a selected command that no longer matches this bridge's registry.
+ * Nothing was journaled or sent, so the backend reports it as a rejection and
+ * keeps the draft rather than parking an ambiguous dispatch.
+ */
+export type PromptDispatchOutcome =
+  | { ok: true; result: PromptAcceptedResult }
+  | { ok: false; status: 400 | 404 | 409 | 503; error: string }
+  | { ok: false; status: 422; error: string; kind: "command-unavailable" };
+
+function commandRefusal(message: string): PromptDispatchOutcome {
+  return { ok: false, status: 422, error: message, kind: "command-unavailable" };
+}
 
 export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
   async prompt(
@@ -150,11 +164,12 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       readOnly?: boolean;
       agentMcp?: { url: string; token: string; design?: boolean };
       workflowResultTool?: string;
+      /** `false` is literal intent: no bridge command resolution at all. */
+      allowProviderCommands?: boolean;
+      /** A selection resolved against this bridge's own catalogue. */
+      command?: NativeAgentBridgeCommandInvocation;
     },
-  ): Promise<
-    | { ok: true; result: PromptAcceptedResult }
-    | { ok: false; status: 400 | 404 | 409 | 503; error: string }
-  > {
+  ): Promise<PromptDispatchOutcome> {
     const session = this.registry.getSession(sessionId);
     if (!session) return { ok: false, status: 404, error: "Session not found" };
     if (!input.requestId?.trim()) {
@@ -202,11 +217,12 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       readOnly?: boolean;
       agentMcp?: { url: string; token: string; design?: boolean };
       workflowResultTool?: string;
+      /** `false` is literal intent: no bridge command resolution at all. */
+      allowProviderCommands?: boolean;
+      /** A selection resolved against this bridge's own catalogue. */
+      command?: NativeAgentBridgeCommandInvocation;
     },
-  ): Promise<
-    | { ok: true; result: PromptAcceptedResult }
-    | { ok: false; status: 400 | 404 | 409 | 503; error: string }
-  > {
+  ): Promise<PromptDispatchOutcome> {
     const requestId = input.requestId!;
     await this.generationRecovery;
 
@@ -286,21 +302,45 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       }
     }
 
-    // `/steer` is reserved even for a schema-constrained prompt. Structured
-    // output bypasses other local commands so the provider can satisfy the
-    // schema, but allowing this command through would start a brand-new model
-    // turn containing raw steering text.
-    if (parseCodexSteerCommand(input.prompt) && input.outputSchema) {
-      return {
-        ok: false,
-        status: 400,
-        error: "/steer cannot be used with structured output",
-      };
-    }
-    if (parseCodexSteerCommand(input.prompt)) {
-      const resolvedSteer = await this.resolveSlashCommand(session, input.prompt, this.options.cwd);
-      if (resolvedSteer?.kind === "builtin") {
-        this.emitLocalResponse(session, input.prompt, resolvedSteer.response);
+    // Literal intent (workflows, mail, structured requests from the backend)
+    // skips every bridge resolver: the text goes to Codex exactly as written.
+    const interpretCommands = input.allowProviderCommands !== false;
+
+    // A selection is validated before anything is journaled, attached or
+    // prepared, so a stale one costs nothing and keeps the user's draft.
+    let plan: CommandPlan | undefined;
+    if (input.command) {
+      plan = await this.commandCatalogue.resolveSelected(input.command);
+      if (plan.kind === "refused") return commandRefusal(plan.message);
+      if (plan.kind === "builtin" && input.outputSchema) {
+        return commandRefusal(
+          `${input.command.name} answers locally and cannot produce structured output.`,
+        );
+      }
+    } else if (interpretCommands) {
+      // `/steer` is reserved even for a schema-constrained prompt. Structured
+      // output bypasses other local commands so the provider can satisfy the
+      // schema, but allowing this command through would start a brand-new model
+      // turn containing raw steering text.
+      const steer = parseCodexSteerCommand(input.prompt);
+      if (steer && input.outputSchema) {
+        return {
+          ok: false,
+          status: 400,
+          error: "/steer cannot be used with structured output",
+        };
+      }
+      // Orkestrator's session action owns a *running* `/steer`. One arriving as
+      // an ordinary prompt means there is no turn to steer; answer locally so
+      // the raw command never starts a model turn.
+      if (steer) {
+        this.emitLocalResponse(
+          session,
+          input.prompt,
+          steer.args
+            ? "There is no active Codex turn to steer. Start a turn, then use /steer while it is running."
+            : "Usage: /steer <instructions>. Run it while a Codex turn is active.",
+        );
         return { ok: true, result: { status: "processing", requestId } };
       }
     }
@@ -336,22 +376,56 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     context = await this.ensureAttached(session.id);
     this.registry.assertNoActiveTurn(context);
 
-    // 3. Local slash commands never reach the model.
-    const cwd = this.options.cwd;
-    // Structured turns must reach the provider. A local slash-command response is
-    // plaintext and can never satisfy the caller's schema.
-    const resolved = input.outputSchema
-      ? undefined
-      : await this.resolveSlashCommand(session, input.prompt, cwd);
-    if (resolved?.kind === "builtin") {
-      this.emitLocalResponse(session, input.prompt, resolved.response);
+    // 3. Resolve typed commands. Structured turns must reach the provider: a
+    //    local reply is plaintext and can never satisfy the caller's schema.
+    if (!plan) {
+      plan =
+        interpretCommands && !input.outputSchema
+          ? await this.commandCatalogue.resolveTyped(input.prompt)
+          : { kind: "text" };
+    } else if (plan.kind === "skill") {
+      // The environment check above can replace the child. A binding listed by
+      // the dead generation is withdrawn; re-validate against the live one.
+      const live = this.commandCatalogue.skills.current()?.byId.get(plan.binding.id);
+      if (!live || live.path !== plan.binding.path || !live.enabled || live.ambiguous) {
+        const revalidated = await this.commandCatalogue.resolveSelected(input.command!);
+        if (revalidated.kind === "refused") return commandRefusal(revalidated.message);
+        plan = revalidated;
+      }
+    }
+
+    // 4. Local commands never reach the model. A refused *typed* command is
+    //    explained locally rather than sent as half-understood slash text.
+    if (plan.kind === "refused") {
+      this.emitLocalResponse(session, input.prompt, plan.message);
+      return { ok: true, result: { status: "processing", requestId } };
+    }
+    if (plan.kind === "builtin") {
+      const response =
+        plan.builtin === "help"
+          ? await this.commandCatalogue.helpText()
+          : await this.modelsListText(session);
+      this.emitLocalResponse(session, input.prompt, response);
       return { ok: true, result: { status: "processing", requestId } };
     }
 
-    const executionPrompt = resolved?.kind === "prompt" ? resolved.expandedPrompt : input.prompt;
-    const parsed = parseSlashCommandPrompt(executionPrompt);
-    const bypassModeWrapper = !!parsed && isCodexCliNativeSlashCommand(parsed.name);
-    const isPlanReview = session.config.mode === "plan" && !bypassModeWrapper;
+    // The visible user message stays the original text; only the wire input
+    // carries the expanded template or the skill binding.
+    let executionPrompt = input.prompt;
+    let skillInput: { name: string; path: string } | undefined;
+    if (plan.kind === "template") {
+      const expansion = await this.commandCatalogue.expandTemplate(plan.entry, plan.args);
+      if (!expansion.ok) {
+        if (input.command) return commandRefusal(expansion.message);
+        this.emitLocalResponse(session, input.prompt, expansion.message);
+        return { ok: true, result: { status: "processing", requestId } };
+      }
+      executionPrompt = expansion.text;
+    } else if (plan.kind === "skill") {
+      executionPrompt = `$${plan.binding.name}${plan.args ? ` ${plan.args}` : ""}`;
+      skillInput = { name: plan.binding.name, path: plan.binding.path };
+    }
+    const isPlanReview = session.config.mode === "plan";
     // Consolidation is a structured report turn, not a planning turn. Keep the
     // reusable Fix session in build mode while applying the read-only boundary
     // and workflow-result approval only to this dispatch.
@@ -450,11 +524,12 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     const promptWithRecoveredContext = session.recoveredContextPending
       ? buildRecoveredContextPrompt(session.localMessages, executionPrompt)
       : executionPrompt;
-    const engineInput: EngineUserInput[] = toEngineInput(
-      bypassModeWrapper
-        ? promptWithRecoveredContext
-        : wrapPromptForConversationMode(promptWithRecoveredContext, session.config.mode),
-      input.attachments,
+    const engineInput: EngineUserInput[] = withSkillInput(
+      toEngineInput(
+        wrapPromptForConversationMode(promptWithRecoveredContext, session.config.mode),
+        input.attachments,
+      ),
+      skillInput,
     );
     try {
       // 5. Journal *before* the write: everything from here to `markAccepted` is
@@ -1162,88 +1237,51 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       });
   }
 
-  protected async resolveSlashCommand(
-    session: BridgeSession,
-    prompt: string,
-    cwd: string,
-  ): Promise<
-    { kind: "prompt"; expandedPrompt: string } | { kind: "builtin"; response: string } | null
-  > {
-    // `/steer` accepts multiline free text, whereas the general slash-command
-    // parser deliberately rejects newlines. Handle it first so an idle or stale
-    // client never starts a fresh model turn with the raw command text.
-    const steer = parseCodexSteerCommand(prompt);
-    if (steer) {
+  // ------------------------------------------------------------ commands
+
+  /**
+   * Enhanced command catalogue for one session.
+   *
+   * A metadata read: it checks the session exists but never touches
+   * `lastAccessed`, hydrates a transcript or re-attaches a thread, and skill
+   * discovery lists the workspace without resuming any thread.
+   */
+  async getCommandCatalogue(sessionId: string): Promise<BridgeCommandCatalogueResponse> {
+    if (!this.registry.getSession(sessionId)) {
       return {
-        kind: "builtin",
-        response: steer.args
-          ? "There is no active Codex turn to steer. Start a turn, then use /steer while it is running."
-          : "Usage: /steer <instructions>. Run it while a Codex turn is active.",
+        catalogueVersion: NATIVE_AGENT_COMMAND_CATALOGUE_VERSION,
+        status: "missing",
+        commands: [],
       };
     }
+    return this.commandCatalogue.list();
+  }
 
-    const parsed = parseSlashCommandPrompt(prompt);
-    if (!parsed) return null;
-
-    if (parsed.name === "/help") {
-      const commands = await getAvailableSlashCommandDefinitions(cwd);
-      const builtin = commands.filter((command) => command.source === "builtin");
-      const prompts = commands.filter(
-        (command): command is PromptSlashCommand => command.source === "prompt",
-      );
-      const sections = ["Available Codex slash commands:"];
-      if (builtin.length > 0) {
-        sections.push("", "Built in:");
-        for (const command of builtin) {
-          sections.push(
-            `- ${command.name}${command.description ? `: ${command.description}` : ""}`,
-          );
-        }
-      }
-      if (prompts.length > 0) {
-        sections.push("", "Prompt commands:");
-        for (const command of prompts) {
-          const suffix = command.argumentHint ? ` ${command.argumentHint}` : "";
-          sections.push(
-            `- ${command.name}${suffix}${command.description ? `: ${command.description}` : ""}`,
-          );
-        }
-      } else {
-        sections.push("", "No Codex prompt commands were discovered in this environment.");
-      }
-      return { kind: "builtin", response: sections.join("\n") };
+  async refreshCommandCatalogue(
+    sessionId: string,
+  ): Promise<{ outcome: NativeAgentCommandRefreshOutcome; message?: string }> {
+    if (!this.registry.getSession(sessionId)) {
+      return { outcome: "failed", message: "Session not found" };
     }
+    return this.commandCatalogue.refresh();
+  }
 
-    if (parsed.name === "/models") {
-      const { models } = await this.listModels();
-      const current = session.config.model || models[0]?.id || "UNCONFIRMED";
-      return {
-        kind: "builtin",
-        response: [
-          "Available Codex models:",
-          ...models.map(
-            (model: BridgeModel) =>
-              `- ${model.id}${model.id === current ? " (current)" : ""}${model.description ? `: ${model.description}` : ""}`,
-          ),
-        ].join("\n"),
-      };
-    }
+  /** Legacy global rows: built-ins and templates, without starting Codex. */
+  async listGlobalCommandRows(): Promise<NativeAgentSlashCommand[]> {
+    return this.commandCatalogue.listTemplateAndBuiltinRows();
+  }
 
-    // Compatibility seam for provider-native commands. The pinned app-server
-    // currently exposes none; experimental goals stay disabled until a stable
-    // RPC can make their state authoritative.
-    if (isCodexCliNativeSlashCommand(parsed.name)) return null;
-
-    const commands = await getAvailableSlashCommandDefinitions(cwd);
-    const promptCommand = commands.find(
-      (command): command is PromptSlashCommand =>
-        command.source === "prompt" && command.name.toLowerCase() === parsed.name.toLowerCase(),
-    );
-    if (!promptCommand) return null;
-    return {
-      kind: "prompt",
-      expandedPrompt: await expandPromptTemplate(promptCommand.template, parsed.args, cwd),
-    };
+  /** `/models`: the catalogue the model picker uses, with the current selection. */
+  protected async modelsListText(session: BridgeSession): Promise<string> {
+    const { models } = await this.listModels();
+    const current = session.config.model || models[0]?.id || "UNCONFIRMED";
+    return [
+      "Available Codex models:",
+      ...models.map(
+        (model: BridgeModel) =>
+          `- ${model.id}${model.id === current ? " (current)" : ""}${model.description ? `: ${model.description}` : ""}`,
+      ),
+    ].join("\n");
   }
 
   /** Answers a built-in command without involving Codex at all. */

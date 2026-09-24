@@ -172,6 +172,44 @@ function InheritedClaudeSettingsHarness({
 }
 
 describe("AgentPlatformPane Claude SDK defaults", () => {
+  test("resolves a stored superseded model without showing an as-is warning", () => {
+    const upgradedCatalog: AgentModelCatalog = {
+      ...catalog,
+      claude: [
+        {
+          id: "claude-fable-5-1[1m]",
+          name: "Fable 5.1",
+          reasoningEfforts: ["xhigh"],
+        },
+      ],
+    };
+    render(
+      <AgentPlatformPane
+        platform="claude"
+        tier={{
+          platforms: {
+            claude: { model: "claude-fable-5[1m]", reasoningEffort: "xhigh" },
+          },
+        }}
+        onChange={() => undefined}
+        tiers={{
+          global: {
+            platforms: {
+              claude: { model: "claude-fable-5[1m]", reasoningEffort: "xhigh" },
+            },
+          },
+        }}
+        canInherit={false}
+        catalog={upgradedCatalog}
+      />,
+    );
+
+    expect(
+      screen.getByRole("combobox", { name: "Claude Code default model" }).textContent,
+    ).toContain("Fable 5.1");
+    expect(screen.queryByText(/will be sent as-is/i) === null).toBe(true);
+  });
+
   test("stores thinking and 1M context choices in Claude settings", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
     render(<ClaudeSettingsHarness onChange={onChange} />);

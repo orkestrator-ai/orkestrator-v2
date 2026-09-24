@@ -206,6 +206,7 @@ export function useVirtuosoScrollState(
   const lastObservedScrollTopRef = useRef(0);
   const mountedRef = useRef(true);
   const scrollInFlightRef = useRef(false);
+  const scrollOperationRef = useRef(0);
   const hasBeenActiveRef = useRef(false);
   const envChangedWhileInactiveRef = useRef(false);
   const pendingActivationScrollRef = useRef(false);
@@ -311,20 +312,27 @@ export function useVirtuosoScrollState(
     // retry loop is still mid-flight would fire a duplicate footer scroll.
     if (scrollInFlightRef.current) return false;
     scrollInFlightRef.current = true;
+    const operation = ++scrollOperationRef.current;
 
     let attempts = 0;
+    const operationIsCurrent = () => mountedRef.current && scrollOperationRef.current === operation;
+    const finishOperation = () => {
+      if (scrollOperationRef.current === operation) {
+        scrollInFlightRef.current = false;
+      }
+    };
 
     const watchScrollHeight = () => {
       const el = scrollerElRef.current;
-      if (!el || !mountedRef.current) {
-        scrollInFlightRef.current = false;
+      if (!el || !operationIsCurrent()) {
+        finishOperation();
         return;
       }
       const start = performance.now();
       let lastScrollHeight = el.scrollHeight;
       const tick = () => {
-        if (!mountedRef.current) {
-          scrollInFlightRef.current = false;
+        if (!operationIsCurrent()) {
+          finishOperation();
           return;
         }
         const currentHeight = el.scrollHeight;
@@ -340,13 +348,17 @@ export function useVirtuosoScrollState(
         if (performance.now() - start < POST_SCROLL_WATCH_MS) {
           requestAnimationFrame(tick);
         } else {
-          scrollInFlightRef.current = false;
+          finishOperation();
         }
       };
       requestAnimationFrame(tick);
     };
 
     const finish = () => {
+      if (!operationIsCurrent()) {
+        finishOperation();
+        return;
+      }
       // Scroll past the last data item to reveal footer content.
       // The browser clamps to scrollHeight - clientHeight.
       handle.scrollTo({
@@ -357,8 +369,8 @@ export function useVirtuosoScrollState(
     };
 
     const attempt = () => {
-      if (!mountedRef.current) {
-        scrollInFlightRef.current = false;
+      if (!operationIsCurrent()) {
+        finishOperation();
         return;
       }
       attempts += 1;
@@ -374,8 +386,8 @@ export function useVirtuosoScrollState(
       // setTimeout (rather than rAF) gives Virtuoso time to fire
       // atBottomStateChange after rendering/measuring the tail items.
       setTimeout(() => {
-        if (!mountedRef.current) {
-          scrollInFlightRef.current = false;
+        if (!operationIsCurrent()) {
+          finishOperation();
           return;
         }
         if (!isAtBottomRef.current && attempts < SCROLL_TO_BOTTOM_MAX_ATTEMPTS) {
@@ -389,7 +401,8 @@ export function useVirtuosoScrollState(
     attempt();
     return true;
     // Deps intentionally empty: reads only refs (virtuosoRef, scrollerElRef,
-    // mountedRef, scrollInFlightRef, isAtBottomRef, wantsStickRef). Adding
+    // mountedRef, scrollInFlightRef, scrollOperationRef, isAtBottomRef,
+    // wantsStickRef). Adding
     // scrollerEl here would recreate the callback whenever the scroller
     // mounts, which in turn would retrigger the ResizeObserver effect and
     // reobserve from scratch on each mount.
@@ -524,6 +537,14 @@ export function useVirtuosoScrollState(
     let userScrollUpPending = false;
     let userScrollUpTimeout: ReturnType<typeof setTimeout> | null = null;
 
+    const releaseStickIntent = () => {
+      wantsStickRef.current = false;
+      // A retry or post-scroll watcher started before this gesture must not
+      // yank the reader back to the bottom after their intent is known.
+      scrollOperationRef.current += 1;
+      scrollInFlightRef.current = false;
+    };
+
     const armUserScrollUp = () => {
       userScrollUpPending = true;
       if (userScrollUpTimeout !== null) clearTimeout(userScrollUpTimeout);
@@ -558,7 +579,7 @@ export function useVirtuosoScrollState(
       // away from the bottom is intent to stop following.
       const distanceFromBottom = scrollerEl.scrollHeight - scrollerEl.clientHeight - st;
       if (distanceFromBottom > AT_BOTTOM_THRESHOLD) {
-        wantsStickRef.current = false;
+        releaseStickIntent();
       }
     };
     const handleTouchStart = () => {
@@ -571,7 +592,7 @@ export function useVirtuosoScrollState(
         st < lastScrollTopRef.current - USER_SCROLL_UP_TOLERANCE_PX &&
         distanceFromBottom > AT_BOTTOM_THRESHOLD
       ) {
-        wantsStickRef.current = false;
+        releaseStickIntent();
       }
       lastScrollTopRef.current = st;
     };
@@ -740,6 +761,7 @@ export function useVirtuosoScrollState(
       wantsStickRef.current = true;
     }
     if (isFirstActivation && !stickToBottomOnActivation) return;
+    scrollOperationRef.current += 1;
     scrollInFlightRef.current = false;
     if (!stickToBottomOnActivation && !envChanged && !wantsStickRef.current) {
       return;

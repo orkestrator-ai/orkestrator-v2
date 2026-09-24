@@ -58,6 +58,8 @@ import type {
   NativeAgentSessionStateUpdate,
   NativeAgentDiscoveryUpdate,
   NativeAgentDiscoverySection,
+  NativeAgentCommandIntent,
+  NativeAgentCommandRefreshOutcome,
 } from "@orkestrator/protocol/native-agent";
 
 export async function getReviewValidationOutput(
@@ -261,6 +263,13 @@ export async function stopMultiReviewReviewer(
   });
 }
 
+/** Stop validation commands and continue Multi Review with the evidence collected so far. */
+export async function stopMultiReviewValidation(
+  workflowId: string,
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("stop_multi_review_validation", { workflowId });
+}
+
 export async function restartMultiReviewReviewer(
   workflowId: string,
   reviewerId: string,
@@ -274,8 +283,27 @@ export async function restartMultiReviewReviewer(
 export async function restartMultiReviewStep(
   workflowId: string,
   kind: "prepare" | "consolidate" | "fix",
+  model?: BackendMultiReviewWorkflow["fixModel"],
 ): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>("restart_multi_review_step", { workflowId, kind });
+  return invoke<BackendMultiReviewWorkflow>("restart_multi_review_step", {
+    workflowId,
+    kind,
+    ...(model ? { model } : {}),
+  });
+}
+
+export async function pauseMultiReviewStep(
+  workflowId: string,
+  kind: "prepare" | "consolidate" | "fix",
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("pause_multi_review_step", { workflowId, kind });
+}
+
+export async function resumeMultiReviewStep(
+  workflowId: string,
+  kind: "prepare" | "consolidate" | "fix",
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("resume_multi_review_step", { workflowId, kind });
 }
 
 export async function unstickMultiReviewReviewer(
@@ -304,13 +332,20 @@ export async function listMultiReviewWorkflows<T = unknown>(
   });
 }
 
+/**
+ * Reads a bounded reviewer transcript tail. Passing the previous response's
+ * `sourceToken` lets the backend answer `transcript: "unchanged"` with no
+ * messages when nothing moved; the caller then keeps what it already shows.
+ */
 export async function getMultiReviewReviewerTranscript(
   workflowId: string,
   reviewerId: string,
+  options: { knownSourceToken?: string } = {},
 ): Promise<MultiReviewReviewerTranscript> {
   return invoke<MultiReviewReviewerTranscript>("get_multi_review_reviewer_transcript", {
     workflowId,
     reviewerId,
+    ...(options.knownSourceToken ? { knownSourceToken: options.knownSourceToken } : {}),
   });
 }
 
@@ -527,6 +562,21 @@ export async function refreshNativeAgentModels<TMessage = unknown>(input: {
   return invoke("refresh_native_agent_models", input);
 }
 
+/** What an explicit command-list refresh did, with the projection it produced. */
+export interface NativeAgentCommandRefreshResult<TMessage = unknown> {
+  outcome: NativeAgentCommandRefreshOutcome;
+  message?: string;
+  projection: NativeAgentSessionProjection<TMessage> | null;
+}
+
+export async function refreshNativeAgentCommands<TMessage = unknown>(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+}): Promise<NativeAgentCommandRefreshResult<TMessage>> {
+  return invoke("refresh_native_agent_commands", input);
+}
+
 export async function stopNativeAgentSession<TMessage = unknown>(input: {
   environmentId: string;
   agent: NativeAgentClientPlatform;
@@ -649,6 +699,8 @@ export async function dispatchNativeAgentPrompt(input: {
   schema?: Record<string, unknown>;
   mode?: "plan" | "build";
   fastMode?: boolean;
+  /** Absent is legacy behaviour: the backend treats the text as typed. */
+  command?: NativeAgentCommandIntent;
 }): Promise<PersistedNativeAgentSession> {
   return invoke<PersistedNativeAgentSession>("dispatch_native_agent_prompt", input);
 }
@@ -682,6 +734,12 @@ export async function dispatchNativeAgentIntent(input: {
   sessionMode?: "plan" | "build";
   executionProfileId?: string;
   parameterValues?: Record<string, string | boolean>;
+  /**
+   * How to interpret the prompt. Absent is legacy behaviour (typed). For a
+   * non-literal intent the backend keeps the prompt bytes, trimming only
+   * leading whitespace, so a command's arguments arrive exactly as typed.
+   */
+  command?: NativeAgentCommandIntent;
 }): Promise<NativeAgentDispatchOutcome> {
   return invoke<NativeAgentDispatchOutcome>("dispatch_native_agent_intent", input);
 }

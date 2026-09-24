@@ -230,9 +230,14 @@ export {
 export {
   MULTI_REVIEW_ADDRESS_PROMPT,
   isMultiReviewTerminalPhase,
+  isMultiReviewStepControlInput,
+  isMultiReviewReviewerTranscriptRequest,
   isMultiReviewWorkflow,
+  isRestartMultiReviewStepInput,
   isStartMultiReviewCustomFixInput,
   isStartMultiReviewInput,
+  type RestartMultiReviewStepInput,
+  type MultiReviewStepControlInput,
   type StartMultiReviewCustomFixInput,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";

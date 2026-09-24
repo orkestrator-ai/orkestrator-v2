@@ -422,6 +422,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     <div
       id="project-panel-coordinator"
       role="tabpanel"
+      data-agent-scope=""
       className="flex h-full min-h-0 flex-col bg-background"
     >
       <div className="shrink-0 border-b border-border/70 bg-chrome px-3 py-2">

@@ -12,25 +12,55 @@ export interface BrowserPreviewBounds {
   height: number;
 }
 
+/**
+ * A registered preview service, resolved to a transport by Electron main.
+ * The renderer never supplies a transport URL for a service preview.
+ */
+export interface BrowserPreviewServiceTarget {
+  backendInstanceId: string;
+  environmentId: string;
+  serviceId: string;
+  /** App-relative path, query, and fragment. */
+  path: string;
+}
+
 export interface BrowserPreviewAttachInput {
   tabId: string;
-  url: string;
+  /** Legacy/manual previews: a loopback or gateway-preview URL. */
+  url?: string;
+  /** Service previews: resolved and authorized in the main process. */
+  service?: BrowserPreviewServiceTarget;
   bounds: BrowserPreviewBounds;
   visible: boolean;
 }
 
+/** Effective transport for a service preview, separate from page loading. */
+export interface BrowserPreviewTransportState {
+  mode: "desktop-tunnel" | "legacy";
+  state: "connecting" | "ready" | "reconnecting" | "unavailable";
+  /** Stable failure category (`PreviewErrorCategory`) when unavailable. */
+  failure?: string;
+  message?: string;
+}
+
 export interface BrowserPreviewState {
   tabId: string;
+  /** Actual view URL. For service previews this is a runtime transport URL; never persist it. */
   url: string;
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
   error: string | null;
+  /** Present for service previews: the durable identity and app-relative path. */
+  service?: { serviceId: string; path: string; displayUrl: string };
+  transport?: BrowserPreviewTransportState;
 }
 
 export interface BrowserPreviewOpenLinkEvent {
   tabId: string;
   url: string;
+  /** Same-service link from a service preview: open as a service tab. */
+  service?: BrowserPreviewServiceTarget;
 }
 
 export interface BrowserPreviewElementRect {

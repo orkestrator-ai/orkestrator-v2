@@ -1,3 +1,4 @@
+import { formatPreviewIntentUri } from "@orkestrator/protocol/preview-services";
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { useEffect, useRef, type ReactNode } from "react";
@@ -1843,6 +1844,17 @@ describe("TerminalContainer", () => {
         </TerminalProvider>,
       );
 
+      const visibleEnvironment = useEnvironmentStore.getState().getEnvironmentById("env-visible");
+      const expectedTerminalLinkTarget = visibleEnvironment
+        ? formatPreviewIntentUri({
+            environmentId: "env-visible",
+            source:
+              visibleEnvironment.environmentType === "local"
+                ? "worktree-terminal"
+                : "container-terminal",
+            url: "http://localhost:3000/docs",
+          })
+        : "http://localhost:3000/docs";
       act(() => {
         requestTerminalBrowserTab({
           environmentId: "env-visible",
@@ -1862,8 +1874,10 @@ describe("TerminalContainer", () => {
           throw new Error("expected leaf panes");
         }
 
+        // The link stays bound to its source environment until the backend
+        // resolves which service it names (never a guessed host port).
         expect(leftPane.tabs.find((tab) => tab.type === "browser")?.browserData).toEqual({
-          url: "http://localhost:3000/docs",
+          url: expectedTerminalLinkTarget,
         });
         expect(rightPane.tabs.some((tab) => tab.type === "browser")).toBe(false);
         expect(environment.activePaneId).toBe("left");

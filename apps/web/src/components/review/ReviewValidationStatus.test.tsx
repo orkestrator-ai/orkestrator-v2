@@ -69,6 +69,40 @@ function runningValidation(): ReviewValidationRun {
 }
 
 describe("ReviewValidationStatus", () => {
+  test("renders the stop control and disables it while stopping", () => {
+    const run = runningValidation();
+    const onStop = mock(() => undefined);
+    const view = render(<ReviewValidationStatus environmentId="env-1" run={run} onStop={onStop} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop tests and continue" }));
+    expect(onStop).toHaveBeenCalledTimes(1);
+
+    view.rerender(
+      <ReviewValidationStatus environmentId="env-1" run={run} onStop={onStop} stopping />,
+    );
+    expect(screen.getByText("Stopping")).toBeTruthy();
+    const stopping = screen.getByRole("button", { name: "Stopping tests…" });
+    expect((stopping as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(stopping);
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not render the stop control for a settled run", () => {
+    const run = runningValidation();
+    run.status = "cancelled";
+    run.completedAt = "2026-09-08T20:00:10.000Z";
+    render(
+      <ReviewValidationStatus
+        environmentId="env-1"
+        run={run}
+        onStop={mock(() => undefined)}
+        stopping
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Stopping tests…" }) === null).toBe(true);
+  });
+
   test("rehydrates a queued result and later incomplete evidence after an inactive view", () => {
     const run = runningValidation();
     Object.assign(run.results[0]!, {
@@ -79,15 +113,17 @@ describe("ReviewValidationStatus", () => {
       executionUpdatedAt: run.startedAt,
     });
     const view = render(<ReviewValidationStatus environmentId="env-1" run={run} />);
-    expect(screen.getByText("Queued")).toBeTruthy();
-    const queuedRow = screen.getByRole("button", {
-      name: "View terminal output for bun run check",
-    });
+    expect(screen.getAllByText("Queued")).toHaveLength(2);
+    const queuedRow = screen
+      .getByRole("button", {
+        name: "View terminal output for bun run check",
+      })
+      .closest("tr")!;
     expect(queuedRow.textContent).toContain("waiting for capacity");
     expect(queuedRow.textContent).toContain("6/8 slots reserved");
     expect(queuedRow.querySelector("[data-slot='validation-elapsed']")?.textContent).toBe("0.3s");
     expect(queuedRow.querySelector("[data-slot='validation-queued']")?.textContent).toBe("12.0s");
-    expect(queuedRow.textContent).toContain("queued");
+    expect(queuedRow.textContent).not.toContain("queued");
     view.unmount();
     // The authoritative worker advances while no view is subscribed.
     run.status = "completed";
@@ -97,9 +133,11 @@ describe("ReviewValidationStatus", () => {
       limitation: "Host capacity wait expired; validation is incomplete",
     });
     render(<ReviewValidationStatus environmentId="env-1" run={run} />);
-    const incompleteRow = screen.getByRole("button", {
-      name: "View terminal output for bun run check",
-    });
+    const incompleteRow = screen
+      .getByRole("button", {
+        name: "View terminal output for bun run check",
+      })
+      .closest("tr")!;
     expect(incompleteRow.textContent).toContain("incomplete");
     expect(incompleteRow.textContent).not.toContain("6/8 slots reserved");
     expect(incompleteRow.querySelector("[data-slot='validation-elapsed']")?.textContent).toBe(
@@ -124,7 +162,7 @@ describe("ReviewValidationStatus", () => {
 
     expect(screen.getByText(/Validation: 10\.0s\./)).toBeTruthy();
     const runningRow = () =>
-      screen.getByRole("button", { name: "View terminal output for bun run check" });
+      screen.getByRole("button", { name: "View terminal output for bun run check" }).closest("tr")!;
     expect(runningRow().textContent).toContain("running");
     expect(runningRow().querySelector("[data-slot='validation-elapsed']")?.textContent).toBe(
       "5.0s",
@@ -160,11 +198,20 @@ describe("ReviewValidationStatus", () => {
     });
     render(<ReviewValidationStatus environmentId="env-1" run={run} />);
 
-    const list = screen.getByRole("list", { name: "Validation commands" });
-    expect(list.className).toContain("grid");
-    const check = screen.getByRole("button", { name: "View terminal output for bun run check" });
-    const build = screen.getByRole("button", { name: "View terminal output for bun run build" });
-    expect(check.className).toContain("grid-cols-subgrid");
+    expect(screen.getByRole("table", { name: "Validation commands" })).toBeTruthy();
+    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual([
+      "Command",
+      "Status",
+      "Duration",
+      "Queued",
+      "Output",
+    ]);
+    const check = screen
+      .getByRole("button", { name: "View terminal output for bun run check" })
+      .closest("tr")!;
+    const build = screen
+      .getByRole("button", { name: "View terminal output for bun run build" })
+      .closest("tr")!;
     expect(check.querySelector("[data-slot='validation-elapsed']")?.textContent).toBe("46.2s");
     expect(check.querySelector("[data-slot='validation-queued']")?.textContent).toBe("1.2s");
     expect(build.querySelector("[data-slot='validation-elapsed']")?.textContent).toBe("2.3s");
@@ -184,15 +231,20 @@ describe("ReviewValidationStatus", () => {
       />,
     );
 
-    const checkRow = screen.getByText("bun run check").closest("li")!;
-    const buildRow = screen.getByText("bun run build").closest("li")!;
+    const checkRow = screen.getByText("bun run check").closest("tr")!;
+    const buildRow = screen.getByText("bun run build").closest("tr")!;
     expect(checkRow.textContent).toContain("A prerequisite did not pass.");
     expect(buildRow.textContent).toContain("A prerequisite did not pass.");
-    for (const row of [checkRow, buildRow]) {
+    for (const [row, command] of [
+      [checkRow, "bun run check"],
+      [buildRow, "bun run build"],
+    ] as const) {
       const limitation = row.querySelector("[data-slot='validation-limitation']");
       expect(limitation?.className.split(/\s+/)).toEqual(
-        expect.arrayContaining(["col-span-full", "mt-1"]),
+        expect.arrayContaining(["mt-1", "break-words"]),
       );
+      expect(limitation?.parentElement).toBe(row.cells[0]);
+      expect(limitation?.parentElement?.querySelector("code")?.textContent).toBe(command);
     }
     expect(screen.getAllByText("A prerequisite did not pass.")).toHaveLength(2);
     const notes = screen.getByText("Notes").closest("details")!;
@@ -200,6 +252,38 @@ describe("ReviewValidationStatus", () => {
     expect(notes.querySelector(".text-amber-500") === null).toBe(true);
     fireEvent.click(screen.getByText("Notes"));
     expect(screen.getByText("No CI workflows are present.")).toBeTruthy();
+  });
+
+  test("opens terminal output from the row body", () => {
+    const run = runningValidation();
+    render(<ReviewValidationStatus environmentId="env-1" run={run} />);
+
+    fireEvent.click(screen.getByText("bun run check"));
+
+    expect(screen.getByRole("dialog", { name: "Terminal output" })).toBeTruthy();
+  });
+
+  test("makes every output row focusable and activatable with Enter or Space", () => {
+    const run = runningValidation();
+    render(<ReviewValidationStatus environmentId="env-1" run={run} />);
+
+    const checkRow = screen.getByRole("button", {
+      name: "View terminal output for bun run check",
+    });
+    const buildRow = screen.getByRole("button", {
+      name: "View terminal output for bun run build",
+    });
+    expect(checkRow.tagName).toBe("TR");
+    expect(checkRow.tabIndex).toBe(0);
+
+    fireEvent.keyDown(checkRow, { key: "Enter" });
+    expect(screen.getByRole("dialog", { name: "Terminal output" })).toBeTruthy();
+    expect(
+      screen.getByText("bun run check", { selector: "[data-slot='dialog-description']" }),
+    ).toBeTruthy();
+
+    expect(fireEvent.keyDown(buildRow, { key: " " })).toBe(false);
+    expect(screen.getByText("This step was skipped, so it has no terminal output.")).toBeTruthy();
   });
 
   test("opens a modal and loads the selected command's captured output", async () => {

@@ -54,8 +54,6 @@ import {
   NATIVE_SYNC_MAX_REVISION_BYTES,
   NATIVE_SYNC_MAX_TOTAL_REVISION_BYTES,
   NATIVE_SYNC_REVISION_TTL_MS,
-  NATIVE_SLASH_COMMAND_CACHE_LIMIT,
-  NATIVE_SLASH_COMMAND_TTL_MS,
   NATIVE_FILE_DETAIL_MAX_BYTES,
   NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES,
   NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES,
@@ -87,6 +85,11 @@ import {
   type ProgressiveReadOutcome,
 } from "./native-agent-progressive-metrics.js";
 import { readReadableHostFile } from "./path-safety.js";
+import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
+import {
+  commandCatalogueKey,
+  type CommandCatalogueSnapshot,
+} from "./native-agent-command-catalogue.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
 type PipelineSessionPhase = shared.PipelineSessionPhase;
 type TaskSnapshotImage = shared.TaskSnapshotImage;
@@ -510,7 +513,13 @@ function normalizeInteractionKinds(value: unknown): AgentInteractionKind[] | und
   return [...new Set(kinds)];
 }
 
-function isNormalizedProgressiveMessage(value: unknown): boolean {
+function isNormalizedProgressiveMessage(value: unknown): value is {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  parts: unknown[];
+  createdAt: string;
+} {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const message = value as Record<string, unknown>;
   const role = message.role;
@@ -566,6 +575,17 @@ function progressiveHydrationToken(snapshot: ProviderTranscriptSnapshot): string
   ].join(":");
 }
 
+const PROGRESSIVE_HYDRATION_MAX_ATTEMPTS = 3;
+const PROGRESSIVE_HYDRATION_RETRY_BASE_MS = 25;
+
+type ProgressiveHydrationEntry = {
+  sourceToken: string;
+  snapshot?: ProviderTranscriptSnapshot;
+  promise?: Promise<void>;
+  attempts: number;
+  holdPreview: boolean;
+};
+
 export abstract class NativeAgentServiceProjection extends NativeAgentServiceDispatch {
   private readonly progressiveInstanceId = randomUUID();
   private readonly progressiveTranscriptCache = new Map<
@@ -618,14 +638,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     string,
     { input: NativeAgentProgressiveInput; value: NativeAgentTranscriptView }
   >();
-  private readonly progressiveHydrations = new Map<
-    string,
-    {
-      sourceToken: string;
-      snapshot?: ProviderTranscriptSnapshot;
-      promise?: Promise<void>;
-    }
-  >();
+  private readonly progressiveHydrations = new Map<string, ProgressiveHydrationEntry>();
   private readonly progressiveHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly progressiveMetrics = new ProgressiveReadMetrics();
 
@@ -1578,55 +1591,70 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     initialPromptPresentation: PersistedNativeAgentSession["initialPromptPresentation"],
   ): void {
     if (snapshot.complete !== false) return;
-    if (this.progressivePreviewFillsWindow(snapshot, input.liveWindow)) return;
+    if (
+      (snapshot.omittedParts ?? 0) <= 0 &&
+      this.progressivePreviewFillsWindow(snapshot, input.liveWindow)
+    )
+      return;
     const sourceToken = progressiveHydrationToken(snapshot);
     const existing = this.progressiveHydrations.get(key);
     if (existing && existing.sourceToken === sourceToken) return;
     const previousTimer = this.progressiveHydrationTimers.get(key);
     if (previousTimer) clearTimeout(previousTimer);
-    const entry: {
-      sourceToken: string;
-      snapshot?: ProviderTranscriptSnapshot;
-      promise?: Promise<void>;
-    } = { sourceToken };
+    const entry: ProgressiveHydrationEntry = {
+      sourceToken,
+      attempts: 0,
+      holdPreview: (snapshot.omittedParts ?? 0) > 0,
+    };
     this.progressiveHydrations.set(key, entry);
-    const timer = setTimeout(() => {
-      if (this.progressiveHydrationTimers.get(key) === timer) {
-        this.progressiveHydrationTimers.delete(key);
-      }
-      if (this.stopped) return;
-      const promise = this.fillIncompleteProgressiveSnapshot(
-        provider,
-        sessionId,
-        snapshot,
-        input.liveWindow,
-      )
-        .then((hydrated) => {
-          if (this.stopped) return;
-          const current = this.progressiveHydrations.get(key);
-          if (!current || current.sourceToken !== sourceToken) return;
-          current.snapshot = hydrated;
-          if (hydrated === snapshot) return;
-          this.commitProgressiveTranscript(
-            key,
-            input,
-            this.projectProgressiveTranscript(
-              input,
+    const scheduleAttempt = (delayMs: number): void => {
+      const timer = setTimeout(() => {
+        if (this.progressiveHydrationTimers.get(key) === timer) {
+          this.progressiveHydrationTimers.delete(key);
+        }
+        if (this.stopped || this.progressiveHydrations.get(key) !== entry) return;
+        entry.attempts += 1;
+        const promise = this.fillIncompleteProgressiveSnapshot(
+          provider,
+          sessionId,
+          snapshot,
+          input.liveWindow,
+        )
+          .catch(() => snapshot)
+          .then((hydrated) => {
+            if (this.stopped || this.progressiveHydrations.get(key) !== entry) return;
+            if (hydrated === snapshot) {
+              // The preview is safer than freezing a stale, fuller revision.
+              // Keep retrying exact recovery in the background, but only the
+              // first attempt is allowed to hold the visible transcript.
+              entry.holdPreview = false;
+              if (entry.attempts < PROGRESSIVE_HYDRATION_MAX_ATTEMPTS) {
+                scheduleAttempt(PROGRESSIVE_HYDRATION_RETRY_BASE_MS * 2 ** (entry.attempts - 1));
+              }
+              return;
+            }
+            entry.holdPreview = false;
+            entry.snapshot = hydrated;
+            this.commitProgressiveTranscript(
               key,
-              hydrated,
-              sessionId,
-              initialPromptPresentation,
-            ),
-          );
-        })
-        .catch(() => undefined)
-        .finally(() => {
-          const current = this.progressiveHydrations.get(key);
-          if (current?.promise === promise) current.promise = undefined;
-        });
-      entry.promise = promise;
-    }, 0);
-    this.progressiveHydrationTimers.set(key, timer);
+              input,
+              this.projectProgressiveTranscript(
+                input,
+                key,
+                hydrated,
+                sessionId,
+                initialPromptPresentation,
+              ),
+            );
+          })
+          .finally(() => {
+            if (entry.promise === promise) entry.promise = undefined;
+          });
+        entry.promise = promise;
+      }, delayMs);
+      this.progressiveHydrationTimers.set(key, timer);
+    };
+    scheduleAttempt(0);
   }
 
   private async fillIncompleteProgressiveSnapshot(
@@ -1642,7 +1670,26 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       return snapshot;
     }
     const normalized = normalizedProgressiveMessages(fuller);
-    if (!normalized || normalized.length <= snapshot.messages.length) return snapshot;
+    if (!normalized) return snapshot;
+    // A single long Codex turn can lose tool/commentary parts without losing a
+    // message. Message count alone rejects that exact recovery indefinitely.
+    const previewHead = snapshot.messages[0];
+    const recoveredHead = normalized.find(
+      (message) =>
+        isNormalizedProgressiveMessage(previewHead) &&
+        isNormalizedProgressiveMessage(message) &&
+        message.id === previewHead.id,
+    );
+    const recoveredParts =
+      snapshot.omittedParts &&
+      isNormalizedProgressiveMessage(previewHead) &&
+      isNormalizedProgressiveMessage(recoveredHead) &&
+      recoveredHead.parts.length > previewHead.parts.length;
+    if (
+      normalized.length < snapshot.messages.length ||
+      (normalized.length === snapshot.messages.length && !recoveredParts)
+    )
+      return snapshot;
     const historyStartIndex =
       snapshot.historyStartIndex === undefined
         ? undefined
@@ -1650,6 +1697,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     return {
       ...snapshot,
       messages: normalized,
+      omittedParts: undefined,
       ...(historyStartIndex === undefined ? {} : { historyStartIndex }),
       complete: normalized.length < liveWindow.messages,
       freshness: "current",
@@ -1668,6 +1716,47 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ??
       `in-process:${input.agent}`;
     const identity = this.progressiveIdentity(input, providerSessionId, sourceGeneration);
+    const previewHead = snapshot.messages[0];
+    const displayedHead = previous?.value.messages.find(
+      (message) =>
+        isNormalizedProgressiveMessage(previewHead) &&
+        isNormalizedProgressiveMessage(message) &&
+        message.id === previewHead.id,
+    );
+    /*
+     * A byte-trimmed message is not a replacement for the full turn already on
+     * screen. Keep the bounded display snapshot until the background exact read
+     * above recovers its parts. Merging by array index would misidentify tool
+     * details (and progress rows need not project one-to-one), so install that
+     * recovery atomically instead. Epoch/session/generation changes and complete
+     * snapshots remain authoritative replacements, including real deletions.
+     */
+    const hydration = this.progressiveHydrations.get(key);
+    const hydrationHoldingPreview =
+      hydration?.sourceToken === progressiveHydrationToken(snapshot) &&
+      hydration.holdPreview &&
+      (hydration.promise !== undefined || this.progressiveHydrationTimers.has(key));
+    if (
+      snapshot.complete === false &&
+      (snapshot.omittedParts ?? 0) > 0 &&
+      hydrationHoldingPreview &&
+      snapshot.historyEpoch !== undefined &&
+      previous?.value.historyEpoch === snapshot.historyEpoch &&
+      previous.value.identity.providerSessionId === providerSessionId &&
+      previous.value.identity.sourceGeneration === identity.sourceGeneration &&
+      isNormalizedProgressiveMessage(previewHead) &&
+      isNormalizedProgressiveMessage(displayedHead)
+    ) {
+      return {
+        value: previous.value,
+        ...(previous.historyStartIndex === undefined
+          ? {}
+          : { historyStartIndex: previous.historyStartIndex }),
+        ...(previous.historyEndIndex === undefined
+          ? {}
+          : { historyEndIndex: previous.historyEndIndex }),
+      };
+    }
     const normalized = this.projectionMessages(
       nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
       snapshot.messages,
@@ -2104,6 +2193,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         : Promise.resolve(false),
     ]);
     if (snapshot.status === "missing") return null;
+    const commandRevision = (snapshot as ProviderSessionStateSnapshot).commandCatalogueRevision;
+    if (commandRevision !== undefined) {
+      this.commandCatalogues.observeProviderRevision(
+        commandCatalogueKey(input.environmentId, input.agent, resolved.session.providerSessionId),
+        input.environmentId,
+        resolved.provider,
+        resolved.session.providerSessionId,
+        commandRevision,
+      );
+    }
     const liveInteractionKinds = normalizeInteractionKinds(
       (snapshot as ProviderSessionStateSnapshot).interactionKinds,
     );
@@ -2575,6 +2674,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
             ...(cached.error ? { error: cached.error } : {}),
           }
         : { availability: "loading", revision: 0 };
+      if (section === "commands") {
+        // The richer catalogue state rides beside the generic availability so a
+        // composer can tell ready-empty, unsupported and stale apart.
+        const catalogue = this.commandCatalogues.peek(
+          commandCatalogueKey(input.environmentId, input.agent, resolved.session.providerSessionId),
+        )?.state;
+        const unsupported = !nativeCapabilities(input.agent).slashCommands;
+        const detail = unsupported ? unsupportedCommandCatalogueState() : catalogue;
+        if (detail) Object.assign(state, { catalogue: detail });
+      }
       Object.assign(sections, { [section]: state });
     }
     const value: NativeAgentDiscoveryView = { identity, sections };
@@ -3081,84 +3190,37 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     });
   }
 
-  protected refreshProjectionSlashCommands(
-    key: string,
+  /**
+   * Provider command rows plus their catalogue state, without session actions.
+   *
+   * Session actions are merged by the caller *after* runtime qualification, so
+   * an unqualified `/steer` never shadows (or deletes) a provider command.
+   */
+  protected async projectionCommandCatalogue(
+    input: NativeAgentProjectionInput,
     provider: NativeAgentRuntimeProvider,
     sessionId?: string,
-  ): Promise<NativeAgentSlashCommand[]> {
-    const pending = this.slashCommandRefreshes.get(key);
-    if (pending) return pending.operation;
-    const validity = { current: true };
-    const operation = (async () => {
-      const commands = (await provider.slashCommands!(sessionId)).slice(0, 512);
-      if (!validity.current) {
-        throw new ProviderUnavailableError("Slash command refresh was invalidated");
-      }
-      if (
-        !this.slashCommandCache.has(key) &&
-        this.slashCommandCache.size >= NATIVE_SLASH_COMMAND_CACHE_LIMIT
-      ) {
-        const oldest = this.slashCommandCache.keys().next().value as string | undefined;
-        if (oldest) this.slashCommandCache.delete(oldest);
-      }
-      this.slashCommandCache.set(key, {
-        commands,
-        expiresAt: this.now() + NATIVE_SLASH_COMMAND_TTL_MS,
-      });
-      return commands;
-    })();
-    const entry = { operation, validity };
-    this.slashCommandRefreshes.set(key, entry);
-    return operation.finally(() => {
-      if (this.slashCommandRefreshes.get(key) === entry) {
-        this.slashCommandRefreshes.delete(key);
-      }
-    });
+  ): Promise<CommandCatalogueSnapshot> {
+    const capabilities = nativeCapabilities(input.agent);
+    if (!capabilities.slashCommands || (!provider.slashCommands && !provider.commandCatalogue)) {
+      return { commands: [], state: unsupportedCommandCatalogueState() };
+    }
+    return this.commandCatalogues.read(
+      commandCatalogueKey(input.environmentId, input.agent, sessionId),
+      input.environmentId,
+      provider,
+      sessionId,
+    );
   }
 
+  /** Command rows as a composer sees them: provider commands plus runtime actions. */
   protected async projectionSlashCommands(
     input: NativeAgentProjectionInput,
     provider: NativeAgentRuntimeProvider,
     sessionId?: string,
   ): Promise<NativeAgentSlashCommand[]> {
-    const capabilities = nativeCapabilities(input.agent);
-    // Runtime-performed commands exist even for a provider that advertises no
-    // command discovery of its own, so they are merged outside the early exit.
-    const withActions = (commands: NativeAgentSlashCommand[]) =>
-      withSessionActionSlashCommands(commands, capabilities);
-    if (!capabilities.slashCommands || !provider.slashCommands) {
-      return withActions([]);
-    }
-    const key = `${input.environmentId}\0${input.agent}\0${sessionId ?? "global"}`;
-    const cached = this.slashCommandCache.get(key);
-    if (cached) {
-      if (cached.expiresAt <= this.now()) {
-        // Command discovery is optional UI metadata. Keep the expired list
-        // visible and update it asynchronously so a transcript refresh never
-        // waits on /global/slash-commands or a provider SDK request.
-        void this.refreshProjectionSlashCommands(key, provider, sessionId)
-          .then(() => {
-            if (!this.stopped) {
-              this.storage.announceNativeAgentSessionProjection(input.environmentId);
-            }
-          })
-          .catch(() => {
-            const retained = this.slashCommandCache.get(key);
-            if (retained === cached) {
-              retained.expiresAt = this.now() + NATIVE_DISCOVERY_RETRY_MS;
-            }
-          });
-      }
-      return withActions(cached.commands);
-    }
-    try {
-      const commands = await this.refreshProjectionSlashCommands(key, provider, sessionId);
-      return withActions(commands);
-    } catch {
-      // Discovery metadata is optional. Keep the transcript usable when a
-      // provider temporarily cannot enumerate commands.
-      return withActions([]);
-    }
+    const snapshot = await this.projectionCommandCatalogue(input, provider, sessionId);
+    return withSessionActionSlashCommands(snapshot.commands, nativeCapabilities(input.agent));
   }
 
   protected async projectionAuthStatus(
@@ -3411,11 +3473,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       const queuePromise = advertisedCapabilities.queue
         ? this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`)
         : Promise.resolve(null);
-      const slashCommandsPromise = this.projectionSlashCommands(
+      const slashCommandsPromise = this.projectionCommandCatalogue(
         input,
         resolved.provider,
         resolved.session.providerSessionId,
-      );
+      ).catch((): CommandCatalogueSnapshot => ({
+        commands: [],
+        state: { status: "unavailable", revision: 0, enhanced: false },
+      }));
       const steerSupportedPromise = advertisedCapabilities.actions?.steer
         ? (resolved.provider
             .steerSupported?.(resolved.session.providerSessionId)
@@ -3429,7 +3494,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         snapshot,
         interactionSnapshot,
         queue,
-        discoveredSlashCommands,
+        commandCatalogue,
         steerSupported,
         mcpServers,
         auth,
@@ -3461,12 +3526,19 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         liveInteractionKinds === undefined
           ? steerQualified
           : { ...steerQualified, interactions: { kinds: liveInteractionKinds } };
-      // Runtime action commands are merged from the static table before the
-      // bridge qualification finishes. Never leave `/steer` behind when this
-      // exact bridge cannot prove the reliable steering surface.
-      const slashCommands = capabilities.actions?.steer
-        ? discoveredSlashCommands
-        : discoveredSlashCommands.filter((command) => command.name !== "/steer");
+      if (snapshot.commandCatalogueRevision !== undefined) {
+        this.commandCatalogues.observeProviderRevision(
+          commandCatalogueKey(input.environmentId, input.agent, resolved.session.providerSessionId),
+          input.environmentId,
+          resolved.provider,
+          resolved.session.providerSessionId,
+          snapshot.commandCatalogueRevision,
+        );
+      }
+      // Runtime actions are merged only after this exact bridge has qualified
+      // them: an unproven steering surface never advertises `/steer`, and a
+      // provider's own same-named command is kept rather than deleted.
+      const slashCommands = withSessionActionSlashCommands(commandCatalogue.commands, capabilities);
       if (snapshot.providerGeneration !== undefined) {
         generation = `${generation}:${String(snapshot.providerGeneration)}`;
       }
@@ -3798,6 +3870,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ...(auth ? { auth } : {}),
         capabilities,
         ...(slashCommands.length > 0 ? { slashCommands } : {}),
+        slashCommandCatalogue: commandCatalogue.state,
         ...(queue
           ? {
               queue: {

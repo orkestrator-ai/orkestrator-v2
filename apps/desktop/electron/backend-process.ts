@@ -43,6 +43,11 @@ const AGENT_TEST_SAFE_ENV_NAMES = new Set([
   "ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY",
   "ORKESTRATOR_CONTROL_MCP_PORT",
   "ORKESTRATOR_GATEWAY_DISABLED",
+  // Browser queueing fixtures use a private scheduler within the outer review
+  // reservation. These carry capacity/path settings, never credentials.
+  "ORKESTRATOR_TEST_SCHEDULER_DIR",
+  "ORKESTRATOR_TEST_HOST_WORKERS",
+  "ORKESTRATOR_TEST_HOST_MEMORY_MIB",
   "ORKESTRATOR_VERSION",
   "PATH",
   "PWD",
@@ -282,6 +287,13 @@ export class BackendHttpClient {
     if (!response.ok)
       throw new Error(payload.error ?? `Backend request failed with HTTP ${response.status}`);
     return payload.result as T;
+  }
+
+  /** WebSocket URL of this backend's desktop preview tunnel. Carries no credential. */
+  previewTunnelUrl(): string {
+    const url = new URL("/__orkestrator/preview/tunnel", this.baseUrl);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url.toString();
   }
 
   async probe(timeoutMs: number): Promise<boolean> {

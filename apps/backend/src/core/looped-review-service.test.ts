@@ -124,6 +124,7 @@ class FakeProvider implements BuildPipelineProvider {
   readonly creates: Array<ProviderCreateSessionOptions | undefined> = [];
   readonly pending = new Map<string, AgentInteractionRequest[]>();
   statusValue: ProviderStatus = "idle";
+  backgroundWorkLive = false;
   settleTurn?: (sessionId: string, requestId: string) => Promise<boolean>;
   statusRejectCount = 0;
   /**
@@ -233,6 +234,12 @@ class FakeProvider implements BuildPipelineProvider {
       throw new ProviderSessionFailedError("claude", this.statusFailure);
     }
     return this.statusValue;
+  }
+  async observeSession() {
+    return {
+      status: await this.status(),
+      ...(this.backgroundWorkLive ? { backgroundWorkLive: true } : {}),
+    };
   }
   async messages(): Promise<unknown[]> {
     return [];
@@ -1125,6 +1132,54 @@ describe("LoopedReviewService", () => {
       await service.retry(started.id);
       await pump(service, started.id, 2);
       expect(provider.sent.some((entry) => entry.requestId !== firstRequestId)).toBe(true);
+    });
+  });
+
+  test("waits for background work and resumes the idle bound when it ends", async () => {
+    await harness(async (service, storage, provider) => {
+      provider.returnNull = true;
+      provider.backgroundWorkLive = true;
+      const started = await service.start({
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+      });
+      await pump(service, started.id, 10);
+      const waiting = await snapshot(storage, started.id);
+      expect(waiting.phase).not.toBe("failed");
+      expect(waiting.structuredWait?.idlePolls).toBe(0);
+      provider.backgroundWorkLive = false;
+      await pump(service, started.id, 6);
+      expect((await snapshot(storage, started.id)).failure?.message).toContain(
+        "without a structured result",
+      );
+    });
+  });
+
+  test("bounds a silent background turn with the transcript stall clock", async () => {
+    await harness(async (service, storage, provider) => {
+      provider.returnNull = true;
+      provider.backgroundWorkLive = true;
+      const started = await service.start({
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+      });
+      await pump(service, started.id, 3);
+      const record = (await storage.getLoopedReviewWorkflow(started.id))!;
+      const workflow = record.snapshot as LoopedReviewWorkflow;
+      workflow.structuredWait!.progressAt = "2020-01-01T00:00:00.000Z";
+      workflow.structuredWait!.startedAt = "2020-01-01T00:00:00.000Z";
+      await storage.saveLoopedReviewWorkflow(started.id, "env-1", 2, workflow, record.revision);
+      await service.advanceNow(started.id);
+      expect(await snapshot(storage, started.id)).toMatchObject({
+        phase: "failed",
+        failure: { message: expect.stringContaining("no activity while awaiting background work") },
+      });
     });
   });
 

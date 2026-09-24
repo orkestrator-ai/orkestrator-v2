@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
+import type { MultiReviewEfficiencyObserver } from "./multi-review-efficiency.js";
 import type {
   BuildPipeline,
   BuildPipelineAgent,
@@ -61,6 +63,8 @@ export abstract class BuildPipelineServiceBase {
   protected timer: ReturnType<typeof setInterval> | null = null;
   protected readonly locks = new Map<string, Promise<void>>();
   protected readonly providers = new Map<string, BuildPipelineProvider>();
+  /** In-flight creations by provider key, so concurrent callers share one instance. */
+  protected readonly providerCreations = new Map<string, Promise<BuildPipelineProvider>>();
   /**
    * The harness whose provider each pipeline last resolved.
    *
@@ -166,6 +170,10 @@ export abstract class BuildPipelineServiceBase {
         resultKey: string,
         provider?: StructuredOutputProvider,
       ) => AgentToolConnection;
+      /** Multi-reviewer stage concurrency; clamped by the shared fan-out runner. */
+      reviewFanoutConcurrency?: Partial<ReviewFanoutConcurrency>;
+      /** Content-free fan-out measurements (tests and benchmarks). */
+      efficiency?: MultiReviewEfficiencyObserver;
     } = {},
   ) {}
 
@@ -414,6 +422,9 @@ export abstract class BuildPipelineServiceBase {
     while (this.locks.size > 0) {
       await Promise.allSettled(this.locks.values());
     }
+    // A creation still in flight caches its provider when it settles; wait for
+    // it so the disposal below reaches that instance too.
+    await Promise.allSettled(this.providerCreations.values());
     await Promise.allSettled(
       [...this.providers.values()].map(async (provider) => {
         const disposable = provider as BuildPipelineProvider & {

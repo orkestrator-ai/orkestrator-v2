@@ -122,13 +122,57 @@ export interface MultiReviewReviewerTranscript {
   status: MultiReviewReviewerStatus;
   /** Current turn journal state, used to qualify the reviewer-level Unstick action. */
   dispatchState?: ReviewDispatchState;
+  /**
+   * The bounded transcript tail. Empty when {@link transcript} is
+   * `"unchanged"`: the caller keeps the messages it already holds.
+   */
   messages: unknown[];
+  /**
+   * `"unchanged"` answers a request whose `knownSourceToken` is still current.
+   * Absent on responses from a backend that predates conditional reads, which
+   * always carry a complete bounded snapshot.
+   */
+  transcript?: "snapshot" | "unchanged";
+  /** Opaque, session-scoped token to send back as `knownSourceToken`. */
+  sourceToken?: string;
+  /** True when older messages were omitted to respect the count/byte bounds. */
+  truncated?: boolean;
   report?: StructuredReviewReport;
   error?: string;
   progressAt?: string;
   stalledSince?: string;
   startedAt?: string;
   completedAt?: string;
+}
+
+/** Upper bound on a reviewer transcript source token, in characters. */
+export const MULTI_REVIEW_TRANSCRIPT_TOKEN_MAX_LENGTH = 512;
+
+export interface MultiReviewReviewerTranscriptRequest {
+  workflowId: string;
+  reviewerId: string;
+  /** Token from the previous response; the backend ignores a stale or foreign one. */
+  knownSourceToken?: string;
+}
+
+export function isMultiReviewReviewerTranscriptRequest(
+  value: unknown,
+): value is MultiReviewReviewerTranscriptRequest {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).every((key) =>
+      ["workflowId", "reviewerId", "knownSourceToken"].includes(key),
+    ) &&
+    typeof record.workflowId === "string" &&
+    record.workflowId.trim().length > 0 &&
+    typeof record.reviewerId === "string" &&
+    record.reviewerId.trim().length > 0 &&
+    (record.knownSourceToken === undefined ||
+      (typeof record.knownSourceToken === "string" &&
+        record.knownSourceToken.length > 0 &&
+        record.knownSourceToken.length <= MULTI_REVIEW_TRANSCRIPT_TOKEN_MAX_LENGTH))
+  );
 }
 
 export type MultiReviewPhase =
@@ -138,10 +182,13 @@ export type MultiReviewPhase =
   | "ready"
   | "fixing"
   | "interactive"
+  | "paused"
   | "completed"
   | "cancelling"
   | "cancelled"
   | "failed";
+
+export type MultiReviewPausablePhase = "preparing" | "consolidating" | "fixing";
 
 /** The preparation/consolidation turns plus the separate fix turn. */
 export type MultiReviewStepKind = "prepare" | "consolidate" | "fix";
@@ -208,8 +255,10 @@ export interface MultiReviewWorkflow {
   targetBranch: string;
   reviewInstruction?: string;
   reviewers: MultiReviewReviewer[];
-  /** One model used for both immutable-package preparation and report consolidation. */
+  /** Model used for immutable-package preparation. */
   reviewModel?: MultiReviewModelSelection;
+  /** Consolidation-only override; absent means use the preparation model. */
+  consolidationModel?: MultiReviewModelSelection;
   /** Durable key for the preparation/consolidation provider session. */
   reviewSessionKey?: string;
   reviewSession?: MultiReviewSession;
@@ -222,11 +271,17 @@ export interface MultiReviewWorkflow {
   reviewWorktreeSnapshot?: MultiReviewWorktreeSnapshot;
   /** Backend projection of the environment-owned validation job. */
   validationRun?: ReviewValidationRun;
+  /** User asked the supervisor to stop validation and package the partial evidence. */
+  validationStopRequested?: boolean;
   /** Immutable evidence shared by all reviewers; absent on legacy workflows. */
   reviewPackage?: ReviewPackageReference;
   /** Set when the live worktree changed during review, or immutable package evidence went stale. */
   reviewSnapshotStale?: boolean;
   phase: MultiReviewPhase;
+  /** Active backend-owned phase retained while its step is paused. */
+  pausedFromPhase?: MultiReviewPausablePhase;
+  /** Step whose context-menu action produced the paused state. */
+  pausedStep?: MultiReviewStepKind;
   consolidatedReport?: StructuredReviewReport;
   fixResult?: {
     complete: boolean;
@@ -367,6 +422,18 @@ export interface StartMultiReviewCustomFixInput {
   instruction: string;
 }
 
+export interface RestartMultiReviewStepInput {
+  workflowId: string;
+  kind: MultiReviewStepKind;
+  /** Omitted for the ordinary restart, which keeps the step's configured model. */
+  model?: MultiReviewModelSelection;
+}
+
+export interface MultiReviewStepControlInput {
+  workflowId: string;
+  kind: MultiReviewStepKind;
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -428,6 +495,29 @@ export function isStartMultiReviewCustomFixInput(
 
 export const MULTI_REVIEW_STEP_KINDS = ["prepare", "consolidate", "fix"] as const;
 
+export function isMultiReviewStepControlInput(
+  value: unknown,
+): value is MultiReviewStepControlInput {
+  return (
+    record(value) &&
+    hasOnlyKeys(value, ["workflowId", "kind"]) &&
+    nonBlank(value.workflowId) &&
+    MULTI_REVIEW_STEP_KINDS.includes(value.kind as MultiReviewStepKind)
+  );
+}
+
+export function isRestartMultiReviewStepInput(
+  value: unknown,
+): value is RestartMultiReviewStepInput {
+  return (
+    record(value) &&
+    hasOnlyKeys(value, ["workflowId", "kind", "model"]) &&
+    nonBlank(value.workflowId) &&
+    MULTI_REVIEW_STEP_KINDS.includes(value.kind as MultiReviewStepKind) &&
+    (value.model === undefined || isMultiReviewModelSelection(value.model))
+  );
+}
+
 const PHASES = new Set<MultiReviewPhase>([
   "preparing",
   "reviewing",
@@ -435,6 +525,7 @@ const PHASES = new Set<MultiReviewPhase>([
   "ready",
   "fixing",
   "interactive",
+  "paused",
   "completed",
   "cancelling",
   "cancelled",
@@ -628,6 +719,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "autoFix",
       "reviewers",
       "reviewModel",
+      "consolidationModel",
       "reviewSessionKey",
       "reviewSession",
       "fixModel",
@@ -635,9 +727,12 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "fixSession",
       "stepRuntimes",
       "phase",
+      "pausedFromPhase",
+      "pausedStep",
       "reviewWorktreeSnapshot",
       "reviewPackage",
       "validationRun",
+      "validationStopRequested",
       "reviewSnapshotStale",
       "consolidatedReport",
       "fixResult",
@@ -673,6 +768,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     value.reviewers.length < MULTI_REVIEW_MIN_REVIEWERS ||
     value.reviewers.length > MULTI_REVIEW_MAX_REVIEWERS ||
     (value.reviewModel !== undefined && !isMultiReviewModelSelection(value.reviewModel)) ||
+    (value.consolidationModel !== undefined &&
+      !isMultiReviewModelSelection(value.consolidationModel)) ||
     (value.reviewSessionKey !== undefined && !nonBlank(value.reviewSessionKey)) ||
     (value.reviewSession !== undefined && !isFixSession(value.reviewSession)) ||
     !record(value.fixModel) ||
@@ -688,10 +785,18 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     (value.reviewWorktreeSnapshot !== undefined &&
       !isReviewWorktreeSnapshotRecord(value.reviewWorktreeSnapshot)) ||
     (value.validationRun !== undefined && !isReviewValidationRun(value.validationRun)) ||
+    (value.validationStopRequested !== undefined &&
+      typeof value.validationStopRequested !== "boolean") ||
     (value.reviewPackage !== undefined &&
       (!isReviewPackageReference(value.reviewPackage) ||
         value.reviewPackage.targetBranch !== value.targetBranch)) ||
     (value.reviewSnapshotStale !== undefined && typeof value.reviewSnapshotStale !== "boolean") ||
+    (value.pausedFromPhase !== undefined &&
+      value.pausedFromPhase !== "preparing" &&
+      value.pausedFromPhase !== "consolidating" &&
+      value.pausedFromPhase !== "fixing") ||
+    (value.pausedStep !== undefined &&
+      !MULTI_REVIEW_STEP_KINDS.includes(value.pausedStep as MultiReviewStepKind)) ||
     (value.activeRequest !== undefined && !isActiveRequest(value.activeRequest)) ||
     (value.pendingResultConsumptions !== undefined &&
       (!Array.isArray(value.pendingResultConsumptions) ||
@@ -765,6 +870,32 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
   )
     return false;
   if ((value.phase === "cancelling") !== (typeof value.cancellingSince === "string")) return false;
+  const paused = value.phase === "paused";
+  if (
+    paused !== (value.pausedFromPhase !== undefined) ||
+    paused !== (value.pausedStep !== undefined)
+  ) {
+    return false;
+  }
+  if (
+    paused &&
+    ((value.pausedFromPhase === "preparing" && value.pausedStep !== "prepare") ||
+      (value.pausedFromPhase === "consolidating" && value.pausedStep !== "consolidate") ||
+      (value.pausedFromPhase === "fixing" && value.pausedStep !== "fix"))
+  ) {
+    return false;
+  }
+  if (
+    paused &&
+    (value.pausedFromPhase === "consolidating" || value.pausedFromPhase === "fixing") &&
+    value.reviewPackage === undefined &&
+    !value.reviewers.some((reviewer) => reviewer.report !== undefined)
+  ) {
+    return false;
+  }
+  if (paused && value.pausedFromPhase === "fixing" && value.consolidatedReport === undefined) {
+    return false;
+  }
   return true;
 }
 

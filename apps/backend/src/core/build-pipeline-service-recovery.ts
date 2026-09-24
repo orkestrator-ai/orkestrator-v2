@@ -559,41 +559,53 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     // during connection setup is still attributed to the right harness.
     this.lastProviderAgent.set(pipeline.id, agent);
     const providerKey = `${pipeline.environmentId}:${agent}`;
+    // Concurrent reviewers of one harness resolve this key together. Joining
+    // the in-flight creation keeps it to one provider per key: a second
+    // instance would never be cached, so nothing would dispose it, and an
+    // OpenCode provider's event monitor runs until it is disposed.
+    let provider = this.providers.get(providerKey);
+    if (!provider) {
+      let creation = this.providerCreations.get(providerKey);
+      if (!creation) {
+        creation = this.createProvider(pipeline, agent).then((created) => {
+          this.providers.set(providerKey, created);
+          return created;
+        });
+        const pending = creation;
+        this.providerCreations.set(providerKey, pending);
+        void pending
+          .catch(() => undefined)
+          .finally(() => {
+            if (this.providerCreations.get(providerKey) === pending) {
+              this.providerCreations.delete(providerKey);
+            }
+          });
+      }
+      provider = await creation;
+    }
     // Only this harness's own sessions. Registering a sibling step's session id
     // would put a foreign session into an environment-wide monitor that is
     // supposed to ignore everything it does not own.
-    const ownSessions = pipeline.sessions.filter(
-      (session) => sessionAgent(pipeline, session) === agent,
-    );
-    const cached = this.providers.get(providerKey);
-    if (cached) {
-      for (const session of ownSessions) {
-        cached.registerSession?.(session.sdkSessionId, {
-          origin: session.origin ?? "build-pipeline",
-          interactionPolicy: session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
-          phase: session.phase,
-          workflowId: pipeline.id,
-          provider: agent,
-          fence: session.sessionKey,
-        });
-      }
-      return cached;
+    for (const session of pipeline.sessions) {
+      if (sessionAgent(pipeline, session) !== agent) continue;
+      provider.registerSession?.(session.sdkSessionId, {
+        origin: session.origin ?? "build-pipeline",
+        interactionPolicy: session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+        phase: session.phase,
+        workflowId: pipeline.id,
+        provider: agent,
+        fence: session.sessionKey,
+      });
     }
-    if (this.options.provider) {
-      const provider = await this.options.provider(pipeline, agent);
-      for (const session of ownSessions) {
-        provider.registerSession?.(session.sdkSessionId, {
-          origin: session.origin ?? "build-pipeline",
-          interactionPolicy: session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
-          phase: session.phase,
-          workflowId: pipeline.id,
-          provider: agent,
-          fence: session.sessionKey,
-        });
-      }
-      this.providers.set(providerKey, provider);
-      return provider;
-    }
+    return provider;
+  }
+
+  /** Builds an uncached provider for one environment harness. */
+  private async createProvider(
+    pipeline: BuildPipeline,
+    agent: BuildPipelineAgent,
+  ): Promise<BuildPipelineProvider> {
+    if (this.options.provider) return this.options.provider(pipeline, agent);
     const environment = await this.storage.getEnvironment(pipeline.environmentId);
     if (!environment) throw new Error("Build environment no longer exists");
     const config = await this.storage.loadConfig();
@@ -605,7 +617,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       repository,
       environment,
     );
-    const provider = createBuildPipelineProvider(
+    return createBuildPipelineProvider(
       {
         ...connection,
         // Connection-level defaults only, and only this harness's own. Every
@@ -639,18 +651,6 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
         },
       },
     );
-    for (const session of ownSessions) {
-      provider.registerSession?.(session.sdkSessionId, {
-        origin: session.origin ?? "build-pipeline",
-        interactionPolicy: session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
-        phase: session.phase,
-        workflowId: pipeline.id,
-        provider: agent,
-        fence: session.sessionKey,
-      });
-    }
-    this.providers.set(providerKey, provider);
-    return provider;
   }
 
   protected interactionJournalEntry(

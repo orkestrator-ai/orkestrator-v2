@@ -146,6 +146,7 @@ export function parsePromptAttachments(value: unknown): PiPromptAttachment[] {
 export async function readPromptImages(
   attachments: readonly PiPromptAttachment[],
   workspaceRoot: string,
+  modelResize?: ImageResizeProfile,
 ): Promise<PiPromptImage[]> {
   const images: PiPromptImage[] = [];
   let totalBytes = 0;
@@ -162,7 +163,7 @@ export async function readPromptImages(
         "Image attachments exceed the 32MB total limit",
       );
     }
-    const normalized = await normalizeImageForPi(bytes, mimeType);
+    const normalized = await normalizeImageForPi(bytes, mimeType, modelResize);
     images.push({
       data: normalized.data,
       mimeType: normalized.mimeType,
@@ -174,12 +175,23 @@ export async function readPromptImages(
   return images;
 }
 
+/** Pi's per-model image resize profile (`model.inputLimits.images.resize`). */
+export type ImageResizeProfile = NonNullable<Parameters<typeof resizeImage>[2]>;
+
+/**
+ * `modelResize` is for input Pi queues as-is. Since 0.87 `prompt()` resizes
+ * every image to the model's own profile, but `steer()` and `followUp()` hand
+ * theirs to the agent untouched, so those callers pass the profile here. The
+ * bridge's own ceiling still applies when the profile allows more.
+ */
 async function normalizeImageForPi(
   bytes: Buffer,
   mimeType: string,
+  modelResize?: ImageResizeProfile,
 ): Promise<{ data: string; mimeType: string }> {
   const resized = await resizeImage(bytes, mimeType, {
-    maxBytes: MAX_IMAGE_ATTACHMENT_BYTES,
+    ...modelResize,
+    maxBytes: Math.min(modelResize?.maxBytes ?? Infinity, MAX_IMAGE_ATTACHMENT_BYTES),
   }).catch(() => null);
   let normalized = resized ?? { data: bytes.toString("base64"), mimeType };
 

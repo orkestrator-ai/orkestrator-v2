@@ -287,6 +287,7 @@ describe("EnvironmentSettingsDialog", () => {
       "opencode",
       "network",
       "ports",
+      "previews",
       "extensions",
     ]);
   });

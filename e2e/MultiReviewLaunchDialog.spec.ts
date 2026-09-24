@@ -1,6 +1,20 @@
 import { expect, test } from "@playwright/test";
 import { MULTI_REVIEW_MAX_REVIEWERS } from "@orkestrator/protocol/multi-review";
 
+test("duplicate warning and work summary render and update in the browser", async ({ page }) => {
+  await page.goto("/multi-review-launch");
+  const warning = page.getByTestId("multi-review-duplicate-warning");
+  const summary = page.getByTestId("multi-review-work-summary");
+  await expect(warning).toBeVisible();
+  await expect(warning).toContainText("Reviewers 1 and 2 use the same configuration");
+  await expect(summary).toContainText("2 reviewer turns");
+  await page.getByRole("button", { name: "Add model" }).click();
+  await expect(summary).toContainText("3 reviewer turns");
+  await page.getByRole("checkbox", { name: "Auto-fix after consolidation" }).click();
+  await expect(summary).toContainText("then 1 fix turn");
+  await expect(page.getByRole("button", { name: "Start 3-model review" })).toBeEnabled();
+});
+
 test("maximum reviewer rows scroll while initial focus and actions remain usable", async ({
   page,
 }, testInfo) => {

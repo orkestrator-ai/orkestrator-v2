@@ -23,18 +23,22 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type {
+  NativeAgentCommandRefreshOutcome,
   NativeAgentResumeEntry,
-  NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import {
   agentDirectory,
   CATALOG_TIMEOUT_MS,
   MAX_RESUME_ENTRIES,
-  MAX_SLASH_COMMANDS,
   sessionDirectory,
   workingDirectory,
 } from "./config.js";
+import {
+  markCommandCatalogueStale,
+  noteCommandError,
+  readSessionCommandCatalogue,
+} from "./commands.js";
 import { assertAuthenticated } from "./credentials.js";
 import { requestToolApproval } from "./interactions.js";
 import { closePiMcp, mcpConnectionNeedsRefresh, piMcpExtension, preparePiMcp } from "./mcp.js";
@@ -230,6 +234,7 @@ export function newSessionState(
     uncheckedTranscriptBytes: 0,
     queue: { steering: [], followUp: [] },
     slashCommands: [],
+    commandCatalogue: { status: "stale", revision: 0 },
     compacting: false,
     lastAccessed: Date.now(),
     health: new RuntimeHealthRecorder(),
@@ -445,6 +450,9 @@ export async function bindSessionExtensions(
       // Not a terminal. `rpc` is the mode Pi's own programmatic host uses.
       mode: "rpc",
       onError: (error) => {
+        // A command handler that throws is caught by Pi and reported only
+        // here; the turn running it needs the failure as its outcome.
+        noteCommandError(state, error);
         // Extension paths are absolute and can name a user's home directory,
         // so only the basename is kept; the message is bounded by the recorder.
         const extension = error.extensionPath.split(/[\\/]/).pop() ?? "extension";
@@ -508,7 +516,10 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
   // release it: a listener left attached to a disposed session keeps the whole
   // object graph — messages, tools, extension runner — alive.
   state.unsubscribe = session.subscribe((event) => applySessionEvent(state, event));
-  state.slashCommands = readSlashCommands(session);
+  // A fresh runtime loaded its resources from scratch, so this read is also
+  // the reload any refresh deferred while the session was detached or busy.
+  state.commandReloadPending = false;
+  readSessionCommandCatalogue(state, session);
   // The catalogue read at create time may have preceded a provider signing in.
   // Re-selecting from the live session is what makes the picker agree with what
   // the turn will actually use.
@@ -521,6 +532,136 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
   }
   state.revision += 1;
   return session;
+}
+
+export interface CommandRefreshResult {
+  outcome: NativeAgentCommandRefreshOutcome;
+  message?: string;
+}
+
+const RELOAD_DEFERRED_MESSAGE =
+  "Pi is busy; its commands reload when the current turn finishes. The previous list is kept until then.";
+
+/**
+ * Whether reloading Pi's resources now could disturb work in flight.
+ *
+ * `AgentSession.reload()` fires `session_shutdown`, invalidates the extension
+ * runner the running turn's hooks belong to (including this bridge's approval
+ * gate), resets the API provider registry and rebuilds the tool registry. Pi's
+ * own terminal refuses `/reload` while `isStreaming` or `isCompacting`
+ * (interactive-mode `handleReloadCommand`), so this bridge does too.
+ */
+function commandReloadBlocked(state: SessionState, session: AgentSession): boolean {
+  return (
+    state.status === "running" ||
+    state.dispatching ||
+    state.compacting ||
+    Boolean(state.attaching) ||
+    session.isIdle === false
+  );
+}
+
+function boundReload(operation: Promise<CommandRefreshResult>): Promise<CommandRefreshResult> {
+  return withTimeout(operation, CATALOG_TIMEOUT_MS, "Pi is still reloading its commands").catch(
+    () => ({
+      outcome: "failed" as const,
+      message: "Pi is still reloading its commands; the previous list is kept.",
+    }),
+  );
+}
+
+/**
+ * Reload Pi's resources and re-read the command list, now.
+ *
+ * Callers have established the session is idle. The operation is published on
+ * the state so a prompt arriving meanwhile waits for it rather than being
+ * dispatched into a half-rebuilt extension runtime.
+ */
+function reloadSessionCommands(
+  state: SessionState,
+  session: AgentSession,
+): Promise<CommandRefreshResult> {
+  state.commandReloadPending = false;
+  const operation: Promise<CommandRefreshResult> = (async (): Promise<CommandRefreshResult> => {
+    try {
+      await session.reload();
+      // Detached mid-reload: the next attach reads a fresh runtime anyway.
+      if (state.session !== session) {
+        return { outcome: "deferred", message: "Pi reads its commands again on its next attach." };
+      }
+      // A reload rebuilds the tool registry; the session's tool policy must
+      // not be widened by it.
+      applyPiToolPolicy(session, state.policy);
+      return readSessionCommandCatalogue(state, session)
+        ? { outcome: "reloaded" }
+        : { outcome: "failed", message: "Pi's command list could not be read." };
+    } catch (error) {
+      markCommandCatalogueStale(state);
+      state.health.recordNotice({
+        message: "Pi could not reload its resources; the previous command list is kept",
+        method: "session/reload",
+        severity: "error",
+        source: "provider",
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        outcome: "failed",
+        message: "Pi could not reload its commands; the previous list is kept.",
+      };
+    }
+  })().finally(() => {
+    if (state.commandReload === operation) state.commandReload = undefined;
+  });
+  state.commandReload = operation;
+  return boundReload(operation);
+}
+
+/**
+ * Reload one session's commands, or say why that has to wait.
+ *
+ * Never aborts a turn: a busy session keeps its current list (reported
+ * `stale`) and reloads once the turn settles. A detached session is attached,
+ * which loads every resource from scratch.
+ */
+export async function refreshSessionCommands(state: SessionState): Promise<CommandRefreshResult> {
+  const inFlight = state.commandReload as Promise<CommandRefreshResult> | undefined;
+  if (inFlight) return boundReload(inFlight);
+  const session = state.session;
+  if (!session) {
+    if (state.dispatching || state.attaching) {
+      // An attach is already under way and reads the list when it lands.
+      return { outcome: "deferred", message: "Pi reads its commands when this session attaches." };
+    }
+    try {
+      await ensureSession(state);
+    } catch (error) {
+      return {
+        outcome: "failed",
+        message: error instanceof Error && error.message.trim() ? error.message.trim() : undefined,
+      };
+    }
+    return state.commandCatalogue.status === "ready"
+      ? { outcome: "reloaded" }
+      : { outcome: "failed", message: "Pi's command list could not be read." };
+  }
+  if (commandReloadBlocked(state, session)) {
+    state.commandReloadPending = true;
+    markCommandCatalogueStale(state);
+    return { outcome: "deferred", message: RELOAD_DEFERRED_MESSAGE };
+  }
+  return reloadSessionCommands(state, session);
+}
+
+/**
+ * Run a reload a busy refresh deferred, if the session is now idle.
+ *
+ * Called from the points where a session stops being busy. Never rejects.
+ */
+export async function runDeferredCommandReload(state: SessionState): Promise<void> {
+  const session = state.session;
+  if (!state.commandReloadPending || !session || state.commandReload) return;
+  if (commandReloadBlocked(state, session)) return;
+  await reloadSessionCommands(state, session);
 }
 
 /** Project-local resource switches passed to Pi's default loader. */
@@ -1152,6 +1293,10 @@ function appendHistoricNotice(
  * transcript disagree with the one it was reproducing.
  *
  * `label` and `session_info` entries stay out: they are naming, not history.
+ * `usage` entries (a cache-warm refresh's token spend) stay out too: they are
+ * accounting, and `getSessionStats` already counts them. `context_edit` entries
+ * change what the model sees without changing the conversation — Pi's own UI
+ * keeps showing the edited entries — so the transcript does the same.
  */
 function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
   switch (entry.type) {
@@ -1195,6 +1340,8 @@ function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
     case "custom_message":
     case "label":
     case "session_info":
+    case "usage":
+    case "context_edit":
       return;
     case "message":
       break;
@@ -1323,44 +1470,4 @@ function pushMessage(
   };
   state.messages.push(message);
   chargeTranscript(state, Buffer.byteLength(JSON.stringify(message)));
-}
-
-/**
- * The slash commands this session offers.
- *
- * Pi's are file-backed: prompt templates and skills discovered from the agent
- * directory and, when project resources are enabled, from the workspace. They
- * are read from the attached session rather than the loader so an extension
- * that registered one is included too.
- */
-function readSlashCommands(session: AgentSession): NativeAgentSlashCommand[] {
-  const commands: NativeAgentSlashCommand[] = [];
-  for (const template of session.promptTemplates) {
-    if (commands.length >= MAX_SLASH_COMMANDS) break;
-    commands.push({
-      name: `/${template.name}`,
-      source: "template",
-      ...(template.description?.trim() ? { description: template.description.trim() } : {}),
-      ...(template.argumentHint?.trim() ? { argumentHint: template.argumentHint.trim() } : {}),
-    });
-  }
-  for (const skill of session.resourceLoader?.getSkills?.().skills ?? []) {
-    if (commands.length >= MAX_SLASH_COMMANDS) break;
-    commands.push({
-      name: `/skill:${skill.name}`,
-      description: skill.description,
-      source: "skill",
-      scope: skill.sourceInfo.scope === "project" ? "session" : "global",
-    });
-  }
-  for (const command of session.extensionRunner?.getRegisteredCommands?.() ?? []) {
-    if (commands.length >= MAX_SLASH_COMMANDS) break;
-    commands.push({
-      name: `/${command.invocationName || command.name}`,
-      ...(command.description ? { description: command.description } : {}),
-      source: "extension",
-      scope: command.sourceInfo.scope === "project" ? "session" : "global",
-    });
-  }
-  return commands;
 }

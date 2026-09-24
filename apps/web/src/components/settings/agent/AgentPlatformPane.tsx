@@ -28,6 +28,7 @@ import {
   effortLabel,
   modelsForAgent,
   platformOwnsSpeed,
+  resolveCatalogModelId,
   toPickerModel,
   type AgentModelCatalog,
 } from "@/lib/agent-launch";
@@ -160,17 +161,15 @@ export function AgentPlatformPane({
         .map((option) => toPickerModel(platform, option)),
     [models, platform],
   );
-  const selectedModel = stored?.model
-    ? models.find((model) => model.id === stored.model || model.resolvedModel === stored.model)
-    : undefined;
+  const selectedModelId = resolveCatalogModelId(platform, models, stored?.model);
+  const selectedModel = models.find((model) => model.id === selectedModelId);
   const modelMissingFromCatalog = Boolean(stored?.model && !selectedModel);
   const effectiveModel = stored?.model ?? inherited.model;
-  const reasoningModel = effectiveModel
-    ? models.find((model) => model.id === effectiveModel || model.resolvedModel === effectiveModel)
-    : models[0];
+  const reasoningModelId = resolveCatalogModelId(platform, models, effectiveModel);
+  const reasoningModel = models.find((model) => model.id === reasoningModelId) ?? models[0];
 
   const reasoningOptions = useMemo<AgentReasoningOption[]>(() => {
-    const efforts = reasoningModel?.reasoningEfforts ?? [];
+    const efforts: readonly string[] = reasoningModel?.reasoningEfforts ?? [];
     // A stored level the catalog no longer lists stays selectable, so opening
     // this pane cannot quietly rewrite a saved choice to "inherit".
     const current = stored?.reasoningEffort;

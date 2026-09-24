@@ -130,6 +130,23 @@ The hosted origins that must be allowed are `https://orkestrator.dev` and
 - The token lasts for the current browser tab unless **Remember token** is
   enabled.
 
+## Service previews
+
+Browser tabs can preview registered services through a scoped desktop tunnel
+(`/__orkestrator/preview/tunnel` on this gateway) or through private HTTPS
+preview origins served by a separate listener. Both are off by default. See
+[browser-previews.md](browser-previews.md) for setup, limits, and the rollback
+procedure.
+
+- Preview credentials authenticate only their one service. They never
+  authenticate the app, the backend API, the event stream, or the legacy
+  loopback proxy.
+- Rotating the gateway token revokes all active preview access.
+- The legacy loopback proxy (`/__orkestrator/browser/loopback/<port>/`) is
+  unchanged for older clients.
+- `ORKESTRATOR_PREVIEW_TRANSPORT` and `ORKESTRATOR_PREVIEW_RELAY` (`0`/`1`)
+  override the stored preview settings.
+
 ## Troubleshooting
 
 - **Could not reach the backend:** The backend process must still be running,

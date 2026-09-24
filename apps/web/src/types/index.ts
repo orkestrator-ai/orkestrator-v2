@@ -50,6 +50,8 @@ export interface PortMapping {
   hostPort: number;
   /** Protocol (tcp or udp), defaults to tcp */
   protocol: PortProtocol;
+  /** "auto": Docker chooses the host port (hostPort is then 0). */
+  hostPortMode?: "auto";
 }
 
 export type ClaudeCatalogEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
@@ -106,6 +108,8 @@ export interface Environment {
   createdAt: string;
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt?: string;
+  /** Last backend-observed native session completion, even if another session is working. */
+  agentSessionCompletedAt?: string;
   /** Backend-owned aggregate agent activity shared by every frontend. */
   agentActivityState?: AgentActivityState;
   /** Last-write-wins timestamp for the aggregate activity snapshot. */

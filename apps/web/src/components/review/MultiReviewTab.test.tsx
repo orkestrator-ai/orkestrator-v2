@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   MULTI_REVIEW_FIX_TAB_TITLE,
+  type MultiReviewModelSelection,
+  type MultiReviewStepKind,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
@@ -151,6 +153,47 @@ function reviewingWorkflow(): MultiReviewWorkflow {
       startedAt: timestamp,
     })),
   };
+}
+
+function validatingWorkflow(): MultiReviewWorkflow {
+  const workflow = reviewingWorkflow();
+  workflow.phase = "preparing";
+  workflow.validationRun = {
+    id: "validation-1",
+    status: "running",
+    startedAt: "2026-09-08T20:00:04.000Z",
+    plan: {
+      headRef: "a".repeat(40),
+      commands: [
+        {
+          id: "test",
+          command: "mise run test",
+          cwd: ".",
+          dependsOn: [],
+          resources: ["workspace:test"],
+          weight: 2,
+          timeoutMs: 1_200_000,
+        },
+      ],
+      limitations: [],
+    },
+    results: [
+      {
+        id: "test",
+        command: "mise run test",
+        status: "running",
+        exitCode: null,
+        stdoutPath: ".orkestrator/test.stdout",
+        stderrPath: ".orkestrator/test.stderr",
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        startedAt: "2026-09-08T20:00:05.000Z",
+        durationMs: 0,
+        limitation: null,
+      },
+    ],
+  };
+  return workflow;
 }
 
 function TabRegistrar({
@@ -580,7 +623,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         "10s",
       );
       const validationRow = () =>
-        screen.getByRole("button", { name: "View terminal output for bun run check" });
+        screen
+          .getByRole("button", { name: "View terminal output for bun run check" })
+          .closest("tr")!;
       expect(validationRow().textContent).toContain("running");
       expect(validationRow().querySelector("[data-slot='validation-elapsed']")?.textContent).toBe(
         "5.0s",
@@ -602,6 +647,127 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       window.setInterval = originalSetInterval;
       window.clearInterval = originalClearInterval;
     }
+  });
+
+  test("stops validation while keeping Multi Review on course for the reviewer step", async () => {
+    const workflow = validatingWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const stopping = {
+      ...workflow,
+      validationStopRequested: true,
+      backendRevision: workflow.backendRevision + 1,
+    };
+    const stopValidation = mock(async () => stopping);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+        commands={{
+          address: mock(async () => workflow),
+          retry: mock(async () => workflow),
+          cancel: mock(async () => workflow),
+          stopValidation,
+          stopReviewer: mock(async () => workflow),
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop tests and continue" }));
+    await waitFor(() => expect(stopValidation).toHaveBeenCalledWith(workflow.id));
+    expect(useMultiReviewStore.getState().workflows.get(workflow.id)).toMatchObject({
+      validationStopRequested: true,
+    });
+    expect(screen.getByText("Stopping")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Stopping tests…" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  test("surfaces a stop-validation failure and makes the control usable again", async () => {
+    const workflow = validatingWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const stopValidation = mock(async () => {
+      throw new Error("Validation cancellation failed");
+    });
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+        commands={{
+          address: mock(async () => workflow),
+          retry: mock(async () => workflow),
+          cancel: mock(async () => workflow),
+          stopValidation,
+          stopReviewer: mock(async () => workflow),
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop tests and continue" }));
+    await waitFor(() => expect(screen.getByText("Validation cancellation failed")).toBeTruthy());
+    const retry = screen.getByRole("button", { name: "Stop tests and continue" });
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(retry);
+    await waitFor(() => expect(stopValidation).toHaveBeenCalledTimes(2));
+  });
+
+  test("suppresses stop validation while another workflow command is pending", async () => {
+    const workflow = validatingWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    let finishCancel!: (value: MultiReviewWorkflow) => void;
+    const cancel = mock(
+      () =>
+        new Promise<MultiReviewWorkflow>((resolve) => {
+          finishCancel = resolve;
+        }),
+    );
+    const stopValidation = mock(async () => workflow);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+        commands={{
+          address: mock(async () => workflow),
+          retry: mock(async () => workflow),
+          cancel,
+          stopValidation,
+          stopReviewer: mock(async () => workflow),
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Stop tests and continue" }));
+    expect(stopValidation).not.toHaveBeenCalled();
+    await act(async () => finishCancel(workflow));
+  });
+
+  test("does not show a stale stopping state after validation has failed", () => {
+    const workflow = validatingWorkflow();
+    workflow.phase = "failed";
+    workflow.error = "Packaging failed";
+    workflow.validationStopRequested = true;
+    workflow.validationRun!.status = "cancelled";
+    workflow.validationRun!.completedAt = "2026-09-08T20:00:10.000Z";
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+      />,
+    );
+
+    expect(screen.queryByText("Stopping") === null).toBe(true);
+    expect(screen.getByText("cancelled")).toBeTruthy();
   });
 
   test("keeps a running validation clock live while the workflow is cancelling", () => {
@@ -1779,6 +1945,253 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     }
   });
 
+  test("opens Restart in for a step and submits its current model selection", async () => {
+    const ready = readyWorkflow();
+    ready.consolidationModel = {
+      agent: "codex",
+      model: "gpt-5.4",
+      reasoningEffort: "medium",
+    };
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+    const restartStep = mock(
+      async (_workflowId: string, _kind: MultiReviewStepKind, _model?: MultiReviewModelSelection) =>
+        ready,
+    );
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+        commands={{
+          address: mock(async () => ready),
+          retry: mock(async () => ready),
+          cancel: mock(async () => ready),
+          stopReviewer: mock(async () => ready),
+          restartStep,
+        }}
+      />,
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Open consolidation session" }).closest("section")!,
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart in…" }));
+    expect(await screen.findByRole("heading", { name: "Restart Consolidation" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Restart Consolidation" }));
+    await waitFor(() => expect(restartStep).toHaveBeenCalledTimes(1));
+    expect(restartStep.mock.calls[0]?.[0]).toBe(ready.id);
+    expect(restartStep.mock.calls[0]?.[1]).toBe("consolidate");
+    expect(restartStep.mock.calls[0]?.[2]).toMatchObject({
+      agent: "codex",
+      model: "gpt-5.4",
+      reasoningEffort: "medium",
+    });
+  });
+
+  test.each([
+    {
+      kind: "prepare" as const,
+      tile: "Open review package generation session",
+      heading: "Restart Preparation",
+      selection: { agent: "claude" as const, model: "sonnet", reasoningEffort: "high" },
+    },
+    {
+      kind: "fix" as const,
+      tile: "Open fix model session",
+      heading: "Restart Fix",
+      selection: { agent: "codex" as const, model: "gpt-5.4", reasoningEffort: "high" },
+    },
+  ])("submits the $kind step's own Restart in selection", async (fixture) => {
+    const ready = readyWorkflow();
+    ready.reviewModel = { agent: "claude", model: "sonnet", reasoningEffort: "high" };
+    ready.reviewSession = {
+      ...ready.reviewModel,
+      sessionKey: "review-session",
+      providerSessionId: "provider-review",
+      requestIds: ["prepare-1", "consolidate-1"],
+      status: "idle",
+      startedAt: ready.createdAt,
+      completedAt: ready.updatedAt,
+    };
+    if (fixture.kind === "fix") {
+      ready.phase = "completed";
+      ready.stepRuntimes = {
+        fix: { startedAt: ready.createdAt, completedAt: ready.updatedAt },
+      };
+    }
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+    const restartStep = mock(
+      async (_workflowId: string, _kind: MultiReviewStepKind, _model?: MultiReviewModelSelection) =>
+        ready,
+    );
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+        commands={{
+          address: mock(async () => ready),
+          retry: mock(async () => ready),
+          cancel: mock(async () => ready),
+          stopReviewer: mock(async () => ready),
+          restartStep,
+        }}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: fixture.tile }).closest("section")!);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart in…" }));
+    fireEvent.click(await screen.findByRole("button", { name: fixture.heading }));
+    await waitFor(() => expect(restartStep).toHaveBeenCalledTimes(1));
+    expect(restartStep.mock.calls[0]).toEqual([ready.id, fixture.kind, fixture.selection]);
+  });
+
+  test("shows each review-side step's recorded model", () => {
+    const ready = readyWorkflow();
+    ready.reviewModel = { agent: "claude", model: "sonnet", reasoningEffort: "high" };
+    ready.consolidationModel = {
+      agent: "codex",
+      model: "gpt-5.4",
+      reasoningEffort: "medium",
+    };
+    ready.reviewSession = {
+      ...ready.consolidationModel,
+      sessionKey: "review-session",
+      providerSessionId: "provider-review",
+      requestIds: ["consolidate-1"],
+      status: "idle",
+      startedAt: ready.createdAt,
+      completedAt: ready.updatedAt,
+    };
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
+
+    expect(
+      within(
+        screen.getByRole("button", { name: "Open review package generation session" }),
+      ).getByText("Preparation · claude"),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole("button", { name: "Open consolidation session" })).getByText(
+        "Consolidation · codex",
+      ),
+    ).toBeTruthy();
+  });
+
+  test("pauses and resumes the active workflow step from its context menu", async () => {
+    const ready = readyWorkflow();
+    const timestamp = ready.createdAt;
+    const preparing: MultiReviewWorkflow = {
+      ...ready,
+      phase: "preparing",
+      consolidatedReport: undefined,
+      activeRequest: {
+        kind: "prepare",
+        requestId: "prepare-2",
+        state: "sent",
+        createdAt: timestamp,
+      },
+      fixSession: {
+        ...ready.fixSession!,
+        requestIds: [...ready.fixSession!.requestIds, "prepare-2"],
+        status: "running",
+        completedAt: undefined,
+      },
+    };
+    const paused: MultiReviewWorkflow = {
+      ...preparing,
+      phase: "paused",
+      pausedFromPhase: "preparing",
+      pausedStep: "prepare",
+      activeRequest: undefined,
+      fixSession: { ...preparing.fixSession!, status: "idle" },
+    };
+    const resumed: MultiReviewWorkflow = {
+      ...paused,
+      phase: "preparing",
+      pausedFromPhase: undefined,
+      pausedStep: undefined,
+    };
+    useMultiReviewStore.getState().replaceWorkflow(preparing);
+    const pauseStep = mock(async (_workflowId: string, _kind: MultiReviewStepKind) => paused);
+    const resumeStep = mock(async (_workflowId: string, _kind: MultiReviewStepKind) => resumed);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: preparing.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => preparing)}
+        commands={{
+          address: mock(async () => preparing),
+          retry: mock(async () => preparing),
+          cancel: mock(async () => preparing),
+          stopReviewer: mock(async () => preparing),
+          pauseStep,
+          resumeStep,
+        }}
+      />,
+    );
+
+    const preparationTile = () =>
+      screen
+        .getByRole("button", { name: "Open review package generation session" })
+        .closest("section")!;
+    fireEvent.contextMenu(preparationTile());
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Pause" }));
+    await waitFor(() => expect(pauseStep).toHaveBeenCalledWith(preparing.id, "prepare"));
+    expect(await screen.findByText("Multi Review paused")).toBeTruthy();
+
+    fireEvent.contextMenu(preparationTile());
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Resume" }));
+    await waitFor(() => expect(resumeStep).toHaveBeenCalledWith(preparing.id, "prepare"));
+    expect(
+      await screen.findByText(
+        "Discovering validation, running checks, and preparing shared evidence",
+      ),
+    ).toBeTruthy();
+  });
+
+  test("does not offer Pause for an interactive Fix session", async () => {
+    const workflow = readyWorkflow();
+    workflow.phase = "interactive";
+    workflow.fixSession = { ...workflow.fixSession!, status: "running" };
+    workflow.fixLaunch = { kind: "default" };
+    workflow.stepRuntimes = { fix: { startedAt: workflow.createdAt } };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+        commands={{
+          address: mock(async () => workflow),
+          retry: mock(async () => workflow),
+          cancel: mock(async () => workflow),
+          stopReviewer: mock(async () => workflow),
+          pauseStep: mock(async () => workflow),
+        }}
+      />,
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Open fix model session" }).closest("section")!,
+    );
+    expect(await screen.findByRole("menuitem", { name: "Restart" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Pause" }) === null).toBe(true);
+    expect(screen.queryByRole("menuitem", { name: "Resume" }) === null).toBe(true);
+  });
+
   test("offers step restart from a touch long press", async () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
@@ -2623,6 +3036,26 @@ describe("MultiReviewTab pipeline step cards", () => {
     expect(consolidationStep({ ...unconsolidated, phase: "cancelled" })).toEqual({
       label: "Cancelled",
       state: "cancelled",
+    });
+  });
+
+  test("keeps downstream labels phase-aware while preparation is paused", () => {
+    const preparing = preparingWorkflow();
+    const paused: MultiReviewWorkflow = {
+      ...preparing,
+      phase: "paused",
+      pausedFromPhase: "preparing",
+      pausedStep: "prepare",
+    };
+
+    expect(reviewPackageGenerationStep(paused)).toEqual({ label: "Paused", state: "paused" });
+    expect(consolidationStep(paused)).toEqual({
+      label: "Waiting for review package",
+      state: "not-started",
+    });
+    expect(fixStep(paused)).toEqual({
+      label: "Waiting for review package",
+      state: "not-started",
     });
   });
 

@@ -1,8 +1,13 @@
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
+import { MenuPlacementFixture } from "./MenuPlacementFixture";
+import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { StrictMode, createRef, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { DndContext } from "@dnd-kit/core";
+import { SortableContext } from "@dnd-kit/sortable";
 import "../../apps/web/src/index.css";
+import { DesignLaunchButton } from "../../apps/web/src/components/design/DesignLaunchButton";
 import {
   CreateEnvironmentDialog,
   type ClaudeOptions,
@@ -31,9 +36,16 @@ import {
 import { SystemUsageIndicator } from "../../apps/web/src/components/layout/SystemUsageIndicator";
 import { TAB_STRIP_CLASS } from "../../apps/web/src/components/pane-layout/TabShell";
 import { ProjectSearchBar } from "../../apps/web/src/components/sidebar/ProjectSearchBar";
+import { SortableProjectFolder } from "../../apps/web/src/components/sidebar/SortableProjectFolder";
 import { Button } from "../../apps/web/src/components/ui/button";
 import { cn } from "../../apps/web/src/lib/utils";
+import {
+  projectFolderDragId,
+  resolveSortProjectFolder,
+} from "../../apps/web/src/lib/project-folders";
 import { useProjectStore } from "../../apps/web/src/stores";
+import { usePaneLayoutStore } from "../../apps/web/src/stores/paneLayoutStore";
+import type { Project } from "../../apps/web/src/types";
 import {
   ReviewLaunchDialog,
   type ReviewLaunchSelection,
@@ -101,6 +113,33 @@ function CreateEnvironmentFixture() {
   );
 }
 
+function DesignLaunchFixture() {
+  useEffect(() => {
+    usePaneLayoutStore.setState((state) => ({
+      hydration: new Map(state.hydration).set("design-fixture", "done"),
+    }));
+  }, []);
+
+  window.orkestrator = {
+    invoke: async <T,>(command: string) => {
+      if (command === "design_status") return { ready: true } as T;
+      if (command === "design_action") return [] as T;
+      throw new Error(`Unexpected fixture command: ${command}`);
+    },
+  } as Window["orkestrator"];
+
+  return (
+    <main className="min-h-screen bg-background p-4 text-foreground">
+      <DesignLaunchButton
+        environmentId="design-fixture"
+        disabled={false}
+        tabCount={0}
+        createTab={() => true}
+      />
+    </main>
+  );
+}
+
 function BrowserFixture() {
   const empty = new URLSearchParams(window.location.search).has("empty");
 
@@ -118,6 +157,69 @@ function BrowserFixture() {
           isActive
         />
       </section>
+    </main>
+  );
+}
+
+const sortableFolderProjects: Project[] = [
+  {
+    id: "project-zulu",
+    name: "Zulu",
+    gitUrl: "https://example.invalid/zulu.git",
+    localPath: null,
+    addedAt: "2024-01-01T00:00:00.000Z",
+    order: 0,
+    folder: "Work",
+  },
+  {
+    id: "project-alpha",
+    name: "Alpha",
+    gitUrl: "https://example.invalid/alpha.git",
+    localPath: null,
+    addedAt: "2024-01-01T00:00:00.000Z",
+    order: 1,
+    folder: "Work",
+  },
+];
+
+function SortableProjectFolderFixture() {
+  const [projects, setProjects] = useState(sortableFolderProjects);
+
+  const sortProjects = () => {
+    const arrangement = resolveSortProjectFolder(projects, "Work");
+    if (!arrangement) return;
+    const byId = new Map(projects.map((project) => [project.id, project]));
+    setProjects(
+      arrangement.projectIds.flatMap((projectId, order) => {
+        const project = byId.get(projectId);
+        return project ? [{ ...project, order }] : [];
+      }),
+    );
+  };
+
+  return (
+    <main className="min-h-screen bg-background p-4 text-foreground">
+      <DndContext>
+        <SortableContext items={[projectFolderDragId("Work")]}>
+          <SortableProjectFolder
+            name="Work"
+            projectCount={projects.length}
+            isCollapsed={false}
+            onToggleCollapse={() => {}}
+            onRename={() => {}}
+            onSort={sortProjects}
+            onUngroup={() => {}}
+          >
+            <ol aria-label="Work projects">
+              {projects.map((project) => (
+                <li key={project.id} data-project-id={project.id}>
+                  {project.name}
+                </li>
+              ))}
+            </ol>
+          </SortableProjectFolder>
+        </SortableContext>
+      </DndContext>
     </main>
   );
 }
@@ -1362,12 +1464,17 @@ function PullRequestCheckStatusFixture() {
 
 function fixtureForPath() {
   if (window.location.pathname === "/design-canvas") return <DesignCanvasFixture />;
+  if (window.location.pathname === "/design-launch") return <DesignLaunchFixture />;
   if (window.location.pathname === "/browser") return <BrowserFixture />;
+  if (window.location.pathname === "/sortable-project-folder") {
+    return <SortableProjectFolderFixture />;
+  }
   if (window.location.pathname === "/build-pipeline-header") {
     return <BuildPipelineHeaderFixture />;
   }
   if (window.location.pathname === "/diff-viewer") return <DiffViewerFixture />;
   if (window.location.pathname === "/native-compose") return <NativeComposeFixture />;
+  if (window.location.pathname === "/menu-placement") return <MenuPlacementFixture />;
   if (window.location.pathname === "/agent-model-picker") return <AgentModelPickerFixture />;
   if (window.location.pathname === "/mobile-shell") return <MobileAppShellFixture />;
   if (window.location.pathname === "/path-truncation") return <PathTruncationFixture />;
@@ -1403,6 +1510,7 @@ function fixtureForPath() {
     return <WorkspaceBarHeightFixture />;
   }
   if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;
+  if (window.location.pathname === "/streaming-transcript") return <StreamingTranscriptFixture />;
   return <CreateEnvironmentFixture />;
 }
 

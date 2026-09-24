@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, mkdir, writeFile, readFile, rm, chmod } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm, chmod, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -102,23 +102,59 @@ async function control(
   expect(isReviewValidationRun(result)).toBe(true);
   return result as ReviewValidationRun;
 }
-async function completed(root: string, run: ReviewValidationRun) {
-  let next = await control(root, run);
-  const deadline = Date.now() + 12000;
-  while (["planned", "running"].includes(next.status) && Date.now() < deadline) {
-    await Bun.sleep(50);
-    next = await control(root, run, "status");
+
+async function observeWorkerState(root: string, expected: ReviewValidationRun) {
+  const statePath = path.join(root, ".orkestrator", "review-artifacts", expected.id, "state.json");
+  const info = await stat(statePath);
+  if (!info.isFile() || info.size > 1024 * 1024) throw new Error("Invalid fixture state file");
+  const record = JSON.parse(await readFile(statePath, "utf8")) as {
+    run?: unknown;
+    heartbeat?: unknown;
+  };
+  if (!isReviewValidationRun(record.run)) throw new Error("Invalid fixture validation run");
+  if (
+    record.run.id !== expected.id ||
+    JSON.stringify(record.run.plan) !== JSON.stringify(expected.plan)
+  )
+    throw new Error("Fixture validation identity changed");
+  if (typeof record.heartbeat !== "number") throw new Error("Invalid fixture heartbeat");
+  return record.run;
+}
+
+async function observeUntil(
+  root: string,
+  run: ReviewValidationRun,
+  predicate: (next: ReviewValidationRun) => boolean,
+  timeoutMs: number,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let next: ReviewValidationRun | undefined;
+  while (Date.now() < deadline) {
+    try {
+      next = await observeWorkerState(root, run);
+      if (predicate(next)) return next;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await Bun.sleep(20);
   }
-  expect(["planned", "running"]).not.toContain(next.status);
-  return next;
+  throw new Error(
+    `Timed out observing validation ${run.id}: ${next?.status ?? "state not created"}`,
+  );
+}
+
+async function completed(root: string, run: ReviewValidationRun) {
+  const started = await control(root, run);
+  if (["planned", "running"].includes(started.status)) {
+    await observeUntil(root, run, (next) => !["planned", "running"].includes(next.status), 12_000);
+  }
+  const final = await control(root, run, "status");
+  expect(["planned", "running"]).not.toContain(final.status);
+  return final;
 }
 async function waitUntilQueued(root: string, run: ReviewValidationRun) {
-  const deadline = Date.now() + 3000;
-  let next = await control(root, run, "status");
-  while (next.results[0]!.status !== "queued" && Date.now() < deadline) {
-    await Bun.sleep(20);
-    next = await control(root, run, "status");
-  }
+  await observeUntil(root, run, (next) => next.results[0]?.status === "queued", 3_000);
+  const next = await control(root, run, "status");
   expect(next.results[0]!.status).toBe("queued");
   return next;
 }
@@ -128,14 +164,18 @@ async function waitFor(
   timeoutMs: number,
   extraEnv: Record<string, string> = {},
 ) {
-  let next = await control(root, run, "start", extraEnv);
-  const deadline = Date.now() + timeoutMs;
-  while (["planned", "running"].includes(next.status) && Date.now() < deadline) {
-    await Bun.sleep(100);
-    next = await control(root, run, "status");
+  const started = await control(root, run, "start", extraEnv);
+  if (["planned", "running"].includes(started.status)) {
+    await observeUntil(
+      root,
+      run,
+      (next) => !["planned", "running"].includes(next.status),
+      timeoutMs,
+    );
   }
-  expect(["planned", "running"]).not.toContain(next.status);
-  return next;
+  const final = await control(root, run, "status");
+  expect(["planned", "running"]).not.toContain(final.status);
+  return final;
 }
 async function cooperativeFixture(
   commands: ReviewValidationPlan["commands"],
@@ -379,16 +419,55 @@ test("HEAD change after discovery still fails validation", async () => {
 });
 
 test("cancellation terminates children and a cancelled launch cannot start commands", async () => {
-  const { root, run } = await fixture([command("slow", "sleep 10; touch .orkestrator/unexpected")]);
+  const { root, run } = await fixture([
+    command("slow", "sleep 10; touch .orkestrator/unexpected", { weight: 2 }),
+    command("never-after-slow", "touch .orkestrator/unexpected-after-slow"),
+  ]);
   await control(root, run);
+  const runningDeadline = Date.now() + 3_000;
+  let running = await control(root, run, "status");
+  while (running.results[0]!.status !== "running" && Date.now() < runningDeadline) {
+    await Bun.sleep(20);
+    running = await control(root, run, "status");
+  }
+  expect(running.results[0]!.status).toBe("running");
   const cancelled = await control(root, run, "cancel");
   expect(cancelled.status).toBe("cancelled");
+  expect(cancelled.results[1]).toMatchObject({
+    status: "incomplete",
+    exitCode: null,
+    limitation: "Validation was cancelled before this command started",
+  });
+  expect(
+    parseReviewPreparationValidation(
+      validationPreparation(cancelled, { allowCancelled: true }).validation,
+      cancelled.id,
+    )[1]!.status,
+  ).toBe("incomplete");
   expect((await control(root, run)).status).toBe("cancelled");
+  expect(existsSync(path.join(root, ".orkestrator", "review-artifacts", ".validation-lock"))).toBe(
+    false,
+  );
   // The child was killed mid-flight, so it never reached its trailing command.
   expect(existsSync(path.join(root, ".orkestrator", "unexpected"))).toBe(false);
+  expect(existsSync(path.join(root, ".orkestrator", "unexpected-after-slow"))).toBe(false);
   const early = await fixture([command("never", "touch .orkestrator/unexpected")]);
   await control(early.root, early.run, "cancel");
-  expect((await completed(early.root, early.run)).status).toBe("cancelled");
+  const earlyDone = await completed(early.root, early.run);
+  expect(earlyDone.status).toBe("cancelled");
+  expect(earlyDone.results[0]).toMatchObject({
+    status: "incomplete",
+    exitCode: null,
+    stdoutPath: null,
+    stderrPath: null,
+    limitation: "Validation was cancelled before this command started",
+  });
+  expect(
+    parseReviewPreparationValidation(
+      validationPreparation(earlyDone, { allowCancelled: true }).validation,
+      earlyDone.id,
+    )[0],
+  ).toMatchObject({ status: "incomplete", exitCode: null });
   // A cancelled launch must not start the command that was never dispatched.
   expect(existsSync(path.join(early.root, ".orkestrator", "unexpected"))).toBe(false);
 });
@@ -403,6 +482,56 @@ test("timeout and output overflow become incomplete evidence, never assertion fa
   expect(result.results[0]!.limitation).toContain("timed out");
   expect(result.results[1]!.limitation).toContain("incomplete");
   expect(result.results[1]!.stdoutBytes).toBe(32 * 1024 * 1024);
+});
+
+test("a ready foreground service is stopped by the no-output watchdog before its absolute timeout", async () => {
+  const { root, run } = await fixture([
+    command("stuck", "printf ready; sleep 60", { timeoutMs: 60000 }),
+  ]);
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { [run.plan.commands[0]!.command]: { noProgressTimeoutMs: 5000 } },
+    }),
+  );
+  await control(root, run, "start", { ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS: "1000" });
+  const result = await completed(root, run);
+  expect(result.results[0]!.status).toBe("incomplete");
+  expect(result.results[0]!.limitation).toContain("no output for 1000ms");
+  expect(result.results[0]!.durationMs).toBeLessThan(10000);
+  expect(result.results[0]!.lastOutputAt).toBeDefined();
+  expect((await control(root, run, "status")).results[0]!.lastOutputAt).toBe(
+    result.results[0]!.lastOutputAt,
+  );
+});
+
+test("stdout and stderr progress reset the ordinary command watchdog", async () => {
+  const { root, run } = await fixture([
+    command("progress", "for i in 1 2 3 4 5 6; do printf progress >&2; sleep 0.3; done"),
+  ]);
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { [run.plan.commands[0]!.command]: { noProgressTimeoutMs: 5000 } },
+    }),
+  );
+  await control(root, run, "start", { ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS: "1000" });
+  const result = await completed(root, run);
+  expect(result.results[0]!.status).toBe("passed");
+  expect(result.results[0]!.stderrBytes).toBe(48);
+  expect(result.results[0]!.lastOutputAt).toBeDefined();
+});
+
+test("a healthy quiet command runs until its declared timeout without an opted-in watchdog", async () => {
+  const { root, run } = await fixture([command("quiet", "sleep 1.2", { timeoutMs: 5000 })]);
+  await control(root, run, "start", { ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS: "1000" });
+  const result = await completed(root, run);
+  expect(result.results[0]).toMatchObject({ status: "passed", exitCode: 0, limitation: null });
+  expect(result.results[0]!.durationMs).toBeGreaterThanOrEqual(1000);
 });
 
 test("artifact verification rejects a same-size log replacement", async () => {

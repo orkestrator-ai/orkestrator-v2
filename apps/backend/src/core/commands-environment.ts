@@ -1307,6 +1307,9 @@ export async function stopEnvironmentOnce(
   //
   // A stopped environment cannot honour a post-setup agent launch, and the
   // renderer cannot clear the intent for an environment it no longer mounts.
+  // Revoke preview access before the target disappears so a host port Docker
+  // later reuses can never inherit this environment's authorization.
+  context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
   if (environment.containerId) {
     await assertDockerContainerOwned(environment.containerId, context);
     await runCommand("docker", ["stop", environment.containerId], { timeoutMs: 60_000 });
@@ -1364,6 +1367,7 @@ export async function recreateEnvironmentOnce(
   if (!environment?.containerId) return;
   await assertDockerContainerOwned(environment.containerId, context);
   invalidateDiscovery(environment.id);
+  context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
   // Recreate is the user's repair action for a container that is already
   // broken, so a failing `rm -f` must not be the thing that makes it
   // unrepairable. Drop the reference and build a fresh container anyway; the

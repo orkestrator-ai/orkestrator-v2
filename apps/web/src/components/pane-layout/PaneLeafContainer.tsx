@@ -212,6 +212,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
   return (
     <div
       ref={containerRef}
+      data-pane-leaf=""
       className={cn(
         "relative flex h-full w-full flex-col overflow-hidden bg-background",
         isPaneFocused && "ring-1 ring-primary/20",
@@ -280,6 +281,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   canvasId={tab.designCanvasData.canvasId}
                   environmentId={environmentId}
                   isActive={isTabActive && isActive}
+                  ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
                 />
               </LazyLoadBoundary>
             );

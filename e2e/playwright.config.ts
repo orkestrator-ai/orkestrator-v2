@@ -8,9 +8,9 @@ export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: "*.spec.ts",
   // `*.spec.ts` expands to `**/*.spec.ts`, which would otherwise sweep in the
-  // agent-testing specs. Those drive a real profile's Electron/backend stack
-  // through their own configs and have nothing to do with this fixture server.
-  testIgnore: "agent-testing/**",
+  // agent-testing and preview specs. Those drive real backend stacks through
+  // their own configs and have nothing to do with this fixture server.
+  testIgnore: ["agent-testing/**", "preview/**"],
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   reporter: "line",

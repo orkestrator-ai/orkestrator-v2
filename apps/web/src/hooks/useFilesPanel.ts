@@ -5,6 +5,7 @@ import { useFilesPanelStore, useConfigStore, usePaneLayoutStore } from "@/stores
 import { useUIStore, useEnvironmentStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import { resolveComparisonRef } from "@/lib/diff-baseline";
+import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 
 // Auto-refresh interval in milliseconds (5 seconds)
 const AUTO_REFRESH_INTERVAL = 5000;
@@ -75,7 +76,8 @@ function formatBatchFailure(completed: number, total: number, message: string): 
  * Hook for managing files panel data loading.
  * Loads git changes and file tree data from the active environment.
  * Supports both containerized (Docker) and local (worktree) environments.
- * Auto-refreshes every 5 seconds when the panel is open.
+ * Auto-refreshes every 5 seconds when the panel is open and the document is
+ * visible (scheduled by the shared read coordinator).
  */
 export function useFilesPanel() {
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
@@ -351,8 +353,9 @@ export function useFilesPanel() {
     ],
   );
 
-  // Refresh data based on active tab (manual refresh shows loading indicator)
-  const refresh = useCallback(() => {
+  // Load data for the active tab, showing the loading indicator. Joins an
+  // equivalent snapshot request already in flight.
+  const loadVisible = useCallback(() => {
     if (activeTab === "changes") {
       return loadChanges(false);
     } else {
@@ -368,6 +371,30 @@ export function useFilesPanel() {
       return Promise.all([loadFileTree(true), loadChanges(true)]).then(() => undefined);
     }
   }, [activeTab, loadChanges, loadFileTree]);
+
+  // The 5 s auto-refresh is owned by the shared read coordinator: one timer
+  // per environment/tab key, paused while the document is hidden,
+  // reconciled once on return. The store is global, so equivalent mounts
+  // share one read. The open/tab/target read below and post-mutation reads
+  // stay direct.
+  const filesRead = useCoordinatedRead({
+    key: { resource: "files-panel", target: environmentSnapshotKey, options: activeTab },
+    enabled: isAvailable,
+    readOnSubscribe: false,
+    demand: { active: isOpen && isAvailable, intervalMs: AUTO_REFRESH_INTERVAL },
+    read: async (context) => {
+      if (!context.explicit) return silentRefresh();
+      // An explicit refresh needs a post-click observation, so it must not
+      // join a snapshot request that started earlier.
+      await Promise.all([loadingChangesRef.current?.promise, loadingTreeRef.current?.promise]);
+      return loadVisible();
+    },
+  });
+  const refreshExplicitly = filesRead.refresh;
+  // Manual refresh shows the loading indicator and always reads afresh.
+  const refresh = useCallback(async () => {
+    await refreshExplicitly();
+  }, [refreshExplicitly]);
 
   const refreshAllFilesData = useCallback(async () => {
     if (activeSnapshotKeyRef.current !== environmentSnapshotKey) return;
@@ -686,24 +713,9 @@ export function useFilesPanel() {
   // Load data when panel opens, tab changes, or environment changes
   useEffect(() => {
     if (isOpen && isAvailable) {
-      refresh();
+      void loadVisible();
     }
-  }, [isOpen, activeTab, isAvailable, containerId, worktreePath, refresh]);
-
-  // Auto-refresh when panel is open and environment is available
-  useEffect(() => {
-    if (!isOpen || !isAvailable) {
-      return;
-    }
-
-    const intervalId = setInterval(() => {
-      silentRefresh();
-    }, AUTO_REFRESH_INTERVAL);
-
-    return () => {
-      clearInterval(intervalId);
-    };
-  }, [isOpen, isAvailable, containerId, worktreePath, silentRefresh]);
+  }, [isOpen, activeTab, isAvailable, containerId, worktreePath, loadVisible]);
 
   // Clear data when environment becomes unavailable
   useEffect(() => {

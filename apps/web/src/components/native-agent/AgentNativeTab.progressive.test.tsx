@@ -7,7 +7,7 @@
  * and editable before session state arrives, actions are not, and a refresh
  * over an authoritative snapshot never withdraws either.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   NativeAgentDiscoveryUpdate,
@@ -25,6 +25,8 @@ import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
@@ -712,19 +714,8 @@ describe("AgentNativeTab progressive controller", () => {
     ];
     stateUpdates = [async () => stateSnapshot("state-1")];
 
-    let runIdlePoll: (() => void) | undefined;
-    const realSetInterval = window.setInterval.bind(window);
-    const intervalSpy = spyOn(window, "setInterval").mockImplementation(((
-      handler: TimerHandler,
-      timeout?: number,
-      ...args: unknown[]
-    ) => {
-      if (timeout === 1_500 && typeof handler === "function") {
-        runIdlePoll = () => handler(...args);
-        return 91_501;
-      }
-      return realSetInterval(handler, timeout, ...args);
-    }) as typeof window.setInterval);
+    // The read coordinator schedules the idle poll; a fake clock drives it.
+    const { clock } = installFakeReadCoordinator();
     try {
       renderTab();
       await waitFor(() => expect(screen.getByTestId("progressive-transcript-list")).toBeTruthy());
@@ -732,16 +723,12 @@ describe("AgentNativeTab progressive controller", () => {
       expect(screen.queryByRole("status") === null).toBe(true);
 
       const readsBeforePoll = transcriptReads;
-      expect(runIdlePoll).toBeDefined();
-      await act(async () => {
-        runIdlePoll!();
-        await Promise.resolve();
-      });
+      await act(() => clock.advance(1_500));
       await waitFor(() => expect(transcriptReads).toBeGreaterThan(readsBeforePoll));
       expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
       expect(screen.queryByRole("status") === null).toBe(true);
     } finally {
-      intervalSpy.mockRestore();
+      resetReadCoordinatorForTests();
     }
   });
 });

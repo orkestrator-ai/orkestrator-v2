@@ -43,6 +43,8 @@
     "./pane-layout": "./src/pane-layout.ts",
     "./pane-layout-merge": "./src/pane-layout-merge.ts",
     "./parent-watchdog": "./src/parent-watchdog.ts",
+    "./bridge-lifecycle": "./src/bridge-lifecycle.ts",
+    "./fake-intervals": "./src/fake-intervals.ts",
     "./plan-usage": "./src/plan-usage.ts",
     "./pr-monitor": "./src/pr-monitor.ts",
     "./preview-access": "./src/preview-access.ts",

@@ -49,8 +49,8 @@ describe("Electron packaging configuration", () => {
       compilerOptions: { outDir: string; rootDir: string };
       include: string[];
     }>("apps/desktop/tsconfig.electron.json");
-    const desktopBuildScript = await fs.readFile(
-      path.join(process.cwd(), "apps/desktop/scripts/build.ts"),
+    const desktopBundleScript = await fs.readFile(
+      path.join(process.cwd(), "apps/desktop/scripts/electron-bundle.ts"),
       "utf8",
     );
     const bootstrapPreload = await fs.readFile(
@@ -126,9 +126,7 @@ describe("Electron packaging configuration", () => {
     expect(electronTsconfig.compilerOptions.outDir).toBe("dist");
     expect(electronTsconfig.compilerOptions.rootDir).toBe(".");
     expect(electronTsconfig.include).toEqual(["electron/**/*.ts"]);
-    expect(desktopBuildScript).toContain(
-      'path.join(packageRoot, "electron/toolchain-bootstrap-preload.ts")',
-    );
+    expect(desktopBundleScript).toContain('"electron/toolchain-bootstrap-preload.ts"');
     expect(bootstrapPreload).toContain('ipcRenderer.on("orkestrator:toolchain-progress"');
     expect(bootstrapPreload).toContain('window.addEventListener("DOMContentLoaded"');
     expect(desktopMain).toContain("userDataDirectoryName(isDev)");

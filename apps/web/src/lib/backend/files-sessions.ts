@@ -1,8 +1,16 @@
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { invoke } from "@/lib/native/backend";
-import type { EnvironmentDiffStatsSnapshot } from "@orkestrator/protocol/diff-stats";
-import type { PrMonitorMode, PrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
+import type {
+  EnvironmentDiffStatsSnapshot,
+  EnvironmentDiffStatsSnapshotOutcome,
+} from "@orkestrator/protocol/diff-stats";
+import type {
+  PrMonitorMode,
+  PrMonitorSnapshot,
+  PrMonitorSnapshotOutcome,
+} from "@orkestrator/protocol/pr-monitor";
+import { toViewSnapshotRequestArgs, type ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import type {
   Environment,
   PortMapping,
@@ -267,8 +275,23 @@ export async function getLocalGitStatusSnapshot(
  * `DIFF_STATS_CHANGED_EVENT`. This is the rehydration path a client uses when it
  * mounts or reconnects, because the event stream has no replay buffer.
  */
-export async function getEnvironmentDiffStats(): Promise<EnvironmentDiffStatsSnapshot> {
-  return invoke<EnvironmentDiffStatsSnapshot>("get_environment_diff_stats");
+export async function getEnvironmentDiffStats(): Promise<EnvironmentDiffStatsSnapshot>;
+/**
+ * Conditional form: a current backend answers with a `ViewSnapshotOutcome`
+ * (`unchanged` without a body when `known` is still current); a legacy backend
+ * ignores `known` and returns a plain snapshot. Callers validate either shape.
+ */
+export async function getEnvironmentDiffStats(
+  known: ViewRevisionStamp | undefined,
+): Promise<EnvironmentDiffStatsSnapshot | EnvironmentDiffStatsSnapshotOutcome>;
+export async function getEnvironmentDiffStats(
+  known?: ViewRevisionStamp,
+): Promise<EnvironmentDiffStatsSnapshot | EnvironmentDiffStatsSnapshotOutcome> {
+  if (!known) return invoke<EnvironmentDiffStatsSnapshot>("get_environment_diff_stats");
+  return invoke<EnvironmentDiffStatsSnapshot | EnvironmentDiffStatsSnapshotOutcome>(
+    "get_environment_diff_stats",
+    { ...toViewSnapshotRequestArgs(known) },
+  );
 }
 
 /** Forces an immediate rescan, e.g. after an operation that changed the tree. */
@@ -280,8 +303,22 @@ export async function refreshEnvironmentDiffStats(environmentId: string): Promis
  * Authoritative snapshot of the backend PR monitor. Read on mount and on every
  * event-stream reconnect; also arms monitoring on a freshly started backend.
  */
-export async function getPrMonitorState(): Promise<PrMonitorSnapshot> {
-  return invoke<PrMonitorSnapshot>("get_pr_monitor_state");
+export async function getPrMonitorState(): Promise<PrMonitorSnapshot>;
+/**
+ * Conditional form: a current backend answers with a `ViewSnapshotOutcome`
+ * (`unchanged` without a body when `known` is still current); a legacy backend
+ * ignores `known` and returns a plain snapshot. Callers validate either shape.
+ */
+export async function getPrMonitorState(
+  known: ViewRevisionStamp | undefined,
+): Promise<PrMonitorSnapshot | PrMonitorSnapshotOutcome>;
+export async function getPrMonitorState(
+  known?: ViewRevisionStamp,
+): Promise<PrMonitorSnapshot | PrMonitorSnapshotOutcome> {
+  if (!known) return invoke<PrMonitorSnapshot>("get_pr_monitor_state");
+  return invoke<PrMonitorSnapshot | PrMonitorSnapshotOutcome>("get_pr_monitor_state", {
+    ...toViewSnapshotRequestArgs(known),
+  });
 }
 
 /**

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { PrMonitorEnvironmentState, PrMonitorEvent } from "@orkestrator/protocol/pr-monitor";
+import type { HydrationStatus } from "@/lib/bounded-hydration";
 
 export type { PrMonitorEnvironmentState };
 
@@ -16,6 +17,13 @@ export type { PrMonitorEnvironmentState };
 interface PrMonitorStoreState {
   /** Monitor state keyed by environment ID. */
   states: Map<string, PrMonitorEnvironmentState>;
+  /**
+   * Freshness of this mirror (see `@/lib/bounded-hydration`). `stale`,
+   * `degraded` and `unsupported` mean the map may lag the backend; it still
+   * shows the newest state this client received.
+   */
+  syncStatus: HydrationStatus;
+  setSyncStatus: (status: HydrationStatus) => void;
 
   /**
    * Replaces the whole map from an authoritative backend snapshot.
@@ -48,6 +56,9 @@ function isSameState(a: PrMonitorEnvironmentState, b: PrMonitorEnvironmentState)
 
 export const usePrMonitorStore = create<PrMonitorStoreState>()((set, get) => ({
   states: new Map(),
+  syncStatus: "idle",
+  setSyncStatus: (syncStatus) =>
+    set((state) => (state.syncStatus === syncStatus ? state : { syncStatus })),
 
   applySnapshot: (entries) =>
     set((state) => {

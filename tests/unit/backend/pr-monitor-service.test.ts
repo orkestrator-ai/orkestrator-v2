@@ -180,10 +180,14 @@ function createHarness() {
       emitted
         .filter((e) => e.event === PR_MONITOR_CHANGED_EVENT && !e.payload.removed)
         .map((e) => e.payload),
+    // Revision metadata is covered by pr-monitor-revisions.test.ts; these
+    // lifecycle tests assert the removal itself.
     removalEvents: () =>
       emitted
         .filter((e) => e.event === PR_MONITOR_CHANGED_EVENT && e.payload.removed === true)
-        .map((e) => e.payload),
+        .map(
+          ({ payload: { generation: _generation, revision: _revision, ...removal } }) => removal,
+        ),
     transitions: () =>
       emitted
         .filter((e) => e.event === PR_MONITOR_CHANGED_EVENT && e.payload.transition)

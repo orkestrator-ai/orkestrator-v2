@@ -24,6 +24,11 @@ import {
   CommandFailedError,
 } from "./commands-dependencies.js";
 import type { EnvironmentDiffStatsSnapshot } from "./commands-dependencies.js";
+import type { EnvironmentDiffStatsSnapshotOutcome } from "@orkestrator/protocol/diff-stats";
+import {
+  parseViewSnapshotRequest,
+  resolveViewSnapshotOutcome,
+} from "@orkestrator/protocol/view-sync";
 import {
   terminalProcesses,
   terminalSessionConfigs,
@@ -724,9 +729,17 @@ export function registerTerminalCommands(
    * also arms tracking, so the first client to ask starts the work even if no
    * lifecycle command has run since the backend started.
    */
-  register("get_environment_diff_stats", async (_args, context) => {
+  register("get_environment_diff_stats", async (args, context) => {
     await syncDiffStatsTracking(context);
-    return { entries: diffStatsService.snapshot() } satisfies EnvironmentDiffStatsSnapshot;
+    // Legacy `{ entries }` shape (additively stamped) without known-revision
+    // arguments; the compact conditional outcome from `view-sync.ts` with them.
+    const request = parseViewSnapshotRequest(args);
+    if (request.kind === "absent") {
+      return diffStatsService.revisionedSnapshot() satisfies EnvironmentDiffStatsSnapshot;
+    }
+    return resolveViewSnapshotOutcome(request, diffStatsService.currentRevision(), () => ({
+      entries: diffStatsService.snapshot(),
+    })) satisfies EnvironmentDiffStatsSnapshotOutcome;
   });
   register("refresh_environment_diff_stats", async ({ environmentId }, context) => {
     await syncDiffStatsTracking(context);

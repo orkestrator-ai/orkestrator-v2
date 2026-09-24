@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   PR_MONITOR_CHANGED_EVENT,
   PR_MONITOR_MODE_TIMEOUTS_MS,
@@ -5,6 +6,9 @@ import {
   type PrMonitorEnvironmentState,
   type PrMonitorEvent,
   type PrMonitorMode,
+  type PrMonitorRemovalEvent,
+  type PrMonitorSnapshot,
+  type PrMonitorStateEvent,
   type PrMonitorTransition,
   type PrCheckSummary,
   type PrState,
@@ -111,6 +115,12 @@ export interface PrMonitorServiceOptions {
   schedule?: (callback: () => void, delayMs: number) => unknown;
   cancel?: (timer: unknown) => void;
   onWarning?: (message: string, error: unknown) => void;
+  /**
+   * Owner generation stamped on every event and snapshot. Defaults to a fresh
+   * random token per service instance, so a backend restart is observable as a
+   * generation change rather than as a revision counter going backwards.
+   */
+  generation?: string;
 }
 
 export const PR_MERGED_COMMENT = "🎉 PR merged";
@@ -161,6 +171,13 @@ interface PrMonitorEntry {
 }
 
 export class PrMonitorService {
+  /** Owner generation; see `packages/protocol/src/view-sync.ts`. */
+  readonly generation: string;
+  /**
+   * Domain revision: incremented once per announced event, so clients can
+   * order events against a snapshot and detect a missed announcement.
+   */
+  private revision = 0;
   private readonly entries = new Map<string, PrMonitorEntry>();
   private readonly reconciliationOperations = new Map<string, Promise<void>>();
   private readonly options: Required<
@@ -186,6 +203,7 @@ export class PrMonitorService {
       cancel: options.cancel ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>)),
       onWarning: options.onWarning,
     };
+    this.generation = options.generation ?? randomUUID();
   }
 
   /**
@@ -353,19 +371,50 @@ export class PrMonitorService {
     return [...this.entries.keys()];
   }
 
-  /** Authoritative snapshot for a client that just connected or remounted. */
+  /**
+   * Live monitoring state of every entry, including unannounced probes and
+   * bookkeeping that has not been announced yet. A diagnostic/test view;
+   * clients read {@link revisionedSnapshot}.
+   */
   snapshot(): PrMonitorEnvironmentState[] {
     return [...this.entries.values()].map((entry) => this.describe(entry));
   }
 
+  /** Current owner generation and the revision of the last announced event. */
+  currentRevision(): { generation: string; revision: number } {
+    return { generation: this.generation, revision: this.revision };
+  }
+
+  /**
+   * Authoritative client snapshot, captured synchronously with its revision.
+   *
+   * `entries` is exactly the fold of every announced event up to `revision`:
+   * each announced entry's last emitted state, and nothing unannounced. An
+   * unannounced probe can vanish silently, so including it would leave clients
+   * holding an entry that no later event or `unchanged` answer would correct.
+   */
+  revisionedSnapshot(): Required<PrMonitorSnapshot> {
+    const entries: PrMonitorEnvironmentState[] = [];
+    for (const entry of this.entries.values()) {
+      if (entry.lastEmitted) entries.push(entry.lastEmitted);
+    }
+    return { entries, generation: this.generation, revision: this.revision };
+  }
+
   /** Releases every timer; used on backend shutdown. */
   shutdown(): void {
+    let announcedEntries = false;
     for (const entry of this.entries.values()) {
+      if (entry.lastEmitted) announcedEntries = true;
       this.options.cancel(entry.timer);
       entry.timer = undefined;
       entry.active = false;
     }
     this.entries.clear();
+    // The snapshot changed without per-entry removal events. Advancing the
+    // revision keeps a conditional read from answering `unchanged` to a client
+    // still holding the discarded entries; a live client sees a gap instead.
+    if (announcedEntries) this.revision += 1;
   }
 
   private track(
@@ -410,7 +459,7 @@ export class PrMonitorService {
     // A provisional probe that found nothing was never announced; announcing
     // its removal would tell clients about an entry they never saw.
     if (entry.lastEmitted) {
-      this.emitSafely({ environmentId: entry.target.environmentId, removed: true });
+      this.announce({ environmentId: entry.target.environmentId, removed: true });
     }
   }
 
@@ -488,6 +537,10 @@ export class PrMonitorService {
       if (entry.generation === generation) entry.lastCheckAt = this.options.now();
       if (this.entries.get(entry.target.environmentId) === entry) {
         if (entry.generation !== generation) {
+          // A superseded check still has to lower a "detecting" state announced
+          // mid-check (mode request, target change); otherwise a paused entry
+          // would keep a spinner that nothing ever clears.
+          if (entry.lastEmitted?.checkInProgress) this.emitState(entry);
           if (entry.active && entry.recheckRequested) {
             entry.recheckRequested = false;
             this.scheduleNext(entry, 0);
@@ -878,7 +931,21 @@ export class PrMonitorService {
     // the polling cadence for information nothing renders.
     if (!transition && entry.lastEmitted && isSameObservableState(entry.lastEmitted, state)) return;
     entry.lastEmitted = state;
-    this.emitSafely({ environmentId: state.environmentId, state, transition });
+    this.announce({ environmentId: state.environmentId, state, transition });
+  }
+
+  /**
+   * Stamps and emits one event. The revision advances even when the sink
+   * throws: the state change happened, and a client that never received it
+   * must see a gap rather than an apparently contiguous sequence.
+   */
+  private announce(
+    payload:
+      | Omit<PrMonitorStateEvent, "generation" | "revision">
+      | Omit<PrMonitorRemovalEvent, "generation" | "revision">,
+  ): void {
+    this.revision += 1;
+    this.emitSafely({ ...payload, generation: this.generation, revision: this.revision });
   }
 
   private emitSafely(payload: PrMonitorEvent): void {
@@ -931,6 +998,9 @@ function isSameObservableState(
 ): boolean {
   return (
     a.mode === b.mode &&
+    // Included so a "detecting" state announced mid-check is always followed
+    // by the lowered state; otherwise the dedupe strands clients on a spinner.
+    a.checkInProgress === b.checkInProgress &&
     a.consecutiveErrors === b.consecutiveErrors &&
     a.prUrl === b.prUrl &&
     a.prState === b.prState &&

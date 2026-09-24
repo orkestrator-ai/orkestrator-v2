@@ -9,6 +9,11 @@ import {
   isPrMonitorMode,
 } from "./commands-dependencies.js";
 import type { AwaitBridgeReadyResult, PrMonitorSnapshot } from "./commands-dependencies.js";
+import type { PrMonitorSnapshotOutcome } from "@orkestrator/protocol/pr-monitor";
+import {
+  parseViewSnapshotRequest,
+  resolveViewSnapshotOutcome,
+} from "@orkestrator/protocol/view-sync";
 import {
   LOCAL_SERVER_KINDS,
   setPrMonitorRuntime,
@@ -322,9 +327,19 @@ export function registerPullRequestCommands(
    * also arms tracking, so the first client to ask starts the polling even if
    * no lifecycle command has run since the backend started.
    */
-  register("get_pr_monitor_state", async (_args, context) => {
+  register("get_pr_monitor_state", async (args, context) => {
     await syncPrMonitorTracking(context);
-    return { entries: prMonitorService.snapshot() } satisfies PrMonitorSnapshot;
+    // Without `knownGeneration`/`knownRevision` this keeps the legacy
+    // `{ entries }` shape, now additively stamped. With them it answers the
+    // compact conditional outcome from `view-sync.ts`. Both are captured
+    // synchronously so the revision identifies exactly the returned state.
+    const request = parseViewSnapshotRequest(args);
+    if (request.kind === "absent") {
+      return prMonitorService.revisionedSnapshot() satisfies PrMonitorSnapshot;
+    }
+    return resolveViewSnapshotOutcome(request, prMonitorService.currentRevision(), () => ({
+      entries: prMonitorService.revisionedSnapshot().entries,
+    })) satisfies PrMonitorSnapshotOutcome;
   });
   /**
    * A client pressed "Create PR" or "Merge": poll this environment faster until

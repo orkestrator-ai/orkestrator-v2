@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import {
   DIFF_STATS_CHANGED_EVENT,
   type EnvironmentDiffStats,
   type EnvironmentDiffStatsChange,
   type EnvironmentDiffStatsRemoval,
+  type EnvironmentDiffStatsSnapshot,
 } from "@orkestrator/protocol/diff-stats";
 import { startWorktreeWatcher, type WorktreeWatcher } from "./worktree-watcher.js";
 
@@ -57,6 +59,11 @@ export interface DiffStatsServiceOptions {
   cancel?: (timer: unknown) => void;
   startWatcher?: typeof startWorktreeWatcher;
   onWarning?: (message: string, error: unknown) => void;
+  /**
+   * Owner generation stamped on every event and snapshot. Defaults to a fresh
+   * random token per service instance (see `packages/protocol/src/view-sync.ts`).
+   */
+  generation?: string;
 }
 
 /** Matches the cadence the renderers used to poll at, for the unwatched case. */
@@ -83,6 +90,13 @@ interface DiffStatsEntry {
 }
 
 export class DiffStatsService {
+  /** Owner generation; see `packages/protocol/src/view-sync.ts`. */
+  readonly generation: string;
+  /**
+   * Domain revision: incremented once per announced change or removal, so
+   * clients can order events against a snapshot and detect a missed one.
+   */
+  private revision = 0;
   private readonly entries = new Map<string, DiffStatsEntry>();
   private readonly options: Required<
     Pick<
@@ -118,6 +132,7 @@ export class DiffStatsService {
       startWatcher: options.startWatcher ?? startWorktreeWatcher,
       onWarning: options.onWarning,
     };
+    this.generation = options.generation ?? randomUUID();
   }
 
   /**
@@ -144,7 +159,7 @@ export class DiffStatsService {
         existing.cachedAt = undefined;
         existing.scanGeneration += 1;
         if (hadPublishedCounts) {
-          this.emitSafely({
+          this.announce({
             environmentId: target.environmentId,
             comparisonRef: target.comparisonRef,
             computedAt: this.options.now(),
@@ -176,14 +191,32 @@ export class DiffStatsService {
     this.request(entry);
   }
 
-  /** Stops tracking and releases the watcher. Safe to call for unknown ids. */
+  /**
+   * Stops tracking and releases the watcher. Safe to call for unknown ids.
+   *
+   * Published counts are withdrawn with a removal event: the snapshot no longer
+   * contains them, and a client must not keep a deleted environment's badge
+   * while a conditional read reports its view as unchanged.
+   */
   untrack(environmentId: string): void {
+    const entry = this.release(environmentId);
+    if (!entry?.last) return;
+    this.announce({
+      environmentId,
+      comparisonRef: entry.target.comparisonRef,
+      computedAt: this.options.now(),
+      removed: true,
+    } satisfies EnvironmentDiffStatsRemoval);
+  }
+
+  private release(environmentId: string): DiffStatsEntry | undefined {
     const entry = this.entries.get(environmentId);
-    if (!entry) return;
+    if (!entry) return undefined;
     entry.active = false;
     this.detachWatcher(entry);
     this.options.cancel(entry.timer);
     this.entries.delete(environmentId);
+    return entry;
   }
 
   /**
@@ -215,18 +248,36 @@ export class DiffStatsService {
 
   /** Releases every watcher and timer; used on backend shutdown. */
   shutdown(): void {
+    let publishedCounts = false;
     for (const environmentId of Array.from(this.entries.keys())) {
-      this.untrack(environmentId);
+      if (this.release(environmentId)?.last) publishedCounts = true;
     }
+    // No per-environment removals on shutdown, but the snapshot did change:
+    // advance the revision so a conditional read cannot answer `unchanged`.
+    if (publishedCounts) this.revision += 1;
   }
 
-  /** Authoritative snapshot for a client that just connected or remounted. */
+  /** Published counts, without revision metadata. */
   snapshot(): EnvironmentDiffStatsChange[] {
     const entries: EnvironmentDiffStatsChange[] = [];
     for (const entry of this.entries.values()) {
       if (entry.last) entries.push(entry.last);
     }
     return entries;
+  }
+
+  /** Current owner generation and the revision of the last announced event. */
+  currentRevision(): { generation: string; revision: number } {
+    return { generation: this.generation, revision: this.revision };
+  }
+
+  /**
+   * Authoritative client snapshot, captured synchronously with its revision:
+   * every announced change or removal up to `revision` is reflected in
+   * `entries`, and none after it.
+   */
+  revisionedSnapshot(): Required<EnvironmentDiffStatsSnapshot> {
+    return { entries: this.snapshot(), generation: this.generation, revision: this.revision };
   }
 
   /**
@@ -407,7 +458,16 @@ export class DiffStatsService {
       computedAt: this.options.now(),
     };
     entry.last = change;
-    this.emitSafely(change);
+    this.announce(change);
+  }
+
+  /**
+   * Stamps and emits one change or removal. The revision advances even when
+   * the sink throws, so a client that missed it sees a gap.
+   */
+  private announce(payload: EnvironmentDiffStatsChange | EnvironmentDiffStatsRemoval): void {
+    this.revision += 1;
+    this.emitSafely({ ...payload, generation: this.generation, revision: this.revision });
   }
 
   private emitSafely(payload: EnvironmentDiffStatsChange | EnvironmentDiffStatsRemoval): void {

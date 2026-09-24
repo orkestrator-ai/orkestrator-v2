@@ -93,8 +93,9 @@ export function draftFromDefinition(definition: McpEditableDefinition): McpDraft
   return {
     name: definition.name,
     transport,
-    command:
-      definition.command?.kind === "visible"
+    command: !definition.command
+      ? { kind: "set", value: "" }
+      : definition.command.kind === "visible"
         ? { kind: "set", value: definition.command.value }
         : { kind: "keep", display: definition.command?.display ?? "" },
     args: definition.args.map((arg) =>
@@ -103,8 +104,9 @@ export function draftFromDefinition(definition: McpEditableDefinition): McpDraft
         : { id: rowId(), kind: "keep", index: arg.index, display: arg.value.display },
     ),
     cwd: definition.cwd ?? "",
-    url:
-      definition.url?.kind === "visible"
+    url: !definition.url
+      ? { kind: "set", value: "" }
+      : definition.url.kind === "visible"
         ? { kind: "set", value: definition.url.value }
         : { kind: "keep", display: definition.url?.display ?? "" },
     env: mapRows(definition.env),
@@ -137,6 +139,7 @@ function cleanAdvanced(advanced: McpDraft["advanced"]): Record<string, McpAdvanc
 export function definitionInputFromDraft(
   draft: McpDraft,
   enabledSupported: boolean,
+  advancedFields?: McpAdvancedFieldSchema[],
 ): McpDefinitionInput {
   const stdio = draft.transport === "stdio";
   const input: McpDefinitionInput = { name: draft.name.trim(), transport: draft.transport };
@@ -154,6 +157,11 @@ export function definitionInputFromDraft(
   if (env.length) input.env = env.map((row) => ({ key: row.key.trim(), value: row.value }));
   if (enabledSupported) input.enabled = draft.enabled;
   const advanced = cleanAdvanced(draft.advanced);
+  if (advancedFields) {
+    for (const field of advancedFields) {
+      if (!field.transports.includes(draft.transport)) delete advanced[field.id];
+    }
+  }
   if (Object.keys(advanced).length) input.advanced = advanced;
   return input;
 }
@@ -168,6 +176,12 @@ function mapPatch(rows: MapRow[], cleared: string[]): McpMapEdit[] {
     if (row.mode === "keep") {
       // The backend drops the old key of a keep-move itself.
       if (row.originalKey && row.originalKey !== key)
+        edits.push({ key, edit: { kind: "keep", fromKey: row.originalKey } });
+      continue;
+    }
+    // Clicking Replace without entering a new value must retain a saved literal.
+    if (row.originalKey && row.originalReference === undefined && row.value === "") {
+      if (row.originalKey !== key)
         edits.push({ key, edit: { kind: "keep", fromKey: row.originalKey } });
       continue;
     }
@@ -193,6 +207,7 @@ function mapPatch(rows: MapRow[], cleared: string[]): McpMapEdit[] {
 export function patchFromDraft(
   original: McpEditableDefinition,
   draft: McpDraft,
+  advancedFields: McpAdvancedFieldSchema[] = [],
 ): McpDefinitionPatch {
   const patch: McpDefinitionPatch = {};
   const before = draftFromDefinition(original);
@@ -203,6 +218,8 @@ export function patchFromDraft(
     if (fromStdio !== toStdio) {
       if (fromStdio) discard.push("command", "args", "cwd");
       else discard.push("url", "headers");
+      const native = fromStdio ? ["env_vars"] : ["env_http_headers", "bearer_token"];
+      for (const key of native) if (original.preservedFields.includes(key)) discard.push(key);
     }
     patch.transport = { to: draft.transport, discard };
   }
@@ -241,10 +258,17 @@ export function patchFromDraft(
   const afterAdvanced = cleanAdvanced(draft.advanced);
   const set: Record<string, McpAdvancedValue> = {};
   const remove: string[] = [];
+  const inapplicable = new Set(
+    advancedFields
+      .filter((field) => !field.transports.includes(draft.transport))
+      .map((field) => field.id),
+  );
   for (const [key, value] of Object.entries(afterAdvanced)) {
+    if (inapplicable.has(key)) continue;
     if (JSON.stringify(beforeAdvanced[key]) !== JSON.stringify(value)) set[key] = value;
   }
-  for (const key of Object.keys(beforeAdvanced)) if (!(key in afterAdvanced)) remove.push(key);
+  for (const key of Object.keys(beforeAdvanced))
+    if (!(key in afterAdvanced) || inapplicable.has(key)) remove.push(key);
   if (Object.keys(set).length || remove.length)
     patch.advanced = {
       ...(Object.keys(set).length ? { set } : {}),

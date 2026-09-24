@@ -329,7 +329,7 @@ describe("runtime application", () => {
     await ticking;
     const older = await fixture.service.getOperation({ operationId: first.operation.operationId });
     expect(older.apply.state).toBe("cancelled");
-    expect(newer.operation.apply.state).toBe("queued");
+    expect(["queued", "pending-next-turn"]).toContain(newer.operation.apply.state);
   });
 
   test("operations survive a backend restart and queued work resumes", async () => {
@@ -380,6 +380,32 @@ describe("crash recovery", () => {
     expect(recovered.phase).toBe("saved");
     expect(recovered.message).toContain("Recovered");
     expect(fixture.read("home/.claude.json")).toBe(before);
+  });
+
+  test("a Codex update with reordered native keys recovers as saved", async () => {
+    const file = "home/.codex/config.toml";
+    fixture.write(
+      file,
+      '[mcp_servers.docs]\ncommand = "bun"\nstartup_timeout_sec = 10\nargs = ["old"]\n',
+    );
+    const targetId = await targetIdFor(fixture, "codex", "backend");
+    const before = await fixture.service.snapshot({ targetId });
+    const source = before.sources.find((item) => item.sourceId === "codex:user")!;
+    const definition = before.definitions.find((item) => item.name === "docs")!;
+    const result = await fixture.service.mutate(
+      mutation(targetId, {
+        kind: "update",
+        entryId: definition.entryId,
+        expectedRevision: source.revision!,
+        patch: { args: [{ kind: "set", value: "new" }] },
+      }),
+    );
+    fixture.service.dispose();
+    markPending(result.operation.operationId);
+    fixture.service = fixture.newService();
+    expect(
+      (await fixture.service.getOperation({ operationId: result.operation.operationId })).phase,
+    ).toBe("saved");
   });
 
   test("a crash before the write is reported as not saved", async () => {

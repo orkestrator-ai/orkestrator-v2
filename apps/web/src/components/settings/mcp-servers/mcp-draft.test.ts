@@ -69,6 +69,57 @@ describe("mcp draft model", () => {
     ]);
   });
 
+  test("an empty replacement retains the saved literal while another edit is saved", () => {
+    const draft = draftFromDefinition(saved);
+    draft.env[0] = { ...draft.env[0]!, mode: "set", value: "" };
+    draft.command = { kind: "set", value: "bun" };
+    expect(patchFromDraft(saved, draft)).toEqual({ command: { kind: "set", value: "bun" } });
+  });
+
+  test("switching from HTTP provides the new command and removes old advanced fields", () => {
+    const remote = {
+      ...saved,
+      transport: "http" as const,
+      command: undefined,
+      args: [],
+      url: { kind: "visible" as const, value: "https://example.com/mcp" },
+      advanced: { bearer_token_env_var: "TOKEN" },
+      preservedFields: ["env_http_headers"],
+    };
+    const draft = draftFromDefinition(remote);
+    draft.transport = "stdio";
+    draft.command = { kind: "set", value: "bun" };
+    const patch = patchFromDraft(remote, draft, [
+      {
+        id: "bearer_token_env_var",
+        label: "Bearer token variable",
+        type: "string",
+        transports: ["http"],
+      },
+    ]);
+    expect(patch.command).toEqual({ kind: "set", value: "bun" });
+    expect(patch.transport?.discard).toContain("env_http_headers");
+    expect(patch.advanced?.remove).toContain("bearer_token_env_var");
+  });
+
+  test("a new draft omits hidden advanced fields after a transport switch", () => {
+    const draft = emptyDraft("http");
+    draft.name = "docs";
+    draft.url = { kind: "set", value: "https://example.com/mcp" };
+    draft.advanced.bearer_token_env_var = "TOKEN";
+    draft.transport = "stdio";
+    draft.command = { kind: "set", value: "bun" };
+    const input = definitionInputFromDraft(draft, false, [
+      {
+        id: "bearer_token_env_var",
+        label: "Bearer token variable",
+        type: "string",
+        transports: ["http"],
+      },
+    ]);
+    expect(input.advanced).toBeUndefined();
+  });
+
   test("argument edits keep retained values by their saved position", () => {
     const draft = draftFromDefinition(saved);
     draft.args = [draft.args[2]!, draft.args[0]!];

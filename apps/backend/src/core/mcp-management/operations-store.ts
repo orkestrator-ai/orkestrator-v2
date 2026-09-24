@@ -12,6 +12,7 @@
 import { createHmac, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
+import { McpSourceStore } from "./source-store.js";
 
 import {
   MCP_MANAGEMENT_LIMITS,
@@ -84,12 +85,17 @@ export class McpOperationStore {
   /** Set when an unreadable file could not be moved aside; writes are refused. */
   private writeBlocked = false;
   private writeChain: Promise<void> = Promise.resolve();
+  /** Last disk version seen for each id, so live service references can stay stable. */
+  private readonly known = new Map<string, string>();
+  private readonly lockStore: McpSourceStore;
 
   constructor(
     private readonly filePath: string,
     private readonly digestKey: () => Promise<Buffer>,
     private readonly now: () => number = Date.now,
-  ) {}
+  ) {
+    this.lockStore = new McpSourceStore({ keyFile: `${filePath}.lock-key` });
+  }
 
   async load(): Promise<void> {
     if (this.loaded) return;
@@ -114,6 +120,8 @@ export class McpOperationStore {
           typeof entry.snapshot?.operationId === "string" &&
           typeof entry.recovery?.fingerprint === "string",
       );
+      for (const entry of this.operations)
+        this.known.set(entry.snapshot.operationId, JSON.stringify(entry));
     } else {
       // A newer schema or a damaged file is moved aside, never overwritten in
       // place: an older build must not destroy history a newer one wrote.
@@ -143,6 +151,10 @@ export class McpOperationStore {
       .slice(0, 43);
   }
 
+  async entryDigest(value: unknown): Promise<string> {
+    return this.digest(canonical(value));
+  }
+
   newOperationId(): string {
     return `mcpop-${randomUUID()}`;
   }
@@ -161,6 +173,29 @@ export class McpOperationStore {
     );
   }
 
+  /** Reconcile records written by another backend before an idempotency lookup. */
+  async refresh(): Promise<void> {
+    await this.writeChain;
+    await this.lockStore.withLock(this.filePath, async () => {
+      let latest: StoreFile;
+      try {
+        latest = JSON.parse(await fs.readFile(this.filePath, "utf8")) as StoreFile;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw mcpFailure("internal", {
+          message: "The configuration operation history cannot be read.",
+        });
+      }
+      if (latest.version !== 1 || !Array.isArray(latest.operations))
+        throw mcpFailure("internal", {
+          message: "The configuration operation history cannot be read.",
+        });
+      this.mergeLatest(latest.operations);
+      for (const current of latest.operations)
+        this.known.set(current.snapshot.operationId, JSON.stringify(current));
+    });
+  }
+
   forTarget(targetId: string, limit = 20): McpOperationSnapshot[] {
     return this.operations
       .filter((entry) => entry.snapshot.targetId === targetId)
@@ -171,13 +206,9 @@ export class McpOperationStore {
 
   /** Insert or replace, then persist. Enforces retention before writing. */
   async put(entry: StoredOperation): Promise<void> {
-    const index = this.operations.findIndex(
-      (candidate) => candidate.snapshot.operationId === entry.snapshot.operationId,
-    );
-    if (index >= 0) this.operations[index] = entry;
-    else this.operations.push(entry);
-    this.prune();
-    await this.persist();
+    const write = this.writeChain.then(() => this.persist(entry));
+    this.writeChain = write.catch(() => undefined);
+    await write;
   }
 
   private prune(): void {
@@ -193,33 +224,80 @@ export class McpOperationStore {
     }
   }
 
-  private async persist(): Promise<void> {
+  private async persist(entry: StoredOperation): Promise<void> {
     if (this.writeBlocked) {
       throw mcpFailure("internal", {
         message:
           "The configuration operation history could not be read or moved aside, so it is left untouched and changes are refused.",
       });
     }
-    let body = JSON.stringify({ version: 1, operations: this.operations } satisfies StoreFile);
-    // Shed the oldest finished history until the file fits; never unfinished work.
-    while (utf8ByteLength(body) > MCP_MANAGEMENT_LIMITS.operationStoreMaxBytes) {
-      const finishedIndex = this.operations.findIndex(isFinishedOperation);
-      if (finishedIndex < 0) break;
-      this.operations.splice(finishedIndex, 1);
-      body = JSON.stringify({ version: 1, operations: this.operations } satisfies StoreFile);
-    }
-    const write = this.writeChain.then(async () => {
+    await this.lockStore.withLock(this.filePath, async () => {
       await fs.mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
+      let latest: StoreFile = { version: 1, operations: [] };
+      try {
+        latest = JSON.parse(await fs.readFile(this.filePath, "utf8")) as StoreFile;
+        if (latest.version !== 1 || !Array.isArray(latest.operations))
+          throw new Error("Invalid operation history");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw mcpFailure("internal", {
+            message:
+              "The configuration operation history changed or cannot be read; changes are refused.",
+          });
+        }
+      }
+      this.mergeLatest(latest.operations, entry);
+      const index = this.operations.findIndex(
+        (candidate) => candidate.snapshot.operationId === entry.snapshot.operationId,
+      );
+      if (index >= 0) this.operations[index] = entry;
+      else this.operations.push(entry);
+      this.prune();
+      let body = JSON.stringify({ version: 1, operations: this.operations } satisfies StoreFile);
+      // Shed the oldest finished history until the file fits; never unfinished work.
+      while (utf8ByteLength(body) > MCP_MANAGEMENT_LIMITS.operationStoreMaxBytes) {
+        const finishedIndex = this.operations.findIndex(isFinishedOperation);
+        if (finishedIndex < 0) break;
+        this.operations.splice(finishedIndex, 1);
+        body = JSON.stringify({ version: 1, operations: this.operations } satisfies StoreFile);
+      }
       const temporary = `${this.filePath}.${randomUUID()}.tmp`;
       try {
         await fs.writeFile(temporary, body, { mode: 0o600 });
         await fs.rename(temporary, this.filePath);
+        this.known.clear();
+        for (const current of (JSON.parse(body) as StoreFile).operations)
+          this.known.set(current.snapshot.operationId, JSON.stringify(current));
       } catch (error) {
         await fs.unlink(temporary).catch(() => undefined);
         throw error;
       }
     });
-    this.writeChain = write.catch(() => undefined);
-    await write;
   }
+
+  private mergeLatest(latest: StoredOperation[], writing?: StoredOperation): void {
+    this.operations = latest.map((diskEntry) => {
+      const id = diskEntry.snapshot.operationId;
+      const local = this.operations.find((candidate) => candidate.snapshot.operationId === id);
+      if (!local) return diskEntry;
+      const diskVersion = JSON.stringify(diskEntry);
+      if (this.known.has(id) && this.known.get(id) !== diskVersion && local !== writing) {
+        local.snapshot = diskEntry.snapshot;
+        local.recovery = diskEntry.recovery;
+      }
+      return local;
+    });
+  }
+}
+
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, canonical(item)]),
+    );
+  }
+  return value;
 }

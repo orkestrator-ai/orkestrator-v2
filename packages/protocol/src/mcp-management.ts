@@ -850,6 +850,12 @@ const LITERAL_ENV_FALLBACK = /\$\{[A-Za-z_][A-Za-z0-9_]*:-[^}]+\}/;
 export function isSensitiveArg(arg: string, previous?: string): boolean {
   if (LITERAL_ENV_FALLBACK.test(arg)) return true;
   if (
+    /^(?:-H|--header)=/i.test(arg) ||
+    /\b(?:Authorization|Bearer)\s*:/i.test(arg) ||
+    /\bBearer\s+\S+/i.test(arg)
+  )
+    return true;
+  if (
     previous &&
     /^--?[A-Za-z]/.test(previous) &&
     SENSITIVE_WORD.test(previous) &&
@@ -897,10 +903,16 @@ export function isSensitiveUrl(value: string): boolean {
     )
   )
     return true;
-  for (const key of parsed.searchParams.keys()) {
-    if (SENSITIVE_WORD.test(key) || /^(key|code|k)$/i.test(key)) return true;
+  for (const [key, queryValue] of parsed.searchParams) {
+    if (
+      SENSITIVE_WORD.test(key) ||
+      /^(key|code|k)$/i.test(key) ||
+      isSensitiveArg(queryValue) ||
+      (queryValue.length >= 24 && /^[A-Za-z0-9_-]+$/.test(queryValue))
+    )
+      return true;
   }
-  return false;
+  return parsed.hash.length > 0;
 }
 
 function decodeURIComponentSafe(value: string): string {
@@ -1258,14 +1270,14 @@ export function validateMcpDefinitionInput(input: unknown): McpFieldError[] {
       checkString(errors, "cwd", input.cwd, MCP_MANAGEMENT_LIMITS.commandMaxBytes);
     if (input.url !== undefined)
       errors.push({ field: "url", message: "A stdio server has no URL." });
-    if (input.headers !== undefined && (input.headers as unknown[]).length) {
+    if (Array.isArray(input.headers) && input.headers.length) {
       errors.push({ field: "headers", message: "A stdio server has no headers." });
     }
   } else {
     validateMcpUrl(input.url, errors);
     if (input.command !== undefined)
       errors.push({ field: "command", message: "A remote server has no command." });
-    if (input.args !== undefined && (input.args as unknown[]).length) {
+    if (input.args !== undefined && (!Array.isArray(input.args) || input.args.length)) {
       errors.push({ field: "args", message: "A remote server has no arguments." });
     }
   }

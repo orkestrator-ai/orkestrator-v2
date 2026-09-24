@@ -176,10 +176,19 @@ export function McpServerEditor({
     if (mode.kind === "add")
       return localAddErrors(
         candidate,
-        definitionInputFromDraft(candidate, capabilities.operations.setEnabled.supported),
+        definitionInputFromDraft(
+          candidate,
+          capabilities.operations.setEnabled.supported,
+          capabilities.fields.advanced,
+        ),
         capabilities,
       );
-    return definition ? localPatchErrors(candidate, patchFromDraft(definition, candidate)) : [];
+    return definition
+      ? localPatchErrors(
+          candidate,
+          patchFromDraft(definition, candidate, capabilities.fields.advanced),
+        )
+      : [];
   };
   const changeDraft = (next: McpDraft) => {
     setDraft(next);
@@ -189,7 +198,8 @@ export function McpServerEditor({
   const dirty =
     mode.kind === "add"
       ? !isBlankDraft(draft)
-      : !!definition && !isEmptyPatch(patchFromDraft(definition, draft));
+      : !!definition &&
+        !isEmptyPatch(patchFromDraft(definition, draft, capabilities.fields.advanced));
   const onDirtyChangeRef = useRef(onDirtyChange);
   onDirtyChangeRef.current = onDirtyChange;
   useEffect(() => {
@@ -219,7 +229,11 @@ export function McpServerEditor({
           kind: "add",
           sourceId: source.sourceId,
           expectedRevision: pinnedRevisions.current[source.sourceId] ?? null,
-          definition: definitionInputFromDraft(draft, capabilities.operations.setEnabled.supported),
+          definition: definitionInputFromDraft(
+            draft,
+            capabilities.operations.setEnabled.supported,
+            capabilities.fields.advanced,
+          ),
         },
       };
     }
@@ -232,7 +246,7 @@ export function McpServerEditor({
         kind: "update",
         entryId: definition.entryId,
         expectedRevision: definition.sourceRevision,
-        patch: patchFromDraft(definition, draft),
+        patch: patchFromDraft(definition, draft, capabilities.fields.advanced),
       },
     };
   };
@@ -242,7 +256,10 @@ export function McpServerEditor({
     // with the stronger intent: it must describe everything applying may do,
     // including starting a stdio server's command.
     if (mode.kind === "add" ? !source : !definition) return;
-    if (definition && isEmptyPatch(patchFromDraft(definition, draft))) {
+    if (
+      definition &&
+      isEmptyPatch(patchFromDraft(definition, draft, capabilities.fields.advanced))
+    ) {
       setProblem({ message: "Nothing has changed.", conflict: false });
       return;
     }

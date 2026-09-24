@@ -17,7 +17,7 @@ export type LoadState<T> =
   | { status: "loading"; data: T | null }
   | { status: "ready"; data: T }
   | { status: "unsupported" }
-  | { status: "error"; message: string; reference?: string; data: T | null };
+  | { status: "error"; message: string; reference?: string; code?: string; data: T | null };
 
 export function describeMcpError(error: unknown): string {
   const detail = mcpManagementErrorFromUnknown(error);
@@ -98,6 +98,7 @@ export function useMcpTargets(environmentId: string | null): {
       });
   }, [environmentId]);
   useEffect(load, [load]);
+  useBackendInvalidation(load);
   return { state: keyed.environmentId === environmentId ? keyed.state : LOADING, reload: load };
 }
 
@@ -144,6 +145,7 @@ export function useMcpSnapshot(targetId: string | null): {
           setState((current) => ({
             status: "error",
             message: describeMcpError(error),
+            code: mcpManagementErrorFromUnknown(error)?.code,
             reference: mcpErrorReference(error),
             data: sameTarget(current),
           }));

@@ -152,4 +152,39 @@ describe("Grok MCP configuration fingerprint", () => {
     await writeFile(files.user, "a = 22\n");
     expect((await watcher.current()).fingerprint).not.toBe(first.fingerprint);
   });
+
+  test("a read started before a save cannot poison the newer stat cache", async () => {
+    const root = await scratch();
+    const files = { user: join(root, "config.toml"), project: join(root, "missing.toml") };
+    await writeFile(files.user, "old\n");
+    const old = await grokMcpConfigFingerprint(files);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let reads = 0;
+    const watcher = new GrokMcpConfigWatcher(
+      () => files,
+      async (paths) => {
+        if (++reads === 1) {
+          started();
+          await held;
+          return old;
+        }
+        return grokMcpConfigFingerprint(paths);
+      },
+    );
+    const first = watcher.current();
+    await entered;
+    await writeFile(files.user, "new and longer\n");
+    const second = await watcher.current();
+    release();
+    await first;
+    expect(second.fingerprint).not.toBe(old.fingerprint);
+    expect((await watcher.current()).fingerprint).toBe(second.fingerprint);
+  });
 });

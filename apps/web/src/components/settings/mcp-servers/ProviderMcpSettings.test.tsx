@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 
 import {
   MCP_MANAGEMENT_CHANGED_EVENT,
+  mcpFailure,
   type McpEditableDefinition,
   type McpManagementSnapshot,
   type McpManagementTarget,
@@ -191,6 +192,41 @@ async function reviewNewServer(name = "files") {
 const TRANSPORT_FAILURE = "Failed to fetch";
 
 describe("ProviderMcpSettings", () => {
+  test("retries a failed targets list without leaving the section", async () => {
+    let attempts = 0;
+    install({
+      ...baseHandlers,
+      list_mcp_management_targets: () => {
+        if (++attempts === 1) throw new Error("Targets unavailable");
+        return baseHandlers.list_mcp_management_targets();
+      },
+    });
+    render(<ProviderMcpSettings />);
+    expect(await screen.findByText("Targets unavailable")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("docs")).toBeTruthy();
+    expect(attempts).toBe(2);
+  });
+
+  test("an unknown target refreshes the target list and loads its replacement", async () => {
+    const fresh = { ...target, targetId: `${target.targetId}-fresh` };
+    let lists = 0;
+    install({
+      list_mcp_management_targets: () => ({
+        protocolVersion: 1,
+        backendId: "b1",
+        targets: [++lists === 1 ? target : fresh],
+      }),
+      get_mcp_management_snapshot: (args) => {
+        if (args.targetId === target.targetId) throw mcpFailure("unknown-target");
+        return snapshot({ target: fresh });
+      },
+    });
+    render(<ProviderMcpSettings />);
+    expect(await screen.findByText("docs")).toBeTruthy();
+    expect(lists).toBeGreaterThanOrEqual(2);
+  });
+
   test("lists servers by source with status text, and links to Control MCP separately", async () => {
     install(baseHandlers);
     render(<ProviderMcpSettings />);
@@ -327,6 +363,133 @@ describe("ProviderMcpSettings", () => {
     });
     // The typed secret is gone from the DOM once the dialog closes.
     await waitFor(() => expect(document.body.innerHTML).not.toContain(SECRET));
+  });
+
+  test("a saved secret replacement can be undone before reviewing another edit", async () => {
+    const mutations: any[] = [];
+    install({
+      ...baseHandlers,
+      get_mcp_definition: () => editableDocs,
+      validate_mcp_mutation: (args) => {
+        mutations.push(args.mutation);
+        return { valid: true, fieldErrors: [], preview };
+      },
+    });
+    render(<ProviderMcpSettings />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit docs" }));
+    await screen.findByText("Value saved");
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep saved value" }));
+    fireEvent.change(screen.getByLabelText("Executable"), { target: { value: "bun" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review change" }));
+    await waitFor(() => expect(mutations).toHaveLength(1));
+    expect(mutations[0].operation.patch).toEqual({ command: { kind: "set", value: "bun" } });
+  });
+
+  test("switching a Codex HTTP server to stdio previews the command and discarded fields", async () => {
+    const codexTarget: McpManagementTarget = {
+      ...target,
+      provider: "codex",
+      providerLabel: "Codex",
+      capabilities: {
+        ...capabilities,
+        fields: {
+          ...capabilities.fields,
+          advanced: [
+            {
+              id: "bearer_token_env_var",
+              label: "Bearer token variable",
+              type: "string",
+              transports: ["http"],
+            },
+          ],
+        },
+      },
+    };
+    const remote: McpEditableDefinition = {
+      ...editableDocs,
+      transport: "http",
+      command: undefined,
+      args: [],
+      url: { kind: "visible", value: "https://example.com/mcp" },
+      env: [],
+      advanced: { bearer_token_env_var: "TOKEN" },
+      preservedFields: ["env_http_headers"],
+    };
+    const mutations: any[] = [];
+    install({
+      list_mcp_management_targets: () => ({
+        protocolVersion: 1,
+        backendId: "b1",
+        targets: [codexTarget],
+      }),
+      get_mcp_management_snapshot: () => snapshot({ target: codexTarget }),
+      get_mcp_definition: () => remote,
+      validate_mcp_mutation: (args) => {
+        mutations.push(args.mutation);
+        return { valid: true, fieldErrors: [], preview };
+      },
+    });
+    requestMcpServerSettings({ provider: "codex" });
+    render(<ProviderMcpSettings />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit docs" }));
+    await screen.findByLabelText("URL");
+    fireEvent.click(screen.getByRole("button", { name: "Command (stdio)" }));
+    fireEvent.change(screen.getByLabelText("Executable"), { target: { value: "bun" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review change" }));
+    await waitFor(() => expect(mutations).toHaveLength(1));
+    expect(mutations[0].operation.patch).toMatchObject({
+      command: { kind: "set", value: "bun" },
+      transport: { to: "stdio", discard: expect.arrayContaining(["url", "env_http_headers"]) },
+      advanced: { remove: ["bearer_token_env_var"] },
+    });
+  });
+
+  test("advanced validation errors reopen a collapsed section", async () => {
+    const advancedTarget: McpManagementTarget = {
+      ...target,
+      capabilities: {
+        ...capabilities,
+        fields: {
+          ...capabilities.fields,
+          advanced: [
+            {
+              id: "bearer_token_env_var",
+              label: "Bearer token variable",
+              type: "string",
+              transports: ["http"],
+            },
+          ],
+        },
+      },
+    };
+    install({
+      list_mcp_management_targets: () => ({
+        protocolVersion: 1,
+        backendId: "b1",
+        targets: [advancedTarget],
+      }),
+      get_mcp_management_snapshot: () => snapshot({ target: advancedTarget }),
+      validate_mcp_mutation: () => ({
+        valid: false,
+        fieldErrors: [
+          { field: "advanced.bearer_token_env_var", message: "Invalid variable name." },
+        ],
+        preview: null,
+      }),
+    });
+    render(<ProviderMcpSettings />);
+    fireEvent.click(await screen.findByRole("button", { name: /Add server/ }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "remote" } });
+    fireEvent.click(screen.getByRole("button", { name: "HTTP" }));
+    fireEvent.change(screen.getByLabelText("URL"), {
+      target: { value: "https://example.com/mcp" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review change" }));
+    expect(await screen.findByText("Invalid variable name.")).toBeTruthy();
+    await waitFor(() =>
+      expect((screen.getByText("Advanced").parentElement as HTMLDetailsElement).open).toBe(true),
+    );
   });
 
   test("a revision conflict keeps the draft and offers a reload", async () => {

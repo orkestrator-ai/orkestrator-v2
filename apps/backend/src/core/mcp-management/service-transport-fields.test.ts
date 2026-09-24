@@ -125,6 +125,31 @@ describe("fields a transport cannot carry are refused, never silently dropped", 
     const parsed = Bun.TOML.parse(fixture.read("home/.codex/config.toml")) as any;
     expect(parsed.mcp_servers.local).toEqual({ url: "https://now-remote.example/mcp" });
   });
+
+  test("Codex requires confirmation and removes preserved native keys on switch", async () => {
+    fixture.write(
+      "home/.codex/config.toml",
+      '[mcp_servers.local]\ncommand = "bun"\nenv_vars = ["TOKEN"]\n',
+    );
+    const targetId = await targetIdFor(fixture, "codex", "backend");
+    const before = await fixture.service.snapshot({ targetId });
+    const sourceId = "codex:user";
+    const operation = (discard: string[]) =>
+      mutation(targetId, {
+        kind: "update",
+        entryId: entry(before, sourceId, "local").entryId,
+        expectedRevision: revision(before, sourceId)!,
+        patch: {
+          transport: { to: "http", discard },
+          url: { kind: "set", value: "https://example.com/mcp" },
+        },
+      });
+    await expect(fixture.service.mutate(operation(["command"]))).rejects.toThrow("env_vars");
+    await fixture.service.mutate(operation(["command", "env_vars"]));
+    const parsed = Bun.TOML.parse(fixture.read("home/.codex/config.toml")) as any;
+    expect(parsed.mcp_servers.local.env_vars).toBeUndefined();
+    expect(parsed.mcp_servers.local.url).toBe("https://example.com/mcp");
+  });
 });
 
 describe("target ids are bound to this backend", () => {

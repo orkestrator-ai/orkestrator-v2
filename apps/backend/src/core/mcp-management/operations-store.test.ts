@@ -77,6 +77,32 @@ function ids(target: McpOperationStore) {
 }
 
 describe("McpOperationStore load", () => {
+  test("two loaded stores preserve each other's operation and request replay", async () => {
+    const first = store();
+    const second = store();
+    await Promise.all([first.load(), second.load()]);
+    const one = operation();
+    const two = operation();
+    await Promise.all([first.put(one), second.put(two)]);
+    const restarted = store();
+    await restarted.load();
+    expect(ids(restarted)).toEqual(
+      expect.arrayContaining([one.snapshot.operationId, two.snapshot.operationId]),
+    );
+    expect(
+      restarted.byRequest(one.snapshot.targetId, one.snapshot.requestId)?.snapshot.operationId,
+    ).toBe(one.snapshot.operationId);
+    expect(
+      restarted.byRequest(two.snapshot.targetId, two.snapshot.requestId)?.snapshot.operationId,
+    ).toBe(two.snapshot.operationId);
+  });
+
+  test("entry digests ignore object key order, including nested maps", async () => {
+    const target = store();
+    expect(await target.entryDigest({ command: "x", advanced: { b: 2, a: 1 } })).toBe(
+      await target.entryDigest({ advanced: { a: 1, b: 2 }, command: "x" }),
+    );
+  });
   test("a newer schema is moved aside, never overwritten", async () => {
     const newer = JSON.stringify({ version: 2, operations: [{ future: true }] });
     writeFileSync(file, newer);

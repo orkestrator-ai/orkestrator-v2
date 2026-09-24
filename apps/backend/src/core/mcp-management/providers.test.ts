@@ -41,6 +41,23 @@ afterEach(() => {
 
 const backend = { kind: "backend" as const, location: "backend-host" as const };
 
+test("OpenCode config directory matching XDG lists each file once", async () => {
+  const configDir = path.join(homes.xdgConfigHome, "opencode");
+  write("home/.config/opencode/opencode.json", '{"mcp":{}}');
+  const specs = await providerSources("opencode", {
+    context: backend,
+    homes: {
+      ...homes,
+      opencodeConfigDir: configDir,
+      opencodeCustomConfig: path.join(configDir, "opencode.json"),
+    },
+    exists: async (file: string) => existsSync(file),
+  });
+  expect(specs.filter((spec) => spec.path === path.join(configDir, "opencode.json"))).toHaveLength(
+    1,
+  );
+});
+
 function hostContext() {
   return { context: backend, homes, exists: async (file: string) => existsSync(file) };
 }

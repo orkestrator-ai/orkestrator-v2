@@ -50,6 +50,8 @@ export interface SourceWritePolicy {
   allowedRoot?: string;
   /** Mode for a newly created file. Existing files keep their mode. */
   createMode: number;
+  /** User configuration can contain literal credentials, including after this edit. */
+  privateExisting?: boolean;
   maxBytes: number;
 }
 
@@ -452,7 +454,9 @@ export class McpSourceStore {
       directory,
       `.${path.basename(target)}.orkestrator-${randomUUID()}.tmp`,
     );
-    const mode = snapshot.mode ?? policy.createMode;
+    const mode = policy.privateExisting
+      ? (snapshot.mode ?? policy.createMode) & 0o700
+      : (snapshot.mode ?? policy.createMode);
     let handle: fs.FileHandle | null = null;
     try {
       handle = await fs.open(

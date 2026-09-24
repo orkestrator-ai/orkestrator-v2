@@ -13,6 +13,7 @@
  */
 
 import os from "node:os";
+import * as fs from "node:fs/promises";
 import path from "node:path";
 
 import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -777,6 +778,21 @@ export async function providerSources(
     }
   }
   add(injectedSource(provider));
+  if (provider === "opencode") {
+    const seen = new Set<string>();
+    const unique: SourceSpec[] = [];
+    for (const spec of build.sources) {
+      const resolved =
+        spec.format === "runtime"
+          ? spec.path
+          : await fs.realpath(spec.path).catch(() => path.resolve(spec.path));
+      const key = `${resolved}\u0000${spec.subtree.join("/")}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(spec);
+    }
+    return unique;
+  }
   return build.sources;
 }
 

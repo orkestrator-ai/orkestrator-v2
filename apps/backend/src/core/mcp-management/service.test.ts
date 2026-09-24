@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { chmodSync, statSync } from "node:fs";
+import path from "node:path";
 
 import { MCP_MANAGEMENT_CHANGED_EVENT, mcpFailure } from "@orkestrator/protocol/mcp-management";
 
@@ -227,6 +229,26 @@ describe("McpManagementService — catalog", () => {
 });
 
 describe("McpManagementService — writes", () => {
+  test("saving a literal token restricts an existing user file to owner-only mode", async () => {
+    fixture.write(
+      "home/.claude.json",
+      JSON.stringify({ mcpServers: { docs: { command: "bun" } } }),
+    );
+    const file = path.join(fixture.root, "home/.claude.json");
+    chmodSync(file, 0o644);
+    const targetId = await targetIdFor(fixture, "claude", "backend");
+    const before = await fixture.service.snapshot({ targetId });
+    await fixture.service.mutate(
+      mutation(targetId, {
+        kind: "update",
+        entryId: entry(before, "claude:user", "docs").entryId,
+        expectedRevision: revision(before, "claude:user")!,
+        patch: { env: [{ key: "TOKEN", edit: { kind: "set", value: "literal-token" } }] },
+      }),
+    );
+    expect(statSync(file).mode & 0o077).toBe(0);
+  });
+
   test("add, update, rename and remove preserve unrelated JSON and unknown fields", async () => {
     fixture.write("home/.claude.json", CLAUDE_JSON);
     const targetId = await targetIdFor(fixture, "claude", "backend");
@@ -414,6 +436,34 @@ describe("McpManagementService — writes", () => {
     expect(replayed.replayed).toBe(true);
     expect(replayed.operation.operationId).toBe(original.operation.operationId);
     expect(replayed.operation.phase).toBe("saved");
+  });
+
+  test("another live backend replays a request saved after its initial load", async () => {
+    const second = fixture.newService();
+    const targetId = await targetIdFor(fixture, "claude", "backend");
+    await second.listTargets({});
+    const request = mutation(targetId, {
+      kind: "add",
+      sourceId: "claude:user",
+      expectedRevision: null,
+      definition: { name: "shared", transport: "stdio", command: "x" },
+    });
+    try {
+      const first = await fixture.service.mutate(request);
+      expect(
+        (await second.getOperation({ operationId: first.operation.operationId })).operationId,
+      ).toBe(first.operation.operationId);
+      expect(
+        (await second.snapshot({ targetId })).operations.some(
+          (item) => item.operationId === first.operation.operationId,
+        ),
+      ).toBe(true);
+      const replay = await second.mutate(request);
+      expect(replay.replayed).toBe(true);
+      expect(replay.operation.operationId).toBe(first.operation.operationId);
+    } finally {
+      second.dispose();
+    }
   });
 
   test("a retry after a definite failure replays that failure; a new request id can succeed", async () => {

@@ -222,6 +222,8 @@ describe("mcp-management protocol", () => {
     expect(isSensitiveArg("--api-key=abc")).toBe(true);
     expect(isSensitiveArg("abc", "--token")).toBe(true);
     expect(isSensitiveArg("Authorization: Bearer x", "-H")).toBe(true);
+    expect(isSensitiveArg("--header=Authorization: Bearer abc123")).toBe(true);
+    expect(isSensitiveArg("-H=Authorization: Bearer abc123")).toBe(true);
     expect(isSensitiveArg("ghp_0123456789abcdefghij")).toBe(true);
     expect(isSensitiveArg("-y")).toBe(false);
     expect(isSensitiveArg("@modelcontextprotocol/server-filesystem")).toBe(false);
@@ -232,6 +234,10 @@ describe("mcp-management protocol", () => {
     expect(visibleArgs(["--setting=${KEY:-literal-value}"])[0]?.value.kind).toBe("redacted");
 
     expect(isSensitiveUrl("https://example.com/mcp?api_key=SENTINEL")).toBe(true);
+    expect(isSensitiveUrl("https://example.com/mcp?u=ghp_0123456789abcdefghij")).toBe(true);
+    expect(isSensitiveUrl("https://example.com/mcp?u=Bearer%20abc123")).toBe(true);
+    expect(isSensitiveUrl("https://example.com/mcp?u=0123456789abcdefghijklmnopqrstuv")).toBe(true);
+    expect(isSensitiveUrl("https://example.com/mcp#credential")).toBe(true);
     expect(isSensitiveUrl("https://example.com/api/SENTINEL-SECRET-7f3a/mcp")).toBe(true);
     expect(visibleUrl("https://example.com/api/SENTINEL-SECRET-7f3a/mcp")).toEqual({
       kind: "redacted",
@@ -245,6 +251,25 @@ describe("mcp-management protocol", () => {
       kind: "visible",
       value: "https://example.com/mcp",
     });
+  });
+
+  test("null transport-specific fields produce validation errors", () => {
+    expect(
+      validateMcpDefinitionInput({
+        name: "a",
+        transport: "stdio",
+        command: "x",
+        headers: null,
+      }).some((error) => error.field === "headers"),
+    ).toBe(true);
+    expect(
+      validateMcpDefinitionInput({
+        name: "a",
+        transport: "http",
+        url: "https://example.com/mcp",
+        args: null,
+      }).some((error) => error.field === "args"),
+    ).toBe(true);
   });
 
   test("recognises provider variable references", () => {

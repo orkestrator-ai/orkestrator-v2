@@ -50,6 +50,7 @@ describe("json-edit", () => {
 
   test("removes middle, last and only properties and keeps valid syntax", () => {
     let text = removeJsonValue(JSONC, ["mcpServers", "a"], true);
+    expect(text).not.toContain("// trailing note");
     expect(parseJsonValue(text, true)).toEqual({
       theme: "dark",
       mcpServers: { b: { url: "https://b.example/mcp" } },
@@ -59,6 +60,13 @@ describe("json-edit", () => {
     const strict = removeJsonValue('{"x": 1, "y": {"k": 2}}', ["y"], false);
     expect(JSON.parse(strict)).toEqual({ x: 1 });
     expect(removeJsonValue('{"x": 1}', ["missing"], false)).toBe('{"x": 1}');
+  });
+
+  test("preserves a standalone comment before the surviving next property", () => {
+    const text = '{\n  "a": 1,\n  // documents b\n  "b": 2\n}\n';
+    const next = removeJsonValue(text, ["a"], true);
+    expect(next).toContain("// documents b");
+    expect(parseJsonValue(next, true)).toEqual({ b: 2 });
   });
 
   test("renames a key while keeping its value text byte-for-byte", () => {

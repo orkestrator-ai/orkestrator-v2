@@ -170,22 +170,33 @@ export interface GrokMcpConfigStatus {
 export class GrokMcpConfigWatcher {
   #key: string | undefined;
   #value: GrokMcpConfigFingerprint | undefined;
-  #pending: Promise<GrokMcpConfigFingerprint> | undefined;
+  #pending: { key: string; value: Promise<GrokMcpConfigFingerprint> } | undefined;
 
-  constructor(private readonly files: () => { user: string; project: string }) {}
+  constructor(
+    private readonly files: () => { user: string; project: string },
+    private readonly fingerprint: typeof grokMcpConfigFingerprint = grokMcpConfigFingerprint,
+  ) {}
 
   async current(): Promise<GrokMcpConfigFingerprint> {
     const files = this.files();
     const key = await statKey(files);
     if (this.#value && this.#key === key) return this.#value;
     // Concurrent misses share one read.
-    this.#pending ??= grokMcpConfigFingerprint(files).finally(() => {
-      this.#pending = undefined;
-    });
-    const value = await this.#pending;
-    this.#key = key;
-    this.#value = value;
-    return value;
+    if (this.#pending?.key !== key) {
+      const pending = { key, value: this.fingerprint(files) };
+      this.#pending = pending;
+    }
+    const pending = this.#pending;
+    try {
+      const value = await pending.value;
+      if (this.#pending === pending && (await statKey(files)) === key) {
+        this.#key = key;
+        this.#value = value;
+      }
+      return value;
+    } finally {
+      if (this.#pending === pending) this.#pending = undefined;
+    }
   }
 }
 

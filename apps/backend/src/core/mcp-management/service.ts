@@ -141,7 +141,7 @@ export class McpManagementService {
   private catalogRevision = 0;
   private eventRevision = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private ticking = false;
+  private ticking: Promise<void> | null = null;
   private initialized: Promise<void> | null = null;
   private disposed = false;
   private readonly evidence: EvidenceScheduler;
@@ -275,6 +275,7 @@ export class McpManagementService {
 
   async snapshot(args: { targetId?: unknown }): Promise<McpManagementSnapshot> {
     await this.init();
+    await this.operations.refresh();
     const target = await resolveTarget(args.targetId, this.options.storage);
     const specs = await this.specsFor(target);
     const catalog = await loadCatalog(this.store, specs, this.options.readContainerFile);
@@ -328,6 +329,7 @@ export class McpManagementService {
 
   async getOperation(args: { operationId?: unknown }): Promise<McpOperationSnapshot> {
     await this.init();
+    await this.operations.refresh();
     const stored =
       typeof args.operationId === "string" ? this.operations.get(args.operationId) : undefined;
     if (!stored) throw mcpFailure("unknown-operation");
@@ -368,6 +370,7 @@ export class McpManagementService {
       applyIntent: mutation.applyIntent,
       operation: mutation.operation,
     });
+    await this.operations.refresh();
     const existing = this.operations.byRequest(mutation.targetId, mutation.requestId);
     if (existing) {
       if (existing.recovery.fingerprint !== fingerprint) throw mcpFailure("request-conflict");
@@ -384,6 +387,7 @@ export class McpManagementService {
     const spec = specFor(mutation, specs);
     if (!spec.writable) throw mcpFailure("read-only-source", { message: spec.readOnlyReason });
     const locked = await this.store.withLock(spec.path, async () => {
+      await this.operations.refresh();
       const replay = this.operations.byRequest(mutation.targetId, mutation.requestId);
       if (replay) {
         if (replay.recovery.fingerprint !== fingerprint) throw mcpFailure("request-conflict");
@@ -421,14 +425,17 @@ export class McpManagementService {
           name: prepared.entryName,
           newName: prepared.resultName ?? undefined,
           entryDigest: prepared.intendedEntry
-            ? await this.operations.digest(prepared.intendedEntry)
+            ? await this.operations.entryDigest(prepared.intendedEntry)
             : undefined,
         },
       };
       await this.operations.put(operation);
       try {
         const text = source.file?.text ?? "";
-        const unchanged = next === text && source.file?.state === "ok";
+        const unchanged =
+          next === text &&
+          source.file?.state === "ok" &&
+          !(spec.scope === "backend-user" && !!(source.file.mode && source.file.mode & 0o077));
         // Taken before the write: a runtime that read the file earlier cannot
         // have loaded this save, whatever it reports.
         const writeStartedAt = nowIso(this.now);
@@ -437,6 +444,7 @@ export class McpManagementService {
           : await this.store.commit(source.file!, expected ?? ABSENT_REVISION, next, {
               allowedRoot: spec.allowedRoot,
               createMode: spec.createMode,
+              privateExisting: spec.scope === "backend-user",
               maxBytes: spec.maxBytes,
             });
         // The exact bytes now in the file, in the format bridges report.
@@ -528,6 +536,11 @@ export class McpManagementService {
     let changedFields: string[] = [];
     let entry: LoadedEntry | undefined;
     const warnings: string[] = [];
+    if (spec.scope === "backend-user" && source.file?.mode && source.file.mode & 0o077) {
+      warnings.push(
+        "Saving will restrict this user configuration file to owner-only permissions so stored credentials stay private.",
+      );
+    }
     switch (operation.kind) {
       case "add": {
         requireFlag(capabilities.operations.add, "unsupported-operation");
@@ -564,6 +577,26 @@ export class McpManagementService {
           changedFields = [operation.enabled ? "enabled" : "disabled"];
         } else {
           requireFlag(capabilities.operations.update, "unsupported-operation");
+          if (
+            target.provider === "codex" &&
+            operation.patch.transport &&
+            operation.patch.transport.to !== definition.transport
+          ) {
+            const nativeKeys =
+              operation.patch.transport.to === "stdio"
+                ? ["env_http_headers", "bearer_token"]
+                : ["env_vars"];
+            const missing = nativeKeys.filter(
+              (key) =>
+                entry!.raw?.[key] !== undefined &&
+                !operation.patch.transport!.discard.includes(key),
+            );
+            if (missing.length)
+              fieldErrors.push({
+                field: "transport",
+                message: `Switching transport discards ${missing.join(", ")}; confirm the switch.`,
+              });
+          }
           const patched = applyPatch(definition, operation.patch, capabilities);
           fieldErrors.push(...patched.errors);
           definition = patched.definition;
@@ -820,6 +853,7 @@ export class McpManagementService {
 
   async cancelApply(args: { operationId?: unknown }): Promise<McpOperationSnapshot> {
     await this.init();
+    await this.operations.refresh();
     const stored =
       typeof args.operationId === "string" ? this.operations.get(args.operationId) : undefined;
     if (!stored) throw mcpFailure("unknown-operation");
@@ -953,47 +987,52 @@ export class McpManagementService {
    * flight per backend, which is the whole apply-concurrency budget.
    */
   async tick(): Promise<void> {
-    if (this.ticking) return;
-    this.ticking = true;
-    try {
-      for (const stored of Array.from(this.operations.list())) {
-        const runtimes = stored.snapshot.apply.runtimes;
-        if (!runtimes.some((runtime) => runtime.state === "queued" || runtime.state === "applying"))
-          continue;
-        // The scheduler is paused for a gated provider; its queue was retired.
-        if (this.gate.applyBlock(stored.snapshot.provider)) continue;
-        const planned: PlannedRuntime[] = runtimes.map((runtime) => {
-          const recovery = stored.recovery.runtimes?.find(
-            (candidate) => candidate.runtimeId === runtime.runtimeId,
-          );
-          return {
-            ...runtime,
-            agent: (recovery?.agent ?? stored.snapshot.provider) as AgentPlatform,
-            logicalSessionKey: recovery?.logicalSessionKey,
-          };
-        });
-        const startingStates = runtimes.map((runtime) => runtime.state);
-        const queuedAt = Date.parse(stored.recovery.applyQueuedAt ?? stored.snapshot.updatedAt);
-        const outcome = await advanceCodexRuntimes(
-          this.options.probe,
-          planned,
-          queuedAt,
-          this.now(),
-        );
-        if (!outcome.changed) continue;
-        // A request may cancel or replace the plan while reloadCodex awaits.
-        if (stored.snapshot.apply.runtimes !== runtimes) continue;
-        stored.snapshot.apply.runtimes = outcome.runtimes.map((runtime, index) => {
-          const current = runtimes[index]!;
-          return current.state === startingStates[index] ? publicRuntime(runtime) : current;
-        });
-        await this.finishApplyUpdate(stored);
-      }
-      // Proof of adoption for runtimes that apply on their own boundary.
-      await this.evidence.check(this.operations.list());
-    } finally {
-      this.ticking = false;
+    if (this.ticking) {
+      // A caller may have supplied newer runtime evidence while the prior pass
+      // was already reading. Give that evidence its own pass.
+      await this.ticking;
+      return this.tick();
     }
+    const running = this.advanceTick();
+    this.ticking = running;
+    try {
+      await running;
+    } finally {
+      if (this.ticking === running) this.ticking = null;
+    }
+  }
+
+  private async advanceTick(): Promise<void> {
+    for (const stored of Array.from(this.operations.list())) {
+      const runtimes = stored.snapshot.apply.runtimes;
+      if (!runtimes.some((runtime) => runtime.state === "queued" || runtime.state === "applying"))
+        continue;
+      // The scheduler is paused for a gated provider; its queue was retired.
+      if (this.gate.applyBlock(stored.snapshot.provider)) continue;
+      const planned: PlannedRuntime[] = runtimes.map((runtime) => {
+        const recovery = stored.recovery.runtimes?.find(
+          (candidate) => candidate.runtimeId === runtime.runtimeId,
+        );
+        return {
+          ...runtime,
+          agent: (recovery?.agent ?? stored.snapshot.provider) as AgentPlatform,
+          logicalSessionKey: recovery?.logicalSessionKey,
+        };
+      });
+      const startingStates = runtimes.map((runtime) => runtime.state);
+      const queuedAt = Date.parse(stored.recovery.applyQueuedAt ?? stored.snapshot.updatedAt);
+      const outcome = await advanceCodexRuntimes(this.options.probe, planned, queuedAt, this.now());
+      if (!outcome.changed) continue;
+      // A request may cancel or replace the plan while reloadCodex awaits.
+      if (stored.snapshot.apply.runtimes !== runtimes) continue;
+      stored.snapshot.apply.runtimes = outcome.runtimes.map((runtime, index) => {
+        const current = runtimes[index]!;
+        return current.state === startingStates[index] ? publicRuntime(runtime) : current;
+      });
+      await this.finishApplyUpdate(stored);
+    }
+    // Proof of adoption for runtimes that apply on their own boundary.
+    await this.evidence.check(this.operations.list());
   }
 
   /**
@@ -1027,7 +1066,13 @@ export class McpManagementService {
         return !!newName && entries.has(newName) && !entries.has(name);
       default: {
         const raw = entries.get(name);
-        return !!raw && !!entryDigest && (await this.operations.digest(raw)) === entryDigest;
+        // Older pending records used insertion-order digests; keep their recovery path.
+        return (
+          !!raw &&
+          !!entryDigest &&
+          ((await this.operations.entryDigest(raw)) === entryDigest ||
+            (await this.operations.digest(raw)) === entryDigest)
+        );
       }
     }
   }

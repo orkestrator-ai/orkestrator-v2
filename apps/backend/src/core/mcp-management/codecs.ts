@@ -378,6 +378,13 @@ export const codexCodec: ProviderCodec = {
   },
   encode(definition, previous) {
     const out: NativeEntry = { ...previous };
+    if (previous && definition.transport === "stdio" && typeof previous.url === "string") {
+      delete out.env_http_headers;
+      delete out.bearer_token;
+    }
+    if (previous && definition.transport !== "stdio" && typeof previous.command === "string") {
+      delete out.env_vars;
+    }
     for (const key of ["command", "args", "env", "cwd", "url", "http_headers"]) delete out[key];
     if (definition.transport === "stdio") {
       out.command = definition.command;

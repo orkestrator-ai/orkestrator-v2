@@ -382,9 +382,20 @@ function removePropertyAt(text: string, object: Node & { type: "object" }, index
   const previous = object.properties[index - 1];
   const next = object.properties[index + 1];
   if (next) {
-    // Remove from this property's line start (or key) up to the next key's line start.
+    // Keep trivia before the next key: a standalone comment can document it.
     const from = lineStartIfOnlyWhitespace(text, property.start);
-    const to = lineStartIfOnlyWhitespace(text, next.start);
+    const comma = text.indexOf(",", property.value.end);
+    if (comma < 0 || comma >= next.start) throw new JsonEditError("Missing property separator.");
+    let to = comma + 1;
+    while (text[to] === " " || text[to] === "\t") to += 1;
+    if (text.startsWith("//", to)) {
+      const newline = text.indexOf("\n", to);
+      to = newline < 0 ? text.length : newline + 1;
+      return splice(text, from, to, "");
+    }
+    if (text[to] === "\r") to += 1;
+    if (text[to] === "\n") to += 1;
+    else to = comma + 1;
     return splice(text, from, to, "");
   }
   if (previous) {

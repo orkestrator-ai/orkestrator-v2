@@ -80,6 +80,19 @@ describe("McpSourceStore", () => {
     expect(statSync(file).mode & 0o777).toBe(0o640);
   });
 
+  test("restricts an existing user file before saving a literal credential", async () => {
+    const file = path.join(root, "user.json");
+    writeFileSync(file, "{}", { mode: 0o644 });
+    const snapshot = await store.read(file, policy);
+    await store.withLock(file, () =>
+      store.commit(snapshot, snapshot.revision!, '{"headers":{"Authorization":"literal"}}', {
+        ...policy,
+        privateExisting: true,
+      }),
+    );
+    expect(statSync(file).mode & 0o077).toBe(0);
+  });
+
   test("oversized sources are read-only and never parsed", async () => {
     const file = path.join(root, "big.json");
     writeFileSync(file, "x".repeat(2048));

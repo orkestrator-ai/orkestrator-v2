@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 
 import {
@@ -90,15 +90,27 @@ function MapEditor({
               </Button>
             </div>
           ) : (
-            <Input
-              aria-label={`${label} value ${index + 1}`}
-              className="min-w-0 flex-1 font-mono text-xs"
-              type={row.originalReference !== undefined || kind === "env" ? "text" : "password"}
-              autoComplete="off"
-              placeholder={kind === "env" ? "value or ${VARIABLE}" : "value or Bearer ${TOKEN}"}
-              value={row.value}
-              onChange={(event) => update(row.id, { value: event.target.value })}
-            />
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <Input
+                aria-label={`${label} value ${index + 1}`}
+                className="min-w-0 flex-1 font-mono text-xs"
+                type={row.originalReference !== undefined || kind === "env" ? "text" : "password"}
+                autoComplete="off"
+                placeholder={kind === "env" ? "value or ${VARIABLE}" : "value or Bearer ${TOKEN}"}
+                value={row.value}
+                onChange={(event) => update(row.id, { value: event.target.value })}
+              />
+              {row.originalKey && row.originalReference === undefined ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => update(row.id, { mode: "keep", value: "" })}
+                >
+                  Keep saved value
+                </Button>
+              ) : null}
+            </div>
           )}
           <Button
             type="button"
@@ -258,6 +270,13 @@ export function McpServerForm({
   const advanced = capabilities.fields.advanced.filter((field) =>
     field.transports.includes(draft.transport),
   );
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const hasAdvancedError = errors.some(
+    (error) => error.field === "advanced" || error.field.startsWith("advanced."),
+  );
+  useEffect(() => {
+    if (hasAdvancedError) setAdvancedOpen(true);
+  }, [hasAdvancedError]);
   return (
     <div className="space-y-5">
       <div className="space-y-1.5">
@@ -467,8 +486,16 @@ export function McpServerForm({
       ) : null}
 
       {advanced.length ? (
-        <details className="rounded-md border border-white/10 px-3 py-2">
-          <summary className="cursor-pointer text-sm font-medium text-foreground">Advanced</summary>
+        <details className="rounded-md border border-white/10 px-3 py-2" open={advancedOpen}>
+          <summary
+            className="cursor-pointer text-sm font-medium text-foreground"
+            onClick={(event) => {
+              event.preventDefault();
+              setAdvancedOpen((open) => !open);
+            }}
+          >
+            Advanced
+          </summary>
           <div className="mt-3 space-y-3">
             {advanced.map((field) => (
               <AdvancedField
@@ -483,7 +510,9 @@ export function McpServerForm({
             <FieldError errors={errors} field="advanced" />
           </div>
         </details>
-      ) : null}
+      ) : (
+        <FieldError errors={errors} field="advanced" />
+      )}
 
       {preservedFields.length ? (
         <p className="text-xs text-muted-foreground">

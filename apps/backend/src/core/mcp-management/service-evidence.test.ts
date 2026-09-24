@@ -110,12 +110,21 @@ describe("Claude evidence", () => {
     session("claude");
     const operation = await saveAndApply("claude", "claude:user");
     expect(await stateOf(operation.operationId)).toEqual(["pending-next-turn"]);
+    // Drain the initial background pass before reporting evidence at a later time.
+    await fixture.service.tick();
 
     fixture.now.value += 5_000;
     report("claude", { user: digestOf(USER_FILE.claude), project: "absent" }, fixture.now.value);
     await fixture.service.tick();
 
-    const done = await fixture.service.getOperation({ operationId: operation.operationId });
+    let done = await fixture.service.getOperation({ operationId: operation.operationId });
+    if (done.apply.state === "pending-next-turn") {
+      // A concurrent sweep may have polled just before the report arrived.
+      fixture.now.value += EVIDENCE_RECHECK_MS;
+      report("claude", { user: digestOf(USER_FILE.claude), project: "absent" }, fixture.now.value);
+      await fixture.service.tick();
+      done = await fixture.service.getOperation({ operationId: operation.operationId });
+    }
     expect(done.apply.state).toBe("applied");
     expect(done.apply.runtimes[0]).toMatchObject({
       state: "applied",
@@ -311,6 +320,37 @@ describe("Cursor and Pi evidence", () => {
 });
 
 describe("Grok evidence", () => {
+  test("a reordered TOML update remains landed in a later file revision", async () => {
+    fixture.environment.grokBridgePid = 100;
+    session("grok");
+    const file = USER_FILE.grok;
+    fixture.write(
+      file,
+      '[mcp_servers.docs]\ncommand = "bun"\nstartup_timeout_sec = 10\nargs = ["old"]\n',
+    );
+    const targetId = await targetIdFor(fixture, "grok", "backend");
+    const before = await fixture.service.snapshot({ targetId });
+    const result = await fixture.service.mutate(
+      mutation(
+        targetId,
+        {
+          kind: "update",
+          entryId: entry(before, "grok:user", "docs").entryId,
+          expectedRevision: revision(before, "grok:user")!,
+          patch: { args: [{ kind: "set", value: "new" }] },
+        },
+        "save-and-apply",
+      ),
+    );
+    expect(await stateOf(result.operation.operationId)).toEqual(["restart-required"]);
+    fixture.write(file, `${fixture.read(file)}# bookkeeping\n`);
+    fixture.environment.grokBridgePid = 200;
+    fixture.now.value += EVIDENCE_RECHECK_MS;
+    report("grok", { user: digestOf(file), project: "absent" }, fixture.now.value);
+    await fixture.service.tick();
+    expect(await stateOf(result.operation.operationId)).toEqual(["applied"]);
+  });
+
   test("process-level evidence counts only from a bridge started after planning", async () => {
     fixture.environment.grokBridgePid = 100;
     session("grok");

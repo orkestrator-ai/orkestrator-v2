@@ -102,7 +102,7 @@ export function ProviderMcpSettings() {
   );
 
   const environmentId = contextId === BACKEND_CONTEXT ? null : contextId;
-  const { state: targetsState } = useMcpTargets(environmentId);
+  const { state: targetsState, reload: reloadTargets } = useMcpTargets(environmentId);
   const targets =
     targetsState.status === "ready" ||
     targetsState.status === "loading" ||
@@ -118,6 +118,10 @@ export function ProviderMcpSettings() {
       (candidate.context.environmentId ?? null) === environmentId,
   );
   const { state: snapshotState, reload } = useMcpSnapshot(target?.targetId ?? null);
+  useEffect(() => {
+    if (snapshotState.status === "error" && snapshotState.code === "unknown-target")
+      reloadTargets();
+  }, [snapshotState, reloadTargets]);
   const snapshot = "data" in snapshotState ? snapshotState.data : null;
   const current = snapshot && snapshot.target.targetId === target?.targetId ? snapshot : null;
 
@@ -204,8 +208,10 @@ export function ProviderMcpSettings() {
           variant="outline"
           size="icon"
           aria-label="Refresh"
-          onClick={reload}
-          disabled={!target}
+          onClick={() => {
+            reloadTargets();
+            if (target) reload();
+          }}
         >
           <RefreshCw
             className={snapshotState.status === "loading" ? "h-4 w-4 animate-spin" : "h-4 w-4"}
@@ -217,7 +223,11 @@ export function ProviderMcpSettings() {
         <McpErrorNotice
           className="rounded-lg px-4 py-3"
           problem={{ message: targetsState.message, reference: targetsState.reference }}
-        />
+        >
+          <Button size="sm" variant="outline" onClick={reloadTargets}>
+            Try again
+          </Button>
+        </McpErrorNotice>
       ) : null}
       {snapshotState.status === "error" ? (
         <McpErrorNotice

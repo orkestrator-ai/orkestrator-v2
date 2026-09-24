@@ -10,6 +10,7 @@ import {
   type RuntimeProcessName,
   type RuntimeStatusManifest,
 } from "../../electron/runtime-profile.js";
+import { bundleElectron, formatBuildLogs } from "../electron-bundle.js";
 import type { DevArguments } from "./arguments.js";
 import {
   atomicWriteJson,
@@ -414,14 +415,15 @@ export async function startDevelopment(
   await atomicWriteJson(statusPath, status);
 
   try {
-    const build = spawnSync("bunx", ["tsc", "-p", "tsconfig.electron.json"], {
-      cwd: packageRoot,
-      encoding: "utf8",
-    });
+    // Bundle exactly as production does. A `tsc` emit leaves workspace
+    // imports bare, and Electron's Node cannot run their raw `.ts` sources.
+    const build = await bundleElectron(packageRoot, path.join(packageRoot, "dist", "electron"));
     await createBoundedLogWriter(path.join(profile.logDir, "build.log")).write(
-      `${build.stdout}${build.stderr}`,
+      build.success
+        ? build.outputs.map((artifact) => `${path.relative(packageRoot, artifact.path)}\n`).join("")
+        : `${formatBuildLogs(build)}\n`,
     );
-    if (build.status !== 0)
+    if (!build.success)
       throw new Error(`Electron compilation failed; see ${path.join(profile.logDir, "build.log")}`);
 
     if (args.fixtureEnvironments.includes("container")) {

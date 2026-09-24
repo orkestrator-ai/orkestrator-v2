@@ -120,7 +120,9 @@ function expectResponsiveBootstrapRendering(
 }
 
 test.beforeAll(() => {
-  const build = spawnSync("bunx", ["tsc", "-p", "tsconfig.electron.json"], {
+  // Bundle exactly as production and the dev launcher do. A `tsc` emit leaves
+  // workspace imports pointing at raw `.ts` sources Electron cannot run.
+  const build = spawnSync("bun", ["scripts/electron-bundle.ts"], {
     cwd: packageRoot,
     encoding: "utf8",
   });
@@ -478,10 +480,25 @@ test("bootstrap window repaints a resized native Wayland surface at fractional s
   const entrypoint = path.join(temporaryRoot, "main.cjs");
   const bootstrapDirname = path.join(packageRoot, "dist", "electron");
   const bootstrapModuleUrl = pathToFileURL(
-    path.join(bootstrapDirname, "toolchain-bootstrap-window.js"),
+    path.join(temporaryRoot, "toolchain-bootstrap-window.js"),
   ).href;
   let launchedApp: ElectronApplication | null = null;
   try {
+    // The shipped bundle inlines this module, so bundle it on its own. Its
+    // preload still resolves from the shared dist/electron output.
+    const bundle = spawnSync(
+      "bun",
+      [
+        "build",
+        "electron/toolchain-bootstrap-window.ts",
+        "--target=node",
+        "--format=esm",
+        "--external=electron",
+        `--outdir=${temporaryRoot}`,
+      ],
+      { cwd: packageRoot, encoding: "utf8" },
+    );
+    expect(bundle.status, `${bundle.stdout}\n${bundle.stderr}`).toBe(0);
     await writeFile(
       entrypoint,
       [

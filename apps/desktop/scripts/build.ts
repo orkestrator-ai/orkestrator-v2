@@ -3,6 +3,8 @@ import { rmSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
+import { bundleElectron, formatBuildLogs } from "./electron-bundle.js";
+
 if (process.platform === "win32") {
   throw new Error("Orkestrator desktop builds support macOS and Linux only.");
 }
@@ -18,22 +20,9 @@ function run(command: string, args: string[]): void {
 run("bunx", ["tsc", "--noEmit", "-p", "tsconfig.electron.json"]);
 rmSync(output, { recursive: true, force: true });
 
-const result = await Bun.build({
-  entrypoints: [
-    path.join(packageRoot, "electron/main.ts"),
-    path.join(packageRoot, "electron/preload.ts"),
-    path.join(packageRoot, "electron/toolchain-bootstrap-preload.ts"),
-  ],
-  outdir: path.join(output, "electron"),
-  target: "node",
-  // ESM preloads require sandbox: false on BrowserWindow. A sandboxed
-  // Chromium context evaluates preloads as CommonJS and cannot load these.
-  format: "esm",
-  external: ["electron"],
-  sourcemap: "external",
-});
+const result = await bundleElectron(packageRoot, path.join(output, "electron"));
 if (!result.success) {
-  for (const log of result.logs) console.error(log);
+  console.error(formatBuildLogs(result));
   process.exit(1);
 }
 

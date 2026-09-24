@@ -54,6 +54,8 @@ afterAll(() => {
 });
 
 const { readPrefetchedCommandResponse } = await import("./prefetched-command-responses");
+const { createReadCoordinator, getReadCoordinator, resetReadCoordinatorForTests } =
+  await import("./read-coordinator");
 const {
   dispatchResourceChange,
   onResourceChanged,
@@ -452,6 +454,25 @@ describe("startResourceSync", () => {
     connected?.handler({ payload: undefined });
 
     expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test("forwards confirmed reconnects, not the boot announcement, to the read coordinator", async () => {
+    const coordinator = createReadCoordinator({ document: null, window: null });
+    const notifyReconnected = mock(() => undefined);
+    resetReadCoordinatorForTests(() => ({ ...coordinator, notifyReconnected }));
+    try {
+      getReadCoordinator();
+      startResourceSync();
+      await tick(10);
+      const connected = listenCalls.find(({ event }) => event === "native-event-stream-connected");
+      // Inside the attach-time window: covered by the boot resync.
+      connected?.handler({ payload: undefined });
+      expect(notifyReconnected).not.toHaveBeenCalled();
+      connected?.handler({ payload: undefined });
+      expect(notifyReconnected).toHaveBeenCalledTimes(1);
+    } finally {
+      resetReadCoordinatorForTests();
+    }
   });
 
   test("requests a resync when a global revision gap is observed", async () => {

@@ -16,6 +16,7 @@ import {
 } from "@orkestrator/protocol/resource-events";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
 import { primePrefetchedCommandResponses } from "@/lib/prefetched-command-responses";
+import { notifyReadCoordinatorReconnected } from "@/lib/read-coordinator";
 
 /**
  * Client half of the backend change feed.
@@ -512,6 +513,9 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
       bootResyncAt = null;
       return;
     }
+    // Presentation reads reconcile on the same confirmed-miss signal: the
+    // coordinator resets read backoff and re-reads active keys, critical first.
+    notifyReadCoordinatorReconnected();
     requestManifestResync();
   });
 

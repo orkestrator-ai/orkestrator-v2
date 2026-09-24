@@ -460,6 +460,19 @@ session surface. When touching the session catalogue
   already did. The backend re-reads both on every session projection
   (`native-agent-service-projection.ts`), so an uncached fallback is one spawn
   per turn boundary rather than a one-off.
+- **Every SDK frame has a declared fate.** `HANDLED_SDK_MESSAGE_TYPES` and
+  `SYSTEM_SUBTYPE_DISPOSITIONS` (`src/types/index.ts`) are `Record`s over the
+  SDK's own unions, so an SDK bump that adds a message type or `system`
+  subtype fails the typecheck until someone decides whether it is handled,
+  kept as a health notice, or ignored as inventory. Content blocks the parser
+  has no branch for are counted as `block:<type>` drift.
+- **The native tab never sees SSE.** The backend polls `GET /session/:id` and
+  the transcript routes; `session.updated` frames only reach the legacy web
+  client. Turn-scoped state the tab must show (activity, thinking estimate,
+  background tasks) has to be in that snapshot. A row derived from a record
+  the rollout keeps (a task report, an interruption marker) must be produced
+  by both the live loop and `normalizePersistedSessionMessages`, or a reload
+  will disagree with the live tab.
 - **`app.onError` is registered on purpose.** Hono's default handler passes the
   raw error to `console.error`, which under Bun prints a source-context dump of
   whichever minified vendor file threw, with no indication of which request

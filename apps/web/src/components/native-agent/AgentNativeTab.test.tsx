@@ -6882,6 +6882,7 @@ describe("AgentNativeTab", () => {
       overrides: {
         connection?: NativeAgentSessionProjection["connection"];
         phase?: NativeAgentSessionProjection["turn"]["phase"];
+        turnActivity?: NativeAgentSessionProjection["turn"]["activity"];
         actions?: NativeAgentSessionProjection["capabilities"]["actions"];
         messageWindow?: NativeAgentSessionProjection["messageWindow"];
         queue?: NativeAgentSessionProjection["queue"];
@@ -6903,7 +6904,10 @@ describe("AgentNativeTab", () => {
         environmentId: input.environmentId,
         sessionId: overrides.sessionId ?? `${input.agent}-session`,
         connection: overrides.connection ?? ("connected" as const),
-        turn: { phase: overrides.phase ?? "idle" },
+        turn: {
+          phase: overrides.phase ?? "idle",
+          ...(overrides.turnActivity ? { activity: overrides.turnActivity } : {}),
+        },
         messages: overrides.messages ?? [
           {
             id: "assistant-1",
@@ -7941,6 +7945,36 @@ describe("AgentNativeTab", () => {
       view.unmount();
       await waitFor(() => expect(mockToastDismiss).toHaveBeenCalledTimes(1));
       expect(mockToastDismiss).toHaveBeenCalledWith(toastId);
+    });
+
+    test("refines the running indicator with the provider's reported activity", async () => {
+      seedProjection({ phase: "running", turnActivity: { thinkingTokens: 1_200 } });
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-turn-activity"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      expect(
+        (await screen.findByText(/is thinking\.\.\./)).closest('[role="status"]')?.textContent,
+      ).toContain("~1.2k tokens");
+
+      // Compaction outranks thinking: it is the reason nothing is moving.
+      seedProjection({
+        phase: "running",
+        turnActivity: { compacting: true, thinkingTokens: 1_200 },
+      });
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-turn-activity"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+      expect(await screen.findByText("Compacting conversation…")).toBeTruthy();
     });
 
     test("dismisses the reconnect toast as soon as the session recovers", async () => {

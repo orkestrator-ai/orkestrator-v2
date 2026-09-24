@@ -3447,7 +3447,7 @@ describe("sendPrompt", () => {
 
     const promptPromise = sendPrompt(session.id, "hello");
     const call = await nextQueryCall();
-    call.push({ type: "system", subtype: "status" });
+    call.push({ type: "system", subtype: "notification", key: "k", text: "FYI", priority: "low" });
     call.push({ type: "result", subtype: "success" });
     call.finish();
     await promptPromise;

@@ -2337,6 +2337,11 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           ? {}
           : { startedAt: stateSnapshot.turnStartedAt }),
         ...(stateSnapshot.error ? { error: stateSnapshot.error } : {}),
+        // Both projection reads carry it, so a progressive refresh cannot
+        // strip an indicator the full read just showed.
+        ...(stateSnapshot.turnActivity && stateSnapshot.status === "running"
+          ? { activity: stateSnapshot.turnActivity }
+          : {}),
       },
       interactions: interactionSnapshot.requests,
       // The progressive read feeds the same rendered projection as the full
@@ -3850,6 +3855,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
                       : "idle")),
           ...(snapshot.turnStartedAt === undefined ? {} : { startedAt: snapshot.turnStartedAt }),
           ...(snapshot.error ? { error: snapshot.error } : {}),
+          ...(snapshot.turnActivity && snapshot.status === "running"
+            ? { activity: snapshot.turnActivity }
+            : {}),
         },
         messages: renderedTranscript.messages,
         interactions: interactionSnapshot.requests,

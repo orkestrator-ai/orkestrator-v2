@@ -67,6 +67,7 @@ import { bridgePromptBody } from "./http-bridge-prompt-body.js";
 import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
 import {
   claudeBackgroundObservation,
+  claudeTurnActivityFromPayload,
   normalizeClaudeBackgroundTasks,
 } from "./http-bridge-claude-runtime.js";
 import {
@@ -956,6 +957,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       }
     }
     const claudeContextUsage = contextUsageWithPlanUsage(this.agent, payload.contextUsage);
+    const claudeTurnActivity = claudeTurnActivityFromPayload(payload);
     const claudeNotices = snapshotNotices({
       transcriptTruncated: transcript.truncated,
       ...(runtime ? { runtime } : {}),
@@ -976,6 +978,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       ...(typeof payload.turnStartedAt === "number" && Number.isFinite(payload.turnStartedAt)
         ? { turnStartedAt: payload.turnStartedAt }
         : {}),
+      ...(claudeTurnActivity ? { turnActivity: claudeTurnActivity } : {}),
       ...(claudeContextUsage ? { contextUsage: claudeContextUsage } : {}),
       ...(isNativeAgentExecutionPolicy(payload.policy) ? { policy: payload.policy } : {}),
       ...(normalizeProviderRateLimits(payload.rateLimits).length > 0

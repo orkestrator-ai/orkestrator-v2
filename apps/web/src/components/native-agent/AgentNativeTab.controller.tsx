@@ -17,6 +17,7 @@ import {
 } from "@orkestrator/protocol/agent-slash-commands";
 import { Button } from "@/components/ui/button";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
+import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import type { MentionableInputRef } from "@/components/chat/MentionableInput";
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
@@ -806,10 +807,13 @@ export function SharedNativeAgentController({
   const settingsLocked = isSubmitting || (phase !== "idle" && phase !== "error");
   const isRunning = phase === "running";
   const isTurnActive = phase === "running" || phase === "recovering" || phase === "cancelling";
+  const turnActivity = phase === "running" ? projection?.turn.activity : undefined;
   /*
    * "Stopping" and "reconnecting" are still loading, but they mean something
    * different to the user than ordinary thinking. Derived from the neutral
-   * phase, so every provider that reports one gets the label.
+   * phase, so every provider that reports one gets the label. Within a running
+   * turn, a provider-reported activity refines the default indicator:
+   * compaction can take a minute with no transcript movement at all.
    */
   const phaseStatusLabel =
     phase === "cancelling" ? (
@@ -820,6 +824,12 @@ export function SharedNativeAgentController({
       <span role="status" className="text-xs">
         Reconnecting to {label}…
       </span>
+    ) : turnActivity?.compacting ? (
+      <span role="status" className="agent-thinking-shimmer text-xs">
+        Compacting conversation…
+      </span>
+    ) : turnActivity?.thinkingTokens ? (
+      <AgentThinkingIndicator agentName={label} thinkingTokens={turnActivity.thinkingTokens} />
     ) : undefined;
   const turnStartedAt =
     projection?.turn.startedAt ??

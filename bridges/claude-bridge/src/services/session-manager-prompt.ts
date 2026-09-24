@@ -9,7 +9,13 @@ import type {
   SDKAPIRetryMessage,
   SDKAuthStatusMessage,
   SDKAssistantMessage,
+  SDKHookResponseMessage,
+  SDKInformationalMessage,
+  SDKMemoryRecallMessage,
+  SDKPermissionDeniedMessage,
   SDKStartupFailureReason,
+  SDKStatusMessage,
+  SDKThinkingTokensMessage,
   SDKUsageReport,
   SDKSystemMessage,
   SDKToolProgressMessage,
@@ -38,6 +44,7 @@ import type {
   SdkMessageBase,
   SdkResultMessage,
   SdkSystemMessage,
+  SessionTurnActivity,
   TaskListSnapshot,
   MessagePatchEventData,
   SessionUsageSnapshot,
@@ -45,7 +52,12 @@ import type {
   SessionRateLimitWindow,
   StopBackgroundTaskResult,
 } from "../types/index.js";
-import { isHandledSdkMessageType, isSdkResultMessage, sessionHealth } from "../types/index.js";
+import {
+  isHandledSdkMessageType,
+  isSdkResultMessage,
+  sessionHealth,
+  systemSubtypeDisposition,
+} from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import {
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
@@ -228,10 +240,13 @@ import {
 import {
   bashToolResultOutcomes,
   bashToolUseIdsFromAssistantMessage,
+  appendInterruptedNotice,
   buildMessageParts,
   parseMessageContent,
   provisionalBackgroundTaskId,
   provisionalBackgroundTaskLaunchesFromAssistantMessage,
+  refreshSettledToolRows,
+  taskNotificationNoticePart,
 } from "./session-manager-messages.js";
 import {
   ClaudeAttachmentError,
@@ -364,8 +379,8 @@ function appendTranscriptNotice(
  *
  * These are the SDK's own diagnostics, so they are recorded as `provider`
  * notices. The severity split is what decides whether the tab shows the notice
- * at all: `info` and `warning` stay in the health panel, while `error` is
- * promoted into the transcript by the backend. Dedicated transcript rows,
+ * at all: `info` and `warning` stay in the health panel, while the backend
+ * raises `error` in the tab as a persistent toast. Dedicated transcript rows,
  * such as API retry progress, remain independent of this health severity.
  */
 /** Bound on the open capability set, which the CLI, not this bridge, sizes. */
@@ -381,14 +396,12 @@ function supportsClaudeContext1m(model: string | undefined): boolean {
 }
 
 const SYSTEM_MESSAGE_SEVERITIES: Record<string, "info" | "warning" | "error"> = {
-  status: "info",
   informational: "info",
   notification: "info",
-  // A hook running and reporting progress is inventory. A hook *response* is
-  // graded by its own outcome below, because a failed hook is the case this
-  // bridge cannot otherwise notice.
-  hook_started: "info",
-  hook_progress: "info",
+  // Hook progress never reaches here (`ignored` in the disposition table). A
+  // hook *response* only does when it failed, and is graded by its outcome
+  // below, because a failed hook is the case this bridge cannot otherwise
+  // notice.
   api_retry: "warning",
   model_refusal_fallback: "warning",
   model_refusal_no_fallback: "error",
@@ -421,6 +434,65 @@ function recordSystemMessageNotice(session: SessionState, message: SdkSystemMess
     source: "provider",
     ...(typeof detail === "string" && detail.length > 0 ? { detail } : {}),
   });
+}
+
+/**
+ * Minimum spacing between published thinking-token estimates.
+ *
+ * The SDK sends one frame per thinking delta — thousands in a long turn — and
+ * every `session.updated` reaches each subscriber. A counter that ticks a few
+ * times a second reads as live; one frame per delta is only load.
+ */
+export const THINKING_TOKENS_EMIT_INTERVAL_MS = 500;
+
+/** Bound on provider-authored text copied into a status row. */
+const MAX_NOTICE_TEXT_LENGTH = 2_000;
+
+/** Trimmed, bounded provider text for a status row, or `undefined` when empty. */
+function boundedNoticeText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  if (text.length === 0) return undefined;
+  return text.length > MAX_NOTICE_TEXT_LENGTH
+    ? `${text.slice(0, MAX_NOTICE_TEXT_LENGTH - 1)}…`
+    : text;
+}
+
+/** How many recalled memories a row names before summarizing the rest. */
+const MAX_RECALLED_MEMORY_NAMES = 8;
+
+/**
+ * The row for memories the CLI surfaced into the turn.
+ *
+ * Names, not bodies: a memory body can be long and is already in the model's
+ * context, and the row only has to say that recall happened and from where.
+ */
+export function memoryRecallPart(
+  mode: unknown,
+  memories: ReadonlyArray<{ path?: unknown; scope?: unknown }>,
+): NormalizedPart {
+  const names = memories
+    .map((memory) => {
+      const path = typeof memory.path === "string" ? memory.path : "";
+      // `<synthesis:DIR>` sentinels and organization URLs have no file name.
+      if (path.startsWith("<synthesis:")) return "synthesized summary";
+      const segments = path.split(/[\\/]/).filter(Boolean);
+      return segments.at(-1) ?? "memory";
+    })
+    .slice(0, MAX_RECALLED_MEMORY_NAMES);
+  const remainder = memories.length - names.length;
+  const listed = remainder > 0 ? `${names.join(", ")} and ${remainder} more` : names.join(", ");
+  return {
+    type: "status",
+    severity: "info",
+    // A synthesis distills many small memories into one paragraph; its entry
+    // names a directory sentinel, not anything the user would recognise.
+    content:
+      mode === "synthesize"
+        ? "Recalled from memory (synthesized summary)"
+        : `Recalled from memory: ${listed}`,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 function boundedPlan(content: unknown): Pick<PlanApprovalRequest, "plan" | "planTruncated"> {
@@ -858,6 +930,55 @@ export async function sendPrompt(
         sessionId,
         data: { contextUsage: session.inProgressUsage },
       });
+    };
+    const recordUnknownContentBlock = (blockType: string) =>
+      sessionHealth(session).recordUnknown(`block:${blockType}`);
+    let lastThinkingTokensEmitAt = 0;
+    /** Informational rows by the tool use they report on, so a repeat updates in place. */
+    const informationalRowsByToolUse = new Map<string, string>();
+    /**
+     * What the provider says it is doing, when that is not visible from the
+     * transcript itself. Session state rather than a row, so a tab mounted
+     * mid-compaction learns it from `GET /session/:id`.
+     */
+    const setTurnActivity = (activity: SessionTurnActivity | undefined) => {
+      if (!ownsActiveTurn() || session.activity === activity) return;
+      session.activity = activity;
+      eventEmitter.emit({
+        type: "session.updated",
+        sessionId,
+        data: { activity: activity ?? null },
+      });
+    };
+    /** Drop the thinking estimate once the thinking it measured is over. */
+    const clearThinkingTokens = () => {
+      if (session.thinkingTokens === undefined || !ownsActiveTurn()) return;
+      session.thinkingTokens = undefined;
+      lastThinkingTokensEmitAt = 0;
+      eventEmitter.emit({ type: "session.updated", sessionId, data: { thinkingTokens: null } });
+    };
+    /**
+     * Follow the CLI out of plan mode when a status frame reports it left.
+     * The ExitPlanMode handler covers the tool path; this covers exits that
+     * never reach `canUseTool`. Only a turn that itself started in plan mode
+     * may leave it this way: a turn started in another mode says nothing about
+     * the user's toggle.
+     *
+     * Deliberately one-way. Entering is the EnterPlanMode handler's job, and a
+     * status frame still saying `plan` just after an approved exit (the CLI
+     * reports its mode lazily) would otherwise turn the toggle back on.
+     */
+    const reconcilePlanModeFromStatus = async (reported: unknown) => {
+      if (typeof reported !== "string" || reported === "plan" || !ownsActiveTurn()) return;
+      if (session.planMode !== true || permissionMode !== "plan") return;
+      try {
+        await applySessionPlanMode(session, false);
+      } catch (error) {
+        console.warn("[session-manager] Could not record plan mode from a status frame", {
+          sessionId,
+          errorClass: diagnosticErrorClass(error),
+        });
+      }
     };
     const setCompletionBlockedByBackgroundTasks = (blocked: boolean) => {
       if (!ownsActiveTurn()) return;
@@ -2045,6 +2166,138 @@ export async function sendPrompt(
             closeQueryControlIfUnused(session, owner);
           }
           emitBackgroundTasks();
+        } else if (sysMsg.subtype === "thinking_tokens") {
+          // A running estimate during the redacted-thinking phase, where the
+          // API otherwise streams only pings. Arrives once per delta, so the
+          // session keeps every value but publishes at most one per interval.
+          const estimate = (message as SDKThinkingTokensMessage).estimated_tokens;
+          if (
+            ownsActiveTurn() &&
+            typeof estimate === "number" &&
+            Number.isFinite(estimate) &&
+            estimate >= 0
+          ) {
+            session.thinkingTokens = Math.round(estimate);
+            const now = Date.now();
+            if (now - lastThinkingTokensEmitAt >= THINKING_TOKENS_EMIT_INTERVAL_MS) {
+              lastThinkingTokensEmitAt = now;
+              eventEmitter.emit({
+                type: "session.updated",
+                sessionId,
+                data: { thinkingTokens: session.thinkingTokens },
+              });
+            }
+          }
+        } else if (sysMsg.subtype === "status") {
+          const status = message as SDKStatusMessage;
+          setTurnActivity(status.status === "compacting" ? "compacting" : undefined);
+          // The compaction row is written by the PostCompact hook, which only
+          // runs on success. A failed compaction left nothing in the tab while
+          // the context stayed exactly as full as before.
+          if (status.compact_result === "failed") {
+            const reason = boundedNoticeText(status.compact_error);
+            appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
+              type: "status",
+              severity: "warning",
+              content: reason ? `Compaction failed: ${reason}` : "Compaction failed",
+              createdAt: new Date().toISOString(),
+            });
+          }
+          await reconcilePlanModeFromStatus(status.permissionMode);
+        } else if (sysMsg.subtype === "hook_response") {
+          // Most of these are this bridge's own compaction and background-task
+          // hooks. Only a failed or cancelled hook says something is broken.
+          if ((message as SDKHookResponseMessage).outcome !== "success") {
+            recordSystemMessageNotice(session, sysMsg);
+          }
+        } else if (sysMsg.subtype === "informational") {
+          const info = message as SDKInformationalMessage;
+          const content = boundedNoticeText(info.content);
+          // `info` renders only in the CLI's verbose transcript mode and
+          // `notice` in inactive gray: inventory, not something to interrupt
+          // the tab with. A stopped continuation is always shown, because the
+          // turn ends on it and nothing else would say why.
+          const visible =
+            info.prevent_continuation === true ||
+            info.level === "warning" ||
+            info.level === "suggestion";
+          if (content && visible) {
+            const part: NormalizedPart = {
+              type: "status",
+              severity:
+                info.prevent_continuation === true || info.level === "warning" ? "warning" : "info",
+              content,
+              createdAt: new Date().toISOString(),
+            };
+            // The SDK repeats a progress line for one tool use; keep one row.
+            const existingId = info.tool_use_id
+              ? informationalRowsByToolUse.get(info.tool_use_id)
+              : undefined;
+            const existing = existingId
+              ? session.messages.find((candidate) => candidate.id === existingId)
+              : undefined;
+            if (existing) {
+              existing.content = part.content;
+              existing.parts = [part];
+              eventEmitter.emit({
+                type: "message.updated",
+                sessionId,
+                data: { message: existing },
+              });
+            } else {
+              const row = appendTranscriptNotice(
+                session,
+                sessionId,
+                (event) => eventEmitter.emit(event),
+                part,
+              );
+              if (info.tool_use_id) informationalRowsByToolUse.set(info.tool_use_id, row.id);
+            }
+          } else {
+            recordSystemMessageNotice(session, sysMsg);
+          }
+        } else if (sysMsg.subtype === "permission_denied") {
+          const denial = message as SDKPermissionDeniedMessage;
+          // The tool result that follows carries the rejection the model read.
+          // What only this frame says is *who* decided and why, so that is
+          // what is kept on the call, where the renderer shows it.
+          const reason = boundedNoticeText(denial.decision_reason ?? denial.message);
+          const marked =
+            typeof denial.tool_use_id === "string" &&
+            toolTracker.recordDenial(denial.tool_use_id, {
+              reason,
+              ...(typeof denial.decision_reason_type === "string"
+                ? { source: denial.decision_reason_type.slice(0, 64) }
+                : {}),
+            });
+          if (marked && stream.currentAssistantMessage) {
+            stream.currentAssistantMessage.parts = buildMessageParts(
+              stream.accumulatedOrderedParts,
+              toolTracker,
+            );
+            stream.emitCurrentAssistantMessage();
+          } else if (!marked) {
+            // A call this turn never saw (a subagent's, or one from before a
+            // reconnect) still deserves to say it was refused.
+            const toolName = boundedNoticeText(denial.tool_name) ?? "A tool call";
+            appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
+              type: "status",
+              severity: "warning",
+              content: reason ? `${toolName} was denied: ${reason}` : `${toolName} was denied`,
+              createdAt: new Date().toISOString(),
+            });
+          }
+        } else if (sysMsg.subtype === "memory_recall") {
+          const recall = message as SDKMemoryRecallMessage;
+          const memories = Array.isArray(recall.memories) ? recall.memories : [];
+          if (memories.length > 0) {
+            appendTranscriptNotice(
+              session,
+              sessionId,
+              (event) => eventEmitter.emit(event),
+              memoryRecallPart(recall.mode, memories),
+            );
+          }
         }
         finishTurnInputIfSettled();
 
@@ -2054,7 +2307,8 @@ export async function sendPrompt(
         // which put arbitrary provider payload on the wire. Record them as
         // runtime notices instead, where they are bounded, redacted, carry a
         // severity, and reach the health panel. Only errors are additionally
-        // promoted into the tab by the backend.
+        // raised in the tab by the backend. Which subtypes are recorded at all
+        // is `SYSTEM_SUBTYPE_DISPOSITIONS`, applied at the end of this branch.
         if (sysMsg.subtype === "api_retry") {
           // A retry the user can see, rather than a silent stall. Recorded as a
           // pending row and settled by the next assistant message or by the
@@ -2082,12 +2336,13 @@ export async function sendPrompt(
             },
           ).id;
         }
-        if (
-          sysMsg.subtype &&
-          sysMsg.subtype !== "init" &&
-          sysMsg.subtype !== "commands_changed" &&
-          sysMsg.subtype !== "local_command_output"
-        ) {
+        const disposition = systemSubtypeDisposition(sysMsg.subtype);
+        if (disposition === undefined) {
+          // A subtype newer than the table: counted as drift, and still kept
+          // as a notice so whatever it said is not lost.
+          sessionHealth(session).recordUnknown(`system:${sysMsg.subtype ?? "(untyped)"}`);
+          recordSystemMessageNotice(session, sysMsg);
+        } else if (disposition === "notice" || disposition === "handled+notice") {
           recordSystemMessageNotice(session, sysMsg);
         }
       } else if (message.type === "assistant") {
@@ -2103,6 +2358,8 @@ export async function sendPrompt(
             },
           });
         }
+        // The thinking this estimate measured has produced its block.
+        clearThinkingTokens();
         // The retry above worked: the model answered. Settle the row rather
         // than leaving a spinner on a request that has already succeeded.
         settlePendingApiRetry(session, sessionId, (event) => eventEmitter.emit(event), stream, {
@@ -2129,6 +2386,7 @@ export async function sendPrompt(
           activeTaskIds,
           taskRegistry,
           receivedAt,
+          recordUnknownContentBlock,
         );
 
         // A foreground Bash call can become background work after a timeout or
@@ -2231,13 +2489,19 @@ export async function sendPrompt(
         stream.emitCurrentAssistantMessage();
       } else if (message.type === "user") {
         // User message with tool results - parse to update tool tracker
-        const { completedTaskIds } = parseMessageContent(
+        const {
+          completedTaskIds,
+          unattachedTaskNotifications,
+          attachedTaskToolUseIds,
+          interrupted,
+        } = parseMessageContent(
           message,
           toolTracker,
           mcpServerNames,
           activeTaskIds,
           taskRegistry,
           receivedAt,
+          recordUnknownContentBlock,
         );
 
         const sdkUserMessage = message as SDKUserMessage;
@@ -2310,6 +2574,25 @@ export async function sendPrompt(
 
           stream.emitCurrentAssistantMessage();
         }
+        // A task report can land on a call from an earlier message of this
+        // turn (one split off by a steer, say), whose parts the rebuild above
+        // does not reach.
+        refreshSettledToolRows(
+          session,
+          sessionId,
+          toolTracker,
+          attachedTaskToolUseIds,
+          stream.currentAssistantMessage,
+        );
+        for (const report of unattachedTaskNotifications) {
+          appendTranscriptNotice(
+            session,
+            sessionId,
+            (event) => eventEmitter.emit(event),
+            taskNotificationNoticePart(report, receivedAt ?? new Date().toISOString()),
+          );
+        }
+        if (interrupted) appendInterruptedNotice(session, sessionId);
         // Skip adding user message replay as we already added it
       } else if (message.type === "auth_status") {
         const auth = message as SDKAuthStatusMessage;
@@ -2761,6 +3044,19 @@ export async function sendPrompt(
     // it stamped only matter for as long as a disconnected client could still
     // be resuming from them; see `evictIdleHydratedTranscripts`.
     session.lastStreamedRevisionAt = Date.now();
+    // Nothing is compacting or thinking once the stream is over. Only the
+    // turn that owns the foreground clears it: a released turn ending must
+    // not wipe the indicator of the turn that replaced it.
+    if (session.latestTurnGeneration === turnGeneration) {
+      if (session.activity !== undefined) {
+        session.activity = undefined;
+        eventEmitter.emit({ type: "session.updated", sessionId, data: { activity: null } });
+      }
+      if (session.thinkingTokens !== undefined) {
+        session.thinkingTokens = undefined;
+        eventEmitter.emit({ type: "session.updated", sessionId, data: { thinkingTokens: null } });
+      }
+    }
     if (session.inProgressUsageGeneration === turnGeneration) {
       // Preserve tokens already observed on interrupted/error paths; the
       // provider may never send the terminal result that would reconcile them.

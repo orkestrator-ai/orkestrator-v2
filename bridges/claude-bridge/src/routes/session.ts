@@ -304,6 +304,10 @@ session.get("/:id", async (c) => {
     // arrive mid-turn, long before there is a usage snapshot to carry them.
     rateLimits: sessionData.rateLimits,
     promptSuggestion: sessionData.promptSuggestion,
+    // Turn-scoped progress hints: the backend projects them onto the running
+    // indicator. Both are cleared when the turn ends.
+    activity: sessionData.activity,
+    thinkingTokens: sessionData.thinkingTokens,
     planMode: sessionData.planMode,
     turnId:
       sessionData.status === "running" && sessionData.latestTurnGeneration !== undefined

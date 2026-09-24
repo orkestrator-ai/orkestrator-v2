@@ -775,6 +775,23 @@ describe("HTTP bridge provider", () => {
     });
   });
 
+  test("carries Claude's turn activity only while the turn runs", async () => {
+    const read = async (status: string) => {
+      const { provider } = httpProvider((url) => {
+        if (url.endsWith("/messages")) return Response.json({ messages: [] });
+        return Response.json({ status, activity: "compacting", thinkingTokens: 1_249 });
+      });
+      return provider.interactiveSnapshot!("session-1");
+    };
+
+    expect((await read("running")).turnActivity).toEqual({
+      compacting: true,
+      thinkingTokens: 1_200,
+    });
+    // A leftover estimate must never decorate an idle tab.
+    expect((await read("idle")).turnActivity).toBeUndefined();
+  });
+
   test("bounds Claude launch correlation metadata at the bridge boundary", async () => {
     const { provider } = httpProvider((url) => {
       if (url.endsWith("/messages")) return Response.json({ messages: [] });

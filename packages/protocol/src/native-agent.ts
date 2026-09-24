@@ -494,10 +494,52 @@ export type NativeAgentTurnPhase =
   | "recovering"
   | "error";
 
+/**
+ * What the provider reports it is doing inside a running turn, when that is
+ * not visible from the transcript. Advisory: it refines the running indicator
+ * and never decides the phase.
+ */
+export interface NativeAgentTurnActivity {
+  /** The provider is compacting the conversation's context. */
+  compacting?: boolean;
+  /**
+   * Running estimate of tokens spent in the current thinking block. An
+   * approximation for progress display, not billed usage.
+   */
+  thinkingTokens?: number;
+}
+
 export interface NativeAgentTurnState {
   phase: NativeAgentTurnPhase;
   startedAt?: number;
   error?: string;
+  /** Present only while the turn is running and the provider reported one. */
+  activity?: NativeAgentTurnActivity;
+}
+
+/**
+ * Normalize a provider's turn activity, or `undefined` when it says nothing.
+ * Shared by every backend read so the full and progressive projections agree.
+ */
+export function normalizeNativeAgentTurnActivity(value: {
+  compacting?: unknown;
+  thinkingTokens?: unknown;
+}): NativeAgentTurnActivity | undefined {
+  const compacting = value.compacting === true;
+  // Quantized: the estimate moves on every thinking delta, and each distinct
+  // value is a new projection revision. The indicator shows it approximately.
+  const step = typeof value.thinkingTokens === "number" && value.thinkingTokens >= 1_000 ? 100 : 10;
+  const thinkingTokens =
+    typeof value.thinkingTokens === "number" &&
+    Number.isFinite(value.thinkingTokens) &&
+    value.thinkingTokens > 0
+      ? Math.max(step, Math.round(value.thinkingTokens / step) * step)
+      : undefined;
+  if (!compacting && thinkingTokens === undefined) return undefined;
+  return {
+    ...(compacting ? { compacting } : {}),
+    ...(thinkingTokens === undefined ? {} : { thinkingTokens }),
+  };
 }
 
 export interface NativeAgentSelectOption {

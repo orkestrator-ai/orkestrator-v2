@@ -29,6 +29,7 @@ import type {
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
   NativeAgentSlashCommand,
+  NativeAgentTurnActivity,
   NativeAgentTurnPhase,
 } from "@orkestrator/protocol/native-agent";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
@@ -343,6 +344,8 @@ export interface ProviderInteractiveSnapshot {
   commandCatalogueRevision?: number;
   phase?: NativeAgentTurnPhase;
   turnStartedAt?: number;
+  /** What the provider reports doing inside the running turn, when it does. */
+  turnActivity?: NativeAgentTurnActivity;
   contextUsage?: NativeAgentContextUsage;
   policy?: NativeAgentExecutionPolicy;
   rateLimits?: NativeAgentRateLimitWindow[];

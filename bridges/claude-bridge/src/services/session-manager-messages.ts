@@ -108,6 +108,24 @@ export class ToolTracker {
     }
   }
 
+  /**
+   * Mark a call as refused by the permission layer rather than failed by the
+   * tool. Kept apart from the result, which arrives separately and carries
+   * the rejection text the model read. Returns `false` for an untracked call.
+   */
+  recordDenial(toolUseId: string, denial: { reason?: string; source?: string }): boolean {
+    const existing = this.tools.get(toolUseId);
+    if (!existing) return false;
+    this.tools.set(toolUseId, {
+      ...existing,
+      toolDenied: {
+        ...(denial.reason ? { reason: denial.reason } : {}),
+        ...(denial.source ? { source: denial.source } : {}),
+      },
+    });
+    return true;
+  }
+
   /** Get all tracked tools as an array, preserving insertion order */
   getTools(): NormalizedPart[] {
     return Array.from(this.tools.values());
@@ -212,6 +230,195 @@ function buildClaudeToolDiff(
 }
 
 /**
+ * A background task's completion report, as the CLI injects it into the root
+ * agent loop.
+ *
+ * The `system/task_notification` frame carries only a one-line summary. The
+ * report the model actually reads — a background agent's final answer — exists
+ * only in this synthetic user turn, so without parsing it the model answers a
+ * report the user never saw.
+ */
+export interface TaskNotificationReport {
+  taskId?: string;
+  toolUseId?: string;
+  status?: string;
+  summary?: string;
+  result?: string;
+}
+
+const TASK_NOTIFICATION_OPEN = "<task-notification>";
+
+/** The text between the first `<name>` and its closing tag, trimmed. */
+function taskNotificationField(text: string, name: string, last = false): string | undefined {
+  const open = `<${name}>`;
+  const close = `</${name}>`;
+  const start = text.indexOf(open);
+  if (start < 0) return undefined;
+  const from = start + open.length;
+  // A report is free text and may itself quote the closing tag, so the result
+  // runs to the *last* one; every other field is a short scalar.
+  const end = last ? text.lastIndexOf(close) : text.indexOf(close, from);
+  if (end < from) return undefined;
+  const value = text.slice(from, end).trim();
+  return value.length > 0 ? value : undefined;
+}
+
+/** Parse a `<task-notification>` user turn, or `undefined` for any other text. */
+export function parseTaskNotification(text: string): TaskNotificationReport | undefined {
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith(TASK_NOTIFICATION_OPEN)) return undefined;
+  return {
+    taskId: taskNotificationField(trimmed, "task-id"),
+    toolUseId: taskNotificationField(trimmed, "tool-use-id"),
+    status: taskNotificationField(trimmed, "status"),
+    summary: taskNotificationField(trimmed, "summary"),
+    result: taskNotificationField(trimmed, "result", true),
+  };
+}
+
+/**
+ * Markers the CLI writes into the rollout as a user text block when a turn is
+ * interrupted. They are not something the user typed, so they render as an
+ * interruption row rather than a user bubble.
+ */
+const INTERRUPT_MARKERS = new Set([
+  "[Request interrupted by user]",
+  "[Request interrupted by user for tool use]",
+]);
+
+export function isInterruptMarker(text: unknown): boolean {
+  return typeof text === "string" && INTERRUPT_MARKERS.has(text.trim());
+}
+
+/** Content of the transcript row that stands for an interrupted turn. */
+export const INTERRUPTED_NOTICE_TEXT = "Interrupted by user";
+
+/** The status row for an interruption, shared by the live and replay paths. */
+export function interruptedNoticePart(createdAt: string): NormalizedPart {
+  return { type: "status", content: INTERRUPTED_NOTICE_TEXT, severity: "info", createdAt };
+}
+
+/**
+ * Append the interruption row to a live transcript and publish it.
+ *
+ * Idempotent against the transcript tail: a user stop aborts the turn *and*
+ * the CLI may echo its own interruption marker, and one interruption is one
+ * row. The rollout keeps the marker, so a reload rebuilds this same row.
+ */
+export function appendInterruptedNotice(session: SessionState, sessionId: string): void {
+  const last = session.messages.at(-1);
+  if (
+    last?.role === "system" &&
+    last.parts.length === 1 &&
+    last.parts[0]?.type === "status" &&
+    last.parts[0].content === INTERRUPTED_NOTICE_TEXT
+  ) {
+    return;
+  }
+  const createdAt = new Date().toISOString();
+  const part = interruptedNoticePart(createdAt);
+  const message: NormalizedMessage = {
+    id: generateMessageId(),
+    role: "system",
+    content: part.content,
+    parts: [part],
+    createdAt,
+  };
+  session.messages.push(message);
+  eventEmitter.emit({ type: "message.updated", sessionId, data: { message } });
+}
+
+/**
+ * Re-publish finished tool rows whose tracked state changed after the message
+ * holding them stopped being the one the turn rebuilds.
+ *
+ * `current` is skipped: the caller has just rebuilt and published it. Each
+ * other message is republished whole, the same way a settled retry row is.
+ */
+export function refreshSettledToolRows(
+  session: SessionState,
+  sessionId: string,
+  toolTracker: ToolTracker,
+  toolUseIds: readonly string[],
+  current: NormalizedMessage | null | undefined,
+): void {
+  if (toolUseIds.length === 0) return;
+  const pending = new Set(toolUseIds);
+  for (let index = session.messages.length - 1; index >= 0 && pending.size > 0; index -= 1) {
+    const message = session.messages[index]!;
+    let changed = false;
+    const parts = message.parts.map((part) => {
+      if (part.type !== "tool-invocation" || !part.toolUseId || !pending.has(part.toolUseId)) {
+        return part;
+      }
+      pending.delete(part.toolUseId);
+      const tracked = toolTracker.getTool(part.toolUseId);
+      if (!tracked || message === current) return part;
+      changed = true;
+      return part.createdAt && !tracked.createdAt
+        ? { ...tracked, createdAt: part.createdAt }
+        : tracked;
+    });
+    if (changed) {
+      message.parts = parts;
+      eventEmitter.emit({ type: "message.updated", sessionId, data: { message } });
+    }
+  }
+}
+
+/** Bound on a task report shown as a row of its own rather than on a tool row. */
+const MAX_TASK_NOTICE_LENGTH = 4_000;
+
+/**
+ * The status row for a task report with no tool row to attach to (a task the
+ * CLI started itself, or one whose launching call is outside this transcript).
+ */
+export function taskNotificationNoticePart(
+  report: TaskNotificationReport,
+  createdAt: string,
+): NormalizedPart {
+  const text =
+    report.summary ??
+    report.result ??
+    (report.status ? `Background task ${report.status}` : "Background task finished");
+  return {
+    type: "status",
+    content:
+      text.length > MAX_TASK_NOTICE_LENGTH ? `${text.slice(0, MAX_TASK_NOTICE_LENGTH - 1)}…` : text,
+    severity: report.status === "failed" ? "error" : "info",
+    createdAt,
+  };
+}
+
+/**
+ * Fold a task report onto the tool call that launched the task.
+ *
+ * The launching call settled long ago with a placeholder ("launched in the
+ * background"), so the report replaces that output: it is the call's real
+ * result. Returns `false` when there is no tracked call to attach it to, and
+ * the caller shows the report as a row of its own instead.
+ */
+function applyTaskNotificationToTool(
+  report: TaskNotificationReport,
+  toolTracker: ToolTracker | undefined,
+  settledAt: string | undefined,
+): boolean {
+  if (!toolTracker || !report.toolUseId || !toolTracker.getTool(report.toolUseId)) return false;
+  const text = report.result ?? report.summary;
+  if (!text) return true;
+  const failed = report.status === "failed" || report.status === "stopped";
+  toolTracker.updateToolResult(report.toolUseId, {
+    ...applyToolResultBudget({
+      output: failed ? undefined : text,
+      error: failed ? text : undefined,
+    }),
+    state: failed ? "failure" : "success",
+    settledAt,
+  });
+  return true;
+}
+
+/**
  * Parse SDK message content, extracting text/thinking parts, registering tools,
  * and tracking the order of non-text parts for chronological display.
  * Also tracks parent Task relationships for proper tool grouping.
@@ -222,6 +429,7 @@ function buildClaudeToolDiff(
  * @param activeTaskIds - Set of currently active (pending) Task IDs for parent tracking
  * @param taskRegistry - Session task list state, stamped onto Task tool results
  * @param timestampFallback - Clock to use when the record omitted its optional timestamp
+ * @param recordUnknownBlock - Told the type of any content block no branch consumes
  */
 export function parseMessageContent(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -231,6 +439,7 @@ export function parseMessageContent(
   activeTaskIds?: Set<string>,
   taskRegistry?: Pick<TaskRegistry, "apply">,
   timestampFallback?: string,
+  recordUnknownBlock?: (blockType: string) => void,
 ): {
   content: string;
   thinkingParts: NormalizedPart[];
@@ -242,11 +451,30 @@ export function parseMessageContent(
   completedTaskIds: string[];
   /** Number of content blocks in this message (including ones that produced no part) */
   contentBlockCount: number;
+  /**
+   * Task reports in this user turn that had no tracked call to attach to.
+   * Reports that did attach have already updated their tool row.
+   */
+  unattachedTaskNotifications: TaskNotificationReport[];
+  /** Tool calls whose row a task report in this user turn just updated. */
+  attachedTaskToolUseIds: string[];
+  /** This user turn is the CLI's record of an interruption, not user input. */
+  interrupted: boolean;
 } {
   const thinkingParts: NormalizedPart[] = [];
   const orderedParts: OrderedPartEntry[] = [];
   const newTaskIds: string[] = [];
   const completedTaskIds: string[] = [];
+  const unattachedTaskNotifications: TaskNotificationReport[] = [];
+  const attachedTaskToolUseIds: string[] = [];
+  const acceptTaskNotification = (report: TaskNotificationReport) => {
+    if (applyTaskNotificationToTool(report, toolTracker, recordTimestamp)) {
+      attachedTaskToolUseIds.push(report.toolUseId!);
+    } else {
+      unattachedTaskNotifications.push(report);
+    }
+  };
+  let interrupted = false;
   let textContent = "";
 
   const messageUuid = typeof message.uuid === "string" ? message.uuid : undefined;
@@ -264,8 +492,29 @@ export function parseMessageContent(
       ? message.parent_tool_use_id
       : undefined;
 
+  const isUserRecord = message.type === "user";
+  const rawContent = message.message?.content;
+  // A synthetic user turn (a task report) carries a bare string. Only that
+  // shape is read from a string: the other string-content user records are
+  // CLI metadata, which the transcript has never shown. Iterating the string
+  // itself, as this loop once did, walked it one character at a time.
+  if (typeof rawContent === "string") {
+    const report = isUserRecord ? parseTaskNotification(rawContent) : undefined;
+    if (report) acceptTaskNotification(report);
+    return {
+      content: "",
+      thinkingParts,
+      orderedParts,
+      newTaskIds,
+      completedTaskIds,
+      contentBlockCount: 0,
+      unattachedTaskNotifications,
+      attachedTaskToolUseIds,
+      interrupted,
+    };
+  }
   // Handle message.message.content array (from Anthropic SDK format)
-  const contentBlocks = message.message?.content || [];
+  const contentBlocks: any[] = Array.isArray(rawContent) ? rawContent : [];
 
   // Track the most recent Task tool use ID within this message
   // This is used for the positional heuristic: tools following a Task belong to it
@@ -273,6 +522,18 @@ export function parseMessageContent(
 
   for (let blockOffset = 0; blockOffset < contentBlocks.length; blockOffset += 1) {
     const block = contentBlocks[blockOffset];
+    if (!block || typeof block !== "object") continue;
+    if (block.type === "text" && isUserRecord) {
+      const report = parseTaskNotification(block.text ?? "");
+      if (report) {
+        acceptTaskNotification(report);
+        continue;
+      }
+      if (isInterruptMarker(block.text)) {
+        interrupted = true;
+        continue;
+      }
+    }
     if (block.type === "text") {
       textContent += block.text || "";
       // Track text in ordered parts so it maintains position relative to thinking/tools
@@ -405,6 +666,10 @@ export function parseMessageContent(
           completedTaskIds.push(block.tool_use_id);
         }
       }
+    } else if (!RECOGNIZED_UNRENDERED_BLOCK_TYPES.has(block.type)) {
+      // Names only, like every other drift record: a block body is model
+      // output or file content.
+      recordUnknownBlock?.(typeof block.type === "string" ? block.type : "(untyped)");
     }
   }
 
@@ -415,8 +680,25 @@ export function parseMessageContent(
     newTaskIds,
     completedTaskIds,
     contentBlockCount: contentBlocks.length,
+    unattachedTaskNotifications,
+    attachedTaskToolUseIds,
+    interrupted,
   };
 }
+
+/**
+ * Block types this parser knows and deliberately produces no part for. A user
+ * turn's images are rendered from the bridge's own copy of the prompt, and
+ * redacted thinking has no readable content. Anything outside these and the
+ * branches above is counted as drift rather than skipped silently.
+ */
+const RECOGNIZED_UNRENDERED_BLOCK_TYPES = new Set<unknown>([
+  "tool_use",
+  "tool_result",
+  "image",
+  "document",
+  "redacted_thinking",
+]);
 
 /**
  * Build message parts from ordered sequence.
@@ -1028,6 +1310,8 @@ export function normalizePersistedSessionMessages(
     content: string;
     orderedParts: OrderedPartEntry[];
     timestamp: string;
+    /** Status rows this record stands for instead of, or beside, a bubble. */
+    notices: NormalizedPart[];
   }> = [];
 
   // Older emitters omitted record timestamps. Give every such record one
@@ -1082,16 +1366,36 @@ export function normalizePersistedSessionMessages(
     );
     for (const taskId of result.newTaskIds) activeTaskIds.add(taskId);
     for (const taskId of result.completedTaskIds) activeTaskIds.delete(taskId);
+    // The same rows the live turn appends, so a reload shows what the user saw
+    // rather than the CLI's own bookkeeping as if the user had typed it.
+    const notices: NormalizedPart[] = [
+      ...(result.interrupted ? [interruptedNoticePart(timestamp)] : []),
+      ...result.unattachedTaskNotifications.map((report) =>
+        taskNotificationNoticePart(report, timestamp),
+      ),
+    ];
     parsed.push({
       raw,
       content: result.content,
       orderedParts: result.orderedParts,
       timestamp,
+      notices,
     });
   }
 
   const messages: NormalizedMessage[] = [];
   for (const entry of parsed) {
+    entry.notices.forEach((part, index) => {
+      messages.push({
+        // Stable across rehydrations so a client holding the row keeps it.
+        // Never an `sdkUuid`: a notice is not a record a fork can address.
+        id: entry.raw.uuid ? `${entry.raw.uuid}:notice:${index}` : generateMessageId(),
+        role: "system",
+        content: part.content,
+        parts: [part],
+        createdAt: entry.timestamp,
+      });
+    });
     const parts = buildMessageParts(entry.orderedParts, toolTracker);
     if (entry.raw.type === "user" && !entry.content.trim()) continue;
     if (entry.raw.type === "assistant" && parts.length === 0 && !entry.content.trim()) {

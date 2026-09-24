@@ -43,6 +43,13 @@ export type OpenCodePromptPart = TextPartInput | FilePartInput | AgentPartInput 
 
 export const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
 export const DEFAULT_MONITOR_RETRY_MS = 1_000;
+/**
+ * Repeated monitor failures back off to at most this multiple of the initial
+ * retry (30 s by default), and a stream must stay up this long before the
+ * next failure counts as a first failure again.
+ */
+export const MONITOR_RETRY_CAP_FACTOR = 30;
+export const MONITOR_HEALTHY_AFTER_MS = 30_000;
 export const DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS = 10_000;
 export const OPENCODE_SUBAGENT_MAX_SESSIONS = 16;
 export const OPENCODE_SUBAGENT_MESSAGE_LIMIT = OPEN_CODE_MESSAGE_HISTORY_LIMIT;
@@ -52,7 +59,14 @@ export interface OpenCodeProviderDependencies {
   openCodeClient?: OpencodeClient;
   openCodeClientFactory?: typeof createOpencodeClient;
   openCodeMessageIdCoordinator?: OpenCodeMessageIdCoordinator;
+  /** First reconnect delay of the event monitor; repeated failures back off from it. */
   monitorRetryMs?: number;
+  /** Upper bound of the monitor's reconnect backoff. */
+  monitorRetryMaxMs?: number;
+  /** Jitter source for the monitor's reconnect backoff; uniform in [0, 1). */
+  monitorRetryRandom?: () => number;
+  /** Test seam for the monitor's cancellable reconnect wait. */
+  waitForMonitorRetry?: (ms: number, signal: AbortSignal) => Promise<void>;
   now?: () => number;
   openCodeExistenceCacheTtlMs?: number;
   openCodeStatusReconcileIntervalMs?: number;

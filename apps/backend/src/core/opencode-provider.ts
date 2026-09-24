@@ -1,6 +1,7 @@
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/types";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
 import { isKnownOpenCodeEvent } from "./opencode-events.js";
 import {
   boundedOpenCodeMessageHistory,
@@ -95,6 +96,8 @@ import { openCodeContextUsage } from "./opencode-usage.js";
 import { OpenCodeStreamState } from "./opencode-stream-state.js";
 import {
   DEFAULT_MONITOR_RETRY_MS,
+  MONITOR_HEALTHY_AFTER_MS,
+  MONITOR_RETRY_CAP_FACTOR,
   DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS,
   effectiveOpenCodePolicy,
   openCodeAgentFor,
@@ -179,6 +182,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private readonly reviewPermissions: OpenCodeReviewSessionPermissions;
   private readonly monitorController = new AbortController();
   private readonly monitorRetryMs: number;
+  /** One owner, one sequential wait: the loop below never arms two retries. */
+  private readonly monitorBackoff: ReconnectBackoff;
+  private readonly waitForMonitorRetry: (ms: number, signal: AbortSignal) => Promise<void>;
   private readonly now: () => number;
   private readonly answeringRequestIds = new Set<string>();
   private readonly requestTasks = new Set<Promise<void>>();
@@ -246,6 +252,25 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     );
     this.monitorRetryMs = Math.max(1, dependencies.monitorRetryMs ?? DEFAULT_MONITOR_RETRY_MS);
     this.now = dependencies.now ?? Date.now;
+    // Every provider watching an OpenCode server loses its stream when that
+    // server restarts. A constant retry kept them all in lock-step for the
+    // whole outage; consecutive failures now back off with jitter, and only a
+    // stream that stayed up resets the ladder. The first retry is no slower.
+    this.monitorBackoff = new ReconnectBackoff(
+      {
+        initialDelayMs: this.monitorRetryMs,
+        maxDelayMs: Math.max(
+          this.monitorRetryMs,
+          dependencies.monitorRetryMaxMs ?? this.monitorRetryMs * MONITOR_RETRY_CAP_FACTOR,
+        ),
+        healthyAfterMs: MONITOR_HEALTHY_AFTER_MS,
+      },
+      {
+        now: this.now,
+        ...(dependencies.monitorRetryRandom ? { random: dependencies.monitorRetryRandom } : {}),
+      },
+    );
+    this.waitForMonitorRetry = dependencies.waitForMonitorRetry ?? waitForOpenCodeRetry;
     this.commands = new OpenCodeCommandRegistry(
       () => this.capabilitiesAdapter.readCommands(),
       () => this.now(),
@@ -405,6 +430,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         if (!response || !("stream" in response)) {
           throw new Error("OpenCode returned no event stream");
         }
+        this.monitorBackoff.connected();
         let startupError: unknown;
         const startup = Promise.all([
           this.reconcileStreamState(),
@@ -433,7 +459,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       this.streamState.markGap();
       this.lifecycle.invalidateEvents();
       try {
-        await waitForOpenCodeRetry(this.monitorRetryMs, this.monitorController.signal);
+        await this.waitForMonitorRetry(
+          this.monitorBackoff.nextDelayMs(),
+          this.monitorController.signal,
+        );
       } catch {
         return;
       }

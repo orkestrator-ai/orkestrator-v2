@@ -231,6 +231,7 @@ export {
   MULTI_REVIEW_ADDRESS_PROMPT,
   isMultiReviewTerminalPhase,
   isMultiReviewStepControlInput,
+  isMultiReviewReviewerTranscriptRequest,
   isMultiReviewWorkflow,
   isRestartMultiReviewStepInput,
   isStartMultiReviewCustomFixInput,

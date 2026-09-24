@@ -136,6 +136,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           this.workflowToolEnabled(agent as BuildPipelineAgent, kind),
         agentMcp: (pipeline, resultKey, provider) =>
           this.workflowAgentMcp(pipeline, resultKey, provider),
+        concurrency: this.options.reviewFanoutConcurrency,
+        efficiency: this.options.efficiency,
       });
     }
     return this.reviewFanoutRunner;

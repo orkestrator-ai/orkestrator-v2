@@ -581,7 +581,10 @@ test("MultiReviewService treats transcript-derived usage failures as non-fatal",
 
     expect((await snapshot(started.id))?.reviewers[0]).toMatchObject({ status: "running" });
     expect((await snapshot(started.id))?.reviewers[0]?.tokenCount).toBeUndefined();
-    expect(provider.messagesCalls).toBe(provider.statusCalls);
+    // Transcript-derived usage shares the throttled progress probe instead of
+    // reading the transcript on every status observation.
+    expect(provider.messagesCalls).toBe(1);
+    expect(provider.statusCalls).toBeGreaterThanOrEqual(provider.messagesCalls);
     expect(provider.messageOptions.every((options) => options?.limit === 64)).toBe(true);
   });
 });
@@ -2717,6 +2720,33 @@ async function waitUntil(
     await Bun.sleep(10);
   }
 }
+
+test("adaptive supervision keeps a running review scheduled until consolidation finishes", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  await withService(
+    "env-adaptive-review",
+    provider,
+    async ({ service, start, snapshot }) => {
+      await service.init();
+      const started = await start();
+      await waitUntil(async () => (await snapshot(started.id))?.reviewers[0]?.status === "running");
+      const callsWhileRunning = provider.statusCalls;
+      await waitUntil(() => provider.statusCalls > callsWhileRunning);
+      provider.statusValue = "idle";
+      await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
+      expect((await snapshot(started.id))?.consolidatedReport).toBeDefined();
+    },
+    {
+      serviceOptions: {
+        autoAdvance: true,
+        pollIntervalMs: 10,
+        observationIntervalMs: 10,
+        reconcileIntervalMs: 30,
+      },
+    },
+  );
+});
 
 test.each(["grok", "cursor", "pi", "codex"] as const)(
   "MultiReviewService delivers %s reviewer and consolidation reports through MCP tools",
@@ -6956,9 +6986,11 @@ test("Multi Review prepares and consolidates with its review model before openin
       expect(
         commands.filter((entry) => entry.command === "get_environment_uncommitted_paths"),
       ).toHaveLength(1);
+      // One verification per phase — fan-out admission and consolidation —
+      // independent of how many reviewers the panel has.
       expect(
         commands.filter((entry) => entry.command === "verify_looped_review_package"),
-      ).toHaveLength(3);
+      ).toHaveLength(2);
       const consolidation = [...provider.sends.values()].find((sent) =>
         sent.prompt.includes("<multi-review-reports-json>"),
       );

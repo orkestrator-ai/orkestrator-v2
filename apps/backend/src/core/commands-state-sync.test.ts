@@ -4865,7 +4865,24 @@ describe("multi review commands", () => {
           reviewerId: "reviewer-1",
           messages: [{ id: "progress" }],
         });
-        expect(reviewerTranscript).toHaveBeenCalledWith("multi-1", "reviewer-1");
+        expect(reviewerTranscript).toHaveBeenCalledWith("multi-1", "reviewer-1", undefined);
+        await invoke("get_multi_review_reviewer_transcript", {
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          knownSourceToken: "rt1.scope.token",
+        });
+        expect(reviewerTranscript).toHaveBeenLastCalledWith(
+          "multi-1",
+          "reviewer-1",
+          "rt1.scope.token",
+        );
+        await expect(
+          invoke("get_multi_review_reviewer_transcript", {
+            workflowId: "multi-1",
+            reviewerId: "reviewer-1",
+            knownSourceToken: "x".repeat(513),
+          }),
+        ).rejects.toThrow("source token");
         await expect(
           invoke("get_multi_review_reviewer_transcript", {
             workflowId: "multi-1",

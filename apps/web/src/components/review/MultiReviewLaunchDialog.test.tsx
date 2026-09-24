@@ -710,3 +710,63 @@ describe("MultiReviewLaunchDialog auto-fix", () => {
     },
   );
 });
+
+describe("MultiReviewLaunchDialog launch value", () => {
+  test("warns about exact duplicates without blocking or altering the launch", () => {
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={speedCatalog}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    const warning = screen.getByTestId("multi-review-duplicate-warning");
+    expect(warning.getAttribute("aria-live")).toBe("polite");
+    expect(warning.textContent).toBe(
+      "Reviewers 1 and 2 use the same configuration. This may provide a second sample of that configuration, but often produces overlapping findings and approximately two review turns.",
+    );
+    const start = screen.getByRole("button", { name: "Start 2-model review" });
+    expect(start.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(start);
+    const selection = onConfirm.mock.calls[0]![0];
+    expect(selection.reviewers[0]).toEqual(selection.reviewers[1]);
+  });
+
+  test("a behaviour-affecting difference clears the warning", () => {
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={speedCatalog}
+        onConfirm={() => undefined}
+      />,
+    );
+    chooseSpeed("Reviewer 2", /Fast/);
+    expect(screen.getByTestId("multi-review-duplicate-warning").textContent).toBe("");
+  });
+
+  test("summarizes expected turns without estimating cost", () => {
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={catalog}
+        onConfirm={() => undefined}
+      />,
+    );
+    const summary = screen.getByTestId("multi-review-work-summary");
+    expect(summary.textContent).toContain("2 reviewer turns");
+    expect(summary.textContent).toContain("validation run once and shared");
+    expect(summary.textContent).not.toMatch(/[$€£]/);
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
+    expect(summary.textContent).toContain("3 reviewer turns");
+    fireEvent.click(screen.getByLabelText("Auto-fix after consolidation"));
+    expect(summary.textContent).toContain("then 1 fix turn");
+  });
+});

@@ -40,10 +40,10 @@ import * as backend from "@/lib/backend";
 import { toPipelineTranscript } from "@/components/build-pipeline/pipeline-transcript";
 
 /**
- * Each poll re-reads the reviewer's whole provider transcript, which in gateway
- * mode crosses a network. A review runs for minutes, so trade a little latency
- * on this read-only progress view for a materially cheaper steady state; the
- * backend caps the response and a status change refreshes immediately.
+ * Backstop poll for the active tab. Each poll sends the previous source token,
+ * so an unchanged transcript costs a small status projection rather than the
+ * message tail; a workflow checkpoint (which lands when the reviewer's
+ * transcript moves) refreshes immediately without waiting for the interval.
  */
 export const REFRESH_INTERVAL_MS = 4_000;
 export const MANUAL_REFRESH_TIMEOUT_MS = REFRESH_INTERVAL_MS * 2;
@@ -79,6 +79,20 @@ interface MultiReviewReviewerTabProps {
   restartReviewer?: typeof backend.restartMultiReviewReviewer;
   unstickReviewer?: typeof backend.unstickMultiReviewReviewer;
   refreshIntervalMs?: number;
+}
+
+/**
+ * Folds a transcript response into the snapshot the tab renders. An
+ * `unchanged` answer carries no messages, so it keeps the ones already shown
+ * while every status and recovery field comes from the new response. A full
+ * snapshot replaces the list: it is authoritative and may be a rebased tail.
+ */
+export function mergeMultiReviewReviewerTranscript(
+  previous: MultiReviewReviewerTranscript | null,
+  next: MultiReviewReviewerTranscript,
+): MultiReviewReviewerTranscript {
+  if (next.transcript !== "unchanged") return next;
+  return { ...next, messages: previous?.messages ?? [] };
 }
 
 export function toMultiReviewReviewerMessages(snapshot: MultiReviewReviewerTranscript) {
@@ -124,13 +138,21 @@ export function MultiReviewReviewerTab({
   const requestGeneration = useRef(0);
   const inFlightRequest = useRef<{ generation: number; promise: Promise<void> } | null>(null);
   const manualRefreshAttempt = useRef<symbol | null>(null);
+  /** Token of the transcript this tab currently shows; reset with the view. */
+  const sourceToken = useRef<string | undefined>(undefined);
   const replaceWorkflow = useMultiReviewStore((state) => state.replaceWorkflow);
+  const workflowRevision = useMultiReviewStore(
+    (state) => state.workflows.get(data.workflowId)?.backendRevision,
+  );
   const containerId =
     useEnvironmentStore((state) => state.getEnvironmentById(data.environmentId)?.containerId) ??
     undefined;
 
   const fenceRequests = useCallback(() => {
     requestGeneration.current += 1;
+    // A fenced view may be about to show another session; never ask the
+    // backend to confirm a transcript this view might not be displaying.
+    sourceToken.current = undefined;
     inFlightRequest.current = null;
     manualRefreshAttempt.current = null;
     setManualRefreshPending(false);
@@ -144,9 +166,12 @@ export function MultiReviewReviewerTab({
     let request!: Promise<void>;
     request = (async () => {
       try {
-        const next = await loadTranscript(data.workflowId, data.reviewerId);
+        const next = await loadTranscript(data.workflowId, data.reviewerId, {
+          knownSourceToken: sourceToken.current,
+        });
         if (requestGeneration.current !== generation) return;
-        setSnapshot(next);
+        sourceToken.current = next.sourceToken;
+        setSnapshot((previous) => mergeMultiReviewReviewerTranscript(previous, next));
         setTranscriptError(null);
       } catch (reason) {
         if (requestGeneration.current !== generation) return;
@@ -303,6 +328,17 @@ export function MultiReviewReviewerTab({
       window.clearInterval(interval);
     };
   }, [isActive, refresh, refreshIntervalMs, snapshot?.status, transcriptError]);
+  /* oxlint-enable react-hooks/exhaustive-deps */
+
+  // The workflow's revision moves when the backend checkpoints reviewer
+  // progress, which is exactly when this transcript has something new. Read
+  // then instead of waiting out the interval; bursts coalesce onto the single
+  // in-flight request.
+  /* oxlint-disable react-hooks/exhaustive-deps */
+  useEffect(() => {
+    if (!isActive || workflowRevision === undefined) return;
+    void refresh();
+  }, [workflowRevision]);
   /* oxlint-enable react-hooks/exhaustive-deps */
 
   const messages = useMemo(() => {

@@ -122,13 +122,57 @@ export interface MultiReviewReviewerTranscript {
   status: MultiReviewReviewerStatus;
   /** Current turn journal state, used to qualify the reviewer-level Unstick action. */
   dispatchState?: ReviewDispatchState;
+  /**
+   * The bounded transcript tail. Empty when {@link transcript} is
+   * `"unchanged"`: the caller keeps the messages it already holds.
+   */
   messages: unknown[];
+  /**
+   * `"unchanged"` answers a request whose `knownSourceToken` is still current.
+   * Absent on responses from a backend that predates conditional reads, which
+   * always carry a complete bounded snapshot.
+   */
+  transcript?: "snapshot" | "unchanged";
+  /** Opaque, session-scoped token to send back as `knownSourceToken`. */
+  sourceToken?: string;
+  /** True when older messages were omitted to respect the count/byte bounds. */
+  truncated?: boolean;
   report?: StructuredReviewReport;
   error?: string;
   progressAt?: string;
   stalledSince?: string;
   startedAt?: string;
   completedAt?: string;
+}
+
+/** Upper bound on a reviewer transcript source token, in characters. */
+export const MULTI_REVIEW_TRANSCRIPT_TOKEN_MAX_LENGTH = 512;
+
+export interface MultiReviewReviewerTranscriptRequest {
+  workflowId: string;
+  reviewerId: string;
+  /** Token from the previous response; the backend ignores a stale or foreign one. */
+  knownSourceToken?: string;
+}
+
+export function isMultiReviewReviewerTranscriptRequest(
+  value: unknown,
+): value is MultiReviewReviewerTranscriptRequest {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).every((key) =>
+      ["workflowId", "reviewerId", "knownSourceToken"].includes(key),
+    ) &&
+    typeof record.workflowId === "string" &&
+    record.workflowId.trim().length > 0 &&
+    typeof record.reviewerId === "string" &&
+    record.reviewerId.trim().length > 0 &&
+    (record.knownSourceToken === undefined ||
+      (typeof record.knownSourceToken === "string" &&
+        record.knownSourceToken.length > 0 &&
+        record.knownSourceToken.length <= MULTI_REVIEW_TRANSCRIPT_TOKEN_MAX_LENGTH))
+  );
 }
 
 export type MultiReviewPhase =

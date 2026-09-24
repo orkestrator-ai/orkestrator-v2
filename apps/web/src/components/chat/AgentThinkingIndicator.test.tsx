@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render, screen } from "@testing-library/react";
-import { AgentThinkingIndicator } from "./AgentThinkingIndicator";
+import { AgentThinkingIndicator, formatThinkingTokens } from "./AgentThinkingIndicator";
 
 describe("AgentThinkingIndicator", () => {
   afterEach(cleanup);
@@ -25,5 +25,16 @@ describe("AgentThinkingIndicator", () => {
     expect(indicator?.className).toContain("agent-thinking-shimmer");
     expect(indicator?.className).toContain("justify-self-start");
     expect(indicator?.className).toContain("text-sm");
+  });
+
+  test("shows an approximate thinking-token estimate when the provider reports one", () => {
+    render(<AgentThinkingIndicator agentName="Claude" thinkingTokens={1_200} />);
+
+    expect(screen.getByRole("status").textContent).toBe("Claude is thinking... ~1.2k tokens");
+  });
+
+  test("formats small and round estimates without noise", () => {
+    expect(formatThinkingTokens(840)).toBe("840 tokens");
+    expect(formatThinkingTokens(2_000)).toBe("2k tokens");
   });
 });

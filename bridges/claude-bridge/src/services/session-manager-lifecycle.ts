@@ -80,6 +80,7 @@ import {
   LIVE_BACKGROUND_TASK_STATUSES,
   releaseQueryControl,
 } from "./session-manager-background-tasks.js";
+import { appendInterruptedNotice } from "./session-manager-messages.js";
 type SessionActivity = core.SessionActivity;
 type PromptDispatchHandle = core.PromptDispatchHandle;
 /**
@@ -564,9 +565,17 @@ export function abortSession(sessionId: string): boolean {
     session.turnStartedAt = undefined;
     session.abortController = undefined;
     session.completionBlockedByBackgroundTasks = false;
+    // Provider-reported progress belongs to the turn just stopped; the aborted
+    // iterator may never reach the frame that would have cleared it.
+    session.activity = undefined;
+    session.thinkingTokens = undefined;
     releaseQueryControl(session);
 
     cleanupPendingInteractions(sessionId);
+    // The stop is part of the conversation: without a row the transcript just
+    // ends mid-answer, and a reload (which reads the CLI's own interruption
+    // marker) would show one that the live tab never did.
+    appendInterruptedNotice(session, sessionId);
 
     eventEmitter.emit({
       type: "session.idle",

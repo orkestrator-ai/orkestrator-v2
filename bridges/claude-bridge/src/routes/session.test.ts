@@ -2684,6 +2684,25 @@ describe("persisted session routes", () => {
       expect(data.rewindInProgress).toBe(true);
     });
 
+    test("serves the running turn's activity and thinking estimate", async () => {
+      mockGetSession.mockReturnValueOnce({
+        id: "s-1",
+        title: "Test",
+        status: "running" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+        activity: "compacting",
+        thinkingTokens: 1_234,
+      } as ReturnType<typeof mockGetSession>);
+
+      const data = await jsonBody(await app.request("/session/s-1"));
+
+      // The backend polls this snapshot, not the event stream, so the
+      // indicator only ever reaches the tab from here.
+      expect(data.activity).toBe("compacting");
+      expect(data.thinkingTokens).toBe(1_234);
+    });
+
     test("reports an empty task set and no rewind for a fresh session", async () => {
       const data = await jsonBody(await app.request("/session/s-1"));
       expect(data.backgroundTasks).toEqual({});

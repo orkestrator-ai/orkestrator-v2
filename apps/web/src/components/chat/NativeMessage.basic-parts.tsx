@@ -158,6 +158,7 @@ export function ToolPart({
   toolError,
   backgroundTask,
   progress,
+  denied,
   deferredDetails = false,
 }: {
   expansionKey: string;
@@ -176,6 +177,12 @@ export function ToolPart({
    * settled row claiming to be busy.
    */
   progress?: { content: string; elapsedMs?: number };
+  /**
+   * The permission layer refused this call. Shown as its own state because
+   * "failure" reads as the tool breaking, and the fix is a permission change,
+   * not a retry.
+   */
+  denied?: { reason?: string; source?: string };
   /** Output exists but is fetched on expand, so the row must stay expandable. */
   deferredDetails?: boolean;
 }) {
@@ -374,8 +381,16 @@ export function ToolPart({
    * and the task itself is still `completed` — so deferring to the lifecycle
    * here would paint a green "completed" over an action that failed.
    */
-  const displayedState =
-    toolState === "failure" ? toolResultState : (lifecycleState ?? toolResultState);
+  const displayedState = denied
+    ? { label: "denied", className: stateColors.failure }
+    : toolState === "failure"
+      ? toolResultState
+      : (lifecycleState ?? toolResultState);
+  const deniedLine = denied
+    ? [denied.source ? `Denied (${denied.source.replaceAll("_", " ")})` : "Denied", denied.reason]
+        .filter(Boolean)
+        .join(": ")
+    : undefined;
 
   // Format the command input for shell-like display
   const formatInput = () => {
@@ -444,6 +459,15 @@ export function ToolPart({
           </span>
         )}
       </CollapsibleTrigger>
+
+      {deniedLine ? (
+        <div
+          className="min-w-0 truncate pl-9 pr-2 pb-1 text-[10px] text-failure/80"
+          title={deniedLine}
+        >
+          {deniedLine}
+        </div>
+      ) : null}
 
       {livingProgress ? (
         <div className="flex min-w-0 items-center gap-2 pl-9 pr-2 pb-1 text-[10px] text-muted-foreground/70">

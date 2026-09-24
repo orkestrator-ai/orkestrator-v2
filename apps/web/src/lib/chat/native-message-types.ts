@@ -102,6 +102,12 @@ export interface NativeBasePart {
   toolOutput?: string;
   toolError?: string;
   toolDiff?: NativeToolDiffMetadata;
+  /**
+   * The provider's permission layer refused this call before it ran, as
+   * opposed to the tool running and failing. `source` names what decided
+   * (for Claude: `rule`, `classifier`, `mode`…) when the provider says.
+   */
+  toolDenied?: { reason?: string; source?: string };
   toolUseCount?: number;
   tokenCount?: number;
   tokenCountText?: string;

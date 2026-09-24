@@ -1,5 +1,25 @@
-import type { NativeAgentBackgroundTaskSummary } from "@orkestrator/protocol/native-agent";
+import {
+  normalizeNativeAgentTurnActivity,
+  type NativeAgentBackgroundTaskSummary,
+  type NativeAgentTurnActivity,
+} from "@orkestrator/protocol/native-agent";
 import { asRecord } from "./agent-provider-runtime.js";
+
+/**
+ * The turn activity a Claude bridge snapshot reports: `activity` names what the
+ * CLI said it is doing (only `compacting` today) and `thinkingTokens` is the
+ * live thinking estimate. Absent unless the session is running, so an estimate
+ * left over from a finished turn can never decorate an idle tab.
+ */
+export function claudeTurnActivityFromPayload(
+  payload: Record<string, unknown> | undefined,
+): NativeAgentTurnActivity | undefined {
+  if (!payload || payload.status !== "running") return undefined;
+  return normalizeNativeAgentTurnActivity({
+    compacting: payload.activity === "compacting",
+    thinkingTokens: payload.thinkingTokens,
+  });
+}
 
 function isoFromEpoch(value: unknown): string | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;

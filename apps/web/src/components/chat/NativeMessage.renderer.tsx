@@ -258,7 +258,7 @@ export function MessagePart({
       // ACP identifies file mutations through diff content as well as tool kind.
       // Render any part carrying an actual diff with the edit treatment, while a
       // location-only hint on read/search tools remains a generic tool row.
-      if (isEditTool(part.toolName) || hasRenderableDiff(part.toolDiff)) {
+      if (!part.toolDenied && (isEditTool(part.toolName) || hasRenderableDiff(part.toolDiff))) {
         return (
           <EditToolPart
             expansionKey={toolExpansionKey}
@@ -272,7 +272,7 @@ export function MessagePart({
           />
         );
       }
-      if (isPlanTool(part.toolName)) {
+      if (!part.toolDenied && isPlanTool(part.toolName)) {
         return (
           <PlanToolPart
             toolName={part.toolName}
@@ -286,7 +286,7 @@ export function MessagePart({
         );
       }
       // Use specialized TodoToolPart for TodoWrite / Cursor updateTodos / Grok todo_write tools
-      if (isTodoTool(part.toolName)) {
+      if (!part.toolDenied && isTodoTool(part.toolName)) {
         return (
           <TodoToolPart
             expansionKey={toolExpansionKey}
@@ -315,6 +315,7 @@ export function MessagePart({
           toolError={part.toolError}
           backgroundTask={part.backgroundTask}
           progress={part.progress}
+          denied={part.toolDenied}
           deferredDetails={deferredDetails}
         />
       );

@@ -6143,3 +6143,50 @@ describe("NativeMessage actions slot", () => {
     expect(container.textContent).not.toContain("Fork from here");
   });
 });
+
+describe("NativeMessage permission-denied tool rows", () => {
+  afterEach(() => {
+    cleanup();
+    useMessagePartExpansionStore.getState().reset();
+  });
+
+  test("shows the refusal and who made it instead of a plain failure", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "Bash",
+        toolState: "failure",
+        toolArgs: { command: "rm -rf build" },
+        toolError: "Permission denied",
+        toolDenied: { reason: "Bash(rm:*) is denied by settings", source: "rule" },
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).toContain("denied");
+    expect(container.textContent).not.toContain("failure");
+    expect(container.textContent).toContain("Denied (rule): Bash(rm:*) is denied by settings");
+  });
+
+  test.each(["Write", "Edit", "MultiEdit", "EnterPlanMode", "TodoWrite"])(
+    "shows a denied %s call with its reason",
+    (toolName) => {
+      const message = makeMessage([
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName,
+          toolState: "failure",
+          toolError: "Permission denied",
+          toolDenied: { reason: "Blocked by workspace rule", source: "rule" },
+        },
+      ]);
+      const { container } = render(<NativeMessage message={message} />);
+      expect(container.textContent).toContain("denied");
+      expect(container.textContent).toContain("Denied (rule): Blocked by workspace rule");
+      expect(container.textContent).not.toContain("failure");
+    },
+  );
+});

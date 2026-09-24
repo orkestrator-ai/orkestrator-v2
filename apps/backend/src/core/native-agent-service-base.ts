@@ -28,6 +28,7 @@ import {
   readProviderStatus,
 } from "./native-agent-service-shared.js";
 import { NATIVE_AGENT_SESSION_VERSION } from "./models.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
 type PipelineSessionPhase = shared.PipelineSessionPhase;
 type TaskSnapshotImage = shared.TaskSnapshotImage;
@@ -523,16 +524,16 @@ export abstract class NativeAgentServiceBase {
   protected async initialize(): Promise<void> {
     await this.repairPersistedStartupTabs().catch(() => undefined);
     await Promise.allSettled([
-      this.trackScan(this.reconcilePendingLaunches()),
-      this.trackScan(this.drainPromptQueues()),
+      this.trackScan(this.observedLaunchScan()),
+      this.trackScan(this.observedQueueScan()),
     ]);
     if (this.stopped) return;
     const launchReconcileIntervalMs = this.options.launchReconcileIntervalMs;
     this.launchTimer = setInterval(
       () => {
         if (this.stopped) return;
-        void this.trackScan(this.reconcilePendingLaunches()).catch(() => undefined);
-        void this.trackScan(this.drainPromptQueues()).catch(() => undefined);
+        void this.trackScan(this.observedLaunchScan()).catch(() => undefined);
+        void this.trackScan(this.observedQueueScan()).catch(() => undefined);
       },
       Number.isFinite(launchReconcileIntervalMs)
         ? Math.max(20, launchReconcileIntervalMs as number)
@@ -550,6 +551,19 @@ export abstract class NativeAgentServiceBase {
       );
       this.interactionTimer.unref?.();
     }
+  }
+
+  /** Neither sweep has an overlap guard; every tick is a full started pass. */
+  private observedLaunchScan(): Promise<void> {
+    recurringWorkMetrics.requested("native-launch-scan");
+    return recurringWorkMetrics.observe("native-launch-scan", () =>
+      this.reconcilePendingLaunches(),
+    );
+  }
+
+  private observedQueueScan(): Promise<void> {
+    recurringWorkMetrics.requested("native-queue-scan");
+    return recurringWorkMetrics.observe("native-queue-scan", () => this.drainPromptQueues());
   }
 
   /**

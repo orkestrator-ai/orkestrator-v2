@@ -9,6 +9,7 @@ import {
   type PrCheckSummary,
   type PrState,
 } from "@orkestrator/protocol/pr-monitor";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
 
 /**
  * Owns pull-request polling for every environment, for every connected client.
@@ -111,6 +112,8 @@ export interface PrMonitorServiceOptions {
   schedule?: (callback: () => void, delayMs: number) => unknown;
   cancel?: (timer: unknown) => void;
   onWarning?: (message: string, error: unknown) => void;
+  /** Content-free cost accounting; defaults to the process-wide recorder. */
+  metrics?: RecurringWorkMetrics;
 }
 
 export const PR_MERGED_COMMENT = "🎉 PR merged";
@@ -169,8 +172,10 @@ export class PrMonitorService {
       "effects" | "emit" | "now" | "monotonicNow" | "schedule" | "cancel"
     >
   > & { onWarning?: PrMonitorServiceOptions["onWarning"] };
+  private readonly metrics: RecurringWorkMetrics;
 
   constructor(options: PrMonitorServiceOptions) {
+    this.metrics = options.metrics ?? recurringWorkMetrics;
     this.options = {
       effects: options.effects,
       emit: options.emit,
@@ -444,7 +449,9 @@ export class PrMonitorService {
 
   private async performCheck(entry: PrMonitorEntry): Promise<void> {
     if (!entry.active || !entry.target.ready) return;
+    this.metrics.requested("pr-detection");
     if (entry.checkInProgress) {
+      this.metrics.coalesced("pr-detection");
       entry.recheckRequested = true;
       return;
     }
@@ -463,7 +470,9 @@ export class PrMonitorService {
           entry.mode !== "merge-pending" &&
           (entry.lastCheckSummaryAt === null ||
             now - entry.lastCheckSummaryAt >= PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS);
-        detection = await this.options.effects.detect(detectionTarget, { includeCheckSummary });
+        detection = await this.metrics.observe("pr-detection", () =>
+          this.options.effects.detect(detectionTarget, { includeCheckSummary }),
+        );
         if (includeCheckSummary && detection?.checkSummaryStatus !== "skipped") {
           entry.lastCheckSummaryAt = now;
         }
@@ -482,6 +491,7 @@ export class PrMonitorService {
         entry.consecutiveErrors = 0;
         if (detection) transition = await this.applyDetection(entry, detection, generation);
         else await this.applyNotFound(entry, generation);
+        this.metrics.outcome("pr-detection", transition ? "changed" : "unchanged");
       }
     } finally {
       entry.checkInProgress = false;

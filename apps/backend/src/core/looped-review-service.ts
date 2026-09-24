@@ -95,6 +95,7 @@ import {
   createAgentModelCatalogReader,
   resolveFastMode,
 } from "./build-pipeline-service-helpers.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -646,7 +647,9 @@ export class LoopedReviewService {
   }
 
   private requestTick(): Promise<void> {
+    recurringWorkMetrics.requested("looped-review-tick");
     if (this.tickRun) {
+      recurringWorkMetrics.coalesced("looped-review-tick");
       this.tickRun.pending = true;
       return this.tickRun.promise;
     }
@@ -654,7 +657,7 @@ export class LoopedReviewService {
     run.promise = (async () => {
       do {
         run.pending = false;
-        await this.tick();
+        await recurringWorkMetrics.observe("looped-review-tick", () => this.tick());
       } while (run.pending && !this.stopped);
     })().finally(() => {
       if (this.tickRun === run) this.tickRun = null;
@@ -666,6 +669,7 @@ export class LoopedReviewService {
   private async tick(): Promise<void> {
     if (this.stopped) return;
     const records = await this.storage.listAllLoopedReviewWorkflows();
+    recurringWorkMetrics.work("record-scanned", records.length);
     // Validating a snapshot walks every round's package — which retains the
     // complete diff and changed-file contents — so re-running it once a second
     // for every workflow is the dominant cost of an otherwise idle tick. The
@@ -692,6 +696,7 @@ export class LoopedReviewService {
           phase === "cancelling" ||
           ((record.snapshot as LoopedReviewWorkflow).pendingResultConsumptions?.length ?? 0) > 0
         ) {
+          recurringWorkMetrics.work("record-selected");
           await this.runLocked(record.id);
         }
       }),
@@ -2031,8 +2036,15 @@ export class LoopedReviewService {
     }
   }
 
-  private async renewLeases(): Promise<void> {
-    if (this.stopped) return;
+  private renewLeases(): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    recurringWorkMetrics.requested("looped-review-lease-renewal");
+    return recurringWorkMetrics.observe("looped-review-lease-renewal", () =>
+      this.renewLeasesOnce(),
+    );
+  }
+
+  private async renewLeasesOnce(): Promise<void> {
     for (const [workflowId, lease] of this.leases) {
       const claimed = await this.storage
         .claimLoopedReviewController(workflowId, this.ownerId, this.controllerLeaseMs())

@@ -1,5 +1,7 @@
 import { DesignService } from "./design-service.js";
 import { PreviewRuntime } from "./preview-runtime.js";
+import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
   createMcpRuntimeProbe,
   mcpRolloutLoader,
@@ -66,6 +68,15 @@ import {
   flushTerminalHistories,
   pruneTerminalHistoryStorage,
 } from "./terminal-history.js";
+
+/**
+ * One observed attempt of an activity-sweep step that has no overlap guard of
+ * its own. A synchronous throw still escapes exactly as it did unobserved.
+ */
+function observeSweepStep(kind: RecurringJobKind, run: () => unknown): Promise<unknown> {
+  recurringWorkMetrics.requested(kind);
+  return recurringWorkMetrics.observe(kind, () => Promise.resolve(run()));
+}
 
 export class OrkestratorBackend {
   private readonly commands = createCommandRegistry();
@@ -551,9 +562,14 @@ export class OrkestratorBackend {
       console.warn("[backend] Failed to clear stale agent activity:", error);
     });
     this.activityLeaseSweep ??= setInterval(() => {
-      void this.context.storage.expireFrontendAgentActivityLeases().catch((error) => {
-        console.warn("[backend] Failed to expire agent activity leases:", error);
-      });
+      recurringWorkMetrics.requested("activity-lease-expiry");
+      void recurringWorkMetrics
+        .observe("activity-lease-expiry", () =>
+          this.context.storage.expireFrontendAgentActivityLeases(),
+        )
+        .catch((error) => {
+          console.warn("[backend] Failed to expire agent activity leases:", error);
+        });
     }, FRONTEND_AGENT_ACTIVITY_LEASE_MS / 2);
     this.activityLeaseSweep.unref?.();
     // Before the gateway can accept a start command: bridges left behind by a
@@ -768,8 +784,14 @@ export class OrkestratorBackend {
     });
     let tabTeardownReconcileInFlight: Promise<void> | null = null;
     const reconcileTabTeardownsOnce = (): void => {
-      if (!reconcileTabTeardowns || tabTeardownReconcileInFlight) return;
-      tabTeardownReconcileInFlight = Promise.resolve(reconcileTabTeardowns({}, this.context))
+      if (!reconcileTabTeardowns) return;
+      recurringWorkMetrics.requested("tab-cleanup");
+      if (tabTeardownReconcileInFlight) {
+        recurringWorkMetrics.coalesced("tab-cleanup");
+        return;
+      }
+      tabTeardownReconcileInFlight = recurringWorkMetrics
+        .observe("tab-cleanup", () => Promise.resolve(reconcileTabTeardowns({}, this.context)))
         .then(() => undefined)
         .catch((error: unknown) => {
           console.warn("[backend] Failed to reconcile tab teardowns:", error);
@@ -780,8 +802,16 @@ export class OrkestratorBackend {
     };
     let orphanReconcileInFlight: Promise<void> | null = null;
     const reconcileOrphanedTabResourcesOnce = (): void => {
-      if (!reconcileOrphanedTabResources || orphanReconcileInFlight) return;
-      orphanReconcileInFlight = Promise.resolve(reconcileOrphanedTabResources({}, this.context))
+      if (!reconcileOrphanedTabResources) return;
+      recurringWorkMetrics.requested("tab-cleanup");
+      if (orphanReconcileInFlight) {
+        recurringWorkMetrics.coalesced("tab-cleanup");
+        return;
+      }
+      orphanReconcileInFlight = recurringWorkMetrics
+        .observe("tab-cleanup", () =>
+          Promise.resolve(reconcileOrphanedTabResources({}, this.context)),
+        )
         .then(() => undefined)
         .catch((error: unknown) => {
           console.warn("[backend] Failed to reconcile orphaned tab resources:", error);
@@ -794,13 +824,20 @@ export class OrkestratorBackend {
     let coordinatorWorkflowTick = 0;
     let coordinatorWorkflowReconcileInFlight: Promise<void> | null = null;
     const reconcileCoordinatorWorkflows = () => {
-      if (coordinatorWorkflowReconcileInFlight) return;
-      coordinatorWorkflowReconcileInFlight = this.coordinators
-        .reconcileWorkflowNotifications()
-        // A delegation closed by an edge whose wake never reached the mail
-        // store — a crash, a storage fault — is finished here. The wake is
-        // idempotent on `wokenAt`, so a delivered one is not repeated.
-        .then(() => this.coordinators.reconcileWorkerDelegations())
+      recurringWorkMetrics.requested("coordinator-repair");
+      if (coordinatorWorkflowReconcileInFlight) {
+        recurringWorkMetrics.coalesced("coordinator-repair");
+        return;
+      }
+      coordinatorWorkflowReconcileInFlight = recurringWorkMetrics
+        .observe("coordinator-repair", () =>
+          this.coordinators
+            .reconcileWorkflowNotifications()
+            // A delegation closed by an edge whose wake never reached the mail
+            // store — a crash, a storage fault — is finished here. The wake is
+            // idempotent on `wokenAt`, so a delivered one is not repeated.
+            .then(() => this.coordinators.reconcileWorkerDelegations()),
+        )
         .catch((error) => {
           console.warn(
             "[backend] Failed to reconcile coordinator workflow notifications:",
@@ -816,7 +853,9 @@ export class OrkestratorBackend {
         console.warn("[backend] Failed to reconcile native agent activity:", error);
       });
       if (reconcileClaudeState) {
-        void Promise.resolve(reconcileClaudeState({}, this.context)).catch((error: unknown) => {
+        void observeSweepStep("claude-state-reconcile", () =>
+          reconcileClaudeState({}, this.context),
+        ).catch((error: unknown) => {
           console.warn("[backend] Failed to reconcile Claude terminal activity:", error);
         });
       }
@@ -833,21 +872,24 @@ export class OrkestratorBackend {
       if (coordinatorWorkflowTick % 30 === 0) reconcileCoordinatorWorkflows();
       mailRetentionTick += 1;
       if (mailRetentionTick % 30 === 0) {
-        void this.context.storage
-          .loadConfig()
-          .then((config) =>
-            this.context.storage.pruneAgentMail(config.global.agentMessaging?.retentionDays ?? 14),
-          )
-          .catch((error) => {
-            console.warn("[backend] Failed to prune agent mail:", error);
-          });
+        void observeSweepStep("mail-retention", () =>
+          this.context.storage
+            .loadConfig()
+            .then((config) =>
+              this.context.storage.pruneAgentMail(
+                config.global.agentMessaging?.retentionDays ?? 14,
+              ),
+            ),
+        ).catch((error) => {
+          console.warn("[backend] Failed to prune agent mail:", error);
+        });
       }
       if (reconcilePendingEnvironmentRenames) {
-        void Promise.resolve(reconcilePendingEnvironmentRenames({}, this.context)).catch(
-          (error: unknown) => {
-            console.warn("[backend] Failed to reconcile pending environment renames:", error);
-          },
-        );
+        void observeSweepStep("pending-rename-reconcile", () =>
+          reconcilePendingEnvironmentRenames({}, this.context),
+        ).catch((error: unknown) => {
+          console.warn("[backend] Failed to reconcile pending environment renames:", error);
+        });
       }
     }, 2_000);
     this.nativeActivitySweep.unref?.();

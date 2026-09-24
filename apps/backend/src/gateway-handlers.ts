@@ -31,6 +31,7 @@ import type {
   DrainAwareEventClientWriter,
   GatewayEventClient,
 } from "./gateway-internals.js";
+import { recurringWorkDiagnostics } from "./core/recurring-diagnostics.js";
 
 export abstract class GatewayHandlers extends GatewayAuth {
   protected commandIsRegistered(command: string, errorMessage: string): boolean {
@@ -301,6 +302,8 @@ export abstract class GatewayHandlers extends GatewayAuth {
       // Ring occupancy and eviction are otherwise invisible: a ring dropping
       // every gap looks exactly like one that never needed to retain anything.
       replay: { ...snapshot.replay, ring: this.eventReplay.getStats() },
+      // Additive: bounded, content-free recurring-work counters (kinds only).
+      recurringWork: recurringWorkDiagnostics(),
     });
   }
 

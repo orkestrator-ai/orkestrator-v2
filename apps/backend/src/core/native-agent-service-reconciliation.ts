@@ -136,12 +136,21 @@ import {
   type SavedInitialPromptAttachment,
 } from "@orkestrator/protocol/initial-prompt-attachments";
 import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 
 export abstract class NativeAgentServiceReconciliation extends NativeAgentServicePrompt {
   reconcileAgentActivity(): Promise<void> {
     if (this.stopped) return Promise.resolve();
-    if (this.activityScan) return this.activityScan;
-    const scan = this.trackScan(this.reconcileAgentActivityOnce()).finally(() => {
+    recurringWorkMetrics.requested("native-activity-sweep");
+    if (this.activityScan) {
+      recurringWorkMetrics.coalesced("native-activity-sweep");
+      return this.activityScan;
+    }
+    const scan = this.trackScan(
+      recurringWorkMetrics.observe("native-activity-sweep", () =>
+        this.reconcileAgentActivityOnce(),
+      ),
+    ).finally(() => {
       if (this.activityScan === scan) this.activityScan = null;
     });
     this.activityScan = scan;

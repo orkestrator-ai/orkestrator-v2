@@ -15,6 +15,7 @@ import {
   validatePrDetectionBranch,
 } from "./commands-review.js";
 import { dockerExec } from "./commands-container-exec.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import type { PrDetectionResult } from "./commands-review.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
 
@@ -281,14 +282,22 @@ export async function detectEnvironmentPullRequest(
       return { ...detection, checkSummaryStatus: "skipped" };
     }
     const checkRequest = getPrMonitorCheckRequest(detection.url);
+    const worktreePath = target.worktreePath;
     try {
-      const result = await runCommand("gh", checkRequest.args, {
-        cwd: target.worktreePath,
-        timeoutMs: 10_000,
-      });
+      recurringWorkMetrics.requested("pr-check-rollup");
+      const checkSummary = await recurringWorkMetrics.observe("pr-check-rollup", async () =>
+        parsePrMonitorCheckResponse(
+          (
+            await runCommand("gh", checkRequest.args, {
+              cwd: worktreePath,
+              timeoutMs: 10_000,
+            })
+          ).stdout,
+        ),
+      );
       return {
         ...detection,
-        checkSummary: parsePrMonitorCheckResponse(result.stdout),
+        checkSummary,
         checkSummaryStatus: "succeeded",
       };
     } catch {
@@ -306,15 +315,21 @@ export async function detectEnvironmentPullRequest(
     return { ...detection, checkSummaryStatus: "skipped" };
   }
   const checkRequest = getPrMonitorCheckRequest(detection.url);
+  const containerId = target.containerId;
   try {
-    const checks = await dockerExec(
-      target.containerId,
-      withContainerRuntimeCredential(checkRequest.shellCommand),
-      10_000,
+    recurringWorkMetrics.requested("pr-check-rollup");
+    const checkSummary = await recurringWorkMetrics.observe("pr-check-rollup", async () =>
+      parsePrMonitorCheckResponse(
+        await dockerExec(
+          containerId,
+          withContainerRuntimeCredential(checkRequest.shellCommand),
+          10_000,
+        ),
+      ),
     );
     return {
       ...detection,
-      checkSummary: parsePrMonitorCheckResponse(checks),
+      checkSummary,
       checkSummaryStatus: "succeeded",
     };
   } catch {

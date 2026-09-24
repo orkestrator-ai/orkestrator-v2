@@ -133,6 +133,45 @@ export class StructuredUsageRequestTimeoutError extends Error {
   }
 }
 
+/**
+ * The end-of-turn context report is awaited inside the SDK message loop, so an
+ * unanswered `get_context_usage` stops every later frame from being consumed:
+ * the result has arrived, but the turn never settles and the session stays
+ * `running` while the CLI keeps working unseen. Bound it and fall back to the
+ * result's own counters.
+ */
+export const CONTEXT_USAGE_REQUEST_TIMEOUT_MS = 2_000;
+
+export class ContextUsageRequestTimeoutError extends Error {
+  constructor() {
+    super(`Context usage control request timed out after ${CONTEXT_USAGE_REQUEST_TIMEOUT_MS}ms`);
+    this.name = "ContextUsageRequestTimeoutError";
+  }
+}
+
+/**
+ * Race an SDK control request against a deadline. The SDK exposes no way to
+ * cancel a pending control request, so a late answer is simply discarded; the
+ * timer is unref'd and always cleared so it never holds the process open.
+ */
+export async function withControlRequestTimeout<T>(
+  request: Promise<T>,
+  timeoutMs: number,
+  createTimeoutError: () => Error,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(createTimeoutError()), timeoutMs);
+    timeout.unref?.();
+  });
+
+  try {
+    return await Promise.race([request, timeoutPromise]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 /** Record that a caller read or hydrated this session's state. */
 export function touchSession(session: SessionState): void {
   session.lastAccessedAt = Date.now();
@@ -543,19 +582,11 @@ export async function getStructuredUsageWithTimeout(
   getStructuredUsage: () => Promise<unknown>,
   queryControl: NonNullable<SessionState["queryControl"]>,
 ): Promise<unknown> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
-      reject(new StructuredUsageRequestTimeoutError());
-    }, STRUCTURED_USAGE_REQUEST_TIMEOUT_MS);
-    timeout.unref?.();
-  });
-
-  try {
-    return await Promise.race([getStructuredUsage.call(queryControl), timeoutPromise]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
+  return withControlRequestTimeout(
+    getStructuredUsage.call(queryControl),
+    STRUCTURED_USAGE_REQUEST_TIMEOUT_MS,
+    () => new StructuredUsageRequestTimeoutError(),
+  );
 }
 
 export type StructuredUsageRefreshResult = "updated" | "unchanged" | "timed-out";
@@ -917,7 +948,13 @@ export async function buildClaudeUsageSnapshot(
       // This runs on the turn's terminal path while the SDK iterator still owns
       // the stdout loop. Summary uses the last response plus local estimates;
       // unlike the full form it does not issue token-counting API requests.
-      const raw = await queryControl.getContextUsage({ detail: "summary" });
+      // It is still a control round trip the CLI may never answer, so it is
+      // bounded; see `CONTEXT_USAGE_REQUEST_TIMEOUT_MS`.
+      const raw = await withControlRequestTimeout(
+        queryControl.getContextUsage({ detail: "summary" }),
+        CONTEXT_USAGE_REQUEST_TIMEOUT_MS,
+        () => new ContextUsageRequestTimeoutError(),
+      );
       context = parseClaudeContextUsage(raw);
     } catch (error) {
       debugLog("[session-manager] Context usage control request failed:", error);

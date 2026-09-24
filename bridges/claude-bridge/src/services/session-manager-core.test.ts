@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  CONTEXT_USAGE_REQUEST_TIMEOUT_MS,
   STRUCTURED_USAGE_REQUEST_TIMEOUT_MS,
   captureEvents,
   createSession,
@@ -1691,5 +1692,29 @@ describe("claude usage snapshot", () => {
     ]);
 
     expect(session.usage).toMatchObject({ usedTokens: 120205, estimated: true });
+  });
+
+  test("settles the turn when the context request never answers", async () => {
+    // Observed live: the CLI left get_context_usage unanswered after a result,
+    // the awaited request parked the SDK message loop, and the session stayed
+    // `running` while every later frame went unconsumed.
+    queryControlOverrides.getContextUsage = mock(() => new Promise<unknown>(() => {}));
+
+    const startedAt = performance.now();
+    const { session } = await runPromptWithMessages([
+      {
+        type: "result",
+        subtype: "success",
+        modelUsage: {
+          "claude-opus-5": { inputTokens: 5, outputTokens: 200, contextWindow: 200000 },
+        },
+      },
+    ]);
+
+    expect(performance.now() - startedAt).toBeGreaterThanOrEqual(
+      CONTEXT_USAGE_REQUEST_TIMEOUT_MS - 50,
+    );
+    expect(session.status).toBe("idle");
+    expect(session.usage).toMatchObject({ usedTokens: 205, estimated: true });
   });
 });

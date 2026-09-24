@@ -133,6 +133,22 @@ export class StructuredUsageRequestTimeoutError extends Error {
   }
 }
 
+/**
+ * The end-of-turn context report is awaited inside the SDK message loop, so an
+ * unanswered `get_context_usage` stops every later frame from being consumed:
+ * the result has arrived, but the turn never settles and the session stays
+ * `running` while the CLI keeps working unseen. Bound it and fall back to the
+ * result's own counters.
+ */
+export const CONTEXT_USAGE_REQUEST_TIMEOUT_MS = 2_000;
+
+export class ContextUsageRequestTimeoutError extends Error {
+  constructor() {
+    super(`Context usage control request timed out after ${CONTEXT_USAGE_REQUEST_TIMEOUT_MS}ms`);
+    this.name = "ContextUsageRequestTimeoutError";
+  }
+}
+
 /** Record that a caller read or hydrated this session's state. */
 export function touchSession(session: SessionState): void {
   session.lastAccessedAt = Date.now();
@@ -917,8 +933,25 @@ export async function buildClaudeUsageSnapshot(
       // This runs on the turn's terminal path while the SDK iterator still owns
       // the stdout loop. Summary uses the last response plus local estimates;
       // unlike the full form it does not issue token-counting API requests.
-      const raw = await queryControl.getContextUsage({ detail: "summary" });
-      context = parseClaudeContextUsage(raw);
+      // It is still a control round trip the CLI may never answer, so it is
+      // bounded; see `CONTEXT_USAGE_REQUEST_TIMEOUT_MS`.
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new ContextUsageRequestTimeoutError()),
+          CONTEXT_USAGE_REQUEST_TIMEOUT_MS,
+        );
+        timeout.unref?.();
+      });
+      try {
+        const raw = await Promise.race([
+          queryControl.getContextUsage({ detail: "summary" }),
+          timeoutPromise,
+        ]);
+        context = parseClaudeContextUsage(raw);
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
     } catch (error) {
       debugLog("[session-manager] Context usage control request failed:", error);
     }

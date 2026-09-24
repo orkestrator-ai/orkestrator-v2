@@ -123,6 +123,7 @@ export const {
   IDLE_TRANSCRIPT_EVICTION_MS,
   MAX_TERMINAL_BACKGROUND_TASKS,
   STRUCTURED_USAGE_REQUEST_TIMEOUT_MS,
+  CONTEXT_USAGE_REQUEST_TIMEOUT_MS,
   deleteSessionDurably,
   renameSessionDurably,
   forkPersistedSession,

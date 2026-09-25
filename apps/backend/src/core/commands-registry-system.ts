@@ -7,6 +7,8 @@ import {
   type ProcessUsageEnvironment,
 } from "./environment-process-usage.js";
 import { createSystemUsageReader, type SystemUsageSnapshot } from "./system-usage.js";
+import { recurringWorkDiagnostics } from "./recurring-diagnostics.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 
 export function registerSystemCommands(
   register: CommandRegistrar,
@@ -24,6 +26,18 @@ export function registerSystemCommands(
   register("get_system_usage", (_args, context) => readUsage(context.storage.getDataDir()));
   register("get_environment_process_usage", async (args, context) => {
     assertOnlyKeys(args, [], "arguments");
-    return readProcesses(await context.storage.loadEnvironments());
+    recurringWorkMetrics.requested("process-usage");
+    return recurringWorkMetrics.observe("process-usage", async () =>
+      readProcesses(await context.storage.loadEnvironments()),
+    );
+  });
+  /**
+   * Bounded, content-free recurring-work diagnostics: per-kind counters, active
+   * attempts and worst ages, plus scheduler and admission-pool status. Reading
+   * it performs no I/O. Also served additively on the gateway's `/api/metrics`.
+   */
+  register("get_recurring_work_diagnostics", (args) => {
+    assertOnlyKeys(args, [], "arguments");
+    return recurringWorkDiagnostics();
   });
 }

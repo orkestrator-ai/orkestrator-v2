@@ -7,6 +7,7 @@ import {
   type EnvironmentDiffStatsSnapshot,
 } from "@orkestrator/protocol/diff-stats";
 import { startWorktreeWatcher, type WorktreeWatcher } from "./worktree-watcher.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
 
 /**
  * Owns the diff counts for every environment, for every connected client.
@@ -64,6 +65,8 @@ export interface DiffStatsServiceOptions {
    * random token per service instance (see `packages/protocol/src/view-sync.ts`).
    */
   generation?: string;
+  /** Content-free cost accounting; defaults to the process-wide recorder. */
+  metrics?: RecurringWorkMetrics;
 }
 
 /** Matches the cadence the renderers used to poll at, for the unwatched case. */
@@ -112,6 +115,7 @@ export class DiffStatsService {
       | "startWatcher"
     >
   > & { onWarning?: DiffStatsServiceOptions["onWarning"] };
+  private readonly metrics: RecurringWorkMetrics;
 
   constructor(options: DiffStatsServiceOptions) {
     this.options = {
@@ -133,6 +137,7 @@ export class DiffStatsService {
       onWarning: options.onWarning,
     };
     this.generation = options.generation ?? randomUUID();
+    this.metrics = options.metrics ?? recurringWorkMetrics;
   }
 
   /**
@@ -410,7 +415,9 @@ export class DiffStatsService {
    */
   private request(entry: DiffStatsEntry): void {
     if (!entry.active) return;
+    this.metrics.requested("diff-scan");
     if (entry.inFlight) {
+      this.metrics.coalesced("diff-scan");
       entry.rescanRequested = true;
       return;
     }
@@ -431,7 +438,7 @@ export class DiffStatsService {
     const scanGeneration = entry.scanGeneration;
     let result: DiffScanResult;
     try {
-      result = await this.options.scan(target);
+      result = await this.metrics.observe("diff-scan", () => this.options.scan(target));
     } catch (error) {
       // Counts are non-critical: a container that is still starting, or a git
       // that failed, must not clear a reading that was true a moment ago.
@@ -449,7 +456,11 @@ export class DiffStatsService {
 
     entry.cachedChanges = result.changes;
     entry.cachedAt = this.options.monotonicNow();
-    if (entry.last && isSameStats(entry.last.stats, result.stats)) return;
+    if (entry.last && isSameStats(entry.last.stats, result.stats)) {
+      this.metrics.outcome("diff-scan", "unchanged");
+      return;
+    }
+    this.metrics.outcome("diff-scan", "changed");
 
     const change: EnvironmentDiffStatsChange = {
       environmentId: target.environmentId,
@@ -488,6 +499,36 @@ export class DiffStatsService {
       // the background scan lifecycle it is supposed to describe.
     }
   }
+}
+
+/**
+ * Serves a Files-panel read from the service's recent scan, or runs one and
+ * shares it with the next reader.
+ *
+ * The sidebar badge and the Files panel look at the same environment and used
+ * to ask for it separately; whichever arrives first pays for the scan. Kept
+ * beside the cache it reads so the command handlers and the baseline harness
+ * drive exactly the same hit/miss path.
+ */
+export async function readSharedFileList<T>(input: {
+  service: DiffStatsService;
+  lookup: { worktreePath?: string; containerId?: string };
+  comparisonRef: string;
+  maxAgeMs: number;
+  scan: () => Promise<T[]>;
+  metrics?: RecurringWorkMetrics;
+}): Promise<T[]> {
+  const metrics = input.metrics ?? recurringWorkMetrics;
+  metrics.requested("file-list-read");
+  const cached = input.service.cachedChanges(input.lookup, input.comparisonRef, input.maxAgeMs);
+  if (cached) {
+    metrics.cacheHit("file-list-read");
+    return cached as T[];
+  }
+  metrics.cacheMiss("file-list-read");
+  const changes = await metrics.observe("file-list-read", () => input.scan());
+  input.service.adoptScan(input.lookup, input.comparisonRef, changes);
+  return changes;
 }
 
 function isSameTarget(a: DiffStatsTarget, b: DiffStatsTarget): boolean {

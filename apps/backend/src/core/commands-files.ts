@@ -34,6 +34,7 @@ import {
 } from "./commands-validation.js";
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 
 export const MAX_FILE_TREE_NODES = 5_000;
 
@@ -170,6 +171,7 @@ export async function buildFileTree(
 ): Promise<FileTreeNode[]> {
   if (budget.remaining <= 0) return [];
   const fullPath = path.join(rootPath, relativePath);
+  recurringWorkMetrics.work("directory-read");
   const entries = await fs.readdir(fullPath, { withFileTypes: true });
   const nodes: FileTreeNode[] = [];
   for (const entry of entries) {
@@ -487,6 +489,9 @@ export async function getContainerGitStatusDetailed(
   includeWorkingTree: boolean,
 ): Promise<{ changes: GitFileChange[]; truncated: boolean }> {
   const ref = validateGitRefName(targetBranch, "target branch");
+  // The status script always attempts `git fetch` inside the container; the
+  // exec itself is charged to whichever scan or read ran it.
+  recurringWorkMetrics.requested("git-fetch-container");
   const output = await dockerExec(
     containerId,
     buildContainerGitStatusScript(ref, includeWorkingTree),
@@ -618,6 +623,7 @@ export async function mapWithConcurrency<T, R>(
 export async function countLocalFileLines(rootPath: string, relativePath: string): Promise<number> {
   const target = validateRelativeFilePath(relativePath, "git status path");
   const fullPath = path.join(rootPath, target);
+  recurringWorkMetrics.work("file-read");
 
   // O_NOFOLLOW, and a stat of the descriptor rather than the path, so an
   // untracked symlink cannot be followed out of the worktree and the file that

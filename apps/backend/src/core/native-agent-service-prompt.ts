@@ -137,6 +137,7 @@ import {
   planCommandDispatch,
   type CommandDispatchPlan,
 } from "./native-agent-command-dispatch.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 
 export abstract class NativeAgentServicePrompt extends NativeAgentServiceProjection {
   sessionActivitySnapshot(
@@ -969,8 +970,16 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
   reconcileAgentInteractions(): Promise<void> {
     if (this.stopped || this.options.interactionMonitorMode !== "observe-only")
       return Promise.resolve();
-    if (this.interactionScan) return this.interactionScan;
-    const scan = this.trackScan(this.reconcileAgentInteractionsOnce()).finally(() => {
+    recurringWorkMetrics.requested("native-interaction-observe");
+    if (this.interactionScan) {
+      recurringWorkMetrics.coalesced("native-interaction-observe");
+      return this.interactionScan;
+    }
+    const scan = this.trackScan(
+      recurringWorkMetrics.observe("native-interaction-observe", () =>
+        this.reconcileAgentInteractionsOnce(),
+      ),
+    ).finally(() => {
       if (this.interactionScan === scan) this.interactionScan = null;
     });
     this.interactionScan = scan;

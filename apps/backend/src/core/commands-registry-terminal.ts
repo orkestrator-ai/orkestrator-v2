@@ -112,6 +112,8 @@ import {
   readLocalFileAtBranch,
 } from "./commands-helpers.js";
 import type { GitFileChange } from "./commands-helpers.js";
+import { readSharedFileList } from "./diff-stats-service.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
   parseReviewWorktreeFingerprint,
   REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
@@ -124,6 +126,54 @@ import {
   resumeTerminalHistory,
   resizeTerminalHistory,
 } from "./terminal-history.js";
+
+/** A committed-only or container file-list read that no cache can serve. */
+function observedFileListRead<T>(read: () => Promise<T>): Promise<T> {
+  recurringWorkMetrics.requested("file-list-read");
+  return recurringWorkMetrics.observe("file-list-read", read);
+}
+
+/**
+ * Records whether a conditional response let the client skip the payload.
+ * An unchanged response still paid for the scan; the two are counted apart so
+ * a small response is never mistaken for less backend work.
+ */
+function fileListSnapshot<T>(
+  value: T,
+  knownDigest: unknown,
+): ReturnType<typeof conditionalSnapshot<T>> {
+  const snapshot = conditionalSnapshot(value, knownDigest);
+  if (knownDigest !== undefined) {
+    recurringWorkMetrics.outcome("file-list-read", digestOutcome(snapshot));
+  }
+  return snapshot;
+}
+
+function digestOutcome(snapshot: unknown): "changed" | "unchanged" {
+  return typeof snapshot === "object" &&
+    snapshot !== null &&
+    (snapshot as { unchanged?: unknown }).unchanged === true
+    ? "unchanged"
+    : "changed";
+}
+
+/** One file-tree read: the walk runs in full before the digest is compared. */
+function observedFileTreeRead<T>(
+  unit: "directory-walk",
+  walk: () => Promise<T>,
+  knownDigest: unknown,
+): Promise<ReturnType<typeof conditionalSnapshot<T>>> {
+  recurringWorkMetrics.requested("file-tree-read");
+  return recurringWorkMetrics.observe("file-tree-read", async (span) => {
+    span.work(unit);
+    const snapshot = conditionalSnapshot(await walk(), knownDigest);
+    if (knownDigest !== undefined) {
+      if (digestOutcome(snapshot) === "unchanged") span.unchanged();
+      else span.changed();
+    }
+    return snapshot;
+  });
+}
 
 function resizeTerminalHistoryBestEffort(sessionId: string, cols: number, rows: number): void {
   try {
@@ -702,23 +752,22 @@ export function registerTerminalCommands(
       const ref = asString(targetBranch, "targetBranch");
       const includeWorkingTree = includeUncommitted !== false;
       if (!includeWorkingTree) {
-        return conditionalSnapshot(
-          await getLocalGitStatus(resolvedWorktreePath, ref, false),
+        return fileListSnapshot(
+          await observedFileListRead(() => getLocalGitStatus(resolvedWorktreePath, ref, false)),
           knownDigest,
         );
       }
 
       // The sidebar badge and the Files panel look at the same environment and used
       // to ask for it separately. Whichever arrives first pays for the scan.
-      const cached = diffStatsService.cachedChanges(
-        { worktreePath: resolvedWorktreePath },
-        ref,
-        DIFF_CACHE_MAX_AGE_MS,
-      );
-      if (cached) return conditionalSnapshot(cached as GitFileChange[], knownDigest);
-      const changes = await getLocalGitStatus(resolvedWorktreePath, ref, true);
-      diffStatsService.adoptScan({ worktreePath: resolvedWorktreePath }, ref, changes);
-      return conditionalSnapshot(changes, knownDigest);
+      const changes = await readSharedFileList<GitFileChange>({
+        service: diffStatsService,
+        lookup: { worktreePath: resolvedWorktreePath },
+        comparisonRef: ref,
+        maxAgeMs: DIFF_CACHE_MAX_AGE_MS,
+        scan: () => getLocalGitStatus(resolvedWorktreePath, ref, true),
+      });
+      return fileListSnapshot(changes, knownDigest);
     },
   );
   /**
@@ -747,7 +796,11 @@ export function registerTerminalCommands(
   });
 
   register("get_local_file_tree", async ({ worktreePath, knownDigest }) =>
-    conditionalSnapshot(await buildFileTree(asString(worktreePath, "worktreePath")), knownDigest),
+    observedFileTreeRead(
+      "directory-walk",
+      () => buildFileTree(asString(worktreePath, "worktreePath")),
+      knownDigest,
+    ),
   );
   register("read_local_file", ({ worktreePath, filePath }) =>
     readTextFile(asString(worktreePath, "worktreePath"), asString(filePath, "filePath")),
@@ -828,29 +881,32 @@ export function registerTerminalCommands(
       const resolvedContainerId = asString(containerId, "containerId");
 
       if (includeWorkingTree) {
-        const cached = diffStatsService.cachedChanges(
-          { containerId: resolvedContainerId },
-          ref,
-          DIFF_CACHE_MAX_AGE_MS,
-        );
-        if (cached) return conditionalSnapshot(cached as GitFileChange[], knownDigest);
-        const changes = (await getContainerGitStatusDetailed(resolvedContainerId, ref, true))
-          .changes;
-        diffStatsService.adoptScan({ containerId: resolvedContainerId }, ref, changes);
-        return conditionalSnapshot(changes, knownDigest);
+        const changes = await readSharedFileList<GitFileChange>({
+          service: diffStatsService,
+          lookup: { containerId: resolvedContainerId },
+          comparisonRef: ref,
+          maxAgeMs: DIFF_CACHE_MAX_AGE_MS,
+          scan: async () =>
+            (await getContainerGitStatusDetailed(resolvedContainerId, ref, true)).changes,
+        });
+        return fileListSnapshot(changes, knownDigest);
       }
 
-      const output = await dockerExec(
-        resolvedContainerId,
-        buildContainerGitStatusScript(ref, includeWorkingTree),
-      );
+      const output = await observedFileListRead(() => {
+        // The status script always attempts `git fetch` inside the container.
+        recurringWorkMetrics.requested("git-fetch-container");
+        return dockerExec(
+          resolvedContainerId,
+          buildContainerGitStatusScript(ref, includeWorkingTree),
+        );
+      });
       // Distinguishes "the requested baseline is not in this container" - which
       // happens when a container is recreated from a different clone - from a
       // corrupt response, so callers do not see both as one opaque exec failure.
       if (isMissingTargetRefResponse(output)) {
         throw new Error(`Target ref is not present in the container: ${ref}`);
       }
-      return conditionalSnapshot(
+      return fileListSnapshot(
         parseContainerGitStatusResponse(output, includeWorkingTree),
         knownDigest,
       );
@@ -909,13 +965,19 @@ export function registerTerminalCommands(
       ...(captured.fingerprint === undefined ? {} : { fingerprint: captured.fingerprint }),
     };
   });
-  register("get_file_tree", async ({ containerId, knownDigest }) => {
-    const output = await dockerExec(
-      asString(containerId, "containerId"),
-      `node -e ${quoteShell(CONTAINER_FILE_TREE_LISTER)} -- /workspace ${MAX_FILE_TREE_NODES}`,
-    );
-    return conditionalSnapshot(parseContainerFileTree(output), knownDigest);
-  });
+  register("get_file_tree", async ({ containerId, knownDigest }) =>
+    observedFileTreeRead(
+      "directory-walk",
+      async () =>
+        parseContainerFileTree(
+          await dockerExec(
+            asString(containerId, "containerId"),
+            `node -e ${quoteShell(CONTAINER_FILE_TREE_LISTER)} -- /workspace ${MAX_FILE_TREE_NODES}`,
+          ),
+        ),
+      knownDigest,
+    ),
+  );
   register("read_container_file", async ({ containerId, filePath }) => {
     const target = validateRelativeFilePath(asString(filePath, "filePath"));
     const encoded = await dockerExec(

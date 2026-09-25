@@ -48,6 +48,7 @@ import {
   createAgentModelCatalogReader,
   resolveFastMode,
 } from "./build-pipeline-service-helpers.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -393,7 +394,9 @@ export class FeaturePlanningService {
    * ---------------------------------------------------------------- */
 
   private requestTick(): Promise<void> {
+    recurringWorkMetrics.requested("feature-planning-tick");
     if (this.tickRun) {
+      recurringWorkMetrics.coalesced("feature-planning-tick");
       this.tickRun.pending = true;
       return this.tickRun.promise;
     }
@@ -401,7 +404,7 @@ export class FeaturePlanningService {
     run.promise = (async () => {
       do {
         run.pending = false;
-        await this.tick();
+        await recurringWorkMetrics.observe("feature-planning-tick", () => this.tick());
       } while (run.pending && !this.stopped);
     })().finally(() => {
       if (this.tickRun === run) this.tickRun = null;
@@ -413,6 +416,8 @@ export class FeaturePlanningService {
   private async tick(): Promise<void> {
     if (this.stopped) return;
     const records = await this.storage.listActiveFeaturePlanning().catch(() => []);
+    // Storage already filtered to active records, so every one is selected.
+    recurringWorkMetrics.work("record-selected", records.length);
     await Promise.all(records.map((record) => this.runLocked(record.featureId)));
   }
 

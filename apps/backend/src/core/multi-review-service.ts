@@ -129,6 +129,7 @@ import {
   resolveUnattendedReviewerInteractions,
   type ReviewFanoutHost,
 } from "./review-fanout.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 /** Structured reports need a mutation boundary without provider planning behavior. */
@@ -1795,23 +1796,39 @@ export class MultiReviewService {
    * progress instead of requesting another: a timer that fires during a slow
    * pass is not evidence that anything changed.
    */
+  /**
+   * Under the adaptive scheduler one `multi-review-tick` attempt is either a
+   * reconciliation scan or one workflow's due pass; both are observed so the
+   * cost stays comparable with the legacy whole-service tick.
+   */
   private runScheduled(workflowId: string): Promise<void> {
+    recurringWorkMetrics.requested("multi-review-tick");
     const existing = this.scheduledRuns.get(workflowId);
-    if (existing) return existing.promise;
-    return this.runLocked(workflowId);
+    if (existing) {
+      recurringWorkMetrics.coalesced("multi-review-tick");
+      return existing.promise;
+    }
+    return recurringWorkMetrics.observe("multi-review-tick", (span) => {
+      span.work("record-selected");
+      return this.runLocked(workflowId);
+    });
   }
 
   /** Workflow IDs storage says need supervision; the scheduler's ground truth. */
-  private async discoverSupervisedWorkflows(): Promise<string[]> {
-    if (this.stopped) return [];
-    const records = await this.storage.listAllMultiReviewWorkflows();
-    return records.flatMap((record) =>
-      isMultiReviewWorkflow(record.snapshot) &&
-      supervisionDemand(record.snapshot, this.options.dispatchAddressPrompt !== undefined) !==
-        "none"
-        ? [record.id]
-        : [],
-    );
+  private discoverSupervisedWorkflows(): Promise<string[]> {
+    if (this.stopped) return Promise.resolve([]);
+    recurringWorkMetrics.requested("multi-review-tick");
+    return recurringWorkMetrics.observe("multi-review-tick", async (span) => {
+      const records = await this.storage.listAllMultiReviewWorkflows();
+      span.work("record-scanned", records.length);
+      return records.flatMap((record) =>
+        isMultiReviewWorkflow(record.snapshot) &&
+        supervisionDemand(record.snapshot, this.options.dispatchAddressPrompt !== undefined) !==
+          "none"
+          ? [record.id]
+          : [],
+      );
+    });
   }
 
   /** Next pass for one workflow, computed from the state its last pass left. */
@@ -1835,7 +1852,9 @@ export class MultiReviewService {
   }
 
   private requestTick(): Promise<void> {
+    recurringWorkMetrics.requested("multi-review-tick");
     if (this.tickRun) {
+      recurringWorkMetrics.coalesced("multi-review-tick");
       this.tickRun.pending = true;
       return this.tickRun.promise;
     }
@@ -1843,7 +1862,7 @@ export class MultiReviewService {
     run.promise = (async () => {
       do {
         run.pending = false;
-        await this.tick();
+        await recurringWorkMetrics.observe("multi-review-tick", () => this.tick());
       } while (run.pending && !this.stopped);
     })().finally(() => {
       if (this.tickRun === run) this.tickRun = null;
@@ -1855,17 +1874,24 @@ export class MultiReviewService {
   private async tick(): Promise<void> {
     if (this.stopped) return;
     const records = await this.storage.listAllMultiReviewWorkflows();
+    recurringWorkMetrics.work("record-scanned", records.length);
     await Promise.all(
       records.flatMap((record) => {
         if (!isMultiReviewWorkflow(record.snapshot)) return [];
         const workflow = record.snapshot;
-        return isSupervisedPhase(workflow.phase) ||
-          needsPausedStopReconciliation(workflow) ||
-          needsInteractiveFixObservation(workflow) ||
-          (workflow.pendingResultConsumptions?.length ?? 0) > 0 ||
-          (workflow.addressPromptPending === true && this.options.dispatchAddressPrompt)
-          ? [this.runLocked(record.id)]
-          : [];
+        if (
+          !(
+            isSupervisedPhase(workflow.phase) ||
+            needsPausedStopReconciliation(workflow) ||
+            needsInteractiveFixObservation(workflow) ||
+            (workflow.pendingResultConsumptions?.length ?? 0) > 0 ||
+            (workflow.addressPromptPending === true && this.options.dispatchAddressPrompt)
+          )
+        ) {
+          return [];
+        }
+        recurringWorkMetrics.work("record-selected");
+        return [this.runLocked(record.id)];
       }),
     );
   }
@@ -3684,8 +3710,13 @@ export class MultiReviewService {
     }
   }
 
-  private async renewLeases(): Promise<void> {
-    if (this.stopped) return;
+  private renewLeases(): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    recurringWorkMetrics.requested("multi-review-lease-renewal");
+    return recurringWorkMetrics.observe("multi-review-lease-renewal", () => this.renewLeasesOnce());
+  }
+
+  private async renewLeasesOnce(): Promise<void> {
     for (const [workflowId, lease] of this.leases) {
       const claimed = await this.storage
         .claimMultiReviewController(workflowId, this.ownerId, this.controllerLeaseMs())

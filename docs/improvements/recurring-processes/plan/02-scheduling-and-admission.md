@@ -1,6 +1,8 @@
 # 02 — Add bounded scheduling and admission mechanics
 
-Status: Not started. Dependencies: 01. Findings: F04, F06.
+Status: Primitive landed with tests (`14f4bd0f`); no owner migrated yet —
+migrations belong to steps 03, 05, 07 and 08. Dependencies: 01. Findings: F04,
+F06.
 
 ## Outcome and boundary
 
@@ -80,3 +82,66 @@ time, retaining its old policy and comparing step 01 counters. Do not replace
 all `setInterval` calls mechanically. Rollback restores a migrated owner's
 previous driver; it must not restore duplicate drivers or discard durable work.
 No new dependency or persistent job store should be needed.
+
+## Completion notes
+
+Landed in `14f4bd0f` (`feat(backend): add bounded recurring scheduler and
+admission pools`). No owner was migrated; the step 01 baseline compares with
+zero differences (`--compare … --fail-on-change` exits 0).
+
+**What landed**
+
+- `apps/backend/src/core/recurring-scheduler.ts` — `RecurringScheduler`
+  (`register`, `update`, `requestSooner`, `invalidate`, `pause`, `resume`,
+  `remove`, `has`, `wake`, `dispose`, `status`). Chosen shape: a bounded due map
+  scanned linearly per admission pass with one timer for the earliest future
+  due time (the baseline population is at most a few hundred keys per owner; a
+  heap was not justified). Admission passes run on a microtask, so no run
+  starts inside `register`/`invalidate` and a startup batch is ordered as one
+  set. Defaults: 1,024 keys (32 reserved for critical/recovery), 4 best-effort
+  runs (1 reserved for interactive/recovery), 4 critical runs in a separate
+  pool, 256 pending hints per class, starvation cap 8, jitter ceiling 30 s.
+- `apps/backend/src/core/work-admission.ts` — `WorkAdmissionPool` with
+  `acquire`, `run`, `close`, `status`; pools `git-docker-scan` (4 / 1 per
+  target), `external-pr` (2 / 1), `workflow-provider` (8 / 2) per the trial
+  table; acquisition order workflow-provider → external-pr → git-docker-scan,
+  same-pool hand-off via `holding`, critical requests refused.
+- `apps/backend/src/core/recurring-diagnostics.ts` — live schedulers and pools
+  register themselves; their content-free status is served with the metrics.
+- `apps/backend/src/core/recurring-test-support.ts` — `ManualTime`, `deferred`,
+  `flushMicrotasks` for owners' migration tests.
+
+Documented semantics (see the module comment): maximum soft-deadline lateness
+is `min(jitterMs, maxJitterMs)` plus timer latency plus waiting for a slot of
+the key's class; `requestSooner` while running is dropped by design (use
+`invalidate` for a post-change read); a refused hint sets `reconcileRequired`
+on the key's next run; aborting a run fences publication but its slot is held
+until the run's promise settles.
+
+**Tests** (`recurring-scheduler.test.ts`, `work-admission.test.ts`; manual
+clock, deferred promises, no sleeps, 1,175/1,175 passing over 25 repeats):
+duplicate/updated/replaced/stale-generation registration; simultaneous
+explicit and timer requests; invalidation during a failed read; continuous
+dirty input; slow scan resting vs mutation getting a post-change read; two slow
+targets with proven peak physical concurrency, including a removed-but-running
+operation; key/pending capacity with reserved keys and `reconcileRequired`;
+priority with starvation cap; late completion after remove/re-register;
+cancellation that does not stop the operation; synchronous throw, rejected
+finalizer, faulty retry policy and reported failures with no unhandled
+rejections; bounded idempotent dispose reporting still-running work; sleep/
+resume and paused-key resume running once; critical renewals on time under a
+saturated best-effort pool; reserved concurrency for recovery; bounded jitter
+and never-postpone; idle keys; `update`; content-free status; invalid specs.
+Admission: overall and per-target bounds, priority and FIFO, starvation cap,
+full queue and aborted wait rejection, slot held until the operation settles,
+nested order and hand-off, critical refusal, close, queue-delay metrics,
+scheduler + pool composition, diagnostics registry.
+
+**Deferred / untested constraints**
+
+- Wiring a real owner (the first migration in steps 03/05/07/08) and comparing
+  its step 01 counters before/after; the primitive has no production caller.
+- Host sleep detection: `wake()` exists for a resume hook but nothing calls it
+  yet; overdue work still runs once when the unref'd timer fires late.
+- A shared cooldown by auth/host scope (step 05) and per-owner tuning of the
+  trial limits against the live profile.

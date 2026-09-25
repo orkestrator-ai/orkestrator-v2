@@ -16,6 +16,7 @@ import {
   isTransientHttpStatus,
   nonEmptyString,
 } from "./agent-provider-runtime.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
 const ACP_SESSION_START_TIMEOUT_MS = 75_000;
@@ -277,6 +278,9 @@ export async function bridgeFetch(
   const timeoutMs = bridgeRequestTimeoutMs(connection, timeoutKind);
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+  // Every bridge request crosses here once; charged to the recurring job that
+  // issued it, or to the unattributed bucket for user-initiated calls.
+  recurringWorkMetrics.work("provider-request");
   try {
     return await fetchImpl(`${connection.baseUrl}${path}`, {
       ...init,

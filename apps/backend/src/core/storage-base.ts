@@ -13,6 +13,7 @@ import {
   randomBytes,
   randomUUID,
 } from "./storage-shared.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
 type AgentInteractionPolicy = shared.AgentInteractionPolicy;
 type AgentInteractionResolutionJournal = shared.AgentInteractionResolutionJournal;
@@ -647,6 +648,8 @@ export abstract class StorageBase {
     mode?: number,
     refreshRecoveryBackup = false,
   ): Promise<void> {
+    recurringWorkMetrics.work("storage-write");
+    recurringWorkMetrics.bytes(contents.length);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     const tempPath = path.join(
       path.dirname(filePath),
@@ -1197,6 +1200,8 @@ export abstract class StorageBase {
 
     try {
       const raw = await fs.readFile(filePath, "utf8");
+      recurringWorkMetrics.work("storage-read");
+      recurringWorkMetrics.bytes(raw.length);
       if (!raw.trim()) throw new SyntaxError("Empty JSON store");
       return JSON.parse(raw) as T;
     } catch {
@@ -1238,6 +1243,7 @@ export abstract class StorageBase {
     const fingerprint = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
     const cached = this.jsonReadCache.get(filePath);
     if (cached && cached.fingerprint === fingerprint) {
+      recurringWorkMetrics.work("storage-stat");
       return structuredClone(cached.value) as T;
     }
     const value = await this.loadJson(filePath, fallback);

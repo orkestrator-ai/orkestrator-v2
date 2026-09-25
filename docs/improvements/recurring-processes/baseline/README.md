@@ -16,6 +16,7 @@ IDs (B01–B25, C01–C16, L01–L14) referenced below.
 | `step-01-baseline.json` | Artifact generated at the step 01 commit (commit, platform, runtime, fixture sizes, phases, per-kind counters, modelled cadences, recorder overhead, limitations). |
 | `step-05-pr-monitoring.json` | Same harness after step 05 (lifecycle-aware PR monitoring). Only `pr-detection`/`pr-check-rollup` counters and the physical units they charge differ from step 01; see "Step 05 re-run" below. |
 | `step-07-baseline.json` | Same scenarios at the step 07 commit (identical counters), plus the driven `nativeObservation` block: the real native activity sweep and queue scan in rollback vs shared mode. |
+| `step-03-snapshots.json` | Same harness after step 03 (shared worktree snapshots), plus two appended two-client scenarios. Compare with `--compare step-01-baseline.json`. |
 
 ## How to run
 
@@ -199,6 +200,45 @@ an externally started turn is bounded by that ladder (≤ 4 s with the event
 lost, next sweep with it delivered); the recorded 1.5 s is this fixture's
 phase, not the worst case. Bridge-side cost per read, mail, coordinator and
 workflow consumers are not driven.
+
+## Step 03 — shared worktree snapshots (after)
+
+Artifact `step-03-snapshots.json`. The harness now drives the Files-panel
+reads through the production owner (`DiffStatsService.readFileList` /
+`readTree`, behind a `git-docker-scan` admission pool) instead of the removed
+3 s shared cache; seams and `PHYSICAL_COST` are unchanged, so every step 01
+scenario compares directly. Two scenarios were appended (`env1-local-c2`,
+`env1-container-c2`); they have no step 01 row. 10 min warm idle:
+
+| Scenario | Physical status scans (diff + list) | List reads (served without a scan) | Tree walks | git/min | docker exec/min | readdir/min |
+| --- | --- | --- | --- | --- | --- | --- |
+| `env1-local-c0` | 5 → 5 | 0 → 0 | 0 → 0 | 2.6 → 2.6 | 0 → 0 | 0 → 0 |
+| `env1-local-c1` | 120 → 5 | 120 (5) → 120 (120) | 120 → 0 | 60.2 → 2.6 | 0 → 0 | 480 → 0 |
+| `env1-container-c1` | 120 → 120 | 120 (40) → 120 (0) | 120 → 120 | 0 → 0 | 84 → 84 | 0 → 0 |
+| `env10-mixed-c1-pr-wf200` | 340 → 225 | 120 (5) → 120 (120) | 120 → 0 | 73.2 → 15.6 | 336 → 336 | 480 → 0 |
+| `env10-mixed-c2-pr-wf200` | 455 → 225 | 240 (10) → 240 (240) | 240 → 0 | 130.7 → 15.6 | 336 → 336 | 960 → 0 |
+| `env50-mixed-c2-pr-wf200` | 1,355 → 1,125 | 240 (10) → 240 (240) | 240 → 0 | 201.7 → 86.6 | 1,684 → 1,684 | 960 → 0 |
+| `env50-container-c1-pr` | 2,080 → 2,080 | 120 (40) → 120 (0) | 120 → 120 | 0 → 0 | 3,384 → 3,384 | 0 → 0 |
+| `env1-local-c2` (new) | — → 5 | — → 240 (240) | — → 0 | — → 2.6 | — → 0 | — → 0 |
+| `env1-container-c2` (new) | — → 120 | — → 240 (0; 120 joined) | — → 120 | — → 0 | — → 84 | — → 0 |
+
+Scenarios without a client are unchanged (identical counters).
+
+- **Watched local worktrees**: an open Files panel — one or two clients — no
+  longer costs anything beyond the backend's own diff statistics: every 5 s
+  read is answered from the owner's valid watched state (no Git spawn, no
+  tree walk). The ~57 `git` spawns and 480 `readdir` per minute per panel are
+  gone; the safety scan (120 s) and fetch cadence are unchanged.
+- **Containers**: one client costs the same (84 execs/min) — the panel needs
+  data at most 3 s old every 5 s, so each read still scans; the periodic
+  15 s scan is now skipped because the read's scan already refreshed the
+  counts (the 40 "cache hits" of step 01 became 40 skipped periodic scans).
+  Two clients share one scan and one tree walk per tick (`env1-container-c2`:
+  120 scans for 240 reads) instead of each paying for its own.
+- Not modelled here (see Limitations): edit bursts, where each hint now also
+  re-walks the tree once while a panel shows it, and real client clocks,
+  where two unsynchronised clients join less often than in this lockstep
+  model (a second read within 3 s still reuses the first).
 
 ## Limitations — what this does not measure
 

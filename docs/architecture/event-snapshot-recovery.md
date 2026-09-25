@@ -5,9 +5,10 @@ client hydration. Introduced by recurring-processes
 [step 11](../improvements/recurring-processes/plan/11-recovery-and-resource-bounds.md).
 
 An event-led view is a live event stream folded over an authoritative snapshot:
-the PR monitor mirror, environment diff statistics, and (planned) file lists,
-file trees and the coordinator view. This note defines which ordering each
-consumer may rely on, the additive wire contract for revisioned snapshots, and
+the PR monitor mirror, environment diff statistics, the worktree snapshot
+revisions behind the Files panel (step 03), and (planned) the coordinator
+view. This note defines which ordering each consumer may rely on, the
+additive wire contract for revisioned snapshots, and
 the client helper every such view uses to stay bounded while it converges.
 The invariants in `AGENTS.md` ("Efficiency and Transport Invariants") apply
 unchanged; nothing here relaxes them.
@@ -26,7 +27,8 @@ compare revisions from two generations of the same row.
 | View owner generation | One lifetime of the service that owns a view (for PR/diff: one `PrMonitorService` / `DiffStatsService` instance, a random UUID) | `generation` on view events and snapshots | Equality only. A different value means the owner was replaced (backend restart, transport switch, retarget to a different lineage): reset the view. |
 | View domain revision | Per owner generation; integer that increases by exactly one per announced event (`packages/protocol/src/view-sync.ts`) | `revision` on view events and snapshots | Order events against a snapshot, drop duplicates, detect a missed event as a gap. Revision `0` = nothing announced yet (snapshots only). |
 | Native observation generation + revision (step 07) | One `NativeAgentObservationBroker` lifetime (`native-agent-observation.ts`); revision advances by exactly one per announced session activity transition | `generation`/`revision` on `native-agent-session-activity`, plus `agent`/`logical_session_key`; current position in `get_native_agent_sync_capabilities.observation` | `apps/web/src/lib/native-observation-events.ts` only: invalidation, never state. A gap or new generation re-reads every mounted native view. |
-| Target generation (per-target views, step 03) | The target's lineage (worktree, comparison ref, container) | Encoded as the owner generation of a per-target view | A retarget is a reset; a deleted target is the `deleted` outcome. |
+| Target generation (worktree snapshots, step 03) | One tracked environment's lineage inside a `DiffStatsService` generation (worktree path or container, comparison ref); a service-unique integer, new on retarget, resume from pause, or re-track | `targetGeneration` on worktree snapshot states and on file-list/tree read stamps | Equality only. A different value means the file list and tree describe a different target: re-read, never compare its revisions with the old lineage's. An untracked environment is announced as a removal. |
+| File-list / tree revision (step 03) | Per target lineage; advances on every semantic change of the changed-file list (paths, original paths, statuses, line counts, truncation) or of the bounded tree | `fileListRevision` / `treeRevision` in worktree snapshot states; `view.revision` on read responses | Decide whether the list or tree the client shows is older than the announced one. Never a content revision. |
 
 Terminal output (generation/revision snapshot protocol with explicit desync)
 and native-agent transcript windows keep their own existing contracts and are
@@ -200,10 +202,44 @@ legacy, malformed), `apps/web/src/hooks/useNativeAgentSession.observation.test.t
 (quiet schedule, immediate read on an announcement, gap re-read, older backend
 and unqualified provider keep the baseline), `packages/protocol/src/native-agent-observation.test.ts`.
 
+## Worktree snapshot revisions (step 03)
+
+`DiffStatsService` owns, per tracked environment, the diff counts, the
+changed-file list and (through `WorktreeTreeSnapshots`) the bounded file tree.
+It announces a keyed view of their revisions:
+`worktree-snapshot-changed` events (one environment's
+`{ targetGeneration, comparisonRef, fileListRevision, treeRevision,
+freshness, watched }`, stamped with the service generation and a contiguous
+revision separate from the diff-stats stream) over the
+`get_worktree_snapshot_revisions` snapshot, which answers conditional reads
+like every view here (`packages/protocol/src/worktree-snapshots.ts`). Events
+are invalidations only; the file list and tree are re-read with
+`get_local_git_status` / `get_git_status` / `get_local_file_tree` /
+`get_file_tree`, whose conditional answers now carry an optional `view` stamp
+(generation, target lineage, the body's revision, freshness, watched).
+
+- The snapshot contains announced state only: a live value (for example a
+  watcher becoming qualified) is announced before a snapshot can show it.
+- Revisions advance on semantic changes. A same-count, different-path list is
+  a new file-list revision; a new empty folder is a new tree revision; an edit
+  that leaves path, status and line counts unchanged is neither. Open editors
+  keep their own load-on-open behaviour — no content invalidation is implied.
+- `freshness` is `current`, `stale` (last scan failed; the retained list is
+  the last good one) or `failed` (no good result). `watched` says whether a
+  qualified watcher covers the worktree *and* its Git metadata; clients keep
+  polling when it is false (containers, watcher failure) or the peer is
+  legacy/unsupported.
+- The Files panel (`useFilesPanel` + `useWorktreeSnapshotRevisions`) hydrates
+  this view with `createBoundedHydration` while open and re-reads a view when
+  the announced revision is newer than the stamp of what it shows, or the
+  owner generation or target lineage differs. A hidden document defers to the
+  read coordinator's return reconcile. The 5 s coordinated poll remains; for a
+  quiet watched worktree the backend answers it from valid watched state.
+
 ## Adopting the contract
 
-For a new event-led view (step 03 file/tree, step 07 activity observations,
-step 09 coordinator):
+For a new event-led view (step 07 activity observations, step 09 coordinator;
+step 03's worktree snapshots above are a worked example):
 
 1. Give the owner a `generation` and a contiguous `revision`, stamp every
    event, and return snapshots via a synchronous `{ entries, generation,

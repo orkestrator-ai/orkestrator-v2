@@ -1,0 +1,2501 @@
+{
+  "schemaVersion": 1,
+  "kind": "recurring-work-baseline",
+  "method": "deterministic-call-count",
+  "generatedBy": "apps/backend/scripts/recurring-baseline.ts",
+  "environment": {
+    "commit": "a9cb5d73127f",
+    "platform": "linux",
+    "arch": "x64",
+    "runtime": "bun 1.4.2"
+  },
+  "phases": {
+    "startupMs": 30000,
+    "idleMs": 600000,
+    "clientRefreshMs": 5000
+  },
+  "physicalCost": {
+    "localScanGitSpawns": 5,
+    "localScanFileReads": 1,
+    "containerScanDockerExecs": 1,
+    "localTreeDirectoryReads": 40,
+    "prBranchResolutionSpawns": 1
+  },
+  "flags": {
+    "recurringMetrics": "enabled",
+    "modelledKinds": [
+      "native-activity-sweep",
+      "native-launch-scan",
+      "native-queue-scan",
+      "claude-state-reconcile",
+      "tmux-queue-drain",
+      "mail-presence",
+      "mail-injection",
+      "pending-rename-reconcile",
+      "coordinator-repair",
+      "mail-retention",
+      "activity-lease-expiry",
+      "tab-cleanup",
+      "build-supervisor-tick",
+      "looped-review-tick",
+      "feature-planning-tick"
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "env1-local-c0",
+      "fixture": {
+        "id": "env1-local-c0",
+        "environments": 1,
+        "localShare": 1,
+        "clients": 0,
+        "prMix": "none",
+        "completedWorkflows": 0,
+        "untrackedFilesPerEnvironment": 3,
+        "local": 1,
+        "container": 0,
+        "prs": {
+          "none": 1,
+          "open": 0,
+          "terminal": 0
+        }
+      },
+      "startup": {
+        "diff-scan": {
+          "requested": 1,
+          "started": 1,
+          "completed": 1,
+          "changed": 1,
+          "workUnits": {
+            "file-read": 4,
+            "git-spawn": 6
+          }
+        },
+        "git-fetch-local": {
+          "requested": 1,
+          "started": 1,
+          "completed": 1,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        }
+      },
+      "idle": {
+        "diff-scan": {
+          "requested": 5,
+          "started": 5,
+          "completed": 5,
+          "unchanged": 5,
+          "workUnits": {
+            "file-read": 20,
+            "git-spawn": 25
+          }
+        },
+        "git-fetch-local": {
+          "requested": 5,
+          "started": 1,
+          "completed": 1,
+          "cacheHits": 4,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        }
+      },
+      "idlePhysicalPerMinute": {
+        "file-read": 2,
+        "git-spawn": 2.6
+      },
+      "modelledIdle": {
+        "native-activity-sweep": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-launch-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-queue-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "claude-state-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "tmux-queue-drain": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-presence": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-injection": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "pending-rename-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "coordinator-repair": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "mail-retention": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "activity-lease-expiry": {
+          "nominalCadenceMs": 15000,
+          "attempts": 40
+        },
+        "tab-cleanup": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "build-supervisor-tick": {
+          "nominalCadenceMs": 1500,
+          "attempts": 400,
+          "recordsScanned": 0
+        },
+        "looped-review-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600,
+          "recordsScanned": 0
+        },
+        "feature-planning-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600
+        }
+      }
+    },
+    {
+      "id": "env1-local-c1",
+      "fixture": {
+        "id": "env1-local-c1",
+        "environments": 1,
+        "localShare": 1,
+        "clients": 1,
+        "prMix": "none",
+        "completedWorkflows": 0,
+        "untrackedFilesPerEnvironment": 3,
+        "local": 1,
+        "container": 0,
+        "prs": {
+          "none": 1,
+          "open": 0,
+          "terminal": 0
+        }
+      },
+      "startup": {
+        "diff-scan": {
+          "requested": 1,
+          "started": 1,
+          "completed": 1,
+          "changed": 1,
+          "workUnits": {
+            "file-read": 4,
+            "git-spawn": 6
+          }
+        },
+        "file-list-read": {
+          "requested": 7,
+          "coalesced": 1,
+          "cacheHits": 6
+        },
+        "file-tree-read": {
+          "requested": 7,
+          "started": 1,
+          "completed": 1,
+          "changed": 1,
+          "cacheHits": 6,
+          "cacheMisses": 1,
+          "workUnits": {
+            "directory-read": 40,
+            "directory-walk": 1
+          }
+        },
+        "git-fetch-local": {
+          "requested": 1,
+          "started": 1,
+          "completed": 1,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        }
+      },
+      "idle": {
+        "diff-scan": {
+          "requested": 5,
+          "started": 5,
+          "completed": 5,
+          "unchanged": 5,
+          "workUnits": {
+            "file-read": 20,
+            "git-spawn": 25
+          }
+        },
+        "file-list-read": {
+          "requested": 120,
+          "cacheHits": 120
+        },
+        "file-tree-read": {
+          "requested": 120,
+          "cacheHits": 120
+        },
+        "git-fetch-local": {
+          "requested": 5,
+          "started": 1,
+          "completed": 1,
+          "cacheHits": 4,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        }
+      },
+      "idlePhysicalPerMinute": {
+        "file-read": 2,
+        "git-spawn": 2.6
+      },
+      "modelledIdle": {
+        "native-activity-sweep": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-launch-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-queue-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "claude-state-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "tmux-queue-drain": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-presence": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-injection": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "pending-rename-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "coordinator-repair": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "mail-retention": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "activity-lease-expiry": {
+          "nominalCadenceMs": 15000,
+          "attempts": 40
+        },
+        "tab-cleanup": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "build-supervisor-tick": {
+          "nominalCadenceMs": 1500,
+          "attempts": 400,
+          "recordsScanned": 0
+        },
+        "looped-review-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600,
+          "recordsScanned": 0
+        },
+        "feature-planning-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600
+        }
+      }
+    },
+    {
+      "id": "env1-container-c1",
+      "fixture": {
+        "id": "env1-container-c1",
+        "environments": 1,
+        "localShare": 0,
+        "clients": 1,
+        "prMix": "none",
+        "completedWorkflows": 0,
+        "untrackedFilesPerEnvironment": 3,
+        "local": 0,
+        "container": 1,
+        "prs": {
+          "none": 1,
+          "open": 0,
+          "terminal": 0
+        }
+      },
+      "startup": {
+        "diff-scan": {
+          "requested": 9,
+          "coalesced": 2,
+          "started": 7,
+          "completed": 7,
+          "changed": 1,
+          "unchanged": 6,
+          "workUnits": {
+            "docker-exec": 7
+          }
+        },
+        "file-list-read": {
+          "requested": 7,
+          "coalesced": 1,
+          "cacheMisses": 6
+        },
+        "file-tree-read": {
+          "requested": 7,
+          "started": 7,
+          "completed": 7,
+          "changed": 1,
+          "unchanged": 6,
+          "cacheMisses": 7,
+          "workUnits": {
+            "directory-walk": 7,
+            "docker-exec": 7
+          }
+        },
+        "git-fetch-container": {
+          "requested": 7
+        },
+        "tmux-poll": {
+          "requested": 31,
+          "started": 31,
+          "completed": 31,
+          "changed": 1,
+          "unchanged": 30,
+          "workUnits": {
+            "docker-exec": 31,
+            "storage-stat": 3,
+            "storage-write": 1
+          }
+        }
+      },
+      "idle": {
+        "diff-scan": {
+          "requested": 160,
+          "coalesced": 40,
+          "started": 120,
+          "completed": 120,
+          "unchanged": 120,
+          "workUnits": {
+            "docker-exec": 120
+          }
+        },
+        "file-list-read": {
+          "requested": 120,
+          "cacheMisses": 120
+        },
+        "file-tree-read": {
+          "requested": 120,
+          "started": 120,
+          "completed": 120,
+          "unchanged": 120,
+          "cacheMisses": 120,
+          "workUnits": {
+            "directory-walk": 120,
+            "docker-exec": 120
+          }
+        },
+        "git-fetch-container": {
+          "requested": 120
+        },
+        "tmux-poll": {
+          "requested": 600,
+          "started": 600,
+          "completed": 600,
+          "unchanged": 600,
+          "workUnits": {
+            "docker-exec": 600,
+            "storage-stat": 40
+          }
+        }
+      },
+      "idlePhysicalPerMinute": {
+        "directory-walk": 12,
+        "docker-exec": 84,
+        "storage-stat": 4
+      },
+      "modelledIdle": {
+        "native-activity-sweep": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-launch-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-queue-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "claude-state-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "tmux-queue-drain": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-presence": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-injection": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "pending-rename-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "coordinator-repair": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "mail-retention": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "activity-lease-expiry": {
+          "nominalCadenceMs": 15000,
+          "attempts": 40
+        },
+        "tab-cleanup": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "build-supervisor-tick": {
+          "nominalCadenceMs": 1500,
+          "attempts": 400,
+          "recordsScanned": 0
+        },
+        "looped-review-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600,
+          "recordsScanned": 0
+        },
+        "feature-planning-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600
+        }
+      }
+    },
+    {
+      "id": "env10-local-c0-pr",
+      "fixture": {
+        "id": "env10-local-c0-pr",
+        "environments": 10,
+        "localShare": 1,
+        "clients": 0,
+        "prMix": "mixed",
+        "completedWorkflows": 0,
+        "untrackedFilesPerEnvironment": 3,
+        "local": 10,
+        "container": 0,
+        "prs": {
+          "none": 4,
+          "open": 3,
+          "terminal": 3
+        }
+      },
+      "startup": {
+        "pr-detection": {
+          "requested": 6,
+          "started": 6,
+          "completed": 6,
+          "unchanged": 6,
+          "workUnits": {
+            "gh-spawn": 6,
+            "git-spawn": 3
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 3,
+          "started": 3,
+          "completed": 3,
+          "workUnits": {
+            "gh-spawn": 3
+          }
+        },
+        "diff-scan": {
+          "requested": 10,
+          "started": 10,
+          "completed": 10,
+          "changed": 10,
+          "workUnits": {
+            "file-read": 40,
+            "git-spawn": 60
+          }
+        },
+        "git-fetch-local": {
+          "requested": 10,
+          "coalesced": 3,
+          "started": 1,
+          "completed": 1,
+          "cacheHits": 6,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        }
+      },
+      "idle": {
+        "pr-detection": {
+          "requested": 180,
+          "started": 180,
+          "completed": 180,
+          "unchanged": 180,
+          "workUnits": {
+            "gh-spawn": 180,
+            "git-spawn": 90
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 30,
+          "started": 30,
+          "completed": 30,
+          "workUnits": {
+            "gh-spawn": 30
+          }
+        },
+        "diff-scan": {
+          "requested": 50,
+          "started": 50,
+          "completed": 50,
+          "unchanged": 50,
+          "workUnits": {
+            "file-read": 200,
+            "git-spawn": 250
+          }
+        },
+        "git-fetch-local": {
+          "requested": 50,
+          "started": 1,
+          "completed": 1,
+          "cacheHits": 49,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        }
+      },
+      "idlePhysicalPerMinute": {
+        "file-read": 20,
+        "gh-spawn": 21,
+        "git-spawn": 34.1
+      },
+      "modelledIdle": {
+        "native-activity-sweep": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-launch-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-queue-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "claude-state-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "tmux-queue-drain": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-presence": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-injection": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "pending-rename-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "coordinator-repair": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "mail-retention": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "activity-lease-expiry": {
+          "nominalCadenceMs": 15000,
+          "attempts": 40
+        },
+        "tab-cleanup": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "build-supervisor-tick": {
+          "nominalCadenceMs": 1500,
+          "attempts": 400,
+          "recordsScanned": 0
+        },
+        "looped-review-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600,
+          "recordsScanned": 0
+        },
+        "feature-planning-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600
+        }
+      }
+    },
+    {
+      "id": "env10-mixed-c0-pr-wf200",
+      "fixture": {
+        "id": "env10-mixed-c0-pr-wf200",
+        "environments": 10,
+        "localShare": 0.5,
+        "clients": 0,
+        "prMix": "mixed",
+        "completedWorkflows": 200,
+        "untrackedFilesPerEnvironment": 3,
+        "local": 5,
+        "container": 5,
+        "prs": {
+          "none": 4,
+          "open": 3,
+          "terminal": 3
+        }
+      },
+      "startup": {
+        "pr-detection": {
+          "requested": 6,
+          "started": 6,
+          "completed": 6,
+          "unchanged": 6,
+          "workUnits": {
+            "docker-exec": 5,
+            "gh-spawn": 3,
+            "git-spawn": 1
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 3,
+          "started": 3,
+          "completed": 3,
+          "workUnits": {
+            "docker-exec": 1,
+            "gh-spawn": 2
+          }
+        },
+        "diff-scan": {
+          "requested": 20,
+          "started": 20,
+          "completed": 20,
+          "changed": 10,
+          "unchanged": 10,
+          "workUnits": {
+            "docker-exec": 15,
+            "file-read": 20,
+            "git-spawn": 30
+          }
+        },
+        "git-fetch-local": {
+          "requested": 5,
+          "coalesced": 3,
+          "started": 1,
+          "completed": 1,
+          "cacheHits": 1,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        },
+        "git-fetch-container": {
+          "requested": 15
+        },
+        "tmux-poll": {
+          "requested": 155,
+          "started": 155,
+          "completed": 155,
+          "changed": 5,
+          "unchanged": 150,
+          "workUnits": {
+            "docker-exec": 155,
+            "storage-stat": 15,
+            "storage-write": 5
+          }
+        }
+      },
+      "idle": {
+        "pr-detection": {
+          "requested": 180,
+          "started": 180,
+          "completed": 180,
+          "unchanged": 180,
+          "workUnits": {
+            "docker-exec": 150,
+            "gh-spawn": 90,
+            "git-spawn": 30
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 30,
+          "started": 30,
+          "completed": 30,
+          "workUnits": {
+            "docker-exec": 10,
+            "gh-spawn": 20
+          }
+        },
+        "diff-scan": {
+          "requested": 225,
+          "started": 225,
+          "completed": 225,
+          "unchanged": 225,
+          "workUnits": {
+            "docker-exec": 200,
+            "file-read": 100,
+            "git-spawn": 125
+          }
+        },
+        "git-fetch-local": {
+          "requested": 25,
+          "started": 1,
+          "completed": 1,
+          "cacheHits": 24,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        },
+        "git-fetch-container": {
+          "requested": 200
+        },
+        "tmux-poll": {
+          "requested": 3000,
+          "started": 3000,
+          "completed": 3000,
+          "unchanged": 3000,
+          "workUnits": {
+            "docker-exec": 3000,
+            "storage-stat": 200
+          }
+        }
+      },
+      "idlePhysicalPerMinute": {
+        "docker-exec": 336,
+        "file-read": 10,
+        "gh-spawn": 11,
+        "git-spawn": 15.6,
+        "storage-stat": 20
+      },
+      "modelledIdle": {
+        "native-activity-sweep": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-launch-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-queue-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "claude-state-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "tmux-queue-drain": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-presence": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-injection": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "pending-rename-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "coordinator-repair": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "mail-retention": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "activity-lease-expiry": {
+          "nominalCadenceMs": 15000,
+          "attempts": 40
+        },
+        "tab-cleanup": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "build-supervisor-tick": {
+          "nominalCadenceMs": 1500,
+          "attempts": 400,
+          "recordsScanned": 80000
+        },
+        "looped-review-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600,
+          "recordsScanned": 120000
+        },
+        "feature-planning-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600
+        }
+      }
+    },
+    {
+      "id": "env10-mixed-c1-pr-wf200",
+      "fixture": {
+        "id": "env10-mixed-c1-pr-wf200",
+        "environments": 10,
+        "localShare": 0.5,
+        "clients": 1,
+        "prMix": "mixed",
+        "completedWorkflows": 200,
+        "untrackedFilesPerEnvironment": 3,
+        "local": 5,
+        "container": 5,
+        "prs": {
+          "none": 4,
+          "open": 3,
+          "terminal": 3
+        }
+      },
+      "startup": {
+        "pr-detection": {
+          "requested": 6,
+          "started": 6,
+          "completed": 6,
+          "unchanged": 6,
+          "workUnits": {
+            "docker-exec": 5,
+            "gh-spawn": 3,
+            "git-spawn": 1
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 3,
+          "started": 3,
+          "completed": 3,
+          "workUnits": {
+            "docker-exec": 1,
+            "gh-spawn": 2
+          }
+        },
+        "diff-scan": {
+          "requested": 20,
+          "started": 20,
+          "completed": 20,
+          "changed": 10,
+          "unchanged": 10,
+          "workUnits": {
+            "docker-exec": 15,
+            "file-read": 20,
+            "git-spawn": 30
+          }
+        },
+        "file-list-read": {
+          "requested": 7,
+          "coalesced": 1,
+          "cacheHits": 6
+        },
+        "file-tree-read": {
+          "requested": 7,
+          "started": 1,
+          "completed": 1,
+          "changed": 1,
+          "cacheHits": 6,
+          "cacheMisses": 1,
+          "workUnits": {
+            "directory-read": 40,
+            "directory-walk": 1
+          }
+        },
+        "git-fetch-local": {
+          "requested": 5,
+          "coalesced": 3,
+          "started": 1,
+          "completed": 1,
+          "cacheHits": 1,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        },
+        "git-fetch-container": {
+          "requested": 15
+        },
+        "tmux-poll": {
+          "requested": 155,
+          "started": 155,
+          "completed": 155,
+          "changed": 5,
+          "unchanged": 150,
+          "workUnits": {
+            "docker-exec": 155,
+            "storage-stat": 15,
+            "storage-write": 5
+          }
+        }
+      },
+      "idle": {
+        "pr-detection": {
+          "requested": 180,
+          "started": 180,
+          "completed": 180,
+          "unchanged": 180,
+          "workUnits": {
+            "docker-exec": 150,
+            "gh-spawn": 90,
+            "git-spawn": 30
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 30,
+          "started": 30,
+          "completed": 30,
+          "workUnits": {
+            "docker-exec": 10,
+            "gh-spawn": 20
+          }
+        },
+        "diff-scan": {
+          "requested": 225,
+          "started": 225,
+          "completed": 225,
+          "unchanged": 225,
+          "workUnits": {
+            "docker-exec": 200,
+            "file-read": 100,
+            "git-spawn": 125
+          }
+        },
+        "file-list-read": {
+          "requested": 120,
+          "cacheHits": 120
+        },
+        "file-tree-read": {
+          "requested": 120,
+          "cacheHits": 120
+        },
+        "git-fetch-local": {
+          "requested": 25,
+          "started": 1,
+          "completed": 1,
+          "cacheHits": 24,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        },
+        "git-fetch-container": {
+          "requested": 200
+        },
+        "tmux-poll": {
+          "requested": 3000,
+          "started": 3000,
+          "completed": 3000,
+          "unchanged": 3000,
+          "workUnits": {
+            "docker-exec": 3000,
+            "storage-stat": 200
+          }
+        }
+      },
+      "idlePhysicalPerMinute": {
+        "docker-exec": 336,
+        "file-read": 10,
+        "gh-spawn": 11,
+        "git-spawn": 15.6,
+        "storage-stat": 20
+      },
+      "modelledIdle": {
+        "native-activity-sweep": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-launch-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-queue-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "claude-state-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "tmux-queue-drain": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-presence": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-injection": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "pending-rename-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "coordinator-repair": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "mail-retention": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "activity-lease-expiry": {
+          "nominalCadenceMs": 15000,
+          "attempts": 40
+        },
+        "tab-cleanup": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "build-supervisor-tick": {
+          "nominalCadenceMs": 1500,
+          "attempts": 400,
+          "recordsScanned": 80000
+        },
+        "looped-review-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600,
+          "recordsScanned": 120000
+        },
+        "feature-planning-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600
+        }
+      }
+    },
+    {
+      "id": "env10-mixed-c2-pr-wf200",
+      "fixture": {
+        "id": "env10-mixed-c2-pr-wf200",
+        "environments": 10,
+        "localShare": 0.5,
+        "clients": 2,
+        "prMix": "mixed",
+        "completedWorkflows": 200,
+        "untrackedFilesPerEnvironment": 3,
+        "local": 5,
+        "container": 5,
+        "prs": {
+          "none": 4,
+          "open": 3,
+          "terminal": 3
+        }
+      },
+      "startup": {
+        "pr-detection": {
+          "requested": 6,
+          "started": 6,
+          "completed": 6,
+          "unchanged": 6,
+          "workUnits": {
+            "docker-exec": 5,
+            "gh-spawn": 3,
+            "git-spawn": 1
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 3,
+          "started": 3,
+          "completed": 3,
+          "workUnits": {
+            "docker-exec": 1,
+            "gh-spawn": 2
+          }
+        },
+        "diff-scan": {
+          "requested": 20,
+          "started": 20,
+          "completed": 20,
+          "changed": 10,
+          "unchanged": 10,
+          "workUnits": {
+            "docker-exec": 15,
+            "file-read": 20,
+            "git-spawn": 30
+          }
+        },
+        "file-list-read": {
+          "requested": 14,
+          "coalesced": 2,
+          "cacheHits": 12
+        },
+        "file-tree-read": {
+          "requested": 14,
+          "coalesced": 1,
+          "started": 1,
+          "completed": 1,
+          "changed": 1,
+          "cacheHits": 12,
+          "cacheMisses": 1,
+          "workUnits": {
+            "directory-read": 40,
+            "directory-walk": 1
+          }
+        },
+        "git-fetch-local": {
+          "requested": 5,
+          "coalesced": 3,
+          "started": 1,
+          "completed": 1,
+          "cacheHits": 1,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        },
+        "git-fetch-container": {
+          "requested": 15
+        },
+        "tmux-poll": {
+          "requested": 155,
+          "started": 155,
+          "completed": 155,
+          "changed": 5,
+          "unchanged": 150,
+          "workUnits": {
+            "docker-exec": 155,
+            "storage-stat": 15,
+            "storage-write": 5
+          }
+        }
+      },
+      "idle": {
+        "pr-detection": {
+          "requested": 180,
+          "started": 180,
+          "completed": 180,
+          "unchanged": 180,
+          "workUnits": {
+            "docker-exec": 150,
+            "gh-spawn": 90,
+            "git-spawn": 30
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 30,
+          "started": 30,
+          "completed": 30,
+          "workUnits": {
+            "docker-exec": 10,
+            "gh-spawn": 20
+          }
+        },
+        "diff-scan": {
+          "requested": 225,
+          "started": 225,
+          "completed": 225,
+          "unchanged": 225,
+          "workUnits": {
+            "docker-exec": 200,
+            "file-read": 100,
+            "git-spawn": 125
+          }
+        },
+        "file-list-read": {
+          "requested": 240,
+          "cacheHits": 240
+        },
+        "file-tree-read": {
+          "requested": 240,
+          "cacheHits": 240
+        },
+        "git-fetch-local": {
+          "requested": 25,
+          "started": 1,
+          "completed": 1,
+          "cacheHits": 24,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        },
+        "git-fetch-container": {
+          "requested": 200
+        },
+        "tmux-poll": {
+          "requested": 3000,
+          "started": 3000,
+          "completed": 3000,
+          "unchanged": 3000,
+          "workUnits": {
+            "docker-exec": 3000,
+            "storage-stat": 200
+          }
+        }
+      },
+      "idlePhysicalPerMinute": {
+        "docker-exec": 336,
+        "file-read": 10,
+        "gh-spawn": 11,
+        "git-spawn": 15.6,
+        "storage-stat": 20
+      },
+      "modelledIdle": {
+        "native-activity-sweep": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-launch-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-queue-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "claude-state-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "tmux-queue-drain": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-presence": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-injection": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "pending-rename-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "coordinator-repair": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "mail-retention": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "activity-lease-expiry": {
+          "nominalCadenceMs": 15000,
+          "attempts": 40
+        },
+        "tab-cleanup": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "build-supervisor-tick": {
+          "nominalCadenceMs": 1500,
+          "attempts": 400,
+          "recordsScanned": 80000
+        },
+        "looped-review-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600,
+          "recordsScanned": 120000
+        },
+        "feature-planning-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600
+        }
+      }
+    },
+    {
+      "id": "env10-container-c0-pr",
+      "fixture": {
+        "id": "env10-container-c0-pr",
+        "environments": 10,
+        "localShare": 0,
+        "clients": 0,
+        "prMix": "mixed",
+        "completedWorkflows": 0,
+        "untrackedFilesPerEnvironment": 3,
+        "local": 0,
+        "container": 10,
+        "prs": {
+          "none": 4,
+          "open": 3,
+          "terminal": 3
+        }
+      },
+      "startup": {
+        "pr-detection": {
+          "requested": 6,
+          "started": 6,
+          "completed": 6,
+          "unchanged": 6,
+          "workUnits": {
+            "docker-exec": 9
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 3,
+          "started": 3,
+          "completed": 3,
+          "workUnits": {
+            "docker-exec": 3
+          }
+        },
+        "diff-scan": {
+          "requested": 30,
+          "started": 30,
+          "completed": 30,
+          "changed": 10,
+          "unchanged": 20,
+          "workUnits": {
+            "docker-exec": 30
+          }
+        },
+        "git-fetch-container": {
+          "requested": 30
+        },
+        "tmux-poll": {
+          "requested": 310,
+          "started": 310,
+          "completed": 310,
+          "changed": 10,
+          "unchanged": 300,
+          "workUnits": {
+            "docker-exec": 310,
+            "storage-stat": 30,
+            "storage-write": 10
+          }
+        }
+      },
+      "idle": {
+        "pr-detection": {
+          "requested": 180,
+          "started": 180,
+          "completed": 180,
+          "unchanged": 180,
+          "workUnits": {
+            "docker-exec": 270
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 30,
+          "started": 30,
+          "completed": 30,
+          "workUnits": {
+            "docker-exec": 30
+          }
+        },
+        "diff-scan": {
+          "requested": 400,
+          "started": 400,
+          "completed": 400,
+          "unchanged": 400,
+          "workUnits": {
+            "docker-exec": 400
+          }
+        },
+        "git-fetch-container": {
+          "requested": 400
+        },
+        "tmux-poll": {
+          "requested": 6000,
+          "started": 6000,
+          "completed": 6000,
+          "unchanged": 6000,
+          "workUnits": {
+            "docker-exec": 6000,
+            "storage-stat": 400
+          }
+        }
+      },
+      "idlePhysicalPerMinute": {
+        "docker-exec": 670,
+        "storage-stat": 40
+      },
+      "modelledIdle": {
+        "native-activity-sweep": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-launch-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-queue-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "claude-state-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "tmux-queue-drain": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-presence": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-injection": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "pending-rename-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "coordinator-repair": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "mail-retention": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "activity-lease-expiry": {
+          "nominalCadenceMs": 15000,
+          "attempts": 40
+        },
+        "tab-cleanup": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "build-supervisor-tick": {
+          "nominalCadenceMs": 1500,
+          "attempts": 400,
+          "recordsScanned": 0
+        },
+        "looped-review-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600,
+          "recordsScanned": 0
+        },
+        "feature-planning-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600
+        }
+      }
+    },
+    {
+      "id": "env50-mixed-c0-pr-wf200",
+      "fixture": {
+        "id": "env50-mixed-c0-pr-wf200",
+        "environments": 50,
+        "localShare": 0.5,
+        "clients": 0,
+        "prMix": "mixed",
+        "completedWorkflows": 200,
+        "untrackedFilesPerEnvironment": 3,
+        "local": 25,
+        "container": 25,
+        "prs": {
+          "none": 17,
+          "open": 17,
+          "terminal": 16
+        }
+      },
+      "startup": {
+        "pr-detection": {
+          "requested": 33,
+          "started": 33,
+          "completed": 33,
+          "unchanged": 33,
+          "workUnits": {
+            "docker-exec": 25,
+            "gh-spawn": 16,
+            "git-spawn": 8
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 17,
+          "started": 17,
+          "completed": 17,
+          "workUnits": {
+            "docker-exec": 9,
+            "gh-spawn": 8
+          }
+        },
+        "diff-scan": {
+          "requested": 100,
+          "started": 100,
+          "completed": 100,
+          "changed": 50,
+          "unchanged": 50,
+          "workUnits": {
+            "docker-exec": 75,
+            "file-read": 100,
+            "git-spawn": 150
+          }
+        },
+        "git-fetch-local": {
+          "requested": 25,
+          "coalesced": 3,
+          "started": 1,
+          "completed": 1,
+          "cacheHits": 21,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        },
+        "git-fetch-container": {
+          "requested": 75
+        },
+        "tmux-poll": {
+          "requested": 775,
+          "started": 775,
+          "completed": 775,
+          "changed": 25,
+          "unchanged": 750,
+          "workUnits": {
+            "docker-exec": 775,
+            "storage-stat": 75,
+            "storage-write": 25
+          }
+        }
+      },
+      "idle": {
+        "pr-detection": {
+          "requested": 990,
+          "started": 990,
+          "completed": 990,
+          "unchanged": 990,
+          "workUnits": {
+            "docker-exec": 750,
+            "gh-spawn": 480,
+            "git-spawn": 240
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 170,
+          "started": 170,
+          "completed": 170,
+          "workUnits": {
+            "docker-exec": 90,
+            "gh-spawn": 80
+          }
+        },
+        "diff-scan": {
+          "requested": 1125,
+          "started": 1125,
+          "completed": 1125,
+          "unchanged": 1125,
+          "workUnits": {
+            "docker-exec": 1000,
+            "file-read": 500,
+            "git-spawn": 625
+          }
+        },
+        "git-fetch-local": {
+          "requested": 125,
+          "started": 1,
+          "completed": 1,
+          "cacheHits": 124,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        },
+        "git-fetch-container": {
+          "requested": 1000
+        },
+        "tmux-poll": {
+          "requested": 15000,
+          "started": 15000,
+          "completed": 15000,
+          "unchanged": 15000,
+          "workUnits": {
+            "docker-exec": 15000,
+            "storage-stat": 1000
+          }
+        }
+      },
+      "idlePhysicalPerMinute": {
+        "docker-exec": 1684,
+        "file-read": 50,
+        "gh-spawn": 56,
+        "git-spawn": 86.6,
+        "storage-stat": 100
+      },
+      "modelledIdle": {
+        "native-activity-sweep": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-launch-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-queue-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "claude-state-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "tmux-queue-drain": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-presence": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-injection": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "pending-rename-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "coordinator-repair": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "mail-retention": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "activity-lease-expiry": {
+          "nominalCadenceMs": 15000,
+          "attempts": 40
+        },
+        "tab-cleanup": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "build-supervisor-tick": {
+          "nominalCadenceMs": 1500,
+          "attempts": 400,
+          "recordsScanned": 80000
+        },
+        "looped-review-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600,
+          "recordsScanned": 120000
+        },
+        "feature-planning-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600
+        }
+      }
+    },
+    {
+      "id": "env50-mixed-c2-pr-wf200",
+      "fixture": {
+        "id": "env50-mixed-c2-pr-wf200",
+        "environments": 50,
+        "localShare": 0.5,
+        "clients": 2,
+        "prMix": "mixed",
+        "completedWorkflows": 200,
+        "untrackedFilesPerEnvironment": 3,
+        "local": 25,
+        "container": 25,
+        "prs": {
+          "none": 17,
+          "open": 17,
+          "terminal": 16
+        }
+      },
+      "startup": {
+        "pr-detection": {
+          "requested": 33,
+          "started": 33,
+          "completed": 33,
+          "unchanged": 33,
+          "workUnits": {
+            "docker-exec": 25,
+            "gh-spawn": 16,
+            "git-spawn": 8
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 17,
+          "started": 17,
+          "completed": 17,
+          "workUnits": {
+            "docker-exec": 9,
+            "gh-spawn": 8
+          }
+        },
+        "diff-scan": {
+          "requested": 100,
+          "started": 100,
+          "completed": 100,
+          "changed": 50,
+          "unchanged": 50,
+          "workUnits": {
+            "docker-exec": 75,
+            "file-read": 100,
+            "git-spawn": 150
+          }
+        },
+        "file-list-read": {
+          "requested": 14,
+          "coalesced": 2,
+          "cacheHits": 12
+        },
+        "file-tree-read": {
+          "requested": 14,
+          "coalesced": 1,
+          "started": 1,
+          "completed": 1,
+          "changed": 1,
+          "cacheHits": 12,
+          "cacheMisses": 1,
+          "workUnits": {
+            "directory-read": 40,
+            "directory-walk": 1
+          }
+        },
+        "git-fetch-local": {
+          "requested": 25,
+          "coalesced": 3,
+          "started": 1,
+          "completed": 1,
+          "cacheHits": 21,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        },
+        "git-fetch-container": {
+          "requested": 75
+        },
+        "tmux-poll": {
+          "requested": 775,
+          "started": 775,
+          "completed": 775,
+          "changed": 25,
+          "unchanged": 750,
+          "workUnits": {
+            "docker-exec": 775,
+            "storage-stat": 75,
+            "storage-write": 25
+          }
+        }
+      },
+      "idle": {
+        "pr-detection": {
+          "requested": 990,
+          "started": 990,
+          "completed": 990,
+          "unchanged": 990,
+          "workUnits": {
+            "docker-exec": 750,
+            "gh-spawn": 480,
+            "git-spawn": 240
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 170,
+          "started": 170,
+          "completed": 170,
+          "workUnits": {
+            "docker-exec": 90,
+            "gh-spawn": 80
+          }
+        },
+        "diff-scan": {
+          "requested": 1125,
+          "started": 1125,
+          "completed": 1125,
+          "unchanged": 1125,
+          "workUnits": {
+            "docker-exec": 1000,
+            "file-read": 500,
+            "git-spawn": 625
+          }
+        },
+        "file-list-read": {
+          "requested": 240,
+          "cacheHits": 240
+        },
+        "file-tree-read": {
+          "requested": 240,
+          "cacheHits": 240
+        },
+        "git-fetch-local": {
+          "requested": 125,
+          "started": 1,
+          "completed": 1,
+          "cacheHits": 124,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        },
+        "git-fetch-container": {
+          "requested": 1000
+        },
+        "tmux-poll": {
+          "requested": 15000,
+          "started": 15000,
+          "completed": 15000,
+          "unchanged": 15000,
+          "workUnits": {
+            "docker-exec": 15000,
+            "storage-stat": 1000
+          }
+        }
+      },
+      "idlePhysicalPerMinute": {
+        "docker-exec": 1684,
+        "file-read": 50,
+        "gh-spawn": 56,
+        "git-spawn": 86.6,
+        "storage-stat": 100
+      },
+      "modelledIdle": {
+        "native-activity-sweep": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-launch-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-queue-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "claude-state-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "tmux-queue-drain": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-presence": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-injection": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "pending-rename-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "coordinator-repair": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "mail-retention": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "activity-lease-expiry": {
+          "nominalCadenceMs": 15000,
+          "attempts": 40
+        },
+        "tab-cleanup": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "build-supervisor-tick": {
+          "nominalCadenceMs": 1500,
+          "attempts": 400,
+          "recordsScanned": 80000
+        },
+        "looped-review-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600,
+          "recordsScanned": 120000
+        },
+        "feature-planning-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600
+        }
+      }
+    },
+    {
+      "id": "env50-container-c1-pr",
+      "fixture": {
+        "id": "env50-container-c1-pr",
+        "environments": 50,
+        "localShare": 0,
+        "clients": 1,
+        "prMix": "mixed",
+        "completedWorkflows": 0,
+        "untrackedFilesPerEnvironment": 3,
+        "local": 0,
+        "container": 50,
+        "prs": {
+          "none": 17,
+          "open": 17,
+          "terminal": 16
+        }
+      },
+      "startup": {
+        "pr-detection": {
+          "requested": 33,
+          "started": 33,
+          "completed": 33,
+          "unchanged": 33,
+          "workUnits": {
+            "docker-exec": 49
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 17,
+          "started": 17,
+          "completed": 17,
+          "workUnits": {
+            "docker-exec": 17
+          }
+        },
+        "diff-scan": {
+          "requested": 156,
+          "coalesced": 2,
+          "started": 154,
+          "completed": 154,
+          "changed": 50,
+          "unchanged": 104,
+          "workUnits": {
+            "docker-exec": 154
+          }
+        },
+        "file-list-read": {
+          "requested": 7,
+          "coalesced": 1,
+          "cacheMisses": 6
+        },
+        "file-tree-read": {
+          "requested": 7,
+          "started": 7,
+          "completed": 7,
+          "changed": 1,
+          "unchanged": 6,
+          "cacheMisses": 7,
+          "workUnits": {
+            "directory-walk": 7,
+            "docker-exec": 7
+          }
+        },
+        "git-fetch-container": {
+          "requested": 154
+        },
+        "tmux-poll": {
+          "requested": 1550,
+          "started": 1550,
+          "completed": 1550,
+          "changed": 50,
+          "unchanged": 1500,
+          "workUnits": {
+            "docker-exec": 1550,
+            "storage-stat": 150,
+            "storage-write": 50
+          }
+        }
+      },
+      "idle": {
+        "pr-detection": {
+          "requested": 990,
+          "started": 990,
+          "completed": 990,
+          "unchanged": 990,
+          "workUnits": {
+            "docker-exec": 1470
+          }
+        },
+        "pr-check-rollup": {
+          "requested": 170,
+          "started": 170,
+          "completed": 170,
+          "workUnits": {
+            "docker-exec": 170
+          }
+        },
+        "diff-scan": {
+          "requested": 2120,
+          "coalesced": 40,
+          "started": 2080,
+          "completed": 2080,
+          "unchanged": 2080,
+          "workUnits": {
+            "docker-exec": 2080
+          }
+        },
+        "file-list-read": {
+          "requested": 120,
+          "cacheMisses": 120
+        },
+        "file-tree-read": {
+          "requested": 120,
+          "started": 120,
+          "completed": 120,
+          "unchanged": 120,
+          "cacheMisses": 120,
+          "workUnits": {
+            "directory-walk": 120,
+            "docker-exec": 120
+          }
+        },
+        "git-fetch-container": {
+          "requested": 2080
+        },
+        "tmux-poll": {
+          "requested": 30000,
+          "started": 30000,
+          "completed": 30000,
+          "unchanged": 30000,
+          "workUnits": {
+            "docker-exec": 30000,
+            "storage-stat": 2000
+          }
+        }
+      },
+      "idlePhysicalPerMinute": {
+        "directory-walk": 12,
+        "docker-exec": 3384,
+        "storage-stat": 200
+      },
+      "modelledIdle": {
+        "native-activity-sweep": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-launch-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-queue-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "claude-state-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "tmux-queue-drain": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-presence": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-injection": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "pending-rename-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "coordinator-repair": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "mail-retention": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "activity-lease-expiry": {
+          "nominalCadenceMs": 15000,
+          "attempts": 40
+        },
+        "tab-cleanup": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "build-supervisor-tick": {
+          "nominalCadenceMs": 1500,
+          "attempts": 400,
+          "recordsScanned": 0
+        },
+        "looped-review-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600,
+          "recordsScanned": 0
+        },
+        "feature-planning-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600
+        }
+      }
+    },
+    {
+      "id": "env1-local-c2",
+      "fixture": {
+        "id": "env1-local-c2",
+        "environments": 1,
+        "localShare": 1,
+        "clients": 2,
+        "prMix": "none",
+        "completedWorkflows": 0,
+        "untrackedFilesPerEnvironment": 3,
+        "local": 1,
+        "container": 0,
+        "prs": {
+          "none": 1,
+          "open": 0,
+          "terminal": 0
+        }
+      },
+      "startup": {
+        "diff-scan": {
+          "requested": 1,
+          "started": 1,
+          "completed": 1,
+          "changed": 1,
+          "workUnits": {
+            "file-read": 4,
+            "git-spawn": 6
+          }
+        },
+        "file-list-read": {
+          "requested": 14,
+          "coalesced": 2,
+          "cacheHits": 12
+        },
+        "file-tree-read": {
+          "requested": 14,
+          "coalesced": 1,
+          "started": 1,
+          "completed": 1,
+          "changed": 1,
+          "cacheHits": 12,
+          "cacheMisses": 1,
+          "workUnits": {
+            "directory-read": 40,
+            "directory-walk": 1
+          }
+        },
+        "git-fetch-local": {
+          "requested": 1,
+          "started": 1,
+          "completed": 1,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        }
+      },
+      "idle": {
+        "diff-scan": {
+          "requested": 5,
+          "started": 5,
+          "completed": 5,
+          "unchanged": 5,
+          "workUnits": {
+            "file-read": 20,
+            "git-spawn": 25
+          }
+        },
+        "file-list-read": {
+          "requested": 240,
+          "cacheHits": 240
+        },
+        "file-tree-read": {
+          "requested": 240,
+          "cacheHits": 240
+        },
+        "git-fetch-local": {
+          "requested": 5,
+          "started": 1,
+          "completed": 1,
+          "cacheHits": 4,
+          "cacheMisses": 1,
+          "workUnits": {
+            "git-spawn": 1
+          }
+        }
+      },
+      "idlePhysicalPerMinute": {
+        "file-read": 2,
+        "git-spawn": 2.6
+      },
+      "modelledIdle": {
+        "native-activity-sweep": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-launch-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-queue-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "claude-state-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "tmux-queue-drain": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-presence": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-injection": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "pending-rename-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "coordinator-repair": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "mail-retention": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "activity-lease-expiry": {
+          "nominalCadenceMs": 15000,
+          "attempts": 40
+        },
+        "tab-cleanup": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "build-supervisor-tick": {
+          "nominalCadenceMs": 1500,
+          "attempts": 400,
+          "recordsScanned": 0
+        },
+        "looped-review-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600,
+          "recordsScanned": 0
+        },
+        "feature-planning-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600
+        }
+      }
+    },
+    {
+      "id": "env1-container-c2",
+      "fixture": {
+        "id": "env1-container-c2",
+        "environments": 1,
+        "localShare": 0,
+        "clients": 2,
+        "prMix": "none",
+        "completedWorkflows": 0,
+        "untrackedFilesPerEnvironment": 3,
+        "local": 0,
+        "container": 1,
+        "prs": {
+          "none": 1,
+          "open": 0,
+          "terminal": 0
+        }
+      },
+      "startup": {
+        "diff-scan": {
+          "requested": 9,
+          "coalesced": 2,
+          "started": 7,
+          "completed": 7,
+          "changed": 1,
+          "unchanged": 6,
+          "workUnits": {
+            "docker-exec": 7
+          }
+        },
+        "file-list-read": {
+          "requested": 14,
+          "coalesced": 8,
+          "cacheMisses": 6
+        },
+        "file-tree-read": {
+          "requested": 14,
+          "coalesced": 7,
+          "started": 7,
+          "completed": 7,
+          "changed": 1,
+          "unchanged": 6,
+          "cacheMisses": 7,
+          "workUnits": {
+            "directory-walk": 7,
+            "docker-exec": 7
+          }
+        },
+        "git-fetch-container": {
+          "requested": 7
+        },
+        "tmux-poll": {
+          "requested": 31,
+          "started": 31,
+          "completed": 31,
+          "changed": 1,
+          "unchanged": 30,
+          "workUnits": {
+            "docker-exec": 31,
+            "storage-stat": 3,
+            "storage-write": 1
+          }
+        }
+      },
+      "idle": {
+        "diff-scan": {
+          "requested": 160,
+          "coalesced": 40,
+          "started": 120,
+          "completed": 120,
+          "unchanged": 120,
+          "workUnits": {
+            "docker-exec": 120
+          }
+        },
+        "file-list-read": {
+          "requested": 240,
+          "coalesced": 120,
+          "cacheMisses": 120
+        },
+        "file-tree-read": {
+          "requested": 240,
+          "coalesced": 120,
+          "started": 120,
+          "completed": 120,
+          "unchanged": 120,
+          "cacheMisses": 120,
+          "workUnits": {
+            "directory-walk": 120,
+            "docker-exec": 120
+          }
+        },
+        "git-fetch-container": {
+          "requested": 120
+        },
+        "tmux-poll": {
+          "requested": 600,
+          "started": 600,
+          "completed": 600,
+          "unchanged": 600,
+          "workUnits": {
+            "docker-exec": 600,
+            "storage-stat": 40
+          }
+        }
+      },
+      "idlePhysicalPerMinute": {
+        "directory-walk": 12,
+        "docker-exec": 84,
+        "storage-stat": 4
+      },
+      "modelledIdle": {
+        "native-activity-sweep": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-launch-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "native-queue-scan": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "claude-state-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "tmux-queue-drain": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-presence": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "mail-injection": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "pending-rename-reconcile": {
+          "nominalCadenceMs": 2000,
+          "attempts": 300
+        },
+        "coordinator-repair": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "mail-retention": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "activity-lease-expiry": {
+          "nominalCadenceMs": 15000,
+          "attempts": 40
+        },
+        "tab-cleanup": {
+          "nominalCadenceMs": 60000,
+          "attempts": 10
+        },
+        "build-supervisor-tick": {
+          "nominalCadenceMs": 1500,
+          "attempts": 400,
+          "recordsScanned": 0
+        },
+        "looped-review-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600,
+          "recordsScanned": 0
+        },
+        "feature-planning-tick": {
+          "nominalCadenceMs": 1000,
+          "attempts": 600
+        }
+      }
+    }
+  ],
+  "limitations": [
+    "Call-count model on a manual clock: no process, container, repository, GitHub or provider is touched, and durations are not measured.",
+    "Physical units per seam call come from PHYSICAL_COST, read from the production scanners at this commit; the real scanners are not executed.",
+    "Driven owners: the worktree snapshot owner (diff statistics, Files-panel file-list and tree reads; watched local / polled container) behind the git-docker-scan admission pool, local git fetch scheduling, PR monitoring with check rollups, and Claude terminal-state polls (one per running container).",
+    "Native activity sweep, launch/queue scans, mail, coordinator repair, retention, tab cleanup and workflow ticks are modelled from nominal cadence only; their provider reads and storage costs need a live isolated profile.",
+    "Multi review uses an adaptive due scheduler by default (reconcile every 15 s plus per-workflow due passes); it is not modelled because idle cost depends on active workflows.",
+    "Local environments use a branch baseline, so every scan consults the fetch scheduler; environments created from an immutable commit skip that path.",
+    "No watcher change events occur in the idle window; burst edits, long reads, outages and approval/completion freshness need the live isolated profile described in the README.",
+    "Clients model the Files panel open on environment 0 with both the file list and file tree refreshing every 5 s; other renderer polling (native session views, meters) is not driven."
+  ]
+}

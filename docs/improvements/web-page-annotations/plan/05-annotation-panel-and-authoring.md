@@ -1,6 +1,6 @@
 # 05 — Annotation panel and authoring
 
-Status: Not started. Depends on: 03, 04. Milestone: A.
+Status: Implemented (2026-09-24); review gaps closed (2026-09-25); gate evidence partial. Depends on: 03, 04. Milestone: A.
 
 ## Deliverable and component boundaries
 

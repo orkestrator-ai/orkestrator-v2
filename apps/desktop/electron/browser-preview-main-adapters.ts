@@ -1,6 +1,8 @@
-import type {
-  BrowserPreviewOpenLinkEvent,
-  BrowserPreviewState,
+import {
+  BROWSER_PREVIEW_CAPTURE_EVENT,
+  type BrowserPreviewCaptureEvent,
+  type BrowserPreviewOpenLinkEvent,
+  type BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
 import type { InitializeBrowserPreviewsOptions } from "./browser-preview-startup.js";
 
@@ -13,7 +15,7 @@ export interface CreateBrowserPreviewMainAdaptersOptions {
 
 export type BrowserPreviewMainAdapters = Pick<
   InitializeBrowserPreviewsOptions,
-  "emitState" | "emitOpenLink" | "openExternal" | "writeClipboardText"
+  "emitState" | "emitOpenLink" | "openExternal" | "writeClipboardText" | "emitCaptureEvent"
 >;
 
 export function createBrowserPreviewMainAdapters({
@@ -27,6 +29,9 @@ export function createBrowserPreviewMainAdapters({
     emitOpenLink: (event: BrowserPreviewOpenLinkEvent) => {
       emitToRenderers("browser-preview-open-link", event);
     },
+    // Content-free hint; the renderer reads status and the spool for content.
+    emitCaptureEvent: (event: BrowserPreviewCaptureEvent) =>
+      emitToRenderers(BROWSER_PREVIEW_CAPTURE_EVENT, event),
     openExternal: (url: string) => {
       void openExternal(url).catch((error: unknown) => {
         logError("[BrowserPreview] Failed to open link externally:", error);

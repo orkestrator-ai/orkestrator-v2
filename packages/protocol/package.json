@@ -80,7 +80,10 @@
     "./web-client": "./src/web-client.ts",
     "./design-canvas": "./src/design-canvas.ts",
     "./design-operations": "./src/design-operations.ts",
-    "./design-runtime": "./src/design-runtime.ts"
+    "./design-runtime": "./src/design-runtime.ts",
+    "./web-annotations": "./src/web-annotations.ts",
+    "./web-annotations-validation": "./src/web-annotations-validation.ts",
+    "./web-annotations-fixtures": "./src/web-annotations-fixtures.ts"
   },
   "scripts": {
     "build": "bunx tsc --noEmit -p tsconfig.json",

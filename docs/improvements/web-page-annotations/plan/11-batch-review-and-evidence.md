@@ -1,6 +1,6 @@
 # 11 — Batch review and efficient evidence
 
-Status: Not started. Depends on: 06–10. Milestone: B.
+Status: Implemented (2026-09-24); review gaps closed (2026-09-25); gate evidence partial. Depends on: 06–10. Milestone: B.
 
 ## Deliverable
 

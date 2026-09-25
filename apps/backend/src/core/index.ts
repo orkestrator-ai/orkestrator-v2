@@ -1,5 +1,13 @@
 import { DesignService } from "./design-service.js";
 import { PreviewRuntime } from "./preview-runtime.js";
+import { WebAnnotationService } from "./web-annotation-service.js";
+import { WebAnnotationRollout } from "./web-annotation-rollout.js";
+import { WebAnnotationDispatchAdapter } from "./web-annotation-dispatch.js";
+import {
+  compileWebAnnotationBrief,
+  composeWebAnnotationDispatchText,
+} from "./web-annotation-brief.js";
+import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
 import {
   createMcpRuntimeProbe,
   mcpRolloutLoader,
@@ -83,6 +91,8 @@ export class OrkestratorBackend {
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private readonly workflowResults: WorkflowResultService;
   private readonly workflowResultRollout: WorkflowResultRollout;
+  private readonly webAnnotations: WebAnnotationService;
+  private readonly webAnnotationRollout: WebAnnotationRollout;
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
@@ -352,6 +362,37 @@ export class OrkestratorBackend {
       readContainerFile: readContainerMcpFile,
       loadRollout: mcpRolloutLoader(context),
     });
+    // Web annotations: backend-owned threads and requests. Execution goes
+    // through the native queue via the dispatch adapter; the tool host is
+    // installed on the agent tools server when it supports annotation tools.
+    const annotationTools = this.agentTools as {
+      setWebAnnotationToolHost?: (host: WebAnnotationToolHost | null) => void;
+      hasWebAnnotationTools?: () => boolean;
+    };
+    // Rollout switch: `config.global.webAnnotations.mode`, overridden by
+    // ORKESTRATOR_WEB_ANNOTATIONS_MODE. Defaults to enabled.
+    this.webAnnotationRollout = new WebAnnotationRollout(
+      async () => (await storage.loadConfig()).global.webAnnotations,
+    );
+    this.webAnnotations = new WebAnnotationService({
+      dataDir: options.dataDir,
+      emit: options.emit,
+      rolloutMode: () => this.webAnnotationRollout.mode,
+      storage,
+      dispatch: new WebAnnotationDispatchAdapter({
+        storage,
+        nativeAgents: this.nativeAgents,
+        invoke: (command, args) => this.invoke(command, args),
+        resultToolsAvailable: () => annotationTools.hasWebAnnotationTools?.() ?? false,
+      }),
+      compileBrief: compileWebAnnotationBrief,
+      composeText: composeWebAnnotationDispatchText,
+      invoke: (command, args) => this.invoke(command, args),
+      resultTools: typeof annotationTools.setWebAnnotationToolHost === "function",
+    });
+    annotationTools.setWebAnnotationToolHost?.(this.webAnnotations.toolHost());
+    context.webAnnotations = this.webAnnotations;
+    context.webAnnotationRollout = this.webAnnotationRollout;
     this.projectGit = new ProjectGitService(storage, async (projectId) => {
       const workspace = await storage.getCoordinatorWorkspace(projectId);
       if (!workspace) return false;
@@ -508,6 +549,14 @@ export class OrkestratorBackend {
       console.warn(
         "[backend] Design storage failed to initialize:",
         (error as NodeJS.ErrnoException)?.code ?? "error",
+      );
+    });
+    await this.webAnnotationRollout.refresh();
+    // Unreadable annotation storage degrades that feature, not the backend.
+    await this.webAnnotations.initialize().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to initialize web annotations:",
+        error instanceof Error ? error.name : "unknown",
       );
     });
     // Preview definitions load before the gateway accepts commands; resolving
@@ -755,6 +804,9 @@ export class OrkestratorBackend {
     await this.nativeAgents.reconcileAgentActivity().catch((error) => {
       console.warn("[backend] Failed to restore native agent activity:", error);
     });
+    // Annotation requests reconcile against native dispatch state, so start
+    // only once native sessions are restored. Runs with no renderer mounted.
+    this.webAnnotations.startReconciler();
     const reconcileClaudeState = this.commands.get("reconcile_claude_state_polling");
     if (reconcileClaudeState) {
       await Promise.resolve(reconcileClaudeState({}, this.context)).catch((error: unknown) => {
@@ -930,6 +982,9 @@ export class OrkestratorBackend {
   async shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
+    // Stop new annotation reconciliation; pending requests stay as persisted
+    // (never marked failed) and resume on the next start.
+    this.webAnnotations.stopReconciler();
     if (this.activityLeaseSweep) {
       clearInterval(this.activityLeaseSweep);
       this.activityLeaseSweep = null;
@@ -1006,6 +1061,15 @@ export class OrkestratorBackend {
         await this.controlMcp.stop();
         await this.agentTools.stop();
         await this.context.design?.close();
+        await Promise.race([
+          this.webAnnotations.close().catch((error: unknown) => {
+            console.warn(
+              "[backend] Failed to flush web annotations:",
+              error instanceof Error ? error.name : "unknown",
+            );
+          }),
+          new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref?.()),
+        ]);
       }
     })();
     this.shutdownPromise = attempt;

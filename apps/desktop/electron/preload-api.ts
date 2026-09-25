@@ -1,6 +1,6 @@
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import type {
-  BrowserPreviewAnnotationStatus,
+  BrowserPreviewCaptureApi,
   BrowserPreviewServiceTarget,
   BrowserPreviewAttachInput,
   BrowserPreviewBounds,
@@ -41,6 +41,50 @@ export function exposeActiveConnectionGateway(
     baseUrl: activeConnection.address,
   });
   return true;
+}
+
+/** `window.orkestrator.browserPreview.capture`, exactly `BrowserPreviewCaptureApi`. */
+export function createBrowserPreviewCaptureApi(
+  ipcRenderer: IpcRendererLike,
+): BrowserPreviewCaptureApi {
+  return {
+    startCapture: (input) => ipcRenderer.invoke("orkestrator:browser-preview:capture-start", input),
+    getCaptureStatus: (tabId) =>
+      ipcRenderer.invoke("orkestrator:browser-preview:capture-status", tabId),
+    cancelCapture: (tabId) =>
+      ipcRenderer.invoke("orkestrator:browser-preview:capture-cancel", tabId),
+    listPendingCaptures: () =>
+      ipcRenderer.invoke("orkestrator:browser-preview:capture-pending-list"),
+    readPendingCapture: (captureId) =>
+      ipcRenderer.invoke("orkestrator:browser-preview:capture-pending-read", captureId),
+    replacePendingCaptureImage: (captureId, input) =>
+      ipcRenderer.invoke(
+        "orkestrator:browser-preview:capture-pending-replace-image",
+        captureId,
+        input,
+      ),
+    acknowledgePendingCapture: (ack) =>
+      ipcRenderer.invoke("orkestrator:browser-preview:capture-pending-ack", ack),
+    discardPendingCapture: (captureId) =>
+      ipcRenderer.invoke("orkestrator:browser-preview:capture-pending-discard", captureId),
+    showPins: (input) => ipcRenderer.invoke("orkestrator:browser-preview:capture-pins-show", input),
+    clearPins: (tabId) =>
+      ipcRenderer.invoke("orkestrator:browser-preview:capture-pins-clear", tabId),
+    getCaptureCapabilities: () =>
+      ipcRenderer.invoke("orkestrator:browser-preview:capture-capabilities"),
+    recordPendingCaptureReceipt: (ack) =>
+      ipcRenderer.invoke("orkestrator:browser-preview:capture-pending-receipt", ack),
+    listExpiredCaptureNotices: () =>
+      ipcRenderer.invoke("orkestrator:browser-preview:capture-expired-list"),
+    dismissExpiredCaptureNotices: (captureIds) =>
+      ipcRenderer.invoke("orkestrator:browser-preview:capture-expired-dismiss", captureIds),
+    getPinResults: (tabId) =>
+      ipcRenderer.invoke("orkestrator:browser-preview:capture-pins-results", tabId),
+    showOnPage: (input) =>
+      ipcRenderer.invoke("orkestrator:browser-preview:capture-show-on-page", input),
+    captureResponsiveSet: (input) =>
+      ipcRenderer.invoke("orkestrator:browser-preview:capture-responsive-set", input),
+  };
 }
 
 export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
@@ -194,15 +238,7 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       openDevTools(tabId: string): Promise<BrowserPreviewState> {
         return ipcRenderer.invoke("orkestrator:browser-preview:open-devtools", tabId);
       },
-      startAnnotation(tabId: string): Promise<BrowserPreviewAnnotationStatus> {
-        return ipcRenderer.invoke("orkestrator:browser-preview:annotation-start", tabId);
-      },
-      getAnnotationStatus(tabId: string): Promise<BrowserPreviewAnnotationStatus> {
-        return ipcRenderer.invoke("orkestrator:browser-preview:annotation-status", tabId);
-      },
-      cancelAnnotation(tabId: string): Promise<void> {
-        return ipcRenderer.invoke("orkestrator:browser-preview:annotation-cancel", tabId);
-      },
+      capture: createBrowserPreviewCaptureApi(ipcRenderer),
       destroy(tabId: string): Promise<void> {
         return ipcRenderer.invoke("orkestrator:browser-preview:destroy", tabId);
       },

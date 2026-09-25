@@ -2751,6 +2751,14 @@ export async function sendPrompt(
           throw new Error(resultError);
         }
       } else if (message.type === "stream_event") {
+        // A resumed root turn can think for minutes before its first complete
+        // assistant record, streaming only partials meanwhile. Waiting for that
+        // record left the session idle — and the environment marked done —
+        // while Claude was still working, so the first root partial reclaims.
+        // Pings carry no content and are not evidence of a new model request.
+        if ((message as { event?: { type?: unknown } }).event?.type !== "ping") {
+          reclaimReleasedTurnForAssistant(message as SdkMessageBase);
+        }
         publishStreamUsage(message);
         stream.applyPartialAssistantMessage(message);
       } else if (message.type === "tool_progress") {

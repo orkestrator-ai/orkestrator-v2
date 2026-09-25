@@ -1,6 +1,6 @@
 # Cursor bridge stall in the full-suite bridges group
 
-- **ID:** 0162
+- **ID:** 0164
 - **Status:** open
 - **Date observed:** 2026-09-24
 - **Tests:** no case reported; Turborepo force-killed `cursor-bridge#test:bridge`

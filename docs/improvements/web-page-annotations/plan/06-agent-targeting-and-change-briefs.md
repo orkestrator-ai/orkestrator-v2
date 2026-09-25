@@ -1,6 +1,6 @@
 # 06 — Agent targeting and change briefs
 
-Status: Not started. Depends on: 01–03, 05. Milestone: A.
+Status: Implemented (2026-09-24); review gaps closed (2026-09-25); gate evidence partial. Depends on: 01–03, 05. Milestone: A.
 
 ## Deliverable
 

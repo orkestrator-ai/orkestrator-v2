@@ -12,6 +12,12 @@ export interface TranscriptAnnotation {
   source?: TranscriptAnnotationSource;
   /** Workspace path for the highlighted browser-frame capture. */
   screenshotPath?: string;
+  /**
+   * Set on a legacy browser note that the backend imported into a durable web
+   * annotation thread (the thread id). A migrated reference is owned by that
+   * thread: sending one chat must not consume other drafts' copies of it.
+   */
+  migratedTo?: string;
 }
 
 export interface PromptTranscriptReference {
@@ -65,8 +71,25 @@ export function isTranscriptAnnotation(value: unknown): value is TranscriptAnnot
       annotation.source === "browser" ||
       annotation.source === "design") &&
     (annotation.screenshotPath === undefined ||
-      (typeof annotation.screenshotPath === "string" && annotation.screenshotPath.length <= 4_096))
+      (typeof annotation.screenshotPath === "string" &&
+        annotation.screenshotPath.length <= 4_096)) &&
+    (annotation.migratedTo === undefined ||
+      (typeof annotation.migratedTo === "string" &&
+        annotation.migratedTo.length > 0 &&
+        annotation.migratedTo.length <= 200))
   );
+}
+
+/**
+ * The draft annotations that are prompt content. A migrated reference
+ * (`migratedTo`) is a display-only link to the durable web annotation thread
+ * that owns it: it is never sent, never counts toward the per-prompt limit, and
+ * never makes an otherwise empty draft sendable.
+ */
+export function sendableTranscriptAnnotations<T extends TranscriptAnnotation>(
+  annotations: readonly T[],
+): T[] {
+  return annotations.filter((annotation) => !annotation.migratedTo);
 }
 
 /**
@@ -82,8 +105,9 @@ export function buildPromptWithTranscriptAnnotations(
   prompt: string,
   annotations: readonly TranscriptAnnotation[],
 ): string {
-  const validAnnotations = annotations
-    .filter(isTranscriptAnnotation)
+  // A migrated reference is owned by its web annotation thread and is never
+  // sent to an agent from a chat draft.
+  const validAnnotations = sendableTranscriptAnnotations(annotations.filter(isTranscriptAnnotation))
     .slice(0, MAX_TRANSCRIPT_ANNOTATIONS)
     .map((annotation, index) => ({
       reference: index + 1,

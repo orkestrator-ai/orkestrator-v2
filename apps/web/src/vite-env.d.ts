@@ -118,13 +118,11 @@ interface Window {
       openDevTools(
         tabId: string,
       ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
-      startAnnotation(
-        tabId: string,
-      ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewAnnotationStatus>;
-      getAnnotationStatus(
-        tabId: string,
-      ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewAnnotationStatus>;
-      cancelAnnotation(tabId: string): Promise<void>;
+      /**
+       * Trusted web annotation capture (selection, pending spool, pins).
+       * Present only on desktop builds that implement it; feature-detect.
+       */
+      capture?: import("@orkestrator/protocol/browser-preview").BrowserPreviewCaptureApi;
       destroy(tabId: string): Promise<void>;
       /** Present on desktop builds with service previews. */
       resetServiceSiteData?(

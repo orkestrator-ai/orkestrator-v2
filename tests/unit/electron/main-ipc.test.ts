@@ -1,5 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import { registerMainIpc } from "../../../apps/desktop/electron/ipc";
+import { fixtureTargets } from "@orkestrator/protocol/web-annotations-fixtures";
+
+const CAPTURE_ID = "capture-0f8fad5b-d9cb-469f-a165-70867728950e";
 
 type IpcEvent = { senderFrame: { url: string } | null };
 type Handler = (event: IpcEvent, ...args: unknown[]) => unknown;
@@ -123,9 +126,16 @@ function createHarness(
     goForward: mock(() => browserPreviewState),
     reload: mock(() => browserPreviewState),
     openDevTools: mock(() => browserPreviewState),
-    startAnnotation: mock(async () => ({ status: "active" as const })),
-    getAnnotationStatus: mock(async () => ({ status: "active" as const })),
-    cancelAnnotation: mock(async () => undefined),
+    startCapture: mock(async () => ({ status: "inactive" as const })),
+    getCaptureStatus: mock(async () => ({ status: "inactive" as const })),
+    cancelCapture: mock(async () => undefined),
+    listPendingCaptures: mock(async () => []),
+    readPendingCapture: mock(async () => null),
+    replacePendingCaptureImage: mock(async () => ({}) as never),
+    acknowledgePendingCapture: mock(async () => undefined),
+    discardPendingCapture: mock(async () => undefined),
+    showPins: mock(async () => []),
+    clearPins: mock(async () => undefined),
     destroy: mock(() => undefined),
   };
 
@@ -403,9 +413,6 @@ describe("main IPC registration", () => {
     await harness.invoke("orkestrator:browser-preview:go-forward", "browser-1");
     await harness.invoke("orkestrator:browser-preview:reload", "browser-1");
     await harness.invoke("orkestrator:browser-preview:open-devtools", "browser-1");
-    await harness.invoke("orkestrator:browser-preview:annotation-start", "browser-1");
-    await harness.invoke("orkestrator:browser-preview:annotation-status", "browser-1");
-    await harness.invoke("orkestrator:browser-preview:annotation-cancel", "browser-1");
     await harness.invoke("orkestrator:browser-preview:destroy", "browser-1");
 
     expect(harness.browserPreviews.attach).toHaveBeenCalledWith({
@@ -424,9 +431,6 @@ describe("main IPC registration", () => {
     expect(harness.browserPreviews.goForward).toHaveBeenCalledWith("browser-1");
     expect(harness.browserPreviews.reload).toHaveBeenCalledWith("browser-1");
     expect(harness.browserPreviews.openDevTools).toHaveBeenCalledWith("browser-1");
-    expect(harness.browserPreviews.startAnnotation).toHaveBeenCalledWith("browser-1");
-    expect(harness.browserPreviews.getAnnotationStatus).toHaveBeenCalledWith("browser-1");
-    expect(harness.browserPreviews.cancelAnnotation).toHaveBeenCalledWith("browser-1");
     expect(harness.browserPreviews.destroy).toHaveBeenCalledWith("browser-1");
     await expect(
       harness.invoke("orkestrator:browser-preview:attach", { tabId: "", url: 42 }),
@@ -493,6 +497,217 @@ describe("main IPC registration", () => {
         visible: "true",
       }),
     ).rejects.toThrow("Expected a browser preview URL and visibility");
+  });
+
+  test("routes trusted capture channels and removes the legacy annotation channels", async () => {
+    const harness = createHarness();
+    for (const legacy of ["annotation-start", "annotation-status", "annotation-cancel"]) {
+      expect(harness.handlers.has(`orkestrator:browser-preview:${legacy}`)).toBe(false);
+    }
+    const ack = {
+      captureId: CAPTURE_ID,
+      annotationId: "annotation-1",
+      backendCaptureId: "capture-b1",
+    };
+    const pins = {
+      tabId: "browser-1",
+      pins: [
+        { annotationId: "annotation-1", number: 1, target: fixtureTargets.element, route: "/" },
+      ],
+      focusedAnnotationId: "annotation-1",
+      scrollIntoView: true,
+    };
+
+    await harness.invoke("orkestrator:browser-preview:capture-start", {
+      tabId: "browser-1",
+      mode: "text",
+      environmentId: "env-1",
+      annotationId: "annotation-1",
+      extra: "dropped",
+    });
+    await harness.invoke("orkestrator:browser-preview:capture-status", "browser-1");
+    await harness.invoke("orkestrator:browser-preview:capture-cancel", "browser-1");
+    await harness.invoke("orkestrator:browser-preview:capture-pending-list");
+    await harness.invoke("orkestrator:browser-preview:capture-pending-read", CAPTURE_ID);
+    await harness.invoke("orkestrator:browser-preview:capture-pending-replace-image", CAPTURE_ID, {
+      imageDataUrl: null,
+      manualRegions: 3,
+    });
+    await harness.invoke("orkestrator:browser-preview:capture-pending-ack", ack);
+    await harness.invoke("orkestrator:browser-preview:capture-pending-discard", CAPTURE_ID);
+    await harness.invoke("orkestrator:browser-preview:capture-pins-show", pins);
+    await harness.invoke("orkestrator:browser-preview:capture-pins-clear", "browser-1");
+
+    const previews = harness.browserPreviews;
+    expect(previews.startCapture).toHaveBeenCalledWith({
+      tabId: "browser-1",
+      mode: "text",
+      environmentId: "env-1",
+      annotationId: "annotation-1",
+    });
+    expect(previews.getCaptureStatus).toHaveBeenCalledWith("browser-1");
+    expect(previews.cancelCapture).toHaveBeenCalledWith("browser-1");
+    expect(previews.listPendingCaptures).toHaveBeenCalledTimes(1);
+    expect(previews.readPendingCapture).toHaveBeenCalledWith(CAPTURE_ID);
+    expect(previews.replacePendingCaptureImage).toHaveBeenCalledWith(CAPTURE_ID, {
+      imageDataUrl: null,
+      manualRegions: 3,
+    });
+    expect(previews.acknowledgePendingCapture).toHaveBeenCalledWith(ack);
+    expect(previews.discardPendingCapture).toHaveBeenCalledWith(CAPTURE_ID);
+    expect(previews.showPins).toHaveBeenCalledWith(pins);
+    expect(previews.clearPins).toHaveBeenCalledWith("browser-1");
+  });
+
+  test("rejects malformed trusted capture arguments before reaching the manager", async () => {
+    const harness = createHarness();
+    const invalid: Array<[string, unknown[], string]> = [
+      [
+        "capture-start",
+        [{ tabId: "browser-1", mode: "comment", environmentId: "env-1" }],
+        "capture mode",
+      ],
+      ["capture-start", [{ tabId: "", mode: "element", environmentId: "env-1" }], "tab ID"],
+      [
+        "capture-start",
+        [{ tabId: "browser-1", mode: "element", environmentId: "" }],
+        "environment ID",
+      ],
+      [
+        "capture-start",
+        [{ tabId: "browser-1", mode: "element", environmentId: "env\n1" }],
+        "environment ID",
+      ],
+      [
+        "capture-start",
+        [{ tabId: "browser-1", mode: "element", environmentId: "e", annotationId: "../x" }],
+        "annotation ID",
+      ],
+      ["capture-start", [null], "capture details"],
+      ["capture-status", ["x".repeat(257)], "tab ID"],
+      ["capture-pending-read", ["../../../etc/passwd"], "pending capture ID"],
+      ["capture-pending-read", [42], "pending capture ID"],
+      ["capture-pending-discard", ["capture-1"], "pending capture ID"],
+      [
+        "capture-pending-replace-image",
+        [CAPTURE_ID, { imageDataUrl: 42, manualRegions: 0 }],
+        "PNG data URL",
+      ],
+      [
+        "capture-pending-replace-image",
+        [
+          CAPTURE_ID,
+          { imageDataUrl: `data:image/png;base64,${"A".repeat(12_000_000)}`, manualRegions: 0 },
+        ],
+        "PNG data URL",
+      ],
+      [
+        "capture-pending-replace-image",
+        [CAPTURE_ID, { imageDataUrl: null, manualRegions: 33 }],
+        "redaction region",
+      ],
+      [
+        "capture-pending-replace-image",
+        [CAPTURE_ID, { imageDataUrl: null, manualRegions: 1.5 }],
+        "redaction region",
+      ],
+      [
+        "capture-pending-ack",
+        [{ captureId: CAPTURE_ID, annotationId: "", backendCaptureId: "b" }],
+        "annotation and capture IDs",
+      ],
+      [
+        "capture-pending-ack",
+        [{ captureId: "nope", annotationId: "a", backendCaptureId: "b" }],
+        "pending capture ID",
+      ],
+      ["capture-pins-show", [{ tabId: "browser-1", pins: "all" }], "at most 50 pins"],
+      [
+        "capture-pins-show",
+        [
+          {
+            tabId: "browser-1",
+            pins: Array.from({ length: 51 }, (_, index) => ({
+              annotationId: `a-${index}`,
+              number: 1,
+              target: fixtureTargets.page,
+              route: "/",
+            })),
+          },
+        ],
+        "at most 50 pins",
+      ],
+      [
+        "capture-pins-show",
+        [
+          {
+            tabId: "browser-1",
+            pins: [{ annotationId: "a", number: 0, target: fixtureTargets.page, route: "/" }],
+          },
+        ],
+        "pin number",
+      ],
+      [
+        "capture-pins-show",
+        [
+          {
+            tabId: "browser-1",
+            pins: [
+              { annotationId: "a", number: 1, target: fixtureTargets.page, route: "relative" },
+            ],
+          },
+        ],
+        "pin route",
+      ],
+      [
+        "capture-pins-show",
+        [
+          {
+            tabId: "browser-1",
+            pins: [
+              { annotationId: "a", number: 1, target: { kind: "element", label: "x" }, route: "/" },
+            ],
+          },
+        ],
+        "pin target",
+      ],
+      [
+        "capture-pins-show",
+        [
+          {
+            tabId: "browser-1",
+            pins: [
+              { annotationId: "a", number: 1, target: fixtureTargets.page, route: "/" },
+              { annotationId: "a", number: 2, target: fixtureTargets.page, route: "/" },
+            ],
+          },
+        ],
+        "unique pin annotation IDs",
+      ],
+    ];
+    for (const [channel, args, message] of invalid) {
+      await expect(
+        harness.invoke(`orkestrator:browser-preview:${channel}`, ...args),
+      ).rejects.toThrow(message);
+    }
+    for (const method of [
+      "startCapture",
+      "getCaptureStatus",
+      "readPendingCapture",
+      "discardPendingCapture",
+      "replacePendingCaptureImage",
+      "acknowledgePendingCapture",
+      "showPins",
+    ] as const) {
+      expect(harness.browserPreviews[method]).not.toHaveBeenCalled();
+    }
+    await expect(
+      harness.invokeFrom(
+        "https://evil.example/",
+        "orkestrator:browser-preview:capture-pending-list",
+      ),
+    ).rejects.toThrow("untrusted renderer");
+    expect(harness.browserPreviews.listPendingCaptures).not.toHaveBeenCalled();
   });
 
   test("reports unavailable native browser preview controllers", async () => {

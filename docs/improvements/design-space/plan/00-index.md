@@ -208,7 +208,7 @@ The living behaviour description is
 | Protocol runtime: `bun test packages/protocol/src/design-runtime.test.ts` | 10 pass |
 | Component browser: `bunx playwright test --config e2e/playwright.config.ts DesignCanvas DesignLaunchDialog` (desktop + phone) | pass |
 | `mise run check` (format, lint, typecheck) | pass |
-| `mise run test` (final run, after review fixes) | all four groups pass: workspace (web, backend, desktop, web-public, cli, protocol), root and agent-support, bridges, codex-protocol lockfile. Earlier runs hit two unrelated aggregate stalls that pass alone, recorded as flakes [0161](../../../tests/flaky-tests/0161-claude-credential-injection-aggregate-hang.md) and [0162](../../../tests/flaky-tests/0162-cursor-bridge-turbo-group-stall.md). |
+| `mise run test` (final run, after review fixes) | all four groups pass: workspace (web, backend, desktop, web-public, cli, protocol), root and agent-support, bridges, codex-protocol lockfile. Earlier runs hit two unrelated aggregate stalls that pass alone, recorded as flakes [0163](../../../tests/flaky-tests/0163-claude-credential-injection-aggregate-hang.md) and [0164](../../../tests/flaky-tests/0164-cursor-bridge-turbo-group-stall.md). |
 | `mise run test:agent:design:isolated` | pass (1 test, `real gateway saves a design and rehydrates another client's edits`) on `7081ae8c`, 2026-09-24. It was blocked on `2aec227b` because the dev Electron main process loaded raw protocol TypeScript; #840 fixed that on `main`. |
 
 Browser/agent gaps that remain explicit: no live Claude/Codex design-tool

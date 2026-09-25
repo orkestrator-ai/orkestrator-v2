@@ -1,6 +1,7 @@
 # Web page annotations — implementation plan
 
-Status: Not started. Source review: 2026-09-21.
+Status: Implemented; review gaps closed (2026-09-25); gate verification partial. Source review: 2026-09-21.
+Living guide: [web-page-annotations.md](../../../architecture/web-page-annotations.md).
 
 This plan implements the recommendations in
 [the findings](../../web-page-annotations.md). It describes proposed work;
@@ -29,20 +30,20 @@ every step, not only after all feature work is complete.
 
 | Step | Plan | Dependencies | Milestone | Status |
 | --- | --- | --- | --- | --- |
-| 01 | [Domain model, contracts, and state transitions](01-domain-model-and-contracts.md) | None | A | Not started |
-| 02 | [Durable storage, assets, and retention](02-storage-assets-and-retention.md) | 01 | A | Not started |
-| 03 | [Commands, synchronization, and capability discovery](03-commands-synchronization-and-capabilities.md) | 01, 02 | A | Not started |
-| 04 | [Trusted capture and acknowledged delivery](04-trusted-capture-and-delivery.md) | 01–03 | A | Not started |
-| 05 | [Annotation panel and authoring](05-annotation-panel-and-authoring.md) | 03, 04 | A | Not started |
-| 06 | [Agent targeting and change briefs](06-agent-targeting-and-change-briefs.md) | 01–03, 05 | A | Not started |
-| 07 | [Dispatch, queues, and recovery](07-dispatch-queues-and-recovery.md) | 02, 03, 06 | A | Not started |
-| 08 | [Discussion, progress, and manual review](08-discussion-progress-and-review.md) | 05–07 | A | Not started |
-| 09 | [Legacy migration and first release](09-migration-and-first-release.md) | 01–08; step 14 gate A | A | Not started |
-| 10 | [Anchors, navigation, and stale targets](10-anchors-navigation-and-stale-targets.md) | 04, 05, 09 | B | Not started |
-| 11 | [Batch review and efficient evidence](11-batch-review-and-evidence.md) | 06–10 | B | Not started |
-| 12 | [Structured results and visual verification](12-results-and-visual-verification.md) | 08, 10, 11 | C | Not started |
-| 13 | [Additional capture modes and client support](13-capture-modes-and-client-support.md) | 10–12 | C | Not started |
-| 14 | [Validation, observability, and release gates](14-validation-observability-and-release.md) | Starts after 01; gates each milestone | A–C | Not started |
+| 01 | [Domain model, contracts, and state transitions](01-domain-model-and-contracts.md) | None | A | Implemented; gaps closed 2026-09-25; gate partial |
+| 02 | [Durable storage, assets, and retention](02-storage-assets-and-retention.md) | 01 | A | Implemented; gaps closed 2026-09-25; gate partial |
+| 03 | [Commands, synchronization, and capability discovery](03-commands-synchronization-and-capabilities.md) | 01, 02 | A | Implemented; gaps closed 2026-09-25; gate partial |
+| 04 | [Trusted capture and acknowledged delivery](04-trusted-capture-and-delivery.md) | 01–03 | A | Implemented; gaps closed 2026-09-25; gate partial |
+| 05 | [Annotation panel and authoring](05-annotation-panel-and-authoring.md) | 03, 04 | A | Implemented; gaps closed 2026-09-25; gate partial |
+| 06 | [Agent targeting and change briefs](06-agent-targeting-and-change-briefs.md) | 01–03, 05 | A | Implemented; gaps closed 2026-09-25; gate partial |
+| 07 | [Dispatch, queues, and recovery](07-dispatch-queues-and-recovery.md) | 02, 03, 06 | A | Implemented; gaps closed 2026-09-25; gate partial |
+| 08 | [Discussion, progress, and manual review](08-discussion-progress-and-review.md) | 05–07 | A | Implemented; gaps closed 2026-09-25; gate partial |
+| 09 | [Legacy migration and first release](09-migration-and-first-release.md) | 01–08; step 14 gate A | A | Implemented; gaps closed 2026-09-25; gate partial |
+| 10 | [Anchors, navigation, and stale targets](10-anchors-navigation-and-stale-targets.md) | 04, 05, 09 | B | Implemented; gaps closed 2026-09-25; gate partial |
+| 11 | [Batch review and efficient evidence](11-batch-review-and-evidence.md) | 06–10 | B | Implemented; gaps closed 2026-09-25; gate partial |
+| 12 | [Structured results and visual verification](12-results-and-visual-verification.md) | 08, 10, 11 | C | Implemented; gaps closed 2026-09-25; gate partial |
+| 13 | [Additional capture modes and client support](13-capture-modes-and-client-support.md) | 10–12 | C | Implemented; gaps closed 2026-09-25; gate partial |
+| 14 | [Validation, observability, and release gates](14-validation-observability-and-release.md) | Starts after 01; gates each milestone | A–C | Fixture, real-stack specs and bounds landed; live-agent, Docker, remote and iOS gates outstanding |
 
 ### Milestones
 
@@ -58,6 +59,57 @@ every step, not only after all feature work is complete.
 Within each milestone, merge small PRs through the repository's normal review
 process. Keep incomplete entry points disabled by backend/client capability
 negotiation. Final merges to `main` belong to a human maintainer.
+
+## Implementation record (2026-09-24)
+
+All steps landed in one working tree on branch `20260924-090518-b9c71b2501fe`
+(not yet committed or reviewed). Automated evidence: protocol, backend,
+desktop and web unit/contract suites, repository `mise run check`, and
+`mise run test`. Not yet exercised: the isolated Electron native-window checks,
+Docker materialization, remote backend upload, live-agent smoke runs per
+provider, and the synthetic fixture application from step 14. Checkboxes in
+the step files remain unchecked until that gate evidence is recorded.
+
+Deviations and known gaps are listed under **Known limitations** in the living
+guide.
+
+## Gap-closure record (2026-09-25)
+
+A plan-versus-code audit found partial or missing work in every step. The
+follow-up changes on this branch close those gaps:
+
+- **Contracts and storage (01–03, 09, 14):** plan page size, justified
+  transition table, archive and continuation at capacity, typed errors with
+  usage, a manifest without prompt or draft bodies, startup record validation,
+  symlink-safe container materialization with owned cleanup, a rollout switch
+  (`enabled`/`read-only`/`disabled`), content-free metrics, and migration
+  receipts with screenshot and ownership metadata.
+- **Dispatch and results (06–08, 11–12):** removing an annotation from the chat
+  queue cancels the request; annotation queue items are frozen; missing
+  destinations and rejected dispatches are explicit holds; the native queue is
+  no longer un-parked automatically; recorded turn outcomes, linked
+  interactions, transcript message ids, the session's own mode for implement
+  requests, capability-derived tool support, per-model image support,
+  deterministic cross-session thread excerpts, batch follow-ups, per-annotation
+  result captures and agent-reported and app-observed evidence kept apart.
+- **Desktop capture (04, 05, 10, 12, 13):** typed expiry notices, receipts and
+  recapture, keyboard-only selection, editor focus handoff, corroborated
+  anchors, `too-complex` and `historical` outcomes, bounded mutation-driven pin
+  re-resolution, `showOnPage`, stable result captures with reapplied masks,
+  advertised capture modes and responsive capture sets.
+- **Web (03–13):** automatic upload resume and re-acknowledgement, local draft
+  persistence, archive and history paging, narrow-layout switching, dirty
+  compose-draft reconciliation, rollout banners and settings, request execution
+  states, in-panel interaction answers, follow-up and retarget flows, and
+  conversation navigation to the request's message.
+- **Validation (14):** the synthetic fixture application
+  (`test-fixtures/agent-project/annotation-app/`), Electron and gateway
+  real-stack specs under `e2e/agent-testing/`, and worst-case payload bounds
+  (`web-annotation-payloads.bench.test.ts`).
+
+Gate evidence recorded so far is in step 14. Live-agent implementation runs,
+Docker materialization, remote upload, iOS review and multi-zoom native-window
+checks remain outstanding, so the step checkboxes stay unchecked.
 
 ## Architectural decisions
 

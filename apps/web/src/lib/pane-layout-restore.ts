@@ -7,6 +7,7 @@ import {
   MAX_SPLIT_DEPTH,
   PANE_LAYOUT_VERSION,
   PROVIDER_NATIVE_PANE_LAYOUT_VERSION,
+  sanitizeBrowserAnnotationPanelState,
   type PaneLeaf,
   type PaneNode,
   type PaneSplit,
@@ -169,6 +170,7 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
       rawHistory ? sanitizeBrowserHistoryForPersistence(rawHistory) : undefined,
       rawHistoryIndex,
     );
+    const annotationPanel = sanitizeBrowserAnnotationPanelState(value.browserData.annotationPanel);
     return {
       ...common,
       type,
@@ -176,6 +178,7 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
         url,
         ...(history ? { history } : {}),
         ...(historyIndex !== undefined ? { historyIndex } : {}),
+        ...(annotationPanel ? { annotationPanel } : {}),
       },
     };
   }

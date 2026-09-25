@@ -121,7 +121,7 @@ export function persistComposeDraft<T>(
   ownerId: string,
   value: T,
   revisionState?: DraftRevisionState,
-): Promise<void> {
+): Promise<SavedComposeDraft<T> | undefined> {
   const state = revisionStateFor(draftKey, revisionState);
   return enqueue(draftKey, async () => {
     if (state.conflictRevision !== null) {
@@ -138,11 +138,15 @@ export function persistComposeDraft<T>(
       if (saved && typeof saved.revision === "number") {
         state.revision = saved.revision;
       }
+      return saved ?? undefined;
     } catch (error) {
-      await recordComposeConflict(draftKey, state, error);
+      return recordComposeConflict(draftKey, state, error);
     }
   });
 }
+
+/** A saved draft; the backend may report legacy browser notes it mapped to threads. */
+export type SavedComposeDraft<T> = Awaited<ReturnType<typeof backend.saveComposeDraft<T>>>;
 
 export function discardComposeDraft(
   draftKey: string,
@@ -168,7 +172,7 @@ export function resolveComposeDraftSaveConflict<T>(
   ownerId: string,
   value: T,
   revisionState?: DraftRevisionState,
-): Promise<void> {
+): Promise<SavedComposeDraft<T> | undefined> {
   const state = revisionStateFor(draftKey, revisionState);
   if (state.conflictRevision !== null) {
     state.revision = state.conflictRevision;

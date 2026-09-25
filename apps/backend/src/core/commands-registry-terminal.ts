@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { MAX_BASE64_PAYLOAD_BYTES } from "./path-safety.js";
+import {
+  CONTAINER_EVIDENCE_REMOVER,
+  CONTAINER_EVIDENCE_WRITER,
+  isAnnotationEvidencePath,
+  runContainerEvidenceScript,
+} from "./web-annotation-evidence-files.js";
 import {
   path,
   randomUUID,
@@ -944,6 +952,18 @@ export function registerTerminalCommands(
     const directory = path.posix.dirname(fullPath);
     const data = asString(base64Data, "base64Data");
     assertBase64PayloadWithinLimit(data);
+    if (isAnnotationEvidencePath(target)) {
+      // App-owned evidence: no symbolic link anywhere on the path, exclusive
+      // temp file, atomic rename. A workspace cannot redirect this write.
+      await runContainerEvidenceScript(
+        spawnCommand,
+        id,
+        CONTAINER_EVIDENCE_WRITER,
+        ["/workspace", target, String(MAX_BASE64_PAYLOAD_BYTES)],
+        data,
+      );
+      return fullPath;
+    }
     await dockerExec(id, `mkdir -p ${quoteShell(directory)}`);
     const child = spawnCommand("docker", [
       "exec",
@@ -962,6 +982,27 @@ export function registerTerminalCommands(
       child.once("error", reject);
     });
     return fullPath;
+  });
+  register("delete_container_annotation_evidence", async ({ containerId, filePath, digest }) => {
+    const id = asString(containerId, "containerId");
+    const target = validateRelativeFilePath(asString(filePath, "filePath"));
+    if (!isAnnotationEvidencePath(target)) {
+      throw new Error("Path is not an app-generated evidence path");
+    }
+    const hash = asString(digest, "digest");
+    if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error("digest is invalid");
+    const output = await runContainerEvidenceScript(
+      spawnCommand,
+      id,
+      CONTAINER_EVIDENCE_REMOVER,
+      ["/workspace", target, hash, String(WEB_ANNOTATION_LIMITS.imageBytes)],
+      "",
+    );
+    const outcome = output.trim();
+    if (outcome !== "removed" && outcome !== "missing" && outcome !== "mismatch") {
+      throw new Error("Unexpected evidence removal result");
+    }
+    return outcome;
   });
   register("revert_container_file", async ({ environmentId, filePath, targetBranch }, context) => {
     const environmentIdString = asString(environmentId, "environmentId");

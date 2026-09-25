@@ -32,6 +32,7 @@ import { MessagePart } from "./NativeMessage.renderer";
 import { JsonPayloadPart } from "./JsonPayloadPart";
 import { TextPart } from "./NativeMessage.file-parts";
 import { structuredReviewJsonPayload } from "@/lib/chat/json-payload";
+import { WebAnnotationRequestChip, webAnnotationMarkerFor } from "./WebAnnotationRequestChip";
 
 export const NativeMessage = memo(function NativeMessage({
   message,
@@ -84,6 +85,15 @@ export const NativeMessage = memo(function NativeMessage({
   const assistantAuthorLabel = confirmedModelId
     ? resolveModelLabel?.(confirmedModelId).trim() || confirmedModelId
     : assistantLabel;
+
+  // Browser-originated turns link back to their annotation thread.
+  const annotationMarker = useMemo(() => {
+    if (!isUser) return null;
+    const firstText = message.parts.find((part) => part.type === "text");
+    return webAnnotationMarkerFor(
+      firstText && "content" in firstText ? firstText.content : message.content,
+    );
+  }, [isUser, message.content, message.parts]);
 
   const hasTextParts = message.parts.some(
     (part) => part.type === "text" || part.type === "async-question",
@@ -248,6 +258,13 @@ export const NativeMessage = memo(function NativeMessage({
                       ) : undefined
                     }
                   >
+                    {annotationMarker ? (
+                      <WebAnnotationRequestChip
+                        requestId={annotationMarker.requestId}
+                        operation={annotationMarker.operation}
+                        annotationCount={annotationMarker.annotationCount}
+                      />
+                    ) : null}
                     {isUser && message.promptEvidence ? (
                       <div className="pb-2">
                         <JsonPayloadPart

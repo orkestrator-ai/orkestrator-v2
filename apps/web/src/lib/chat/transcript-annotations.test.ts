@@ -8,6 +8,7 @@ import {
   normalizeTranscriptAnnotationComment,
   normalizeTranscriptAnnotationText,
   parsePromptTranscriptReferences,
+  sendableTranscriptAnnotations,
   transcriptAnnotationSourceLabel,
 } from "./transcript-annotations";
 
@@ -253,5 +254,35 @@ describe("transcript annotations", () => {
     ]);
     const forged = plain.replace('"userComment": null', '"userComment": null, "source": "design"');
     expect(parsePromptTranscriptReferences(forged).references).toEqual([]);
+  });
+});
+
+describe("migrated legacy references", () => {
+  const migrated = {
+    id: "legacy",
+    text: "Moved to a thread",
+    comment: "",
+    source: "browser" as const,
+    migratedTo: "annotation-1",
+  };
+  const live = { id: "live", text: "Selected answer", comment: "Keep" };
+
+  test("are not prompt content", () => {
+    expect(sendableTranscriptAnnotations([migrated, live])).toEqual([live]);
+    expect(sendableTranscriptAnnotations([migrated])).toEqual([]);
+    expect(buildPromptWithTranscriptAnnotations("Prompt", [migrated])).toBe("Prompt");
+    expect(buildPromptWithTranscriptAnnotations("", [migrated])).toBe("");
+  });
+
+  test("do not shift the numbering or the bound of the references that are sent", () => {
+    const many = Array.from({ length: MAX_TRANSCRIPT_ANNOTATIONS }, (_, index) => ({
+      id: `live-${index}`,
+      text: `Excerpt ${index}`,
+      comment: "",
+    }));
+    const prompt = buildPromptWithTranscriptAnnotations("Prompt", [migrated, ...many]);
+    const { references } = parsePromptTranscriptReferences(prompt);
+    expect(references).toHaveLength(MAX_TRANSCRIPT_ANNOTATIONS);
+    expect(references[0]).toMatchObject({ reference: 1, selectedText: "Excerpt 0" });
   });
 });

@@ -279,18 +279,78 @@ describe("preload API factory", () => {
       channel: "orkestrator:browser-preview:open-devtools",
       args: ["browser-1"],
     });
-    await expect(api.browserPreview.startAnnotation("browser-1")).resolves.toEqual({
-      channel: "orkestrator:browser-preview:annotation-start",
-      args: ["browser-1"],
-    });
-    await expect(api.browserPreview.getAnnotationStatus("browser-1")).resolves.toEqual({
-      channel: "orkestrator:browser-preview:annotation-status",
-      args: ["browser-1"],
-    });
-    await expect(api.browserPreview.cancelAnnotation("browser-1")).resolves.toEqual({
-      channel: "orkestrator:browser-preview:annotation-cancel",
-      args: ["browser-1"],
-    });
+    expect("startAnnotation" in api.browserPreview).toBe(false);
+    expect("getAnnotationStatus" in api.browserPreview).toBe(false);
+    expect("cancelAnnotation" in api.browserPreview).toBe(false);
+    const capture = api.browserPreview.capture;
+    expect(Object.keys(capture).sort()).toEqual(
+      [
+        "acknowledgePendingCapture",
+        "cancelCapture",
+        "captureResponsiveSet",
+        "clearPins",
+        "discardPendingCapture",
+        "dismissExpiredCaptureNotices",
+        "getCaptureCapabilities",
+        "getCaptureStatus",
+        "getPinResults",
+        "listExpiredCaptureNotices",
+        "listPendingCaptures",
+        "readPendingCapture",
+        "recordPendingCaptureReceipt",
+        "replacePendingCaptureImage",
+        "showOnPage",
+        "showPins",
+        "startCapture",
+      ].sort(),
+    );
+    const captureId = "capture-0f8fad5b-d9cb-469f-a165-70867728950e";
+    const ack = { captureId, annotationId: "annotation-1", backendCaptureId: "capture-b1" };
+    const pins = { tabId: "browser-1", pins: [] };
+    const start = { tabId: "browser-1", mode: "element" as const, environmentId: "env-1" };
+    const showOnPage = {
+      tabId: "browser-1",
+      pin: {
+        annotationId: "annotation-1",
+        number: 1,
+        route: "/",
+        target: { kind: "page" as const, label: "Whole page" },
+      },
+    };
+    const responsive = { tabId: "browser-1", environmentId: "env-1", widths: [390, 1280] };
+    const calls: Array<[Promise<unknown>, string, unknown[]]> = [
+      [capture.startCapture(start), "capture-start", [start]],
+      [capture.getCaptureStatus("browser-1"), "capture-status", ["browser-1"]],
+      [capture.cancelCapture("browser-1"), "capture-cancel", ["browser-1"]],
+      [capture.listPendingCaptures(), "capture-pending-list", []],
+      [capture.readPendingCapture(captureId), "capture-pending-read", [captureId]],
+      [
+        capture.replacePendingCaptureImage(captureId, { imageDataUrl: null, manualRegions: 1 }),
+        "capture-pending-replace-image",
+        [captureId, { imageDataUrl: null, manualRegions: 1 }],
+      ],
+      [capture.acknowledgePendingCapture(ack), "capture-pending-ack", [ack]],
+      [capture.discardPendingCapture(captureId), "capture-pending-discard", [captureId]],
+      [capture.showPins(pins), "capture-pins-show", [pins]],
+      [capture.clearPins("browser-1"), "capture-pins-clear", ["browser-1"]],
+      [capture.getCaptureCapabilities!(), "capture-capabilities", []],
+      [capture.recordPendingCaptureReceipt!(ack), "capture-pending-receipt", [ack]],
+      [capture.listExpiredCaptureNotices!(), "capture-expired-list", []],
+      [
+        capture.dismissExpiredCaptureNotices!([captureId]),
+        "capture-expired-dismiss",
+        [[captureId]],
+      ],
+      [capture.getPinResults!("browser-1"), "capture-pins-results", ["browser-1"]],
+      [capture.showOnPage!(showOnPage), "capture-show-on-page", [showOnPage]],
+      [capture.captureResponsiveSet!(responsive), "capture-responsive-set", [responsive]],
+    ];
+    for (const [call, channel, args] of calls) {
+      await expect(call).resolves.toEqual({
+        channel: `orkestrator:browser-preview:${channel}`,
+        args,
+      });
+    }
     await expect(api.browserPreview.destroy("browser-1")).resolves.toEqual({
       channel: "orkestrator:browser-preview:destroy",
       args: ["browser-1"],

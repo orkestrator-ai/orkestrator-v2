@@ -26,6 +26,9 @@ export interface InitializeBrowserPreviewsOptions {
   getAuthorization: (url: string) => string | null;
   transport?: BrowserPreviewManagerOptions["transport"];
   openServiceExternally?: BrowserPreviewManagerOptions["openServiceExternally"];
+  captureStore?: BrowserPreviewManagerOptions["captureStore"];
+  emitCaptureEvent?: BrowserPreviewManagerOptions["emitCaptureEvent"];
+  nativeImage?: BrowserPreviewManagerOptions["nativeImage"];
 }
 
 export interface BrowserPreviewRuntime {
@@ -91,6 +94,9 @@ export function initializeBrowserPreviews({
   getAuthorization,
   transport,
   openServiceExternally,
+  captureStore,
+  emitCaptureEvent,
+  nativeImage,
 }: InitializeBrowserPreviewsOptions): BrowserPreviewRuntime {
   const browserSession = fromPartition(partition);
   const manager = new BrowserPreviewManager({
@@ -105,6 +111,9 @@ export function initializeBrowserPreviews({
     focusAddressBar,
     ...(transport ? { transport } : {}),
     ...(openServiceExternally ? { openServiceExternally } : {}),
+    ...(captureStore ? { captureStore } : {}),
+    ...(emitCaptureEvent ? { emitCaptureEvent } : {}),
+    ...(nativeImage ? { nativeImage } : {}),
   });
   browserSession.setPermissionCheckHandler(() => false);
   browserSession.setPermissionRequestHandler((webContents, permission, callback, details) => {

@@ -88,7 +88,10 @@ import {
   resolveNativeAgentResponseBoundary,
 } from "./native-agent-fork";
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
-import { composerOccupiedError } from "@/lib/prompt-queue-errors";
+import {
+  composerOccupiedError,
+  webAnnotationQueueItemFrozenError,
+} from "@/lib/prompt-queue-errors";
 import { modelSupportsSpeed } from "@/lib/agent-launch";
 import { buildReviewModelCatalog } from "@/lib/review-launch-options";
 import {
@@ -110,10 +113,16 @@ import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalSto
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import type { FileCandidate } from "@/types";
 import {
+  openWebAnnotationRequest,
+  openWebAnnotationThread,
+} from "@/lib/web-annotations/navigation";
+import { webAnnotationQueueOrigin } from "@orkestrator/protocol/web-annotations";
+import {
   buildPromptWithTranscriptAnnotations,
   MAX_TRANSCRIPT_ANNOTATIONS,
   normalizeTranscriptAnnotationComment,
   normalizeTranscriptAnnotationText,
+  sendableTranscriptAnnotations,
   type TranscriptAnnotation,
 } from "@/lib/chat/transcript-annotations";
 import { toast } from "sonner";
@@ -132,6 +141,7 @@ import {
   type NativeCommandSubmission,
 } from "./native-command-submission";
 import { useNativeCommandComposer } from "./useNativeCommandComposer";
+import { useConversationScrollTarget } from "./useConversationScrollTarget";
 import { NativeAgentQuestionCard } from "./NativeAgentQuestionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
 import { nativeMessageHasPlanTool } from "@/lib/plan-tool";
@@ -447,7 +457,9 @@ export function SharedNativeAgentController({
       const text = normalizeTranscriptAnnotationText(selectedText);
       if (!text) return null;
       const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
-      if (current.annotations.length >= MAX_TRANSCRIPT_ANNOTATIONS) {
+      // Migrated references are links, not prompt content: they do not use
+      // up the per-prompt allowance.
+      if (sendableTranscriptAnnotations(current.annotations).length >= MAX_TRANSCRIPT_ANNOTATIONS) {
         toast.error(`A prompt can include up to ${MAX_TRANSCRIPT_ANNOTATIONS} annotations`);
         return null;
       }
@@ -510,12 +522,13 @@ export function SharedNativeAgentController({
     tabId === "startup-agent" &&
     (environment?.pendingAgentLaunch === true || environment?.startupAgentSession !== undefined);
   const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
-  const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
-    isActive,
-    persistKey: sessionKey,
-    environmentId: data.environmentId,
-    stickToBottomOnActivation: true,
-  });
+  const { isAtBottom, scrollToBottom, scrollToIndex, virtuosoRef, scrollProps } =
+    useVirtuosoScrollState({
+      isActive,
+      persistKey: sessionKey,
+      environmentId: data.environmentId,
+      stickToBottomOnActivation: true,
+    });
 
   /*
    * Claude reports subagents and background tasks as ordinary tool rows plus a
@@ -748,6 +761,19 @@ export function SharedNativeAgentController({
     if (!fixReport) return pinned;
     return attachFixPromptEvidence(pinned, fixReport);
   }, [displayMessages, fixReport, transcriptMessages]);
+  // "Open full conversation" (web annotations) parks a scroll target for this
+  // tab; it is consumed here once the message is rendered.
+  const highlightedMessageId = useConversationScrollTarget({
+    environmentId: data.environmentId,
+    tabId,
+    isActive,
+    messages,
+    turnBoundaries: projection?.turnBoundaries,
+    transcriptSettled:
+      hasCompletedRead &&
+      (transcriptAvailability === "current" || transcriptAvailability === "empty"),
+    scrollToIndex,
+  });
   const latestAssistantMessage = [...normalizedMessages]
     .reverse()
     .find((message) => message.role === "assistant");
@@ -1131,7 +1157,7 @@ export function SharedNativeAgentController({
             text,
             literal,
             attachments: submittedAttachments,
-            annotationCount: draft.annotations.length,
+            annotationCount: sendableTranscriptAnnotations(draft.annotations).length,
             pendingHandoff: Boolean(handoff.pendingHistory),
             busy: isRunning,
           });
@@ -1194,7 +1220,7 @@ export function SharedNativeAgentController({
           setSendError("/steer supports text only. Remove the attachments and retry.");
           return false;
         }
-        if (draft.annotations.length > 0) {
+        if (sendableTranscriptAnnotations(draft.annotations).length > 0) {
           setSendError("/steer supports text only. Remove transcript annotations and retry.");
           return false;
         }
@@ -2207,6 +2233,7 @@ export function SharedNativeAgentController({
       scrollToBottom={scrollToBottom}
       scrollProps={scrollProps}
       virtuosoRef={virtuosoRef}
+      highlightedMessageId={highlightedMessageId}
       blockingCards={pinnedInteractions.map((interaction) => (
         <NativeAgentInteractionCard
           key={interaction.id}
@@ -2327,6 +2354,9 @@ export function SharedNativeAgentController({
             });
           }}
           annotations={draft.annotations}
+          onOpenMigratedAnnotation={(annotationId) =>
+            openWebAnnotationThread(data.environmentId, annotationId)
+          }
           onClearAnnotations={() => {
             if (draft.submissionPending) return;
             const annotationIds = new Set(draft.annotations.map((annotation) => annotation.id));
@@ -2615,7 +2645,10 @@ export function SharedNativeAgentController({
           sendDisabled={
             (sendLocked && !draftSessionAction) ||
             isDispatching ||
-            (!draft.text.trim() && draft.attachments.length === 0 && draft.annotations.length === 0)
+            (!draft.text.trim() &&
+              draft.attachments.length === 0 &&
+              // A draft holding only migrated references has nothing to send.
+              sendableTranscriptAnnotations(draft.annotations).length === 0)
           }
           sendTitle={
             authenticationRequired
@@ -2642,7 +2675,13 @@ export function SharedNativeAgentController({
                 open={queueDialogOpen}
                 onOpenChange={setQueueDialogOpen}
                 messages={queuedMessages}
+                onOpenWebAnnotationRequest={(requestId) =>
+                  openWebAnnotationRequest(data.environmentId, requestId)
+                }
                 onEdit={async (message) => {
+                  // Removing an annotation request cancels it, so the
+                  // remove-then-load edit below must never run for one.
+                  if (webAnnotationQueueOrigin(message)) throw webAnnotationQueueItemFrozenError();
                   // Editing loads the prompt into the composer, so anything
                   // already there would be destroyed. Refusing with a reason
                   // beats the silent overwrite.

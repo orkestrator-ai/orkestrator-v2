@@ -1,6 +1,6 @@
 # 09 — Legacy migration and first release
 
-Status: Not started. Depends on: 01–08 and gate A in step 14. Milestone: A.
+Status: Implemented (2026-09-24); review gaps closed (2026-09-25); gate evidence partial. Depends on: 01–08 and gate A in step 14. Milestone: A.
 
 ## Deliverable
 

@@ -1,6 +1,6 @@
 # 04 — Trusted capture and acknowledged delivery
 
-Status: Not started. Depends on: 01–03. Milestone: A.
+Status: Implemented (2026-09-24); review gaps closed (2026-09-25); gate evidence partial. Depends on: 01–03. Milestone: A.
 
 ## Deliverable
 

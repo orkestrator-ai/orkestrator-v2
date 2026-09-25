@@ -26,6 +26,7 @@ Refreshed 2026-09-17 against the current tree.
 | [control-mcp.md](architecture/control-mcp.md) | Living | Control MCP operator guide. |
 | [mcp-management.md](architecture/mcp-management.md) | Living | Per-provider MCP server management: sources, precedence, safe writes, secrets, apply states, evidence. |
 | [remote-gateway.md](architecture/remote-gateway.md) | Living | Standalone backend, Tailscale Serve, flags, troubleshooting. |
+| [web-page-annotations.md](architecture/web-page-annotations.md) | Living | Preview notes, capture spool, backend threads, native dispatch, review, migration. Real-stack gates pending. |
 | [browser-previews.md](architecture/browser-previews.md) | Living | Service previews: registry, desktop tunnel, private HTTPS origins, relay, kill switch, rollback. |
 | [review-preparation.md](architecture/review-preparation.md) | Living | Multi-review pipeline; queue wait is 30 minutes. |
 | [native-agent-commands.md](architecture/native-agent-commands.md) | Living | Slash-command descriptors, bridge wire contract, intent resolution, collisions, catalogue lifecycle. |
@@ -64,7 +65,7 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 | Document | Status | Notes |
 | --- | --- | --- |
 | [sdk-coverage/00-index.md](plans/sdk-coverage/00-index.md) | Active | Living index. 01–03 Done; 04–10 and 14–15 Active; 11–13 code done, QA leftover. |
-| [Web page annotations](improvements/web-page-annotations/plan/00-index.md) | Active | Detailed implementation plan; all steps not started. Findings in [web-page-annotations.md](improvements/web-page-annotations.md). |
+| [Web page annotations](improvements/web-page-annotations/plan/00-index.md) | Active | Steps 01–13 implemented with unit coverage; step 14 real-stack gates (native window, Docker, live agents) outstanding. Living guide: [web-page-annotations.md](architecture/web-page-annotations.md). |
 | [improvements/browser/plan/00-index.md](improvements/browser/plan/00-index.md) | Active | Browser preview plan. 01–13 implemented behind disabled-by-default capabilities; 14–15 partly evidenced. Browser, Safari/iOS, two-machine, and Docker Desktop runs are outstanding. |
 | [mcp/plan/00-index.md](improvements/mcp/plan/00-index.md) | Active | MCP server management plan. Steps 02–12 implemented; container-private writes (13) and live-probe/real-stack evidence (01, 14) outstanding. Findings: [mcp.md](improvements/mcp.md). |
 | [slash-commands/plan/00-index.md](improvements/slash-commands/plan/00-index.md) | Active | Slash-command correctness plan. Code landed; live provider probes and isolated browser QA are the open items. Findings: [slash-commands.md](improvements/slash-commands.md). |

@@ -77,7 +77,9 @@ export function useDurableComposeDraft<T>({
     (draftKey: string, nextValue: T): Promise<void> =>
       clearedKeyRef.current === draftKey || isEmptyRef.current(nextValue)
         ? discardComposeDraft(draftKey, revisionState)
-        : persistComposeDraft(draftKey, ownerType, ownerId, nextValue, revisionState),
+        : persistComposeDraft(draftKey, ownerType, ownerId, nextValue, revisionState).then(
+            () => undefined,
+          ),
     [ownerId, ownerType, revisionState],
   );
 

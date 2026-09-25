@@ -36,6 +36,8 @@ export interface NativeComposeBarProps {
   onRemoveAttachment: (id: string) => void;
   annotations?: readonly TranscriptAnnotation[];
   onClearAnnotations?: () => void;
+  /** Open the web annotation thread a migrated legacy browser note now lives in. */
+  onOpenMigratedAnnotation?: (annotationId: string) => void;
   inputRef: RefObject<MentionableInputRef | null>;
   inputContainerRef: RefObject<HTMLDivElement | null>;
   text: string;
@@ -73,8 +75,9 @@ export function NativeComposeBar({
   layout = "bottom",
   attachments,
   onRemoveAttachment,
-  annotations = [],
+  annotations: allAnnotations = [],
   onClearAnnotations,
+  onOpenMigratedAnnotation,
   inputRef,
   inputContainerRef,
   text,
@@ -99,6 +102,9 @@ export function NativeComposeBar({
   onSend,
   footer,
 }: NativeComposeBarProps) {
+  // Migrated legacy browser notes are links to their thread, never prompt content.
+  const annotations = allAnnotations.filter((annotation) => !annotation.migratedTo);
+  const migrated = allAnnotations.filter((annotation) => annotation.migratedTo);
   return (
     <>
       <div
@@ -108,8 +114,27 @@ export function NativeComposeBar({
           layout === "bottom" ? "mb-4 mt-2" : "my-0",
         )}
       >
-        {attachments.length > 0 || annotations.length > 0 ? (
+        {attachments.length > 0 || annotations.length > 0 || migrated.length > 0 ? (
           <div className="mb-2 flex flex-wrap gap-2">
+            {migrated.map((annotation) => (
+              <div
+                key={annotation.id}
+                data-testid="compose-migrated-annotation"
+                className="flex h-9 items-center gap-1.5 rounded-full border border-border/70 bg-muted/40 px-3 text-xs text-muted-foreground"
+              >
+                <MessageSquareText className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Browser note moved to a web annotation thread</span>
+                {onOpenMigratedAnnotation ? (
+                  <button
+                    type="button"
+                    className="underline underline-offset-2 hover:text-foreground"
+                    onClick={() => onOpenMigratedAnnotation(annotation.migratedTo!)}
+                  >
+                    Open note
+                  </button>
+                ) : null}
+              </div>
+            ))}
             {annotations.length > 0 ? (
               <Tooltip delayDuration={250}>
                 <TooltipTrigger asChild>

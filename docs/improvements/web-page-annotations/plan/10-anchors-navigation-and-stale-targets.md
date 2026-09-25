@@ -1,6 +1,6 @@
 # 10 — Anchors, navigation, and stale targets
 
-Status: Not started. Depends on: 04, 05, 09. Milestone: B.
+Status: Implemented (2026-09-24); review gaps closed (2026-09-25); gate evidence partial. Depends on: 04, 05, 09. Milestone: B.
 
 ## Deliverable
 

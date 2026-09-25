@@ -27,6 +27,7 @@ import { SkillsSettings } from "./SkillsSettings";
 import { McpSettings } from "./McpSettings";
 import { ProviderMcpSettings } from "./mcp-servers/ProviderMcpSettings";
 import { PreviewSettings } from "./PreviewSettings";
+import { WebAnnotationSettings } from "./WebAnnotationSettings";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 import { MessagingSettings } from "./MessagingSettings";
 import { ConnectionsSettings } from "./ConnectionsSettings";
@@ -142,7 +143,10 @@ export function SettingsPage({
         ) : activeSection === "mcp-servers" ? (
           <ProviderMcpSettings />
         ) : activeSection === "previews" ? (
-          <PreviewSettings />
+          <div className="space-y-8">
+            <PreviewSettings />
+            <WebAnnotationSettings />
+          </div>
         ) : activeSection === "messaging" ? (
           <MessagingSettings />
         ) : isLoading && !initialLoadDone ? (

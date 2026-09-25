@@ -345,11 +345,23 @@ export const useNativeComposeStore = create<NativeComposeState>()((set) => ({
       const drafts = new Map(state.drafts);
       for (const [sessionKey, draft] of Array.from(drafts)) {
         if (getEnvironmentIdFromSessionKey(sessionKey) !== environmentId) continue;
+        // Only genuinely unmigrated legacy copies are consumed. A note the
+        // backend imported into a durable thread (`migratedTo`) and anything
+        // it owns stay put; new web annotations never enter drafts at all.
+        const consumed = new Set(
+          draft.annotations
+            .filter(
+              (annotation) =>
+                annotation.source === "browser" && !annotation.migratedTo && ids.has(annotation.id),
+            )
+            .map((annotation) => annotation.id),
+        );
+        if (consumed.size === 0) continue;
         const annotations = draft.annotations.filter(
-          (annotation) => annotation.source !== "browser" || !ids.has(annotation.id),
+          (annotation) => annotation.source !== "browser" || !consumed.has(annotation.id),
         );
         const attachments = draft.attachments.filter(
-          (attachment) => !attachment.annotationId || !ids.has(attachment.annotationId),
+          (attachment) => !attachment.annotationId || !consumed.has(attachment.annotationId),
         );
         if (
           annotations.length === draft.annotations.length &&

@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
   COMPOSER_OCCUPIED_MESSAGE,
   composerOccupiedError,
+  describePromptQueueActionError,
+  isWebAnnotationQueueItemFrozenError,
+  WEB_ANNOTATION_QUEUE_ITEM_FROZEN_MESSAGE,
+  webAnnotationQueueItemFrozenError,
   isComposeDraftOccupiedBackendError,
   isPromptQueueActionError,
   PromptQueueActionError,
@@ -48,5 +52,37 @@ describe("prompt queue action errors", () => {
       false,
     );
     expect(isComposeDraftOccupiedBackendError("Compose draft already exists")).toBe(false);
+  });
+});
+
+describe("web annotation frozen queue items", () => {
+  const frozen = new Error(
+    "Web annotation queue item is frozen: item-1 is a frozen request snapshot; it cannot be edited or moved into a draft. Remove it to cancel the request.",
+  );
+
+  test("recognises the backend refusal by its stable prefix", () => {
+    expect(isWebAnnotationQueueItemFrozenError(frozen)).toBe(true);
+    expect(isWebAnnotationQueueItemFrozenError(`wrapped: ${frozen.message}`)).toBe(true);
+    expect(isWebAnnotationQueueItemFrozenError(new Error("Prompt queue is busy"))).toBe(false);
+    expect(isWebAnnotationQueueItemFrozenError(null)).toBe(false);
+  });
+
+  test("describes queue failures without leaking the raw refusal", () => {
+    expect(describePromptQueueActionError(frozen)).toBe(WEB_ANNOTATION_QUEUE_ITEM_FROZEN_MESSAGE);
+    expect(describePromptQueueActionError(webAnnotationQueueItemFrozenError())).toBe(
+      WEB_ANNOTATION_QUEUE_ITEM_FROZEN_MESSAGE,
+    );
+    expect(describePromptQueueActionError(composerOccupiedError())).toBe(COMPOSER_OCCUPIED_MESSAGE);
+    expect(describePromptQueueActionError(new Error("socket closed"))).toContain(
+      "Could not confirm the prompt queue update",
+    );
+  });
+
+  test("the frozen error is an actionable queue error", () => {
+    const cause = new Error("raw");
+    const error = webAnnotationQueueItemFrozenError({ cause });
+    expect(isPromptQueueActionError(error)).toBe(true);
+    expect(error.cause).toBe(cause);
+    expect(error.message).toContain("Open the note");
   });
 });

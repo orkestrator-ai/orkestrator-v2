@@ -569,8 +569,22 @@ export interface PersistedNativeAgentSession {
   pendingSteer?: PersistedNativeAgentPendingSteer;
   /** Content-free authoritative outcome rehydrated by every OpenCode tab. */
   openCodeIncompleteTurnNotice?: OpenCodeIncompleteTurnNotice;
+  /**
+   * Bounded, content-free outcomes of recent turns keyed by the request id that
+   * started them, recorded from provider status reads the backend already
+   * makes. Lets observers settle a turn as failed without reading transcripts.
+   */
+  turnOutcomes?: PersistedNativeAgentTurnOutcome[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PersistedNativeAgentTurnOutcome {
+  requestId: string;
+  outcome: "completed" | "failed";
+  /** Bounded provider error detail for a failed turn. */
+  error?: string;
+  observedAt: string;
 }
 
 /** Content-free exact-once interaction records owned by backend workflows. */
@@ -633,6 +647,12 @@ export interface PersistedPromptQueue {
     claimedAt: string;
     expiresAt: string;
   };
+  /**
+   * Bounded tombstones for backend-authored items (typed `origin`) that left
+   * `messages` without being reserved or claimed — i.e. removed or replaced
+   * before dispatch. Lets the owner tell "removed" from "already sent".
+   */
+  removedOrigins?: Array<{ requestId: string; removedAt: string }>;
   updatedAt: string;
   revision: number;
 }
@@ -811,6 +831,11 @@ export interface AppConfig {
      * a saved provider file.
      */
     mcpManagement?: import("@orkestrator/protocol/mcp-management").McpManagementRolloutSettings;
+    /**
+     * Backend rollout switch for web annotations (`enabled` / `read-only` /
+     * `disabled`). `ORKESTRATOR_WEB_ANNOTATIONS_MODE` overrides it.
+     */
+    webAnnotations?: import("@orkestrator/protocol/web-annotations").WebAnnotationRolloutSettings;
   };
   repositories: Record<string, RepositoryConfig>;
 }

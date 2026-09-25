@@ -111,6 +111,7 @@ export type NativeAgentServiceLayerTypes = [
 import { NativeAgentServiceReconciliation } from "./native-agent-service-reconciliation.ts";
 import type { ProviderMcpConfigEvidenceRead } from "./agent-provider-contract.js";
 import { agentSessionOwnerKey } from "@orkestrator/protocol/coordinator";
+import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import {
   coordinatorRuntimeEnvironment,
@@ -451,11 +452,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       ? input.logicalSessionKey.slice(prefix.length)
       : "";
     const agentMcp =
-      (input.agent === "claude" ||
-        input.agent === "codex" ||
-        input.agent === "pi" ||
-        input.agent === "cursor" ||
-        input.agent === "grok") &&
+      nativeAgentCapabilities(input.agent).agentTools === true &&
       input.owner?.kind === "environment" &&
       tabId &&
       environment &&
@@ -584,6 +581,29 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     }
     if (record.mode === "plan" || record.mode === "build") return record.mode;
     return record.mode === undefined ? "build" : "plan";
+  }
+
+  /**
+   * The mode actually sent with a queued prompt. Backend-authored prompts may
+   * ask to leave the session's own mode untouched (`preserveSessionMode`):
+   * several providers persist a prompt's mode on the session, so sending the
+   * `build` default would silently change a mode the user chose.
+   */
+  protected queueDispatchMode(
+    agent: BuildPipelineAgent,
+    message: unknown,
+  ): ProviderExecutionMode | undefined {
+    if (
+      message &&
+      typeof message === "object" &&
+      !Array.isArray(message) &&
+      (message as Record<string, unknown>).preserveSessionMode === true &&
+      (message as Record<string, unknown>).mode === undefined &&
+      (message as Record<string, unknown>).planModeEnabled === undefined
+    ) {
+      return undefined;
+    }
+    return this.queueExecutionMode(agent, message);
   }
 
   protected async bridgeConnection(

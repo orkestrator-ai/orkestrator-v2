@@ -5,7 +5,6 @@ import {
   Code2,
   Globe2,
   Loader2,
-  MessageSquarePlus,
   RefreshCw,
   Server,
   ShieldCheck,
@@ -15,6 +14,7 @@ import type {
   BrowserPreviewBounds,
   BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
+import type { WebAnnotationPageIdentity } from "@orkestrator/protocol/web-annotations";
 import { parsePreviewTabTarget } from "@orkestrator/protocol/preview-services";
 import { Button } from "@/components/ui/button";
 import { isWkWebViewClient } from "@/lib/client-platform";
@@ -32,10 +32,13 @@ import {
   reloadBrowserPreview,
   setBrowserPreviewVisible,
 } from "@/lib/native/browser-preview";
-import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { usePreviewServiceStore } from "@/stores/previewServiceStore";
 import type { BrowserTabData } from "@/types/paneLayout";
-import { errorMessage, useBlockingOverlay, useBrowserPreviewAnnotation } from "./browser-tab-hooks";
+import { AnnotatedPreviewArea, AnnotationsButton } from "./annotations/BrowserAnnotationsLayout";
+import { currentPageForManualUrl } from "./annotations/format";
+import { useBrowserAnnotations } from "./annotations/useBrowserAnnotations";
+import { errorMessage, useBlockingOverlay } from "./browser-tab-hooks";
 import { ServiceBrowserTab } from "./ServiceBrowserTab";
 
 interface BrowserTabProps {
@@ -93,14 +96,6 @@ function ManualBrowserTab({
   const owningPaneId = usePaneLayoutStore(
     (state) => state.findPaneWithTab(tabId, environmentId)?.id,
   );
-  const nativeSessionCount = usePaneLayoutStore((state) => {
-    const environment = state.environments.get(environmentId);
-    if (!environment) return 0;
-    return getAllLeaves(environment.root).reduce(
-      (count, leaf) => count + leaf.tabs.filter((tab) => tab.type === "agent-native").length,
-      0,
-    );
-  });
   const nativeBrowserPreview = hasNativeBrowserPreview();
   const previewPublicationAvailable = usePreviewServiceStore(
     (state) => state.capabilities?.surfaces.browserTopLevel.available === true,
@@ -137,8 +132,48 @@ function ManualBrowserTab({
   const nativeAttachedRef = useRef(false);
   const [nativeState, setNativeState] = useState<BrowserPreviewState | null>(null);
   const hasBlockingOverlay = useBlockingOverlay(nativeBrowserPreview && browserPreviewSupported);
-  const { annotationMode, annotationSaving, toggleAnnotationMode, stopAnnotationForPageChange } =
-    useBrowserPreviewAnnotation({ tabId, environmentId, isActive, nativeBrowserPreview });
+  const [nativeAttached, setNativeAttached] = useState(false);
+  const navigateRef = useRef<(address: string) => void>(() => undefined);
+  const currentPage = useMemo(() => currentPageForManualUrl(currentUrl), [currentUrl]);
+  const navigateToPage = useCallback(
+    (page: WebAnnotationPageIdentity) => {
+      if (page.requiresNavigation) {
+        return {
+          ok: false,
+          message:
+            "Private parts of this page's address were removed when it was saved. Navigate to it yourself, then reselect the target.",
+        };
+      }
+      if (page.service.kind !== "port") {
+        return {
+          ok: false,
+          message:
+            page.service.kind === "service"
+              ? "This note belongs to a registered preview service. Open that service in a browser tab to view it."
+              : "The page's server is unknown. Navigate to it yourself.",
+        };
+      }
+      let host = "localhost";
+      try {
+        host = new URL(currentUrl).hostname || host;
+      } catch {
+        // Keep the loopback default.
+      }
+      navigateRef.current(`http://${host}:${page.service.port}${page.route}`);
+      return { ok: true };
+    },
+    [currentUrl],
+  );
+  const annotations = useBrowserAnnotations({
+    tabId,
+    environmentId,
+    isActive,
+    data,
+    currentPage,
+    previewAttached: nativeBrowserPreview && nativeAttached,
+    navigateToPage,
+  });
+  const stopAnnotationForPageChange = annotations.stopSelection;
 
   const applyNativeSurfaceState = useCallback(
     (state: BrowserPreviewState | null) => {
@@ -349,6 +384,8 @@ function ManualBrowserTab({
     ],
   );
 
+  navigateRef.current = navigate;
+
   const handleSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -444,11 +481,12 @@ function ManualBrowserTab({
           tabId,
           url: resolved.iframeUrl,
           bounds,
-          visible: isActive && !hasBlockingOverlay,
+          visible: isActive && !hasBlockingOverlay && !annotations.previewHidden,
         })
           .then((state) => {
             if (disposed) return;
             nativeAttachedRef.current = true;
+            setNativeAttached(true);
             applyNativeState(state);
           })
           .catch((attachError) => {
@@ -473,6 +511,7 @@ function ManualBrowserTab({
       hideNativePreview(false);
     };
   }, [
+    annotations.previewHidden,
     applyNativeState,
     browserPreviewSupported,
     hasBlockingOverlay,
@@ -489,28 +528,36 @@ function ManualBrowserTab({
   const isIosClient = isWkWebViewClient();
 
   if (!browserPreviewSupported) {
+    // Saved feedback stays readable and reviewable without a preview.
     return (
       <div
         className={cn(
-          "@container/browser absolute inset-0 grid min-w-0 place-items-center overflow-hidden bg-background p-6",
+          "@container/browser absolute inset-0 flex min-w-0 flex-col overflow-hidden bg-background",
           !isActive && "hidden",
         )}
       >
-        <div className="w-full min-w-0 max-w-sm text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-muted/30 shadow-sm">
-            <Smartphone className="h-6 w-6 text-muted-foreground" />
-          </div>
-          <h2 className="text-base font-semibold text-foreground">
-            {isIosClient
-              ? "Browser tabs aren’t supported on iOS"
-              : "Browser tabs aren’t supported here"}
-          </h2>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            {previewPublicationAvailable
-              ? "Manual addresses need the desktop app. Open a registered service from the environment's browser button instead; it opens in its own browser tab on your private network."
-              : "Open this browser tab in the Orkestrator desktop app to view the local development server."}
-          </p>
+        <div className="flex shrink-0 justify-end border-b border-border/80 bg-muted/25 px-2 py-1.5">
+          <AnnotationsButton annotations={annotations} />
         </div>
+        <AnnotatedPreviewArea annotations={annotations}>
+          <div className="absolute inset-0 grid place-items-center p-6">
+            <div className="w-full min-w-0 max-w-sm text-center">
+              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-muted/30 shadow-sm">
+                <Smartphone className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <h2 className="text-base font-semibold text-foreground">
+                {isIosClient
+                  ? "Browser tabs aren’t supported on iOS"
+                  : "Browser tabs aren’t supported here"}
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                {previewPublicationAvailable
+                  ? "Manual addresses need the desktop app. Open a registered service from the environment's browser button instead; it opens in its own browser tab on your private network."
+                  : "Open this browser tab in the Orkestrator desktop app to view the local development server."}
+              </p>
+            </div>
+          </div>
+        </AnnotatedPreviewArea>
       </div>
     );
   }
@@ -591,43 +638,7 @@ function ManualBrowserTab({
             Go
           </Button>
         </form>
-        {nativeBrowserPreview && (
-          <Button
-            type="button"
-            variant={annotationMode ? "secondary" : "ghost"}
-            size="sm"
-            className={cn(
-              "h-8 shrink-0 gap-1.5 px-2.5",
-              annotationMode &&
-                "border border-blue-400/40 bg-blue-500/15 text-blue-200 hover:bg-blue-500/20 hover:text-blue-100",
-            )}
-            aria-label={annotationMode ? "Stop annotating preview" : "Annotate preview"}
-            aria-pressed={annotationMode}
-            title={
-              nativeSessionCount === 0
-                ? "Open a native agent session to add annotations"
-                : annotationMode
-                  ? "Stop annotating preview"
-                  : "Annotate preview"
-            }
-            disabled={
-              !resolved ||
-              !nativeAttachedRef.current ||
-              nativeSessionCount === 0 ||
-              annotationSaving
-            }
-            onClick={toggleAnnotationMode}
-          >
-            {annotationSaving ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <MessageSquarePlus className="h-4 w-4" />
-            )}
-            <span className="hidden @lg/browser:inline">
-              {annotationMode ? "Annotating" : "Annotate"}
-            </span>
-          </Button>
-        )}
+        <AnnotationsButton annotations={annotations} />
         {nativeBrowserPreview && (
           <Button
             type="button"
@@ -659,7 +670,7 @@ function ManualBrowserTab({
         </div>
       )}
 
-      <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
+      <AnnotatedPreviewArea annotations={annotations}>
         {resolved && nativeBrowserPreview ? (
           <div
             ref={previewHostRef}
@@ -696,7 +707,7 @@ function ManualBrowserTab({
             </div>
           </div>
         )}
-      </div>
+      </AnnotatedPreviewArea>
     </div>
   );
 }

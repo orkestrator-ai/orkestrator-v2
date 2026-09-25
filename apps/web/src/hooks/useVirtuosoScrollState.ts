@@ -37,6 +37,14 @@ const ACTIVATION_SCROLL_READY_MAX_ATTEMPTS = 30;
  */
 const POST_SCROLL_WATCH_MS = 400;
 
+/**
+ * Re-issues of a jump to one row. Virtuoso positions an unmeasured row from
+ * estimated heights, so the first jump to a distant message can land short;
+ * each correction runs after the rows around it have measured.
+ */
+const SCROLL_TO_INDEX_CORRECTIONS = 3;
+const SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS = 120;
+
 interface PersistedEntry {
   snapshot: StateSnapshot;
   wantsStick: boolean;
@@ -128,6 +136,12 @@ interface UseVirtuosoScrollStateReturn {
   isAtBottomRef: React.RefObject<boolean>;
   /** Scroll to bottom and re-enable stick mode */
   scrollToBottom: () => void;
+  /**
+   * Bring one row into the middle of the view and release stick intent, so
+   * neither a pending activation jump nor streaming follow snaps the reader
+   * back to the bottom. False when the list has not mounted yet.
+   */
+  scrollToIndex: (index: number) => boolean;
   /** Ref to attach to the Virtuoso component */
   virtuosoRef: React.RefObject<VirtuosoHandle | null>;
   /** Props to spread onto the Virtuoso component */
@@ -791,10 +805,42 @@ export function useVirtuosoScrollState(
     }
   }, [isActive, scrollerEl, schedulePendingActivationScroll, cancelActivationScrollFrame]);
 
+  const scrollToIndex = useCallback(
+    (index: number): boolean => {
+      const handle = virtuosoRef.current;
+      if (!handle || typeof handle.scrollToIndex !== "function") return false;
+      if (!Number.isInteger(index) || index < 0) return false;
+      // An explicit jump to one row is a statement that the reader wants to be
+      // there, not at the tail: drop stick intent and any activation jump
+      // still queued, and retire an in-flight bottom scroll.
+      wantsStickRef.current = false;
+      pendingActivationScrollRef.current = false;
+      activationScrollReadyAttemptsRef.current = 0;
+      cancelActivationScrollFrame();
+      const operation = ++scrollOperationRef.current;
+      scrollInFlightRef.current = false;
+      handle.scrollToIndex({ index, align: "center", behavior: "auto" });
+      let corrections = 0;
+      const correct = () => {
+        // A user scroll bumps the operation, so a correction never fights them.
+        if (!mountedRef.current || scrollOperationRef.current !== operation) return;
+        virtuosoRef.current?.scrollToIndex({ index, align: "center", behavior: "auto" });
+        corrections += 1;
+        if (corrections < SCROLL_TO_INDEX_CORRECTIONS) {
+          setTimeout(correct, SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS);
+        }
+      };
+      setTimeout(correct, SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS);
+      return true;
+    },
+    [cancelActivationScrollFrame],
+  );
+
   return {
     isAtBottom,
     isAtBottomRef,
     scrollToBottom,
+    scrollToIndex,
     virtuosoRef,
     scrollProps: {
       followOutput,

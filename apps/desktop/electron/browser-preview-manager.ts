@@ -3,31 +3,51 @@ import type {
   ContextMenuParams,
   InputEvent,
   MenuItemConstructorOptions,
-  NativeImage,
   Rectangle,
   Session,
   WebContents,
   WebContentsView,
   WebContentsViewConstructorOptions,
 } from "electron";
-import { randomUUID } from "node:crypto";
 import type {
-  BrowserPreviewAnnotationStatus,
+  BrowserPreviewAnchorResult,
   BrowserPreviewAttachInput,
   BrowserPreviewBounds,
-  BrowserPreviewElementDetails,
+  BrowserPreviewCaptureAck,
+  BrowserPreviewCaptureCapabilities,
+  BrowserPreviewCaptureEvent,
+  BrowserPreviewExpiredCaptureNotice,
   BrowserPreviewOpenLinkEvent,
+  BrowserPreviewPendingCapture,
+  BrowserPreviewPendingCaptureDescriptor,
+  BrowserPreviewPinSnapshot,
+  BrowserPreviewPinsInput,
+  BrowserPreviewReplaceImageInput,
+  BrowserPreviewResponsiveSetInput,
+  BrowserPreviewResponsiveSetResult,
+  BrowserPreviewSelectionStatus,
   BrowserPreviewServiceTarget,
+  BrowserPreviewShowOnPageInput,
+  BrowserPreviewShowOnPageResult,
+  BrowserPreviewStartCaptureInput,
   BrowserPreviewState,
   BrowserPreviewTransportState,
 } from "@orkestrator/protocol/browser-preview";
 import { previewFailure } from "@orkestrator/protocol/preview-services";
 import { createContextMenuTemplate, type MenuLike } from "./context-menu.js";
 import {
-  BROWSER_PREVIEW_ANNOTATION_CANCEL_SCRIPT,
-  BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT,
-  browserPreviewAnnotationStartScript,
-} from "./browser-preview-annotation-script.js";
+  BrowserPreviewCaptureSessions,
+  type CaptureNativeImageApi,
+  type CapturePreviewHandle,
+  type CaptureStoreLike,
+  type CaptureWebContents,
+} from "./browser-preview-capture.js";
+import {
+  BrowserPreviewPinSessions,
+  type BrowserPreviewPinSessionsOptions,
+} from "./browser-preview-capture-pins.js";
+import { captureResponsiveSet } from "./browser-preview-capture-responsive.js";
+import { captureTabId } from "./browser-preview-capture-validation.js";
 
 type WebContentsViewConstructor = new (
   options?: WebContentsViewConstructorOptions,
@@ -40,7 +60,11 @@ interface ManagedPreview {
   loadGeneration: number;
   loading: boolean;
   error: string | null;
-  annotationSessionId?: string;
+  /**
+   * Advances on every main-frame navigation start/commit (including in-page
+   * route changes) and reload. A capture is bound to the generation it started in.
+   */
+  documentGeneration: number;
   /**
    * Service previews: transport key, the partition the view was created with,
    * and the transport holder the view keeps (unique per attach, so a stale
@@ -85,13 +109,23 @@ export interface BrowserPreviewManagerOptions {
   transport?: BrowserPreviewServiceTransport;
   /** Open a service in the default browser through the private preview origin. */
   openServiceExternally?: (target: BrowserPreviewServiceTarget) => Promise<void>;
+  /** Process-wide pending capture spool; capture is unavailable without it. */
+  captureStore?: CaptureStoreLike;
+  /** Content-free capture status hints for the owning renderer. */
+  emitCaptureEvent?: (event: BrowserPreviewCaptureEvent) => void;
+  /** Used to paint opaque masks over sensitive fields in captured pixels. */
+  nativeImage?: CaptureNativeImageApi;
+  capturePollIntervalMs?: number;
+  /** Live pin polling and page-side limits (tests shorten or disable them). */
+  pins?: Pick<BrowserPreviewPinSessionsOptions, "livePollIntervalMs" | "pageLimits" | "sleep">;
+  /** Result-capture and responsive stability windows (tests shorten them). */
+  stability?: { deadlineMs: number; quietMs: number };
+  now?: () => number;
 }
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
 const CLIPBOARD_USER_ACTIVATION_WINDOW_MS = 5_000;
-const MAX_ANNOTATION_SCREENSHOT_DIMENSION = 2_000;
-const MAX_ANNOTATION_SCREENSHOT_BYTES = 8 * 1024 * 1024;
 const CLIPBOARD_USER_ACTIVATION_INPUTS = new Set<InputEvent["type"]>([
   "mouseDown",
   "pointerDown",
@@ -184,155 +218,6 @@ function assertTabId(tabId: unknown): asserts tabId is string {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function isStringRecord(value: unknown): value is Record<string, string> {
-  return (
-    isRecord(value) &&
-    Object.entries(value).every(
-      ([key, entry]) => key.length <= 200 && typeof entry === "string" && entry.length <= 12_000,
-    )
-  );
-}
-
-function isFiniteRect(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  return ["x", "y", "width", "height", "top", "right", "bottom", "left"].every(
-    (key) => typeof value[key] === "number" && Number.isFinite(value[key]),
-  );
-}
-
-function isElementDetails(value: unknown): value is BrowserPreviewElementDetails {
-  if (!isRecord(value) || !isRecord(value.viewport) || !isFiniteRect(value.rect)) return false;
-  const boundedStrings = [
-    [value.pageUrl, 4_000],
-    [value.pageTitle, 1_000],
-    [value.tagName, 100],
-    [value.selector, 2_000],
-    [value.cssPath, 8_000],
-    [value.xpath, 8_000],
-    [value.text, 4_000],
-    [value.outerHtml, 12_000],
-  ] as const;
-  if (
-    boundedStrings.some(([entry, limit]) => typeof entry !== "string" || entry.length > limit) ||
-    ![value.viewport.width, value.viewport.height, value.viewport.devicePixelRatio].every(
-      (entry) => typeof entry === "number" && Number.isFinite(entry),
-    ) ||
-    !isStringRecord(value.attributes) ||
-    !isStringRecord(value.styles) ||
-    !Array.isArray(value.classNames) ||
-    value.classNames.length > 50 ||
-    value.classNames.some((entry) => typeof entry !== "string" || entry.length > 500) ||
-    !Array.isArray(value.hierarchy) ||
-    value.hierarchy.length > 32
-  ) {
-    return false;
-  }
-  for (const nullable of [value.id, value.role, value.ariaLabel, value.testId]) {
-    if (nullable !== null && (typeof nullable !== "string" || nullable.length > 2_000))
-      return false;
-  }
-  return value.hierarchy.every((ancestor) => {
-    if (!isRecord(ancestor)) return false;
-    return (
-      typeof ancestor.tagName === "string" &&
-      ancestor.tagName.length <= 100 &&
-      typeof ancestor.selector === "string" &&
-      ancestor.selector.length <= 2_000 &&
-      Array.isArray(ancestor.classNames) &&
-      ancestor.classNames.length <= 50 &&
-      ancestor.classNames.every((entry) => typeof entry === "string" && entry.length <= 500) &&
-      [ancestor.id, ancestor.role, ancestor.ariaLabel, ancestor.testId].every(
-        (entry) => entry === null || (typeof entry === "string" && entry.length <= 2_000),
-      )
-    );
-  });
-}
-
-function parseAnnotationRuntimeStatus(
-  value: unknown,
-  expectedSessionId: string | undefined,
-):
-  | { status: "inactive" | "active" | "cancelled" }
-  | { status: "error"; message: string }
-  | { status: "submitted"; comment: string; element: BrowserPreviewElementDetails } {
-  if (typeof value !== "string" || value.length > 65_536) return { status: "inactive" };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return { status: "inactive" };
-  }
-  if (
-    !isRecord(parsed) ||
-    typeof parsed.status !== "string" ||
-    typeof parsed.sessionId !== "string" ||
-    parsed.sessionId !== expectedSessionId
-  ) {
-    return { status: "inactive" };
-  }
-  if (parsed.status === "active" || parsed.status === "cancelled" || parsed.status === "inactive") {
-    return { status: parsed.status };
-  }
-  if (
-    parsed.status === "error" &&
-    typeof parsed.message === "string" &&
-    parsed.message.trim().length > 0 &&
-    parsed.message.length <= 500
-  ) {
-    return { status: "error", message: parsed.message };
-  }
-  if (
-    parsed.status === "submitted" &&
-    typeof parsed.comment === "string" &&
-    parsed.comment.trim().length > 0 &&
-    parsed.comment.length <= 2_000 &&
-    isElementDetails(parsed.element)
-  ) {
-    return { status: "submitted", comment: parsed.comment, element: parsed.element };
-  }
-  return { status: "inactive" };
-}
-
-function pngDataUrlByteLength(dataUrl: string): number {
-  const prefix = "data:image/png;base64,";
-  if (!dataUrl.startsWith(prefix)) throw new Error("The browser frame did not return a PNG image");
-  const base64 = dataUrl.slice(prefix.length);
-  if (!base64 || base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
-    throw new Error("The browser frame returned an invalid PNG image");
-  }
-  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
-  return (base64.length / 4) * 3 - padding;
-}
-
-function annotationScreenshotDataUrl(image: NativeImage): string {
-  const originalSize = image.getSize();
-  const longestSide = Math.max(originalSize.width, originalSize.height);
-  const initialScale = Math.min(1, MAX_ANNOTATION_SCREENSHOT_DIMENSION / longestSide);
-  let width = Math.max(1, Math.round(originalSize.width * initialScale));
-  let height = Math.max(1, Math.round(originalSize.height * initialScale));
-  let candidate = initialScale < 1 ? image.resize({ width, height, quality: "best" }) : image;
-
-  for (let attempt = 0; attempt < 12; attempt += 1) {
-    const dataUrl = candidate.toDataURL();
-    const byteLength = pngDataUrlByteLength(dataUrl);
-    if (byteLength <= MAX_ANNOTATION_SCREENSHOT_BYTES) return dataUrl;
-    if (width === 1 && height === 1) break;
-    const byteScale = Math.sqrt(MAX_ANNOTATION_SCREENSHOT_BYTES / byteLength) * 0.92;
-    const scale = Math.min(0.85, Math.max(0.1, byteScale));
-    const nextWidth = Math.max(1, Math.floor(width * scale));
-    const nextHeight = Math.max(1, Math.floor(height * scale));
-    width = nextWidth === width && width > 1 ? width - 1 : nextWidth;
-    height = nextHeight === height && height > 1 ? height - 1 : nextHeight;
-    candidate = image.resize({ width, height, quality: "best" });
-  }
-
-  throw new Error("The browser screenshot is too large to save. Try a smaller preview window.");
-}
-
 function validateBounds(bounds: BrowserPreviewBounds, zoomFactor: number): Rectangle {
   const values = [bounds.x, bounds.y, bounds.width, bounds.height];
   if (!values.every(Number.isFinite)) throw new Error("Expected finite browser preview bounds");
@@ -356,8 +241,76 @@ export class BrowserPreviewManager {
   private readonly pendingAttaches = new Map<string, Promise<BrowserPreviewState>>();
   private attachSequence = 0;
   private disposed = false;
+  private readonly captures: BrowserPreviewCaptureSessions;
+  private readonly pins: BrowserPreviewPinSessions;
 
-  constructor(private readonly options: BrowserPreviewManagerOptions) {}
+  constructor(private readonly options: BrowserPreviewManagerOptions) {
+    this.captures = new BrowserPreviewCaptureSessions({
+      preview: (tabId) => this.captureHandle(tabId),
+      ...(options.captureStore ? { store: options.captureStore } : {}),
+      ...(options.emitCaptureEvent ? { emit: options.emitCaptureEvent } : {}),
+      ...(options.nativeImage ? { nativeImage: options.nativeImage } : {}),
+      ...(options.capturePollIntervalMs !== undefined
+        ? { pollIntervalMs: options.capturePollIntervalMs }
+        : {}),
+      ...(options.now ? { now: options.now } : {}),
+      ...(options.stability ? { stability: options.stability } : {}),
+      focusHost: () => this.focusHost(),
+    });
+    this.pins = new BrowserPreviewPinSessions({
+      preview: (tabId) => this.captureHandle(tabId),
+      ...(options.emitCaptureEvent ? { emit: options.emitCaptureEvent } : {}),
+      // Deadlines use the real clock; `options.now` only stamps records.
+      ...options.pins,
+    });
+  }
+
+  /** Give keyboard focus back to the app window's renderer (the trusted editor). */
+  private focusHost(): void {
+    const window = this.options.getWindow();
+    if (!window || window.isDestroyed()) return;
+    const host = window as unknown as { focus?: () => void; webContents?: { focus?: () => void } };
+    host.focus?.();
+    host.webContents?.focus?.();
+  }
+
+  private captureHandle(tabId: string): CapturePreviewHandle | null {
+    const preview = this.previews.get(tabId);
+    if (!preview) return null;
+    const transport = this.options.transport;
+    return {
+      contents: preview.view.webContents as unknown as CaptureWebContents,
+      generation: preview.documentGeneration,
+      visible: preview.view.getVisible(),
+      loading: preview.loading,
+      navigate: async (url: string) => {
+        await this.navigate(tabId, url);
+      },
+      viewSize: () => {
+        const bounds = preview.view.getBounds();
+        return { width: bounds.width, height: bounds.height };
+      },
+      ...(preview.service && transport
+        ? { describeService: (url: string) => transport.describe(url) }
+        : {}),
+    };
+  }
+
+  private advanceDocument(tabId: string, preview: ManagedPreview): void {
+    preview.documentGeneration += 1;
+    if (this.previews.get(tabId) === preview) {
+      this.captures.onDocumentChanged(tabId);
+      this.pins.onDocumentChanged(tabId, { loading: preview.loading });
+    }
+  }
+
+  /** Apply visibility; a shown-to-hidden transition ends any selection in progress. */
+  private applyVisibility(tabId: string, preview: ManagedPreview, visible: boolean): void {
+    const wasVisible = preview.view.getVisible();
+    preview.view.setVisible(visible);
+    if (!visible) this.clipboardUserActivations.delete(preview.view.webContents);
+    if (wasVisible && !visible) this.captures.onHidden(tabId);
+  }
 
   /**
    * The renderer measures the preview host with `getBoundingClientRect()`, which
@@ -456,9 +409,11 @@ export class BrowserPreviewManager {
     }
 
     preview.view.setBounds(bounds);
-    const visible = input.visible && bounds.width > 0 && bounds.height > 0;
-    preview.view.setVisible(visible);
-    if (!visible) this.clipboardUserActivations.delete(preview.view.webContents);
+    this.applyVisibility(
+      input.tabId,
+      preview,
+      input.visible && bounds.width > 0 && bounds.height > 0,
+    );
     return this.snapshot(input.tabId, preview);
   }
 
@@ -506,9 +461,11 @@ export class BrowserPreviewManager {
       }
     }
     preview.view.setBounds(bounds);
-    const visible = input.visible && bounds.width > 0 && bounds.height > 0;
-    preview.view.setVisible(visible);
-    if (!visible) this.clipboardUserActivations.delete(preview.view.webContents);
+    this.applyVisibility(
+      input.tabId,
+      preview,
+      input.visible && bounds.width > 0 && bounds.height > 0,
+    );
     return this.snapshot(input.tabId, preview);
   }
 
@@ -562,9 +519,7 @@ export class BrowserPreviewManager {
     const preview = this.previews.get(tabId);
     if (!preview) return null;
     const bounds = preview.view.getBounds();
-    const nextVisible = visible && bounds.width > 0 && bounds.height > 0;
-    preview.view.setVisible(nextVisible);
-    if (!nextVisible) this.clipboardUserActivations.delete(preview.view.webContents);
+    this.applyVisibility(tabId, preview, visible && bounds.width > 0 && bounds.height > 0);
     return this.snapshot(tabId, preview);
   }
 
@@ -617,6 +572,8 @@ export class BrowserPreviewManager {
   reload(tabId: string): BrowserPreviewState {
     const preview = this.get(tabId);
     preview.error = null;
+    preview.loading = true;
+    this.advanceDocument(tabId, preview);
     preview.view.webContents.reload();
     return this.snapshot(tabId, preview);
   }
@@ -627,56 +584,92 @@ export class BrowserPreviewManager {
     return this.snapshot(tabId, preview);
   }
 
-  async startAnnotation(tabId: string): Promise<BrowserPreviewAnnotationStatus> {
-    const preview = this.get(tabId);
-    const sessionId = randomUUID();
-    preview.annotationSessionId = sessionId;
-    try {
-      await preview.view.webContents.executeJavaScript(
-        browserPreviewAnnotationStartScript(sessionId),
-        true,
-      );
-    } catch (error) {
-      delete preview.annotationSessionId;
-      throw error;
-    }
-    return { status: "active" };
+  startCapture(input: BrowserPreviewStartCaptureInput): Promise<BrowserPreviewSelectionStatus> {
+    return this.captures.start(input);
   }
 
-  async getAnnotationStatus(tabId: string): Promise<BrowserPreviewAnnotationStatus> {
-    const preview = this.get(tabId);
-    const encoded = await preview.view.webContents.executeJavaScript(
-      BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT,
-      true,
+  getCaptureStatus(tabId: string): Promise<BrowserPreviewSelectionStatus> {
+    return this.captures.status(tabId);
+  }
+
+  cancelCapture(tabId: string): Promise<void> {
+    return this.captures.cancel(tabId);
+  }
+
+  listPendingCaptures(): Promise<BrowserPreviewPendingCaptureDescriptor[]> {
+    return this.captures.listPending();
+  }
+
+  readPendingCapture(captureId: string): Promise<BrowserPreviewPendingCapture | null> {
+    return this.captures.readPending(captureId);
+  }
+
+  replacePendingCaptureImage(
+    captureId: string,
+    input: BrowserPreviewReplaceImageInput,
+  ): Promise<BrowserPreviewPendingCaptureDescriptor> {
+    return this.captures.replacePendingImage(captureId, input);
+  }
+
+  acknowledgePendingCapture(ack: BrowserPreviewCaptureAck): Promise<void> {
+    return this.captures.acknowledgePending(ack);
+  }
+
+  recordPendingCaptureReceipt(
+    ack: BrowserPreviewCaptureAck,
+  ): Promise<BrowserPreviewPendingCaptureDescriptor | null> {
+    return this.captures.recordPendingReceipt(ack);
+  }
+
+  discardPendingCapture(captureId: string): Promise<void> {
+    return this.captures.discardPending(captureId);
+  }
+
+  listExpiredCaptureNotices(): Promise<BrowserPreviewExpiredCaptureNotice[]> {
+    return this.captures.listExpiredNotices();
+  }
+
+  dismissExpiredCaptureNotices(captureIds?: string[]): Promise<void> {
+    return this.captures.dismissExpiredNotices(captureIds);
+  }
+
+  getCaptureCapabilities(): BrowserPreviewCaptureCapabilities {
+    return this.captures.capabilities();
+  }
+
+  showPins(input: BrowserPreviewPinsInput): Promise<BrowserPreviewAnchorResult[]> {
+    return this.pins.showPins(input);
+  }
+
+  clearPins(tabId: string): Promise<void> {
+    return this.pins.clearPins(tabId);
+  }
+
+  getPinResults(tabId: string): Promise<BrowserPreviewPinSnapshot | null> {
+    return this.pins.getPinResults(tabId);
+  }
+
+  showOnPage(input: BrowserPreviewShowOnPageInput): Promise<BrowserPreviewShowOnPageResult> {
+    return this.pins.showOnPage(input);
+  }
+
+  captureResponsiveSet(
+    input: BrowserPreviewResponsiveSetInput,
+  ): Promise<BrowserPreviewResponsiveSetResult> {
+    const store = this.options.captureStore;
+    if (!store) return Promise.reject(new Error("Trusted capture is unavailable in this build"));
+    const tabId = captureTabId((input as { tabId?: unknown } | null)?.tabId);
+    return captureResponsiveSet(
+      {
+        preview: () => this.captureHandle(tabId),
+        store,
+        ...(this.options.nativeImage ? { nativeImage: this.options.nativeImage } : {}),
+        now: this.options.now ?? Date.now,
+        busy: this.captures.isBusy(tabId),
+        ...(this.options.stability ? { settle: this.options.stability } : {}),
+      },
+      input,
     );
-    const status = parseAnnotationRuntimeStatus(encoded, preview.annotationSessionId);
-    if (status.status === "active") return status;
-    if (status.status !== "submitted") {
-      delete preview.annotationSessionId;
-      await preview.view.webContents
-        .executeJavaScript(BROWSER_PREVIEW_ANNOTATION_CANCEL_SCRIPT, true)
-        .catch(() => undefined);
-      return status;
-    }
-
-    const screenshot = await preview.view.webContents.capturePage();
-    const screenshotDataUrl = annotationScreenshotDataUrl(screenshot);
-    await preview.view.webContents
-      .executeJavaScript(BROWSER_PREVIEW_ANNOTATION_CANCEL_SCRIPT, true)
-      .catch(() => undefined);
-    delete preview.annotationSessionId;
-    return {
-      ...status,
-      screenshotDataUrl,
-    };
-  }
-
-  async cancelAnnotation(tabId: string): Promise<void> {
-    const preview = this.get(tabId);
-    delete preview.annotationSessionId;
-    await preview.view.webContents
-      .executeJavaScript(BROWSER_PREVIEW_ANNOTATION_CANCEL_SCRIPT, true)
-      .catch(() => undefined);
   }
 
   destroy(tabId: string): void {
@@ -692,11 +685,14 @@ export class BrowserPreviewManager {
     this.disposed = true;
     const tabIds = new Set([...this.previews.keys(), ...this.attachTokens.keys()]);
     for (const tabId of tabIds) this.destroy(tabId);
+    this.pins.dispose();
   }
 
   private removePreview(tabId: string): void {
     const preview = this.previews.get(tabId);
     if (!preview) return;
+    this.captures.onRemoved(tabId);
+    this.pins.onRemoved(tabId);
     this.previews.delete(tabId);
     this.clipboardUserActivations.delete(preview.view.webContents);
     if (preview.service)
@@ -743,6 +739,7 @@ export class BrowserPreviewManager {
       loadGeneration: 0,
       loading: true,
       error: null,
+      documentGeneration: 0,
       ...(service ? { service: service.service } : {}),
     };
     this.previews.set(tabId, preview);
@@ -872,6 +869,13 @@ export class BrowserPreviewManager {
         event.preventDefault();
       }
     });
+    // Electron passes either a details event or positional (url, isInPlace, isMainFrame).
+    contents.on("did-start-navigation", (...args: unknown[]) => {
+      const details = args[0] as { isMainFrame?: unknown } | undefined;
+      const isMainFrame =
+        typeof args[1] === "string" ? args[3] === true : details?.isMainFrame === true;
+      if (isMainFrame) this.advanceDocument(tabId, preview);
+    });
     contents.on("did-start-loading", () => {
       preview.loading = true;
       preview.error = null;
@@ -879,15 +883,18 @@ export class BrowserPreviewManager {
     });
     contents.on("did-stop-loading", () => {
       preview.loading = false;
+      if (this.previews.get(tabId) === preview) this.pins.onDocumentReady(tabId);
       this.emit(tabId, preview);
     });
     contents.on("did-navigate", (_event, url) => {
       this.clipboardUserActivations.delete(contents);
+      this.advanceDocument(tabId, preview);
       if (this.withinScope(url, preview.navigationScope)) preview.requestedUrl = url;
       this.emit(tabId, preview);
     });
     contents.on("did-navigate-in-page", (_event, _url, isMainFrame) => {
       if (isMainFrame) {
+        this.advanceDocument(tabId, preview);
         const url = contents.getURL();
         if (this.withinScope(url, preview.navigationScope)) preview.requestedUrl = url;
         this.emit(tabId, preview);
@@ -908,7 +915,10 @@ export class BrowserPreviewManager {
 
   private async load(tabId: string, preview: ManagedPreview, url: string): Promise<void> {
     const generation = ++preview.loadGeneration;
+    // Loading first: pins cleared by this document change are re-requested
+    // once the new document is ready, not against the one being replaced.
     preview.loading = true;
+    this.advanceDocument(tabId, preview);
     this.emit(tabId, preview);
     try {
       await preview.view.webContents.loadURL(url);
@@ -946,6 +956,8 @@ export class BrowserPreviewManager {
     preview.navigationScope = navigationScope;
     preview.error = null;
     preview.loadGeneration += 1;
+    preview.loading = true;
+    this.advanceDocument(tabId, preview);
     this.clipboardUserActivations.delete(preview.view.webContents);
     if (offset === -1) history.goBack();
     else history.goForward();

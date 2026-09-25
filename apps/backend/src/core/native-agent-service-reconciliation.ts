@@ -1075,6 +1075,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       provider,
       session.providerSessionId,
     );
+    // This read is the last look at the previous turn before the next prompt
+    // replaces its status; keep its content-free outcome for observers.
+    await this.recordObservedTurnOutcome(session, status, statusDetail);
     await this.assertEnvironmentLive(queue.environmentId);
     if (status === "running") {
       const requestId =
@@ -1183,7 +1186,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         model: this.queueString(message, "model"),
         reasoningEffort: this.queueReasoningEffort(message),
         phase: this.queueExecutionMode(agent, message) === "plan" ? "review" : "build",
-        mode: this.queueExecutionMode(agent, message),
+        mode: this.queueDispatchMode(agent, message),
         fastMode: this.queueFastMode(agent, message),
         subAgent: this.queueString(message, "agent"),
         executionAgent:

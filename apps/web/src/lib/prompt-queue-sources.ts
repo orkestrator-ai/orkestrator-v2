@@ -15,6 +15,8 @@ import {
 } from "@/lib/compose-draft-persistence";
 import {
   composerOccupiedError,
+  isWebAnnotationQueueItemFrozenError,
+  webAnnotationQueueItemFrozenError,
   isComposeDraftOccupiedBackendError,
 } from "@/lib/prompt-queue-errors";
 import * as backend from "@/lib/backend";
@@ -297,6 +299,11 @@ export async function transferAgentPromptToComposeDraft<TItem extends QueuedItem
     // "could not confirm" failure.
     if (isComposeDraftOccupiedBackendError(error)) {
       throw composerOccupiedError({ cause: error });
+    }
+    // A web annotation request is a frozen snapshot: it can be removed (which
+    // cancels it) but never turned back into an editable draft.
+    if (isWebAnnotationQueueItemFrozenError(error)) {
+      throw webAnnotationQueueItemFrozenError({ cause: error });
     }
     throw error;
   }

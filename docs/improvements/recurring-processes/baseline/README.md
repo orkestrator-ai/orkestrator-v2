@@ -14,6 +14,7 @@ IDs (B01–B25, C01–C16, L01–L14) referenced below.
 | File | Contents |
 | --- | --- |
 | `step-01-baseline.json` | Artifact generated at the step 01 commit (commit, platform, runtime, fixture sizes, phases, per-kind counters, modelled cadences, recorder overhead, limitations). |
+| `step-05-pr-monitoring.json` | Same harness after step 05 (lifecycle-aware PR monitoring). Only `pr-detection`/`pr-check-rollup` counters and the physical units they charge differ from step 01; see "Step 05 re-run" below. |
 
 ## How to run
 
@@ -141,6 +142,35 @@ What the baseline attributes, by owner:
 5. **Local fetching is already well bounded.** Every local scan consults the
    fetch scheduler, but one fetch per 5 min TTL serves all worktrees of a
    repository (B05).
+
+### Step 05 re-run (PR monitoring)
+
+`step-05-pr-monitoring.json`, generated at `fad57961` (step 05 code in
+`ceebd7a2`, harness seeding in `fad57961`). The harness change is
+comparability-preserving: `PrMonitorService` now jitters restored and terminal
+schedules, so the harness passes it a seeded uniform source
+(`seededRandom(scenario.id)`); regenerating reproduces every counter
+(`--compare step-05-pr-monitoring.json --fail-on-change` exits 0). The fixture,
+phases and cost model are unchanged. Compared with `step-01-baseline.json`,
+152 counters differ, all in `pr-detection`, `pr-check-rollup` and the
+per-minute physical units they charge; no other owner moved.
+
+| Scenario (10 min warm idle) | PR entries open / terminal | PR detections before → after | Rollups | Physical units per min |
+| --- | --- | --- | --- | --- |
+| `env10-local-c0-pr` | 3 / 3 | 180 → 96 | 30 → 30 | gh 21 → 12.6; branch-resolution spawns 9 → 0.6 |
+| `env10-mixed-*-pr-wf200` | 3 / 3 | 180 → 96 | 30 → 30 | docker exec −11.2, gh −2.8, branch-resolution −2.8 |
+| `env10-container-c0-pr` | 3 / 3 | 180 → 96 | 30 → 30 | docker exec 670 → 653.2 |
+| `env50-mixed-*-pr-wf200` | 17 / 16 | 990 → 542 | 170 → 170 | gh 56 → 33.6; docker exec −44.8; branch-resolution −22.4 |
+| `env50-container-c1-pr` | 17 / 16 | 990 → 541 | 170 → 170 | docker exec 3,384 → 3,294.2 |
+
+Open entries keep exactly 30 detections per 10 min (20 s); each terminal entry
+goes from 30 to 2 per 10 min (one discovery per five-minute period, after a
+local repair that makes no `gh` call), and each discovery still resolves the
+live branch. The 30 s startup window shows fewer detections because restored
+entries are spread over [20 s, 40 s) and restored terminal entries repair
+locally first. Durations and queue delays are not modelled (detections resolve
+instantly), so the two-concurrent admission bound is proven by unit tests, not
+by this artifact.
 
 ## Limitations — what this does not measure
 

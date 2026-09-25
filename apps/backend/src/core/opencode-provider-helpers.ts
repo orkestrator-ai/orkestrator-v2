@@ -72,6 +72,8 @@ export interface OpenCodeProviderDependencies {
   openCodeStatusReconcileIntervalMs?: number;
   autoAnswerRequests?: boolean;
   onInteractionObservation?: (event: ProviderInteractionObservationEvent) => void | Promise<void>;
+  /** See `ProviderCommonDependencies.onObservationHint`. */
+  onObservationHint?: (sessionId: string | undefined) => void;
   resolveOpenCodeModelProviders?: () =>
     | readonly string[]
     | undefined

@@ -34,6 +34,54 @@ function fakeAgentTools(
   };
 }
 
+test("activity transition events name their session and carry the observer stamp", async () => {
+  const events: Array<{ event: string; payload: unknown }> = [];
+  const backend = new OrkestratorBackend({
+    dataDir: path.join(os.tmpdir(), `ork-backend-activity-stamp-${randomUUID()}`),
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: (event, payload) => events.push({ event, payload }),
+    agentTools: fakeAgentTools(),
+  });
+  const transition = (
+    backend as unknown as {
+      nativeAgents: {
+        options: { onActivityTransition?: (event: Record<string, unknown>) => void };
+      };
+    }
+  ).nativeAgents.options.onActivityTransition;
+
+  transition?.({
+    environmentId: "env-1",
+    sessionKey: "private-storage-key",
+    providerSessionId: "private-provider-id",
+    previousState: "idle",
+    state: "working",
+    agent: "cursor",
+    logicalSessionKey: "env-env-1:tab-1",
+    observation: { generation: "observer-1", revision: 7 },
+  });
+
+  // Additive and content-free: the addressable session and the stamp a client
+  // uses to invalidate exactly that view and to detect a missed transition.
+  expect(events).toEqual([
+    {
+      event: "native-agent-session-activity",
+      payload: {
+        environment_id: "env-1",
+        previous_state: "idle",
+        state: "working",
+        agent: "cursor",
+        logical_session_key: "env-env-1:tab-1",
+        generation: "observer-1",
+        revision: 7,
+      },
+    },
+  ]);
+  await backend.shutdown();
+});
+
 test("activity transition events omit backend-only provider session identifiers", async () => {
   const events: Array<{ event: string; payload: unknown }> = [];
   const backend = new OrkestratorBackend({

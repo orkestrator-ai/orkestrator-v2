@@ -422,6 +422,8 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
   projectionSyncVersions: number[];
   historyPagingVersions: number[];
   progressiveViewVersions?: number[];
+  /** Stamped, session-scoped activity announcements (step 07). */
+  observationEventVersions?: number[];
 }> {
   const response = await invoke<unknown>("get_native_agent_sync_capabilities");
   if (!response || typeof response !== "object" || Array.isArray(response)) {
@@ -438,7 +440,11 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
     (candidate.progressiveViewVersions !== undefined &&
       (!Array.isArray(candidate.progressiveViewVersions) ||
         candidate.progressiveViewVersions.length > 16 ||
-        !candidate.progressiveViewVersions.every(Number.isSafeInteger)))
+        !candidate.progressiveViewVersions.every(Number.isSafeInteger))) ||
+    (candidate.observationEventVersions !== undefined &&
+      (!Array.isArray(candidate.observationEventVersions) ||
+        candidate.observationEventVersions.length > 16 ||
+        !candidate.observationEventVersions.every(Number.isSafeInteger)))
   ) {
     throw new Error("Invalid native agent sync capabilities response");
   }
@@ -446,6 +452,7 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
     projectionSyncVersions: number[];
     historyPagingVersions: number[];
     progressiveViewVersions?: number[];
+    observationEventVersions?: number[];
   };
 }
 

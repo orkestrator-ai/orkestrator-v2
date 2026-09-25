@@ -57,6 +57,11 @@ import {
   updateNativeAgentControls,
 } from "@/lib/backend";
 import { nativeSessionReadDemand } from "@/lib/native-session-read-policy";
+import {
+  nativeObservationInvalidationMatches,
+  subscribeNativeObservationInvalidations,
+} from "@/lib/native-observation-events";
+import { NATIVE_AGENT_OBSERVATION_EVENT_VERSION } from "@orkestrator/protocol/native-agent-observation";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 import { createSessionKey } from "@/lib/utils";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -82,6 +87,8 @@ const HISTORY_PAGE_MAX_MESSAGES = 200;
 let syncCapability: {
   supported: boolean;
   progressive: boolean;
+  /** The backend announces stamped, session-scoped activity invalidations. */
+  observationEvents?: boolean;
   checkedAt: number;
   generation: number;
 } | null = null;
@@ -258,8 +265,17 @@ async function nativeAgentSyncSupported(): Promise<boolean> {
       const capabilities = await getNativeAgentSyncCapabilities();
       const supported = capabilities.projectionSyncVersions?.includes(1) === true;
       const progressive = capabilities.progressiveViewVersions?.includes(1) === true;
+      const observationEvents =
+        capabilities.observationEventVersions?.includes(NATIVE_AGENT_OBSERVATION_EVENT_VERSION) ===
+        true;
       if (generation === syncCapabilityGeneration) {
-        syncCapability = { supported, progressive, checkedAt: Date.now(), generation };
+        syncCapability = {
+          supported,
+          progressive,
+          observationEvents,
+          checkedAt: Date.now(),
+          generation,
+        };
       }
       return supported;
     } catch (error) {
@@ -285,6 +301,17 @@ async function nativeAgentSyncSupported(): Promise<boolean> {
   } finally {
     if (syncCapabilityRequest === request) syncCapabilityRequest = null;
   }
+}
+
+/**
+ * Whether the connected backend announces stamped, session-scoped activity
+ * invalidations (step 07). Synchronous and conservative: false until the
+ * capability read for the current backend generation has answered.
+ */
+export function nativeObservationEventsSupported(): boolean {
+  return Boolean(
+    syncCapability?.generation === syncCapabilityGeneration && syncCapability.observationEvents,
+  );
 }
 
 async function nativeAgentProgressiveSupported(): Promise<boolean> {
@@ -2408,6 +2435,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     readOnSubscribe: false,
     demand: nativeSessionReadDemand(platform, runtimeProjection?.turn.phase, {
       active: enabled && isActive,
+      observationEvents: nativeObservationEventsSupported(),
     }),
     read: (context) =>
       refreshRef.current?.(
@@ -2434,9 +2462,30 @@ export function useNativeAgentSession<TMessage = unknown>({
       invalidateNativeAgentSyncCapability();
       if (enabled && isActive) coordinatedInvalidate();
     });
+    /*
+     * The backend observer announces every activity transition, stamped: a
+     * turn starting or ending, a question or approval parking the turn. This
+     * is what lets a qualified idle view read less often — it is told when it
+     * must read. A missed announcement (stamp gap) or a new observer lifetime
+     * re-reads every view.
+     */
+    const unsubscribeObservation = subscribeNativeObservationInvalidations((invalidation) => {
+      if (
+        enabled &&
+        isActive &&
+        nativeObservationInvalidationMatches(invalidation, {
+          environmentId,
+          agent: platform,
+          logicalSessionKey: sessionKey,
+        })
+      ) {
+        coordinatedInvalidate();
+      }
+    });
     return () => {
       unsubscribeChange();
       unsubscribeResync();
+      unsubscribeObservation();
     };
   }, [coordinatedInvalidate, enabled, environmentId, isActive, platform, sessionKey]);
 

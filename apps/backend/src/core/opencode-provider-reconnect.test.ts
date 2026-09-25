@@ -164,3 +164,104 @@ describe("OpenCode monitor reconnect backoff", () => {
     expect(monitor.maxPendingWaits()).toBe(1);
   });
 });
+
+describe("OpenCode observation wakeups (step 07)", () => {
+  test("reports its stream live only while connected and hints every owned-session change", async () => {
+    const fake = openCodeFake();
+    const hints: Array<string | undefined> = [];
+    let release: (() => void) | undefined;
+    const provider = createNativeAgentProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+      },
+      {
+        openCodeClient: fake.client,
+        monitorRetryMs: 1,
+        onObservationHint: (sessionId) => hints.push(sessionId),
+        waitForMonitorRetry: (_ms, signal) =>
+          // Mirrors the production wait: a monitor already disposed never waits.
+          signal.aborted
+            ? Promise.reject(signal.reason)
+            : new Promise<void>((resolve, reject) => {
+                release = resolve;
+                signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+              }),
+      },
+    );
+    try {
+      const owned = await provider.createSession("build", "Build task");
+      await waitUntil(() => fake.subscriptions.length === 1);
+      await waitUntil(() => provider.observationStreamLive?.() === true);
+      // A (re)connect may follow missed events: wake every owned session.
+      expect(hints).toContain(undefined);
+
+      hints.length = 0;
+      const stream = fake.subscriptions[0]!;
+      stream.push({
+        type: "session.status",
+        properties: { sessionID: owned, status: { type: "busy" } },
+      });
+      await waitUntil(() => hints.includes(owned));
+      stream.push({
+        type: "question.asked",
+        properties: { id: "question-1", sessionID: owned, questions: [] },
+      });
+      await waitUntil(() => hints.filter((hint) => hint === owned).length >= 2);
+      // Someone else's session is never hinted.
+      stream.push({
+        type: "session.status",
+        properties: { sessionID: "foreign-session", status: { type: "busy" } },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(hints.every((hint) => hint === owned)).toBe(true);
+
+      // Losing the stream: not live, and every owned session is woken.
+      hints.length = 0;
+      stream.close();
+      await waitUntil(() => release !== undefined);
+      expect(provider.observationStreamLive?.()).toBe(false);
+      expect(hints).toEqual([undefined]);
+      release!();
+      await waitUntil(() => fake.subscriptions.length === 2);
+      await waitUntil(() => provider.observationStreamLive?.() === true);
+    } finally {
+      await provider.dispose?.();
+    }
+    expect(provider.observationStreamLive?.()).toBe(false);
+  });
+
+  test("is not live before its first connection", async () => {
+    const fake = openCodeFake();
+    fake.setSubscribeFailures(["throw"]);
+    let release: (() => void) | undefined;
+    const provider = createNativeAgentProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+      },
+      {
+        openCodeClient: fake.client,
+        monitorRetryMs: 1,
+        waitForMonitorRetry: (_ms, signal) =>
+          // Mirrors the production wait: a monitor already disposed never waits.
+          signal.aborted
+            ? Promise.reject(signal.reason)
+            : new Promise<void>((resolve, reject) => {
+                release = resolve;
+                signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+              }),
+      },
+    );
+    try {
+      await waitUntil(() => release !== undefined);
+      expect(provider.observationStreamLive?.()).toBe(false);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+});

@@ -256,6 +256,8 @@ export class OrkestratorBackend {
       },
       {
         interactionMonitorMode,
+        // Rollback for step 07's observation sharing; fences stay either way.
+        observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",
         interactionMonitorAdoptionEnabled:
           process.env.ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH !== "1",
         onActivityTransition: (event) => {
@@ -263,6 +265,17 @@ export class OrkestratorBackend {
             environment_id: event.environmentId,
             previous_state: event.previousState,
             state: event.state,
+            // Additive (step 07): which session, and the observer's stamp so a
+            // client can invalidate exactly that view and detect a missed
+            // transition as a revision gap. Older clients ignore these.
+            ...(event.agent ? { agent: event.agent } : {}),
+            ...(event.logicalSessionKey ? { logical_session_key: event.logicalSessionKey } : {}),
+            ...(event.observation
+              ? {
+                  generation: event.observation.generation,
+                  revision: event.observation.revision,
+                }
+              : {}),
           });
           // An agent that just ended a turn may have run `gh pr create` itself,
           // and an environment with no stored PR carries no polling timer that
@@ -498,6 +511,14 @@ export class OrkestratorBackend {
    * not slow down, or fail, because GitHub is slow. The probe itself is
    * idempotent — an environment already being monitored just gets its next
    * check brought forward.
+   */
+  /**
+   * The single PR-monitor call site for a native turn-end edge.
+   *
+   * Called once per `isAgentTurnEndTransition` edge from `onActivityTransition`
+   * — never per idle observation, and never for a fenced pre-dispatch idle,
+   * which the observer refuses to apply (step 07). Re-point this one function
+   * when the PR monitor grows a dedicated completion wakeup (step 05).
    */
   private probeForAgentCreatedPullRequest(environmentId: string, context: CommandContext): void {
     void Promise.resolve(context.probeAgentCreatedPullRequest?.(environmentId)).catch(

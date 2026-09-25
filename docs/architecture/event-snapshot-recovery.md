@@ -25,6 +25,7 @@ compare revisions from two generations of the same row.
 | Resource manifest generation / snapshot revisions | Persistent storage snapshots; opaque 128-bit hex digests | `get_resource_revision_manifest`, scoped manifests, conditional resource snapshots | Equality only. Covers persistent resources, not ephemeral views. |
 | View owner generation | One lifetime of the service that owns a view (for PR/diff: one `PrMonitorService` / `DiffStatsService` instance, a random UUID) | `generation` on view events and snapshots | Equality only. A different value means the owner was replaced (backend restart, transport switch, retarget to a different lineage): reset the view. |
 | View domain revision | Per owner generation; integer that increases by exactly one per announced event (`packages/protocol/src/view-sync.ts`) | `revision` on view events and snapshots | Order events against a snapshot, drop duplicates, detect a missed event as a gap. Revision `0` = nothing announced yet (snapshots only). |
+| Native observation generation + revision (step 07) | One `NativeAgentObservationBroker` lifetime (`native-agent-observation.ts`); revision advances by exactly one per announced session activity transition | `generation`/`revision` on `native-agent-session-activity`, plus `agent`/`logical_session_key`; current position in `get_native_agent_sync_capabilities.observation` | `apps/web/src/lib/native-observation-events.ts` only: invalidation, never state. A gap or new generation re-reads every mounted native view. |
 | Target generation (per-target views, step 03) | The target's lineage (worktree, comparison ref, container) | Encoded as the owner generation of a per-target view | A retarget is a reset; a deleted target is the `deleted` outcome. |
 
 Terminal output (generation/revision snapshot protocol with explicit desync)
@@ -177,6 +178,27 @@ State convergence and notifications are separate contracts.
 | Current | Before step 11 | `legacy`: reconnect hydration with bounded buffering; no periodic reads. |
 | Current | Without the snapshot command | `unsupported`: live events only until a reconnect. |
 | Before step 11 | Current | Extra optional fields are ignored; the unconditional snapshot shape is unchanged. |
+
+## Native observation invalidations (step 07)
+
+The native session view is not an event-folded view: its state comes from its
+own progressive reads (transcript/state/discovery tokens). The stamped
+activity announcement is therefore an **invalidation only** — a matching view
+schedules one read through the read coordinator; nothing is applied from the
+event itself. The stamp exists so a client can tell that it missed one: a
+revision gap or a new generation invalidates every mounted native view, a
+duplicate is ignored, and a malformed or partial stamp drops the announcement.
+Reconnects are still covered by the coordinator's reconnect reconcile and
+`onResourceResync`.
+
+Quiet idle-view backoff relies on this, so it is enabled only for providers
+whose idle view cannot change without an announced transition
+(`NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS`) and only against a backend that
+advertises `observationEventVersions`. Coverage:
+`apps/web/src/lib/native-observation-events.test.ts` (gap, reset, duplicate,
+legacy, malformed), `apps/web/src/hooks/useNativeAgentSession.observation.test.tsx`
+(quiet schedule, immediate read on an announcement, gap re-read, older backend
+and unqualified provider keep the baseline), `packages/protocol/src/native-agent-observation.test.ts`.
 
 ## Adopting the contract
 

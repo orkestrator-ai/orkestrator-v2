@@ -29,6 +29,7 @@ import {
 } from "./native-agent-service-shared.js";
 import { NATIVE_AGENT_SESSION_VERSION } from "./models.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { NativeAgentObservationBroker } from "./native-agent-observation.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
 type PipelineSessionPhase = shared.PipelineSessionPhase;
 type TaskSnapshotImage = shared.TaskSnapshotImage;
@@ -240,6 +241,26 @@ export abstract class NativeAgentServiceBase {
     string,
     { providerSessionId: string; state: AgentActivityState; readyForInput?: boolean }
   >();
+  /**
+   * Shared observation records, dispatch/generation fences and next-due
+   * provider groups (recurring-processes step 07). `observedSessionActivity`
+   * above stays the edge state machine; the broker says how old, how
+   * trustworthy and how reusable each answer is.
+   */
+  protected readonly observations: NativeAgentObservationBroker;
+  /**
+   * Providers replaced or evicted from the cache but not yet disposed. An
+   * OpenCode provider owns an event subscription from construction, so an
+   * obsolete one left undisposed is a duplicate observer for the life of the
+   * process; disposing it while a prompt it sent is in flight would abort that
+   * prompt. Retirement waits for its dispatches to settle and a grace period.
+   */
+  protected readonly retiringProviders = new Map<
+    NativeAgentRuntimeProvider,
+    ReturnType<typeof setTimeout> | null
+  >();
+  protected readonly disposedProviders = new WeakSet<NativeAgentRuntimeProvider>();
+  protected unsubscribeObservationWakeups: (() => void) | null = null;
   /** In-flight incomplete-turn recoveries, coalesced per durable session. */
   protected readonly openCodeRecoveryTasks = new Map<string, Promise<void>>();
   /** Idle transcript candidates retained across transient recovery failures. */
@@ -308,6 +329,8 @@ export abstract class NativeAgentServiceBase {
     provider: NativeAgentRuntimeProvider,
   ): void;
   protected abstract pruneProviders(liveEnvironmentIds: Set<string>): Promise<void>;
+  protected abstract scheduleProviderRetirement(provider: NativeAgentRuntimeProvider): void;
+  protected abstract isProviderCached(provider: NativeAgentRuntimeProvider): boolean;
   protected abstract composeDraftHoldsQueue(value: unknown): boolean;
   protected abstract queueExecutionMode(
     agent: BuildPipelineAgent,
@@ -381,6 +404,10 @@ export abstract class NativeAgentServiceBase {
   protected readonly interactionSelectionCursors = new Map<string, number>();
   protected interactionGlobalSelectionCursor = 0;
   protected activityScan: Promise<void> | null = null;
+  /** Number of the latest sweep started; demands compare against it. */
+  protected activityScanNumber = 0;
+  /** One follow-up scan shared by every consumer demanding a newer read. */
+  protected activityScanFollowUp: Promise<void> | null = null;
   protected interactionScan: Promise<void> | null = null;
   protected interactionScanNumber = 0;
   protected interactionRevisionReconciliations = 0;
@@ -396,6 +423,20 @@ export abstract class NativeAgentServiceBase {
     protected readonly options: NativeAgentServiceOptions = {},
   ) {
     this.interactionMonitorAdoptionEnabled = options.interactionMonitorAdoptionEnabled !== false;
+    this.observations = new NativeAgentObservationBroker(() => this.now());
+    /*
+     * Durable session mutations wake the affected provider group. Only a
+     * backed-off group is affected at all — every other group is read on
+     * every sweep — so this is a cheap hint, never a read of its own.
+     * Optional because narrow test doubles of the storage omit listeners.
+     */
+    this.unsubscribeObservationWakeups =
+      typeof storage.addResourceChangeListener === "function"
+        ? storage.addResourceChangeListener((change) => {
+            if (change.resource !== "native-agent-session") return;
+            this.observations.wakeEnvironment(change.id, "session-mutation", change.agent);
+          })
+        : null;
   }
 
   protected now(): number {

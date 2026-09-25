@@ -1541,6 +1541,22 @@ describe("HTTP bridge provider", () => {
     }
   });
 
+  test("reads an older Pi bridge's parked-approval `blocked` as waiting", async () => {
+    const piConnection = { ...codexConnection, agent: "pi" as const, baseUrl: "http://pi.test" };
+    const { provider } = httpProvider(() => Response.json({ activity: "blocked" }), piConnection);
+    // Rejecting it failed the whole provider group — backoff, eviction and a
+    // frozen indicator — at exactly the moment a person was needed.
+    await expect(provider.observeActivity?.("session-1")).resolves.toEqual({ state: "waiting" });
+    // The legacy token is Pi's alone: any other bridge sending it is malformed.
+    const { provider: codex } = httpProvider(
+      () => Response.json({ activity: "blocked" }),
+      codexConnection,
+    );
+    await expect(codex.observeActivity?.("session-1")).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+  });
+
   test.each([
     ["claude" as const, claudeConnection],
     ["codex" as const, codexConnection],

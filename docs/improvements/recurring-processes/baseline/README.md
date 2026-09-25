@@ -14,6 +14,7 @@ IDs (B01–B25, C01–C16, L01–L14) referenced below.
 | File | Contents |
 | --- | --- |
 | `step-01-baseline.json` | Artifact generated at the step 01 commit (commit, platform, runtime, fixture sizes, phases, per-kind counters, modelled cadences, recorder overhead, limitations). |
+| `step-07-baseline.json` | Same scenarios at the step 07 commit (identical counters), plus the driven `nativeObservation` block: the real native activity sweep and queue scan in rollback vs shared mode. |
 
 ## How to run
 
@@ -141,6 +142,34 @@ What the baseline attributes, by owner:
 5. **Local fetching is already well bounded.** Every local scan consults the
    fetch scheduler, but one fetch per 5 min TTL serves all worktrees of a
    repository (B05).
+
+## Driven native observation (step 07)
+
+`recurring-baseline-native.ts` drives the **real** `NativeAgentService`
+activity sweep and native prompt-queue scan every 2 s for 10 min on a manual
+clock, with a real `StorageService` in a temporary directory and fake providers
+counted at the provider boundary. Fixture: 10 local environments, one session
+each, agents cycled codex/claude/pi/cursor/opencode; environments 0–1 are
+mid-turn with a queued prompt; an idle OpenCode session is started by another
+client twice, once with its provider event lost and once with it delivered.
+Both modes run the identical workload; `rollback` is
+`observationSharing: false` (`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`), which
+reproduces the pre-step-07 cadence.
+
+| Mode | No-touch activity reads | Tab-facing status reads | Provider reads / min | Groups served from a retained observation | External start seen (event lost / delivered) | External end seen | Turn-end edges |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| rollback | 3,000 | 1,200 | 420 | 0 | 1.5 s / 1.5 s | 1.5 s | 2 |
+| shared | 2,722 | 0 | 272.2 | 558 | 1.5 s / 1.5 s | 1.5 s | 2 |
+
+The 1,200 status reads were the two busy queues' `ensureSession` + drain
+status reads (two per queue per 2 s pass) — tab-facing routes, i.e. a liveness
+touch on Codex and a transcript hydrate on Claude — now answered by the sweep's
+no-touch observation. The 278 fewer activity reads are OpenCode idle groups
+backing off to a 4 s safety read behind their live event stream. Discovery of
+an externally started turn is bounded by that ladder (≤ 4 s with the event
+lost, next sweep with it delivered); the recorded 1.5 s is this fixture's
+phase, not the worst case. Bridge-side cost per read, mail, coordinator and
+workflow consumers are not driven.
 
 ## Limitations — what this does not measure
 

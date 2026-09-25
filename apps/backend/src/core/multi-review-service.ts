@@ -110,6 +110,26 @@ import {
 import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
 import { WorkflowDueScheduler, stableJitterMs } from "./multi-review-scheduler.js";
 import {
+  isSupervisedPhase,
+  multiReviewDiscovery,
+  multiReviewObligation,
+  needsInteractiveFixObservation,
+  needsPausedStopReconciliation,
+  reviewSession,
+  supervisionDemand,
+  type MultiReviewObligation,
+} from "./multi-review-scheduling.js";
+import {
+  KeyedWorkflowSupervisor,
+  keyedSchedulingEnabled,
+  type KeyedWorkflowOwner,
+  type KeyedWorkflowServiceOptions,
+  type WorkflowReconcileReport,
+  type WorkflowSupervisorStatus,
+  type WorkflowWakeReason,
+} from "./workflow-supervisor.js";
+import { ElapsedPollGate, type PollTrigger } from "./workflow-poll-gate.js";
+import {
   readReviewerTranscript,
   type ReviewerTranscriptRead,
 } from "./multi-review-reviewer-transcript.js";
@@ -210,13 +230,6 @@ function stepResultLabel(
     : kind === "consolidate"
       ? "consolidated report"
       : "fix result";
-}
-
-function reviewSession(workflow: MultiReviewWorkflow): MultiReviewFixSession | undefined {
-  return (
-    workflow.reviewSession ??
-    (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession)
-  );
 }
 
 function clearReviewSession(workflow: MultiReviewWorkflow): void {
@@ -366,16 +379,6 @@ class FixResultValidationError extends Error {
   }
 }
 
-function isSupervisedPhase(phase: MultiReviewPhase): boolean {
-  return (
-    phase === "preparing" ||
-    phase === "reviewing" ||
-    phase === "consolidating" ||
-    phase === "fixing" ||
-    phase === "cancelling"
-  );
-}
-
 function stepForPausablePhase(phase: MultiReviewPhase): MultiReviewStepKind | null {
   if (phase === "preparing") return "prepare";
   if (phase === "consolidating") return "consolidate";
@@ -395,63 +398,7 @@ function hasWorkflowActivity(workflow: MultiReviewWorkflow): boolean {
   );
 }
 
-function needsPausedStopReconciliation(workflow: MultiReviewWorkflow): boolean {
-  if (workflow.phase !== "paused" || !workflow.pausedStep) return false;
-  const session = workflow.pausedStep === "fix" ? workflow.fixSession : reviewSession(workflow);
-  return (
-    (workflow.pausedStep === "prepare" &&
-      (workflow.validationRun?.status === "planned" ||
-        workflow.validationRun?.status === "running")) ||
-    session?.status === "running"
-  );
-}
-
-/**
- * How soon a workflow needs its next supervision pass.
- *
- * `fast` covers every state that is about to issue a request or is settling a
- * boundary — admission, dispatch journals, result consumption, cancellation.
- * `observe` covers work that is simply running at the provider: reviews last
- * minutes, so reading their status every second bought nothing but load.
- */
-function supervisionDemand(
-  workflow: MultiReviewWorkflow,
-  dispatchesAddressPrompts: boolean,
-): "none" | "fast" | "observe" {
-  if ((workflow.pendingResultConsumptions?.length ?? 0) > 0) return "fast";
-  if (workflow.phase === "cancelling") return "fast";
-  if (workflow.phase === "interactive" && workflow.addressPromptPending === true) {
-    return dispatchesAddressPrompts ? "fast" : "none";
-  }
-  if (needsPausedStopReconciliation(workflow)) return "observe";
-  if (needsInteractiveFixObservation(workflow)) return "observe";
-  if (!isSupervisedPhase(workflow.phase)) return "none";
-  if (workflow.phase === "reviewing") {
-    return workflow.reviewers.some(
-      (reviewer) =>
-        reviewer.status === "pending" ||
-        (reviewer.status === "running" && reviewer.dispatchState !== "sent"),
-    )
-      ? "fast"
-      : "observe";
-  }
-  if (workflow.phase === "preparing" && workflow.validationRun) {
-    return workflow.validationRun.status === "planned" ? "fast" : "observe";
-  }
-  return workflow.activeRequest?.state === "sent" ? "observe" : "fast";
-}
-
-/** The initial interactive Fix turn is observed until its durable runtime settles. */
-function needsInteractiveFixObservation(workflow: MultiReviewWorkflow): boolean {
-  return (
-    workflow.phase === "interactive" &&
-    workflow.addressPromptPending !== true &&
-    (workflow.fixSession?.status === "running" || workflow.fixSession?.status === "idle") &&
-    workflow.stepRuntimes?.fix?.completedAt === undefined
-  );
-}
-
-export interface MultiReviewServiceOptions {
+export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
   autoAdvance?: boolean;
   pollIntervalMs?: number;
   controllerLeaseMs?: number;
@@ -523,7 +470,7 @@ export interface MultiReviewServiceOptions {
 }
 
 /** Durable backend owner for reviewer fan-out, consolidation, and fixes. */
-export class MultiReviewService {
+export class MultiReviewService implements KeyedWorkflowOwner {
   private cachedWorkflowRollout: WorkflowResultRollout | null = null;
   private readonly ownerId = randomUUID();
   private readonly locks = new Map<string, Promise<void>>();
@@ -553,6 +500,17 @@ export class MultiReviewService {
   private tickRun: { pending: boolean; promise: Promise<void> } | null = null;
   private readonly scheduler: WorkflowDueScheduler;
   private stopped = false;
+  /**
+   * Selected once (step 08): the keyed driver, else the adaptive due
+   * scheduler (its rollback), else the legacy tick. Never more than one.
+   */
+  private readonly keyed: boolean;
+  private supervisor: KeyedWorkflowSupervisor<MultiReviewObligation> | null = null;
+  private unsubscribeStorage: (() => void) | null = null;
+  /** How each running pass was triggered, for the attempt-counted deadlines. */
+  private readonly passTriggers = new Map<string, PollTrigger>();
+  /** Elapsed-time gate for idle-result grace and bounded final-usage probes. */
+  private readonly pollGate: ElapsedPollGate;
 
   constructor(
     private readonly storage: StorageService,
@@ -561,6 +519,15 @@ export class MultiReviewService {
   ) {
     this.progress = new MultiReviewProgressTracker(
       options.progressProbeIntervalMs ?? DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
+    );
+    this.keyed =
+      options.keyedScheduling ??
+      (options.adaptiveScheduling !== false && keyedSchedulingEnabled("multi-review"));
+    // The spacing is the slowest cadence these counts were designed for (the
+    // 3 s observation interval), so the elapsed bound never shortens a grace.
+    this.pollGate = new ElapsedPollGate(
+      options.observationIntervalMs ?? options.pollIntervalMs ?? DEFAULT_OBSERVATION_MS,
+      options.schedulerClock ? { now: options.schedulerClock.now } : {},
     );
     this.scheduler = new WorkflowDueScheduler({
       run: (workflowId) => this.runScheduled(workflowId),
@@ -590,6 +557,27 @@ export class MultiReviewService {
     // for completed work, and retire a stale working source left by a workflow
     // that settled while the previous process was shutting down.
     await this.reconcileEnvironmentActivity();
+    this.supervisor?.stop();
+    this.supervisor = null;
+    this.unsubscribeStorage?.();
+    this.unsubscribeStorage = null;
+    if (this.options.autoAdvance !== false && this.keyed) {
+      this.supervisor = this.createSupervisor();
+      this.unsubscribeStorage = this.storage.addResourceChangeListener((change) => {
+        if (change.resource === "multi-review" && change.deleted) {
+          this.supervisor?.forget(change.id);
+        }
+      });
+      // Lease renewal rides the scheduler's separate critical pool.
+      this.supervisor.addCriticalJob({
+        key: "lease-renewal",
+        kind: "multi-review-lease-renewal",
+        intervalMs: this.options.controllerRenewMs ?? CONTROLLER_RENEW_MS,
+        run: () => this.renewLeasesOnce(),
+      });
+      this.supervisor.start();
+      return;
+    }
     if (this.options.autoAdvance !== false) {
       if (this.options.adaptiveScheduling === false) {
         this.timer = setInterval(
@@ -617,6 +605,10 @@ export class MultiReviewService {
     if (this.renewTimer) clearInterval(this.renewTimer);
     this.timer = null;
     this.renewTimer = null;
+    this.supervisor?.stop();
+    this.supervisor = null;
+    this.unsubscribeStorage?.();
+    this.unsubscribeStorage = null;
     await this.scheduler.stop();
     await Promise.allSettled([
       ...this.locks.values(),
@@ -1752,6 +1744,8 @@ export class MultiReviewService {
         // fails, stale tabs can still reconcile against a missing workflow; the
         // inverse would strand a live record with every recovery surface gone.
         await this.storage.deleteMultiReviewWorkflow(workflow.id);
+        this.supervisor?.forget(workflow.id);
+        this.pollGate.clearPrefix(`${workflow.id}\0`);
         this.addressDispatchRetryAt.delete(workflow.id);
         const cleanup = await Promise.allSettled([
           this.storage.removeMultiReviewTabs(workflow.environmentId, workflow.id),
@@ -1771,6 +1765,89 @@ export class MultiReviewService {
         await this.release(workflow, token);
       }
     });
+  }
+
+  wakeEnvironment(environmentId: string, reason: WorkflowWakeReason): void {
+    this.supervisor?.wakeTarget(environmentId, reason);
+  }
+
+  schedulingStatus(): WorkflowSupervisorStatus | null {
+    return this.supervisor?.status() ?? null;
+  }
+
+  async reconcileScheduling(): Promise<WorkflowReconcileReport | null> {
+    return this.supervisor ? this.supervisor.reconcileNow() : null;
+  }
+
+  /**
+   * The keyed driver (step 08). Same due-time policy as the adaptive
+   * scheduler it replaces (`nextDueAt`: 1 s for boundaries, 3 s plus a stable
+   * spread while simply observing a provider, address-handoff backoff), but
+   * on the shared primitive with obligation-aware discovery, scoped wakeups,
+   * bounded admission and a critical lease-renewal job.
+   */
+  private createSupervisor(): KeyedWorkflowSupervisor<MultiReviewObligation> {
+    const dispatches = this.options.dispatchAddressPrompt !== undefined;
+    return new KeyedWorkflowSupervisor<MultiReviewObligation>({
+      domain: "multi-review",
+      kind: "multi-review-tick",
+      progressIntervalMs: this.options.pollIntervalMs ?? DEFAULT_POLL_MS,
+      discoveryIntervalMs:
+        this.options.discoveryIntervalMs ??
+        this.options.reconcileIntervalMs ??
+        this.options.pollIntervalMs ??
+        DEFAULT_RECONCILE_MS,
+      maxConcurrent: MAX_CONCURRENT_WORKFLOW_PASSES,
+      discover: async () =>
+        multiReviewDiscovery(
+          await this.storage.listAllMultiReviewWorkflows(),
+          isMultiReviewWorkflow,
+          dispatches,
+        ),
+      advance: async (pass) => {
+        this.passTriggers.set(pass.key, pass.trigger);
+        try {
+          await this.runLocked(pass.key);
+        } finally {
+          this.passTriggers.delete(pass.key);
+        }
+      },
+      nextDelayMs: async (key) => {
+        const dueAt = await this.nextDueAt(key);
+        return dueAt === undefined ? null : Math.max(0, dueAt - Date.now());
+      },
+      admission: this.options.workflowAdmission ?? null,
+      ...(this.options.schedulerClock
+        ? { now: this.options.schedulerClock.now, timers: this.options.schedulerClock.timers }
+        : {}),
+    });
+  }
+
+  /** Keeps the keyed index current after an authoritative read or durable write. */
+  private noteRecord(workflowId: string, snapshot: unknown): void {
+    const supervisor = this.supervisor;
+    if (!supervisor) return;
+    if (!isMultiReviewWorkflow(snapshot)) {
+      supervisor.note(workflowId, null);
+      return;
+    }
+    supervisor.note(
+      workflowId,
+      multiReviewObligation(snapshot, this.options.dispatchAddressPrompt !== undefined),
+      snapshot.environmentId,
+    );
+  }
+
+  /** Whether this observation counts toward an attempt-counted deadline. */
+  private countPoll(workflowId: string, scope: string): boolean {
+    return this.pollGate.count(
+      `${workflowId}\0${scope}`,
+      this.passTriggers.get(workflowId) ?? "explicit",
+    );
+  }
+
+  private pollsExhausted(workflowId: string, scope: string, count: number, limit: number) {
+    return this.pollGate.exhausted(`${workflowId}\0${scope}`, count, limit);
   }
 
   /**
@@ -2000,6 +2077,7 @@ export class MultiReviewService {
       { ownerId: this.ownerId, token },
     );
     workflow.backendRevision = saved.revision;
+    this.noteRecord(workflow.id, workflow);
     await this.syncWorkflowActivity(workflow);
     return workflow;
   }
@@ -2078,6 +2156,7 @@ export class MultiReviewService {
 
   private async advance(workflowId: string): Promise<void> {
     const existing = await this.storage.getMultiReviewWorkflow(workflowId);
+    this.noteRecord(workflowId, existing?.snapshot);
     if (!existing || !isMultiReviewWorkflow(existing.snapshot)) return;
     const existingPhase = existing.snapshot.phase;
     const pendingAddress =
@@ -2330,6 +2409,11 @@ export class MultiReviewService {
         observation?.status !== "missing"
       ) {
         if (session.observedRunning !== true) {
+          // A wakeup burst does not count as the settling observation.
+          if (!this.countPoll(workflow.id, "fix\0idle")) {
+            await this.unclaim(workflow, token);
+            return;
+          }
           session.idleResultPolls = (session.idleResultPolls ?? 0) + 1;
           if (session.idleResultPolls <= INTERACTIVE_FIX_INITIAL_IDLE_POLLS) {
             await this.save(workflow, token);
@@ -2391,8 +2475,18 @@ export class MultiReviewService {
       if (
         observation.status === "idle" &&
         observation.usagePending === true &&
-        (session.usageFinalizationPolls ?? 0) < REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS
+        (session.usageFinalizationPolls ?? 0) < REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS &&
+        !this.pollsExhausted(
+          workflow.id,
+          "fix\0usage",
+          session.usageFinalizationPolls ?? 0,
+          REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS,
+        )
       ) {
+        if (!this.countPoll(workflow.id, "fix\0usage")) {
+          await this.unclaim(workflow, token);
+          return;
+        }
         session.usageFinalizationPolls = (session.usageFinalizationPolls ?? 0) + 1;
         await this.save(workflow, token);
         await this.unclaim(workflow, token);
@@ -2686,6 +2780,11 @@ export class MultiReviewService {
   private reviewFanoutHost(workflow: MultiReviewWorkflow, token: string): ReviewFanoutHost {
     return {
       workflowId: workflow.id,
+      pollGate: {
+        count: (scope) =>
+          this.pollGate.count(scope, this.passTriggers.get(workflow.id) ?? "explicit"),
+        exhausted: (scope, count, limit) => this.pollGate.exhausted(scope, count, limit),
+      },
       targetBranch: workflow.targetBranch,
       reviewInstruction: workflow.reviewInstruction,
       label: "Multi Review",
@@ -3277,9 +3376,14 @@ export class MultiReviewService {
     if (status === "blocked") {
       // Unattended interactions were already resolved above; a provider still
       // reporting blocked cannot be waited on indefinitely.
-      request.idleResultPolls = (request.idleResultPolls ?? 0) + 1;
+      const scope = `${request.requestId}\0idle`;
+      if (!this.countPoll(workflow.id, scope)) return;
+      request.idleResultPolls = Math.min((request.idleResultPolls ?? 0) + 1, MAX_IDLE_RESULT_POLLS);
       await this.save(workflow, token);
-      if (request.idleResultPolls >= MAX_IDLE_RESULT_POLLS) {
+      if (
+        request.idleResultPolls >= MAX_IDLE_RESULT_POLLS ||
+        this.pollsExhausted(workflow.id, scope, request.idleResultPolls, MAX_IDLE_RESULT_POLLS)
+      ) {
         throw new Error(`The ${modelLabel} model stayed blocked without a resolvable interaction`);
       }
       return;
@@ -3319,17 +3423,29 @@ export class MultiReviewService {
         );
         return;
       }
-      request.idleResultPolls = (request.idleResultPolls ?? 0) + 1;
+      const scope = `${request.requestId}\0idle`;
+      if (!this.countPoll(workflow.id, scope)) return;
+      request.idleResultPolls = Math.min((request.idleResultPolls ?? 0) + 1, MAX_IDLE_RESULT_POLLS);
       await this.save(workflow, token);
-      if (request.idleResultPolls >= MAX_IDLE_RESULT_POLLS) {
+      if (
+        request.idleResultPolls >= MAX_IDLE_RESULT_POLLS ||
+        this.pollsExhausted(workflow.id, scope, request.idleResultPolls, MAX_IDLE_RESULT_POLLS)
+      ) {
         throw new Error(`The ${modelLabel} model became idle without returning its ${resultLabel}`);
       }
       return;
     }
     if (
       observation.usagePending === true &&
-      (request.usageFinalizationPolls ?? 0) < REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS
+      (request.usageFinalizationPolls ?? 0) < REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS &&
+      !this.pollsExhausted(
+        workflow.id,
+        `${request.requestId}\0usage`,
+        request.usageFinalizationPolls ?? 0,
+        REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS,
+      )
     ) {
+      if (!this.countPoll(workflow.id, `${request.requestId}\0usage`)) return;
       request.usageFinalizationPolls = (request.usageFinalizationPolls ?? 0) + 1;
       await this.save(workflow, token);
       return;

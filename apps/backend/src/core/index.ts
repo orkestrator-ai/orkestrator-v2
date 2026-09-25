@@ -479,6 +479,7 @@ export class OrkestratorBackend {
           ),
         recoverAddressSession: (workflow, replacement) =>
           recoverMissingMultiReviewFixSession(this.nativeAgents, workflow, replacement),
+        workflowAdmission: this.workflowAdmission,
         invalidateAddressSession: async (workflow, session) => {
           await storage.invalidateNativeAgentSession(
             nativeAgentSessionStorageKey(workflow.environmentId, session.agent, session.sessionKey),
@@ -543,6 +544,7 @@ export class OrkestratorBackend {
       this.featurePlanning,
       this.buildPipelines,
       this.loopedReviews,
+      this.multiReviews,
     ];
     return owners.filter((owner): owner is KeyedWorkflowOwner => owner !== undefined);
   }

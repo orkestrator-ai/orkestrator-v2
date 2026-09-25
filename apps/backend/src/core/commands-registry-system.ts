@@ -52,6 +52,7 @@ export function registerSystemCommands(
     const owners: [string, KeyedWorkflowOwner | undefined][] = [
       ["feature-planning", context.featurePlanning],
       ["build-pipeline", context.buildPipelines],
+      ["looped-review", context.loopedReviews],
     ];
     const result: Record<string, unknown> = {};
     for (const [domain, owner] of owners) {

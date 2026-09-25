@@ -96,6 +96,21 @@ import {
   resolveFastMode,
 } from "./build-pipeline-service-helpers.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import {
+  KeyedWorkflowSupervisor,
+  keyedSchedulingEnabled,
+  type KeyedWorkflowOwner,
+  type KeyedWorkflowServiceOptions,
+  type WorkflowReconcileReport,
+  type WorkflowSupervisorStatus,
+  type WorkflowWakeReason,
+} from "./workflow-supervisor.js";
+import { ElapsedPollGate, type PollTrigger } from "./workflow-poll-gate.js";
+import {
+  discoverLoopedReviews,
+  loopedReviewObligation,
+  type LoopedReviewObligation,
+} from "./looped-review-scheduling.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -335,7 +350,7 @@ function applyReconciliation(
   };
 }
 
-export interface LoopedReviewServiceOptions {
+export interface LoopedReviewServiceOptions extends KeyedWorkflowServiceOptions {
   autoAdvance?: boolean;
   pollIntervalMs?: number;
   missingResultPollLimit?: number;
@@ -364,7 +379,7 @@ export interface LoopedReviewServiceOptions {
 }
 
 /** Backend-owned, fenced controller for every looped-review transition. */
-export class LoopedReviewService {
+export class LoopedReviewService implements KeyedWorkflowOwner {
   private cachedWorkflowRollout: WorkflowResultRollout | null = null;
   private readonly ownerId = randomUUID();
   private readonly interactionOwnerId = randomUUID();
@@ -381,12 +396,25 @@ export class LoopedReviewService {
   /** Workflow id → revision that last passed full validation, to skip re-walking it. */
   private validatedRevisions = new Map<string, number>();
   private stopped = false;
+  /** Selected once: the keyed driver or the whole-store tick, never both. */
+  private readonly keyed: boolean;
+  private supervisor: KeyedWorkflowSupervisor<LoopedReviewObligation> | null = null;
+  private unsubscribeStorage: (() => void) | null = null;
+  /** How each running pass was triggered, for the missing-result grace. */
+  private readonly passTriggers = new Map<string, PollTrigger>();
+  private readonly missingResultGate: ElapsedPollGate;
 
   constructor(
     private readonly storage: StorageService,
     private readonly invoke: CommandInvoker,
     private readonly options: LoopedReviewServiceOptions = {},
-  ) {}
+  ) {
+    this.keyed = options.keyedScheduling ?? keyedSchedulingEnabled("looped-review");
+    this.missingResultGate = new ElapsedPollGate(
+      options.pollIntervalMs ?? DEFAULT_POLL_MS,
+      options.schedulerClock ? { now: options.schedulerClock.now } : {},
+    );
+  }
 
   async init(): Promise<void> {
     this.stopped = false;
@@ -401,6 +429,31 @@ export class LoopedReviewService {
       if (legacyLoopedReviewAdoption(record.snapshot)) {
         await this.adoptLegacy(record).catch(() => undefined);
       }
+    }
+    this.supervisor?.stop();
+    this.supervisor = null;
+    this.unsubscribeStorage?.();
+    this.unsubscribeStorage = null;
+    if (this.options.autoAdvance !== false && this.keyed) {
+      this.supervisor = this.createSupervisor();
+      this.unsubscribeStorage = this.storage.addResourceChangeListener((change) => {
+        if (change.resource !== "looped-review") return;
+        // Deletion retires the key; a write by another path (a renderer-era
+        // save) is probed so adoption does not wait for the safety scan.
+        if (change.deleted) this.supervisor?.forget(change.id);
+        else if (!this.supervisor?.has(change.id)) {
+          this.supervisor?.wake(change.id, "storage-change");
+        }
+      });
+      // Lease renewal rides the scheduler's separate critical pool.
+      this.supervisor.addCriticalJob({
+        key: "lease-renewal",
+        kind: "looped-review-lease-renewal",
+        intervalMs: this.options.controllerRenewMs ?? CONTROLLER_RENEW_MS,
+        run: () => this.renewLeasesOnce(),
+      });
+      this.supervisor.start();
+      return;
     }
     if (this.options.autoAdvance !== false) {
       this.timer = setInterval(
@@ -428,6 +481,10 @@ export class LoopedReviewService {
     if (this.renewTimer) clearInterval(this.renewTimer);
     this.timer = null;
     this.renewTimer = null;
+    this.supervisor?.stop();
+    this.supervisor = null;
+    this.unsubscribeStorage?.();
+    this.unsubscribeStorage = null;
     await Promise.allSettled([
       ...this.locks.values(),
       ...[...this.scheduledRuns.values()].map((entry) => entry.promise),
@@ -529,6 +586,67 @@ export class LoopedReviewService {
 
   advanceNow(workflowId: string): Promise<void> {
     return this.runLocked(workflowId);
+  }
+
+  wakeEnvironment(environmentId: string, reason: WorkflowWakeReason): void {
+    this.supervisor?.wakeTarget(environmentId, reason);
+  }
+
+  schedulingStatus(): WorkflowSupervisorStatus | null {
+    return this.supervisor?.status() ?? null;
+  }
+
+  async reconcileScheduling(): Promise<WorkflowReconcileReport | null> {
+    return this.supervisor ? this.supervisor.reconcileNow() : null;
+  }
+
+  /**
+   * The keyed driver (step 08): one key per workflow with an obligation,
+   * progressed on the previous one-second cadence by the same locked,
+   * lease-fenced advance; storage is enumerated only by the safety discovery.
+   */
+  private createSupervisor(): KeyedWorkflowSupervisor<LoopedReviewObligation> {
+    const pollMs = this.options.pollIntervalMs ?? DEFAULT_POLL_MS;
+    return new KeyedWorkflowSupervisor<LoopedReviewObligation>({
+      domain: "looped-review",
+      kind: "looped-review-tick",
+      progressIntervalMs: pollMs,
+      discoveryIntervalMs: this.options.discoveryIntervalMs ?? pollMs,
+      discover: async () => {
+        const { result, validated } = await discoverLoopedReviews({
+          list: () => this.storage.listAllLoopedReviewWorkflows(),
+          read: (workflowId) => this.storage.getLoopedReviewWorkflow(workflowId),
+          adopt: (record) => this.adoptLegacy(record),
+          validatedRevisions: this.validatedRevisions,
+        });
+        this.validatedRevisions = validated;
+        return result;
+      },
+      advance: async (pass) => {
+        this.passTriggers.set(pass.key, pass.trigger);
+        try {
+          await this.runLocked(pass.key);
+        } finally {
+          this.passTriggers.delete(pass.key);
+        }
+      },
+      admission: this.options.workflowAdmission ?? null,
+      ...(this.options.schedulerClock
+        ? { now: this.options.schedulerClock.now, timers: this.options.schedulerClock.timers }
+        : {}),
+    });
+  }
+
+  /** Keeps the keyed index current after an authoritative read or durable write. */
+  private noteRecord(workflowId: string, snapshot: unknown, environmentId?: string): void {
+    const supervisor = this.supervisor;
+    if (!supervisor) return;
+    const valid = isLoopedReviewWorkflow(snapshot);
+    supervisor.note(
+      workflowId,
+      loopedReviewObligation(snapshot, valid),
+      environmentId ?? (valid ? snapshot.environmentId : undefined),
+    );
   }
 
   async pause(workflowId: string): Promise<LoopedReviewWorkflow> {
@@ -753,6 +871,7 @@ export class LoopedReviewService {
     // for the rest of the process. The tick already skips terminal workflows;
     // this covers direct advanceNow callers.
     const existing = await this.storage.getLoopedReviewWorkflow(workflowId);
+    this.noteRecord(workflowId, existing?.snapshot, existing?.environmentId);
     if (
       existing &&
       isLoopedReviewWorkflow(existing.snapshot) &&
@@ -966,12 +1085,19 @@ export class LoopedReviewService {
         await this.save(workflow, lease.token);
         return;
       }
-      wait.idlePolls += 1;
+      // Attempt-counted grace with elapsed semantics: a wakeup burst does not
+      // count, and a slowed cadence cannot stretch it past its duration.
+      const scope = `${workflow.id}\0${dispatch.id}`;
+      const trigger = this.passTriggers.get(workflow.id) ?? "explicit";
+      const counted = this.missingResultGate.count(scope, trigger);
+      if (counted) wait.idlePolls += 1;
       workflow.structuredWait = wait;
-      if (wait.idlePolls >= (this.options.missingResultPollLimit ?? DEFAULT_MISSING_RESULT_POLLS)) {
+      const limit = this.options.missingResultPollLimit ?? DEFAULT_MISSING_RESULT_POLLS;
+      if (this.missingResultGate.exhausted(scope, wait.idlePolls, limit)) {
+        this.missingResultGate.clear(scope);
         throw new DefiniteResultError("Native provider completed without a structured result");
       }
-      await this.save(workflow, lease.token);
+      if (counted) await this.save(workflow, lease.token);
     }
   }
 
@@ -1560,6 +1686,7 @@ export class LoopedReviewService {
    */
   private async releaseWorkflowResources(workflow: LoopedReviewWorkflow): Promise<void> {
     this.stopInteractionWatches(workflow);
+    this.missingResultGate.clearPrefix(`${workflow.id}\0`);
     const lease = this.leases.get(workflow.id);
     if (lease) {
       this.leases.delete(workflow.id);
@@ -2027,6 +2154,7 @@ export class LoopedReviewService {
       { ownerId: this.ownerId, token },
     );
     workflow.backendRevision = saved.revision;
+    this.noteRecord(workflow.id, workflow);
     return workflow;
   }
 

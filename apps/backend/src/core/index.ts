@@ -455,6 +455,7 @@ export class OrkestratorBackend {
         onInteractionObservation: (event) => {
           this.nativeAgents.recordProviderInteractionObservation(event);
         },
+        workflowAdmission: this.workflowAdmission,
       },
     );
     context.loopedReviews = this.loopedReviews;
@@ -538,7 +539,11 @@ export class OrkestratorBackend {
   private keyedWorkflowOwners(): KeyedWorkflowOwner[] {
     // Read lazily: a storage change can be announced while the constructor is
     // still building the owners.
-    const owners: (KeyedWorkflowOwner | undefined)[] = [this.featurePlanning, this.buildPipelines];
+    const owners: (KeyedWorkflowOwner | undefined)[] = [
+      this.featurePlanning,
+      this.buildPipelines,
+      this.loopedReviews,
+    ];
     return owners.filter((owner): owner is KeyedWorkflowOwner => owner !== undefined);
   }
 

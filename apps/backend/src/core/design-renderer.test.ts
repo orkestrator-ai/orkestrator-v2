@@ -407,7 +407,10 @@ describe("DesignRenderer lifecycle deadlines", () => {
   test("a hung launch settles within the deadline and a later job uses a new generation", async () => {
     const late = fakeBrowser();
     const hung = deferred<Browser>();
-    const good = fakeBrowser();
+    const finish = deferred<string>();
+    const good = fakeBrowser({
+      evaluate: (operation) => (operation.op === "render" ? true : finish.promise),
+    });
     const launch = launcher(() => hung.promise, good.browser);
     const instance = renderer(launch, { budgets: { launchMs: 30, overallMs: 400 } });
     const started = Date.now();
@@ -415,13 +418,17 @@ describe("DesignRenderer lifecycle deadlines", () => {
     expect(Date.now() - started).toBeLessThan(400);
     expect(error.code).toBe("renderer-unavailable");
     expect(instance.status().state).toBe("launch-failed");
-    await expect(instance.run(job())).resolves.toBe(frame.html);
+    const inFlight = instance.run(job());
+    await waitFor(() => good.evaluated.some((operation) => operation.op === "serialize"));
     expect(launch).toHaveBeenCalledTimes(2);
-    expect(instance.status()).toMatchObject({ state: "ready", generation: 2 });
-    // A launch that completes after its deadline is closed, not adopted.
+    expect(instance.status()).toMatchObject({ state: "running", generation: 2 });
+    // A late launch cannot take over the new generation while its job runs.
     hung.resolve(late.browser);
     await waitFor(() => late.close.mock.calls.length === 1);
     expect(late.newContext).not.toHaveBeenCalled();
+    finish.resolve(frame.html);
+    await expect(inFlight).resolves.toBe(frame.html);
+    expect(instance.status().generation).toBe(2);
   });
 
   test("launch failure is not reported as a missing executable", async () => {

@@ -51,21 +51,29 @@ export function loadDrafts(key: string): DesignIntent[] {
 
 /**
  * Saves a canvas's unsettled intents. Returns false (keeping the previous
- * stored set) when bounds would be exceeded, so accepted work is never dropped
- * silently; the caller reports capacity.
+ * stored set) when accepted work would exceed bounds. Tokenless drafts are
+ * best-effort; leaving them out never strands a prepared backend operation.
  */
 export function saveDrafts(key: string, intents: DesignIntent[]): boolean {
   const target = storage();
   if (!target) return false;
   const all = readAll();
-  const persisted = intents
-    .filter(isPersistable)
-    .map(({ restored: _restored, blocked: _blocked, ...rest }) => rest);
-  if (persisted.length > DRAFT_LIMITS.perCanvas) return false;
+  const unsettled = intents.filter(isPersistable);
+  const accepted = unsettled.filter((intent) => intent.token || intent.outcome === "unknown");
+  if (accepted.length > DRAFT_LIMITS.perCanvas) return false;
+  const available = DRAFT_LIMITS.perCanvas - accepted.length;
+  const persisted = [
+    ...accepted,
+    ...unsettled.filter((intent) => !accepted.includes(intent)).slice(0, available),
+  ].map(({ restored: _restored, blocked: _blocked, ...rest }) => rest);
   if (persisted.length) all[key] = persisted;
   else delete all[key];
   const total = Object.values(all).reduce((count, entries) => count + entries.length, 0);
-  if (total > DRAFT_LIMITS.perClient) return false;
+  if (total > DRAFT_LIMITS.perClient) {
+    const otherCount = total - persisted.length;
+    if (otherCount + accepted.length > DRAFT_LIMITS.perClient) return false;
+    all[key] = persisted.slice(0, DRAFT_LIMITS.perClient - otherCount);
+  }
   const serialized = JSON.stringify(all);
   if (serialized.length > DRAFT_LIMITS.bytes) return false;
   try {

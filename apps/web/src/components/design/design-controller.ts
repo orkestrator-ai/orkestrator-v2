@@ -97,7 +97,17 @@ function jitter(ms: number) {
 
 let clientId: string | undefined;
 function designClientId() {
-  clientId ??= `c-${createUuid().slice(0, 12)}`;
+  if (!clientId) {
+    try {
+      clientId = window.sessionStorage.getItem("orkestrator.design.client") ?? undefined;
+      if (!clientId) {
+        clientId = `c-${createUuid().slice(0, 12)}`;
+        window.sessionStorage.setItem("orkestrator.design.client", clientId);
+      }
+    } catch {
+      clientId = `c-${createUuid().slice(0, 12)}`;
+    }
+  }
   return clientId;
 }
 
@@ -108,6 +118,7 @@ function designClientId() {
  */
 export class DesignCanvasController {
   readonly key: string;
+  readonly draftKey: string;
   private consumers = 0;
   private epoch = 0;
   private disposed = false;
@@ -140,11 +151,15 @@ export class DesignCanvasController {
     readonly canvasId: string,
   ) {
     this.key = `${backend}|${environmentId}|${canvasId}`;
+    this.draftKey = `${this.key}|${designClientId()}`;
     const store = useDesignStore.getState();
     if (!store.projections.has(this.key)) {
+      const owned = loadDrafts(this.draftKey);
+      const legacy = owned.length ? [] : loadDrafts(this.key);
+      if (legacy.length && saveDrafts(this.draftKey, legacy)) saveDrafts(this.key, []);
       store.put({
         ...emptyProjection(this.key, environmentId, canvasId),
-        intents: loadDrafts(this.key),
+        intents: owned.length ? owned : legacy,
       });
     }
   }
@@ -591,7 +606,8 @@ export class DesignCanvasController {
           intent.gestureKey === input.gestureKey &&
           intent.phase === "draft" &&
           !intent.restored &&
-          !this.running.has(intent.id),
+          !this.running.has(intent.id) &&
+          !this.retryAt.has(intent.id),
       );
       if (existing) {
         // Only the sample changes: the gesture keeps the base it was first
@@ -644,7 +660,7 @@ export class DesignCanvasController {
   }
 
   private persist(): boolean {
-    return saveDrafts(this.key, this.projection.intents);
+    return saveDrafts(this.draftKey, this.projection.intents);
   }
 
   private runnable(intent: DesignIntent, index: number, intents: DesignIntent[]) {
@@ -1092,7 +1108,6 @@ export class DesignCanvasController {
       };
       this.patchIntent(id, {
         ...cleared,
-        id: fresh,
         descriptor,
         token: undefined,
         phase: "draft",

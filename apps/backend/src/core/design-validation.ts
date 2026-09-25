@@ -123,7 +123,7 @@ async function run(
       result = {
         runtimeVersion: DESIGN_RUNTIME_VERSION,
         state: "invalid",
-        reasons: [{ code: /5000/.test((error as Error).message) ? "dom-limit" : "runtime-error" }],
+        reasons: [{ code: /5000/.test((error as Error).message) ? "dom-limit" : "html-limit" }],
         truncated: false,
         message: "This frame could not be rendered by the design runtime.",
         validatedAt: service.iso(),

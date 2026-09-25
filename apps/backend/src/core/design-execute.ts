@@ -160,7 +160,7 @@ async function validateRaw(
 ): Promise<Omit<DesignFrameValidation, "frameId" | "contentId">> {
   try {
     const report = (await ctx.render(
-      { html: "", ...size },
+      { html: "", width: size.width, height: size.height },
       { op: "validate", html },
       "interactive",
     )) as DesignValidationReport;
@@ -394,8 +394,6 @@ async function computeFrameOperation(
         y: input.y ?? frame.y,
         revision: 0,
       });
-      result.frameRevisions = [];
-      result.frameRevisions.push({ frameId: frame.id, revision: frame.revision });
       result.frames.push(
         change(null, copy, ["name", "geometry", "viewport", "content", "structure"], {
           index: record.document.frames.indexOf(frame) + 1,
@@ -660,7 +658,8 @@ async function computeHistory(
     const now = record.document.frames.find((candidate) => candidate.id === frame.frameId);
     if (now) result.frameRevisions.push({ frameId: now.id, revision: now.revision });
   }
-  if (entry.scope === "canvas") result.canvasRevision = record.document.revision;
+  if (entry.scope === "canvas" || descriptor.preconditions.canvasRevision !== undefined)
+    result.canvasRevision = record.document.revision;
   if (checkpoint.canvasName)
     result.canvasName = { before: record.document.name, after: checkpoint.canvasName.before };
   if (

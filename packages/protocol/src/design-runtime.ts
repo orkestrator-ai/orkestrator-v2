@@ -405,11 +405,40 @@ export function installDesignRuntime() {
         const el = find(input.selector),
           parent = find(input.parentSelector);
         const before = input.beforeSelector ? find(input.beforeSelector) : null;
+        const unsafeParents = new Set([
+          "AREA",
+          "BASE",
+          "BR",
+          "COL",
+          "EMBED",
+          "HR",
+          "IMG",
+          "INPUT",
+          "LINK",
+          "META",
+          "PARAM",
+          "SOURCE",
+          "TRACK",
+          "WBR",
+          "TEMPLATE",
+          "SCRIPT",
+          "STYLE",
+          "TEXTAREA",
+          "TITLE",
+          "XMP",
+          "NOSCRIPT",
+          "IFRAME",
+          "OBJECT",
+          "SELECT",
+          "OPTION",
+          "OPTGROUP",
+        ]);
         if (
           !document.body.contains(el) ||
           el === document.body ||
           !document.body.contains(parent) ||
           el.contains(parent) ||
+          unsafeParents.has(parent.tagName) ||
           (before && before.parentElement !== parent)
         )
           throw new Error("Invalid element move");

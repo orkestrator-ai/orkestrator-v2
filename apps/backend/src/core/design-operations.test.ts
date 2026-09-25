@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
-import { DESIGN_MAX_CANVASES } from "@orkestrator/protocol/design-canvas";
+import { DESIGN_MAX_CANVASES, DESIGN_MAX_FRAMES } from "@orkestrator/protocol/design-canvas";
 import {
   DESIGN_LIMITS,
   type DesignOperationDescriptor,
   type DesignOperationStatus,
 } from "@orkestrator/protocol/design-operations";
 import { isDesignError } from "./design-errors.js";
+import { validate as validateFrame } from "./design-validation.js";
 import type { DesignService } from "./design-service.js";
 import {
   createDesignHarness,
@@ -86,6 +87,143 @@ describe("design operations: prepare, execute, status and cancel", () => {
       document: { revision: number; frames: Array<{ x: number; html: string }> };
       receipts: DesignOperationStatus[];
     };
+
+  test("concurrent duplicates at the frame limit settle with a capacity receipt", async () => {
+    const frames = Array.from({ length: DESIGN_MAX_FRAMES - 1 }, (_, index) => ({
+      ...frameInput,
+      id: crypto.randomUUID(),
+      name: `Frame ${index}`,
+      revision: 1,
+    }));
+    const imported = await service().create(
+      "env-1",
+      "Full soon",
+      JSON.stringify({
+        format: "orkdes",
+        version: 1,
+        id: crypto.randomUUID(),
+        environmentId: "env-1",
+        name: "Full soon",
+        revision: 1,
+        frames,
+      }),
+      "user",
+    );
+    const descriptor = {
+      canvasId: imported.id,
+      input: { kind: "duplicate_frame" as const, frameId: imported.frames[0]!.id },
+      preconditions: { frameRevision: 1 },
+    };
+    const first = await service().prepare("env-1", "user", descriptor);
+    const second = await service().prepare("env-1", "agent", descriptor);
+    expect((await service().execute("env-1", imported.id, first.token)).state).toBe("committed");
+    const rejected = await service().execute("env-1", imported.id, second.token);
+    expect(rejected).toMatchObject({ state: "rejected", failure: { code: "capacity" } });
+    expect(await service().status("env-1", imported.id, second.token)).toEqual(rejected);
+    expect((await service().get(imported.id, "env-1")).frames).toHaveLength(DESIGN_MAX_FRAMES);
+  });
+
+  test("batch create then delete preserves final order and is atomic on error", async () => {
+    const { canvasId, frameId } = await setup();
+    const second = await service().createFrame(
+      canvasId,
+      "env-1",
+      2,
+      { ...frameInput, name: "B" },
+      "user",
+    );
+    const original = await service().get(canvasId, "env-1");
+    const batch = {
+      canvasId,
+      input: {
+        kind: "batch" as const,
+        operations: [
+          { kind: "create_frame" as const, frame: { ...frameInput, name: "C" } },
+          { kind: "delete_frame" as const, frameId },
+        ],
+      },
+      preconditions: { canvasRevision: original.revision },
+    };
+    const prepared = await service().prepare("env-1", "user", batch);
+    expect((await service().execute("env-1", canvasId, prepared.token)).state).toBe("committed");
+    expect((await service().get(canvasId, "env-1")).frames.map((frame) => frame.name)).toEqual([
+      "B",
+      "C",
+    ]);
+    const before = await service().get(canvasId, "env-1");
+    const invalid = await service().prepare("env-1", "user", {
+      canvasId,
+      input: {
+        kind: "batch",
+        operations: [
+          { kind: "create_frame", frame: { ...frameInput, name: "D" } },
+          { kind: "delete_frame", frameId: crypto.randomUUID() },
+        ],
+      },
+      preconditions: { canvasRevision: before.revision },
+    });
+    expect((await service().execute("env-1", canvasId, invalid.token)).state).toBe("rejected");
+    expect(await service().get(canvasId, "env-1")).toEqual(before);
+    const structural = await service().prepare("env-1", "user", {
+      canvasId,
+      input: {
+        kind: "batch",
+        operations: [
+          { kind: "replace_frame_html", frameId: second.frame.id, html: "<p>New</p>" },
+          {
+            kind: "set_element_styles",
+            frameId: second.frame.id,
+            selector: "p",
+            styles: { color: "red" },
+          },
+        ],
+      },
+      preconditions: { canvasRevision: before.revision },
+    });
+    expect(await service().execute("env-1", canvasId, structural.token)).toMatchObject({
+      state: "rejected",
+      failure: { code: "invalid-input" },
+    });
+    expect(await service().get(canvasId, "env-1")).toEqual(before);
+    expect(second.frame.id).toBe(before.frames[0]!.id);
+  });
+
+  test("replacing an over-limit frame validates the replacement without rendering old HTML", async () => {
+    const oversized = `<main>${"<i></i>".repeat(5001)}</main>`;
+    const importedFrameId = crypto.randomUUID();
+    const canvas = await service().create(
+      "env-1",
+      "Repair",
+      JSON.stringify({
+        format: "orkdes",
+        version: 1,
+        id: crypto.randomUUID(),
+        environmentId: "env-1",
+        name: "Repair",
+        revision: 1,
+        frames: [{ ...frameInput, id: importedFrameId, html: oversized, revision: 1 }],
+      }),
+      "user",
+    );
+    const frameId = canvas.frames[0]!.id;
+    const prepared = await service().prepare("env-1", "user", {
+      canvasId: canvas.id,
+      input: { kind: "replace_frame_html", frameId, html: "<p>Repaired</p>" },
+      preconditions: { frameRevision: 1 },
+    });
+    expect(await service().execute("env-1", canvas.id, prepared.token)).toMatchObject({
+      state: "committed",
+    });
+    expect((await service().getFrame(canvas.id, "env-1", frameId)).html).toBe("<p>Repaired</p>");
+  });
+
+  test("validation classifies the HTML byte limit", async () => {
+    const { canvasId, frameId } = await setup();
+    harness.renderer.fail = (job) =>
+      job.operation.op === "validate" ? new Error("HTML exceeds 256 KiB") : undefined;
+    const result = await validateFrame(service(), "env-1", canvasId, frameId);
+    expect(result).toMatchObject({ state: "invalid", reasons: [{ code: "html-limit" }] });
+  });
 
   test("prepare stores intent without editing; execute commits once; status is side-effect free", async () => {
     const { canvasId, frameId } = await setup();

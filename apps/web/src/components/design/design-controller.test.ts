@@ -72,6 +72,65 @@ describe("design canvas controller", () => {
     expect(listeners).toHaveLength(0);
   });
 
+  test("sync installs a delta, updates status, and recovers from reset", async () => {
+    const controller = designController("env-1", canvasId);
+    const release = controller.acquire();
+    await controller.refresh();
+    const snapshot = backend.snapshot();
+    const { frames: _frames, ...workspace } = snapshot.workspace;
+    const existing = backend.frames.get(frameA)!;
+    backend.revision = 2;
+    existing.frame.x = 42;
+    existing.frame.revision = 2;
+    backend.syncReplies.push({
+      kind: "delta",
+      responseVersion: 1,
+      generation: backend.generation,
+      baseRevision: 1,
+      revision: 2,
+      statusVersion: backend.statusVersion,
+      added: [],
+      removed: [],
+      patched: [
+        {
+          id: frameA,
+          revision: 2,
+          identity: {
+            contentId: existing.contentId,
+            structureId: existing.structureId,
+            viewportId: "v",
+          },
+          x: 42,
+        },
+      ],
+      workspace,
+    });
+    await controller.refresh();
+    expect(controller.projection.canvas?.frames.find((frame) => frame.id === frameA)?.x).toBe(42);
+    backend.statusVersion = 1;
+    backend.syncReplies.push({
+      kind: "status",
+      responseVersion: 1,
+      generation: backend.generation,
+      revision: 2,
+      statusVersion: 1,
+      workspace: backend.snapshot().workspace,
+    });
+    await controller.refresh();
+    expect(controller.projection.statusVersion).toBe(1);
+    backend.revision = 3;
+    backend.syncReplies.push({
+      kind: "reset",
+      responseVersion: 1,
+      generation: backend.generation,
+      revision: 3,
+      reason: "expired-range",
+    });
+    await controller.refresh();
+    expect(controller.projection.revision).toBe(3);
+    release();
+  });
+
   test("a selector edit keeps its observed base: a structural change conflicts instead of retargeting", async () => {
     const controller = designController("env-1", canvasId);
     const release = controller.acquire();
@@ -466,6 +525,59 @@ describe("design canvas controller regressions", () => {
     offline = false;
     await until(() => backend.frames.get(frameA)!.frame.x === 7, 3000);
     expect(attempts).toBe(2);
+    release();
+  });
+
+  test("a gesture sample after an uncertain prepare gets a new intent", async () => {
+    const controller = designController("env-1", canvasId);
+    const release = controller.acquire();
+    await controller.refresh();
+    let lost = false;
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      const response = await backend.handle(command, args ?? {});
+      if (command === "design_prepare" && !lost) {
+        lost = true;
+        throw new Error("Failed to fetch");
+      }
+      return response;
+    });
+    const first = controller.submit(geometry(frameA, 1, { x: 7 }, "keys"));
+    await until(
+      () =>
+        lost && controller.projection.intents.find((item) => item.id === first)?.phase === "draft",
+    );
+    const second = controller.submit(geometry(frameA, 1, { x: 8 }, "keys"));
+    expect(second).not.toBe(first);
+    await until(() => backend.executions.length === 2, 4000);
+    expect(backend.executions.map((item) => item.input)).toMatchObject([
+      { patch: { x: 7 } },
+      { patch: { x: 8 } },
+    ]);
+    expect(controller.projection.intents.find((item) => item.id === first)?.failure?.code).not.toBe(
+      "invalid-input",
+    );
+    release();
+  });
+
+  test("nine offline drafts resume without holding prepared tokens", async () => {
+    const ids = Array.from({ length: 9 }, () => crypto.randomUUID());
+    for (const id of ids) backend.addFrame(id);
+    const controller = designController("env-1", canvasId);
+    const release = controller.acquire();
+    await controller.refresh();
+    let offline = true;
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === "design_prepare" && offline) throw new Error("Failed to fetch");
+      return backend.handle(command, args ?? {});
+    });
+    for (const [index, id] of ids.entries())
+      controller.submit(geometry(id, 1, { x: index + 1 }, `offline-${index}`));
+    await until(
+      () => controller.projection.intents.filter((item) => item.phase === "draft").length === 9,
+    );
+    offline = false;
+    await until(() => backend.executions.length === 9, 5000);
+    expect(controller.projection.intents.some((item) => item.held)).toBe(false);
     release();
   });
 

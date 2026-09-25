@@ -85,6 +85,33 @@ describe("design runtime editing", () => {
     });
   });
 
+  test("moveElement rejects parents that cannot preserve element children", () => {
+    run({
+      op: "appendHtml",
+      html: '<img id="image"><input id="field"><template id="slot"></template><style id="css"></style><textarea id="text"></textarea>',
+    });
+    for (const parentSelector of ["#image", "#field", "#slot", "#css", "#text"]) {
+      expect(() => run({ op: "moveElement", selector: "#title", parentSelector })).toThrow(
+        "Invalid element move",
+      );
+      expect(testWindow.document.querySelector("#title")?.parentElement?.id).toBe("root");
+    }
+    expect(() => run({ op: "moveElement", selector: "#root", parentSelector: "#title" })).toThrow(
+      "Invalid element move",
+    );
+    expect(() =>
+      run({
+        op: "moveElement",
+        selector: "#title",
+        parentSelector: "#root",
+        beforeSelector: "section p:first-child",
+      }),
+    ).toThrow("Invalid element move");
+    expect(
+      String(run({ op: "moveElement", selector: "#title", parentSelector: "section" })),
+    ).toContain('<h1 id="title"');
+  });
+
   test("applyStyles is atomic: one invalid value applies nothing", () => {
     const result = run({
       op: "applyStyles",

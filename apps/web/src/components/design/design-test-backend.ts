@@ -3,6 +3,7 @@ import type {
   DesignOperationDescriptor,
   DesignOperationStatus,
   DesignSnapshotEnvelope,
+  DesignSyncResult,
 } from "@orkestrator/protocol/design-operations";
 
 /** Test support: an in-memory protocol-v2 design backend with strict CAS. */
@@ -48,6 +49,7 @@ export class FakeBackend {
   executeBarrier?: (descriptor: DesignOperationDescriptor) => Promise<void>;
   loseExecuteResponse = new Set<string>();
   executions: DesignOperationDescriptor[] = [];
+  syncReplies: DesignSyncResult[] = [];
   history = { undoCount: 0, redoCount: 0 };
   /** When set, snapshots report a tombstone (even if no hint was delivered). */
   deleted = false;
@@ -295,6 +297,8 @@ export class FakeBackend {
       case "design_snapshot":
         return ok(this.deleted ? this.tombstone() : this.snapshot());
       case "design_sync": {
+        const scripted = this.syncReplies.shift();
+        if (scripted) return ok(scripted);
         if (this.deleted) return ok(this.tombstone());
         if (
           args.generation === this.generation &&
@@ -315,7 +319,18 @@ export class FakeBackend {
         const existing = descriptor.correlationId
           ? this.correlation.get(descriptor.correlationId)
           : undefined;
-        if (existing) return ok({ token: existing, canvasId, state: "prepared", expiresAt: "" });
+        if (existing) {
+          if (JSON.stringify(this.pending.get(existing)?.descriptor) !== JSON.stringify(descriptor))
+            return {
+              ok: false,
+              failure: {
+                code: "invalid-input",
+                message: "This correlation id was already used for a different edit",
+                retry: "never",
+              },
+            };
+          return ok({ token: existing, canvasId, state: "prepared", expiresAt: "" });
+        }
         const token = `op_${crypto.randomUUID()}`;
         this.pending.set(token, { descriptor, executing: false });
         if (descriptor.correlationId) this.correlation.set(descriptor.correlationId, token);

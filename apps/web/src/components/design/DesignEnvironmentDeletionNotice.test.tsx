@@ -44,6 +44,7 @@ describe("DesignEnvironmentDeletionNotice", () => {
     });
     render(<DesignEnvironmentDeletionNotice environmentId="env-1" open />);
     const notice = await screen.findByTestId("design-deletion-notice");
+    expect(notice.getAttribute("role")).toBe("status");
     expect(notice.textContent).toContain("3 designs");
     expect(notice.textContent).toContain("2 have changes that were never exported");
   });

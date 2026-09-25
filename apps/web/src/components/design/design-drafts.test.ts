@@ -37,17 +37,27 @@ describe("design draft persistence", () => {
     expect(restored[0]).toMatchObject({ id: "a", token: "op_1", restored: true });
   });
 
-  test("bounds refuse to overwrite instead of dropping accepted work", () => {
+  test("bounds protect accepted work while tokenless drafts are best effort", () => {
     const many = Array.from({ length: DRAFT_LIMITS.perCanvas + 1 }, (_, index) =>
       intent(`i${index}`),
     );
     expect(saveDrafts("key", many.slice(0, 2))).toBe(true);
-    expect(saveDrafts("key", many)).toBe(false);
-    expect(loadDrafts("key")).toHaveLength(2);
+    expect(saveDrafts("key", many)).toBe(true);
+    expect(loadDrafts("key")).toHaveLength(8);
     expect(saveDrafts("key", [])).toBe(true);
     for (let canvas = 0; canvas < 4; canvas++)
       expect(saveDrafts(`c${canvas}`, many.slice(0, 8))).toBe(true);
-    expect(saveDrafts("c-over", [intent("x")])).toBe(false);
+    expect(saveDrafts("c-over", [intent("x")])).toBe(true);
+    expect(loadDrafts("c-over")).toHaveLength(0);
+    const accepted = many.map((item) => ({ ...item, token: `op_${item.id}` }));
+    expect(saveDrafts("accepted", accepted)).toBe(false);
+  });
+
+  test("separate window keys retain their own accepted tokens", () => {
+    expect(saveDrafts("canvas|window-a", [intent("a", { token: "op_a" })])).toBe(true);
+    expect(saveDrafts("canvas|window-b", [intent("b", { token: "op_b" })])).toBe(true);
+    expect(loadDrafts("canvas|window-a").map((item) => item.id)).toEqual(["a"]);
+    expect(loadDrafts("canvas|window-b").map((item) => item.id)).toEqual(["b"]);
   });
 
   test("corrupt storage reads as empty", () => {

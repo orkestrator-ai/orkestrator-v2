@@ -223,6 +223,13 @@ describe("DesignHistoryPanel", () => {
     expect((await screen.findByRole("alert")).textContent).toContain(
       "The design changed before this could be applied (now revision 8)",
     );
+    view.update(projection({ intents: [] }));
+    expect(screen.getByRole("status").textContent).toContain("no longer tracked");
+    expect(screen.getByRole("status").textContent).not.toContain("applied");
+    view.update(
+      projection({ intents: [{ ...rejected, failure: undefined, outcome: "committed" }] }),
+    );
+    expect(screen.getByRole("status").textContent).toContain("applied");
   });
 
   test("undo submits an own-scope canvas operation at the current revision", async () => {

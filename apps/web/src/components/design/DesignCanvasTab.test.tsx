@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
 import { resetDesignControllers } from "./design-controller";
 import { resetCapabilities } from "./design-client";
-import { FakeBackend, canvasId } from "./design-test-backend";
+import { FakeBackend, canvasId, deferred } from "./design-test-backend";
 
 const { DesignCanvasTab } = await import("./DesignCanvasTab");
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
@@ -121,6 +121,27 @@ describe("DesignCanvasTab", () => {
     await waitFor(() => expect(screen.getAllByText("Revision 1")).toHaveLength(2));
     const snapshots = backend.calls.filter((call) => call.command === "design_snapshot").length;
     expect(snapshots).toBe(1);
+  });
+
+  test("an edit finishing while the tab is unmounted appears on return", async () => {
+    const gate = deferred();
+    backend.executeBarrier = () => gate.promise;
+    const first = render(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
+    const undo = await screen.findByRole("button", { name: "Undo design change" });
+    await waitFor(() => expect(undo.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(undo);
+    await waitFor(() => expect(prepared("undo")).toHaveLength(1));
+    first.unmount();
+    await act(async () => {
+      gate.resolve();
+    });
+    await waitFor(() => expect(backend.revision).toBe(2));
+    render(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
+    expect(await screen.findByText("Revision 2")).toBeTruthy();
   });
 
   test("a deleted canvas shows a recoverable deleted state even without a deletion hint", async () => {

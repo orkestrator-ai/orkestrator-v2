@@ -53,7 +53,7 @@ export function DesignEnvironmentDeletionNotice({
       ? ` ${summary.unexported + summary.outdated} ${summary.unexported + summary.outdated === 1 ? "has" : "have"} changes that were never exported to the repository.`
       : "";
   return (
-    <span className="mt-2 block text-orange-500" data-testid="design-deletion-notice">
+    <span className="mt-2 block text-orange-500" data-testid="design-deletion-notice" role="status">
       This environment holds {designs} in its workspace, which will be deleted with it.
       {notExported} Export or download any design you want to keep first.
     </span>

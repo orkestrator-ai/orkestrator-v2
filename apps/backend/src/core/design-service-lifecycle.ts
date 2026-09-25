@@ -505,10 +505,21 @@ export async function enforceRecycleBin(service: DesignService) {
     Array.from(service.library.entries.values())
       .filter((entry) => entry.state === "deleted")
       .sort((a, b) => (a.deletedAt ?? "").localeCompare(b.deletedAt ?? ""));
+  const removeIfStillDeleted = async (entry: ReturnType<typeof deleted>[number]) => {
+    await service.lane(entry.id, async () => {
+      const current = service.library.entries.get(entry.id);
+      if (current !== entry || current.state !== "deleted") return;
+      const { record } = await service.loadFor(entry.id, entry.environmentId, {
+        allowDeleted: true,
+      });
+      if (record.state !== "deleted" || record.deleted?.deletedAt !== entry.deletedAt) return;
+      await removeCanvasFiles(service, entry.id);
+    });
+  };
   for (const entry of deleted()) {
     if (now - Date.parse(entry.deletedAt ?? entry.modifiedAt) < DESIGN_LIMITS.recycleRetentionMs)
       break;
-    await service.lane(entry.id, () => removeCanvasFiles(service, entry.id));
+    await removeIfStillDeleted(entry);
   }
   for (;;) {
     const remaining = deleted();
@@ -520,7 +531,7 @@ export async function enforceRecycleBin(service: DesignService) {
       return;
     const oldest = remaining[0];
     if (!oldest) return;
-    await service.lane(oldest.id, () => removeCanvasFiles(service, oldest.id));
+    await removeIfStillDeleted(oldest);
   }
 }
 

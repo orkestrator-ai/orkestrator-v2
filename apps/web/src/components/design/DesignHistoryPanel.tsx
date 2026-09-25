@@ -343,9 +343,11 @@ export function DesignHistoryPanel({
               ? `${submitted.label} failed: ${failureText(submittedIntent.failure)}`
               : submittedIntent?.outcome === "no-op"
                 ? `${submitted.label} made no changes`
-                : !submittedIntent || submittedIntent.phase === "settled"
+                : submittedIntent?.outcome === "committed"
                   ? `${submitted.label} applied`
-                  : `${submitted.label}…`}
+                  : !submittedIntent
+                    ? `${submitted.label} is no longer tracked`
+                    : `${submitted.label}…`}
           </p>
         )}
       </section>

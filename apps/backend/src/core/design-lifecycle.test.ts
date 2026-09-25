@@ -496,4 +496,35 @@ describe("design lifecycle: tombstones, restore, purge, duplicate and fencing", 
       { id: survivor.canvasId, name: "Lifecycle", revision: 2 },
     ]);
   });
+
+  test("recycle enforcement skips a canvas restored after its selection", async () => {
+    const { canvasId } = await setup();
+    await service().delete(canvasId, "env-1", "user");
+    clock += DESIGN_LIMITS.recycleRetentionMs + 1;
+    const selected = deferred();
+    const release = deferred();
+    const originalLane = service().lane.bind(service());
+    let pauseOnce = true;
+    service().lane = <T>(id: string, work: () => Promise<T>): Promise<T> => {
+      if (id === canvasId && pauseOnce) {
+        pauseOnce = false;
+        selected.resolve();
+        return release.promise.then(() => originalLane(id, work));
+      }
+      return originalLane(id, work);
+    };
+    const enforcement = enforceRecycleBin(service());
+    await selected.promise;
+    const restored = await run("env-1", {
+      canvasId,
+      input: { kind: "restore_canvas" },
+      preconditions: { tombstoneRevision: 2 },
+    });
+    expect(restored.state).toBe("committed");
+    release.resolve();
+    await enforcement;
+    service().lane = originalLane;
+    expect((await service().get(canvasId, "env-1")).frames).toHaveLength(1);
+    expect(await exists(service().store.historyDir(canvasId))).toBe(true);
+  });
 });

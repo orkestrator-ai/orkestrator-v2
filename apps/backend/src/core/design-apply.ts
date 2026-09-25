@@ -1,4 +1,4 @@
-import type { DesignFrame } from "@orkestrator/protocol/design-canvas";
+import { DESIGN_MAX_FRAMES, type DesignFrame } from "@orkestrator/protocol/design-canvas";
 import type {
   DesignChangeDescriptor,
   DesignFrameMeta,
@@ -56,6 +56,13 @@ export function verifyComputed(record: DesignPrivateRecord, computed: ComputedOp
     if (!change.base && change.next && frames.has(change.next.id))
       throw new DesignError("conflict", "Frame already exists", { target });
   }
+  const created = computed.frames.filter((change) => !change.base && change.next).length;
+  const removed = computed.frames.filter((change) => change.base && !change.next).length;
+  if (record.document.frames.length + created - removed > DESIGN_MAX_FRAMES)
+    throw new DesignError("capacity", `Frame limit reached (${DESIGN_MAX_FRAMES})`, {
+      target,
+      retry: "after-refresh",
+    });
 }
 
 /**
@@ -77,6 +84,8 @@ export function applyComputed(
     canvasFields: [],
   };
   let createdFrameId: string | undefined;
+  const originalIndices = new Map(doc.frames.map((frame, index) => [frame.id, index]));
+  const insertions: Array<{ frame: DesignFrame; index: number }> = [];
   for (const change of computed.frames) {
     const index = doc.frames.findIndex((frame) => frame.id === change.frameId);
     const current = index >= 0 ? doc.frames[index]! : null;
@@ -88,7 +97,7 @@ export function applyComputed(
         frameId: current.id,
         before: current,
         after: null,
-        beforeIndex: index,
+        beforeIndex: originalIndices.get(current.id) ?? index,
       });
       historyFrames.push({ frameId: current.id, name: current.name, before: current.revision });
       descriptor.frames.push({ id: current.id, fields: change.fields, removed: true });
@@ -119,7 +128,7 @@ export function applyComputed(
       meta = freshFrameMeta(record, next, now);
       const at = Math.max(0, Math.min(change.index ?? doc.frames.length, doc.frames.length));
       if (current) doc.frames[index] = next;
-      else doc.frames.splice(at, 0, next);
+      else insertions.push({ frame: next, index: at });
       if (!change.base) createdFrameId ??= next.id;
     } else {
       const previous = record.frames[next.id]!;
@@ -141,12 +150,12 @@ export function applyComputed(
       meta.validation = unvalidated(next.id, meta.contentId);
     }
     record.frames[next.id] = meta;
-    const afterIndex = doc.frames.findIndex((frame) => frame.id === next.id);
+    const afterIndex = current ? doc.frames.findIndex((frame) => frame.id === next.id) : -1;
     checkpointFrames.push({
       frameId: next.id,
       before: current,
       after: next,
-      ...(current ? { beforeIndex: index } : {}),
+      ...(current ? { beforeIndex: originalIndices.get(next.id) ?? index } : {}),
       afterIndex,
     });
     historyFrames.push({
@@ -169,6 +178,17 @@ export function applyComputed(
         viewportId: meta.viewportId,
       },
     });
+  }
+  // Batch indices describe the final order. Remove old frames before placing
+  // new ones, then record their actual final positions in the checkpoint.
+  for (const insertion of insertions.sort((a, b) => a.index - b.index))
+    doc.frames.splice(
+      Math.max(0, Math.min(insertion.index, doc.frames.length)),
+      0,
+      insertion.frame,
+    );
+  for (const frame of checkpointFrames) {
+    if (frame.after) frame.afterIndex = doc.frames.findIndex((item) => item.id === frame.frameId);
   }
   let canvasName: DesignCheckpoint["canvasName"];
   if (computed.canvasName && computed.canvasName.after !== doc.name) {

@@ -98,7 +98,15 @@ const ROOT_COMMAND_SURFACE = [
   "package:release",
 ] as const;
 
-const SKIPPED_DIRECTORIES = new Set([".git", "node_modules", "dist", "build", ".turbo", "logos"]);
+const SKIPPED_DIRECTORIES = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "build",
+  ".turbo",
+  "logos",
+  "output",
+]);
 
 /**
  * `test-fixtures/agent-project` is a separate project copied into agent-test
@@ -129,7 +137,7 @@ function markdownFiles(): string[] {
       )
         continue;
       if (entry.isDirectory()) {
-        // Dot directories are agent state, leftovers, or VCS — not documents.
+        // Dot directories and generated output are not repository documents.
         // In-tree `.protocol-*` fixtures from older runs must not be scanned.
         if (entry.name.startsWith(".") || SKIPPED_DIRECTORIES.has(entry.name)) continue;
         walk(relativePath);

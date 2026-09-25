@@ -162,6 +162,12 @@ State convergence and notifications are separate contracts.
   remain backend-owned in `pr-monitor.ts`; client notification delivery never
   gates them. A durable acknowledged transition journal was not needed for
   this policy and is not implemented.
+- PR monitor freshness fields `lastCheckAt` (attempted) and the additive
+  `lastSuccessfulCheckAt` (GitHub answered) ride on the next announced state
+  event; neither is announced on its own, so a snapshot may carry a value
+  older than the latest attempt. Lifecycle scheduling (terminal repair,
+  five-minute terminal discovery, admission) is internal and never appears on
+  the wire; see `pr-monitor-policy.ts`.
 
 ## Supported peers
 

@@ -16,8 +16,9 @@ import {
 } from "@orkestrator/protocol/view-sync";
 import {
   LOCAL_SERVER_KINDS,
-  setPrMonitorRuntime,
   prMonitorService,
+  requestPrMonitorRefresh,
+  wakePrMonitorForCompletion,
   environmentToPrMonitorTarget,
   syncPrMonitorTracking,
   reconcileConfirmedMerge,
@@ -359,8 +360,7 @@ export function registerPullRequestCommands(
   });
   /** Requests an immediate check for an environment already being monitored. */
   register("pr_monitor_refresh", async ({ environmentId }, context) => {
-    await syncPrMonitorTracking(context);
-    prMonitorService.requestCheck(asString(environmentId, "environmentId"));
+    await requestPrMonitorRefresh(asString(environmentId, "environmentId"), context);
   });
   /**
    * Durably arm the next completed agent turn to re-check a conflicting PR.
@@ -398,8 +398,7 @@ export function registerPullRequestCommands(
     const id = asString(environmentId, "environmentId");
     const environment = await context.storage.getEnvironment(id);
     if (!environment?.prRecheckAfterAgentCompletionArmedAt) return;
-    await syncPrMonitorTracking(context);
-    prMonitorService.requestCheck(id);
+    await requestPrMonitorRefresh(id, context, "completion");
   });
   /**
    * One-shot PR discovery for an environment whose agent just ended a turn.
@@ -416,11 +415,7 @@ export function registerPullRequestCommands(
    */
   register("pr_monitor_probe_environment", async (args, context) => {
     assertOnlyKeys(args, ["environmentId"], "arguments");
-    const id = asString(args.environmentId, "environmentId");
-    setPrMonitorRuntime(context);
-    const environment = await context.storage.getEnvironment(id);
-    if (!environment) return;
-    prMonitorService.probe(environmentToPrMonitorTarget(environment));
+    await wakePrMonitorForCompletion(asString(args.environmentId, "environmentId"), context);
   });
 
   register("start_local_opencode_server_cmd", ({ environmentId }, context) =>

@@ -107,6 +107,15 @@ export interface PrMonitorEnvironmentState {
   consecutiveErrors: number;
   /** ISO timestamp of the last completed check, or null before the first. */
   lastCheckAt: string | null;
+  /**
+   * ISO timestamp of the last check GitHub actually answered, or null before
+   * the first. Unlike `lastCheckAt` it does not move on a failed or
+   * rate-limited attempt, so a client can tell "checked" from "fresh".
+   * Optional: absent from backends before lifecycle-aware monitoring. Like
+   * `lastCheckAt` it is carried by the next announced event, not announced on
+   * its own.
+   */
+  lastSuccessfulCheckAt?: string | null;
   prUrl: string | null;
   prState: PrState | null;
   hasMergeConflicts: boolean | null;
@@ -213,6 +222,9 @@ export function isPrMonitorEnvironmentState(value: unknown): value is PrMonitorE
     Number.isSafeInteger(candidate.consecutiveErrors) &&
     (candidate.consecutiveErrors as number) >= 0 &&
     (candidate.lastCheckAt === null || typeof candidate.lastCheckAt === "string") &&
+    (candidate.lastSuccessfulCheckAt === undefined ||
+      candidate.lastSuccessfulCheckAt === null ||
+      typeof candidate.lastSuccessfulCheckAt === "string") &&
     (candidate.prUrl === null || typeof candidate.prUrl === "string") &&
     isPrStateOrNull(candidate.prState) &&
     (candidate.hasMergeConflicts === null || typeof candidate.hasMergeConflicts === "boolean") &&

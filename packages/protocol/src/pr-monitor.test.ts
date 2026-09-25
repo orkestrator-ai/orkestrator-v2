@@ -46,6 +46,19 @@ describe("getEffectivePrMonitorInterval", () => {
   });
 });
 
+describe("lastSuccessfulCheckAt", () => {
+  test("is optional, nullable, and otherwise a string", () => {
+    const event = (value: unknown) => ({
+      environmentId: "env-1",
+      state: { ...state(), lastSuccessfulCheckAt: value },
+    });
+    expect(isPrMonitorEvent({ environmentId: "env-1", state: state() })).toBe(true);
+    expect(isPrMonitorEvent(event(null))).toBe(true);
+    expect(isPrMonitorEvent(event("2026-07-28T00:00:00.000Z"))).toBe(true);
+    expect(isPrMonitorEvent(event(42))).toBe(false);
+  });
+});
+
 describe("isPrMonitorMode", () => {
   test("accepts the three modes and rejects everything else", () => {
     expect(isPrMonitorMode("normal")).toBe(true);

@@ -16,6 +16,7 @@ import {
 } from "./commands-review.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { WorkAdmissionPool } from "./work-admission.js";
 import type { PrDetectionResult } from "./commands-review.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
 
@@ -260,6 +261,37 @@ export async function resolvePrDetectionBranch(target: PrMonitorTarget): Promise
   return liveBranch ? validatePrDetectionBranch(liveBranch) : fallback;
 }
 
+/** Budget for one PR lookup at the `gh` boundary; the rollup has its own 10 s. */
+export const PR_DETECTION_TIMEOUT_MS = 30_000;
+
+/**
+ * Host/auth scope for sharing a rate-limit cooldown.
+ *
+ * Every local environment runs the host's `gh` with the backend's own process
+ * environment and the user's single `gh` configuration, and `gh` selects its
+ * credential by GitHub host. Two local lookups against the same host therefore
+ * provably share one credential and one rate-limit budget. The host is only
+ * known from a stored PR URL; branch discovery without one has no provable
+ * scope. Containers source their own runtime credential inside the container,
+ * which the backend cannot prove equal across containers, so they never share.
+ * Tokens are never read, hashed or logged for this.
+ */
+export function prMonitorCooldownScope(target: PrMonitorTarget): string | null {
+  if (target.kind !== "local" || !target.prUrl) return null;
+  try {
+    const host = new URL(target.prUrl).host.toLowerCase();
+    return host ? `local-gh:${host}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Aggregate bound on backend PR detections: 2 concurrent, 1 per environment,
+ * user intent before quiet discovery, starvation cap 8 (`work-admission.ts`).
+ */
+export const prMonitorAdmission = new WorkAdmissionPool({ name: "external-pr" });
+
 /** Runs immutable lookup for known PRs and branch discovery for unknown PRs. */
 export async function detectEnvironmentPullRequest(
   target: PrMonitorTarget,
@@ -274,7 +306,7 @@ export async function detectEnvironmentPullRequest(
     if (!target.worktreePath) throw new Error("Local environment has no worktree path");
     const { stdout } = await runCommand("gh", request.args, {
       cwd: target.worktreePath,
-      timeoutMs: 30_000,
+      timeoutMs: PR_DETECTION_TIMEOUT_MS,
     });
     const detection = parsePrMonitorDetectionResponse(request, stdout);
     if (!detection) return null;
@@ -305,9 +337,12 @@ export async function detectEnvironmentPullRequest(
     }
   }
   if (!target.containerId) throw new Error("Container environment has no container id");
+  // Same budget as the local `gh` call. The generic docker exec default is two
+  // minutes, which would hold one of the two shared detection slots that long.
   const output = await dockerExec(
     target.containerId,
     withContainerRuntimeCredential(request.shellCommand),
+    PR_DETECTION_TIMEOUT_MS,
   );
   const detection = parsePrMonitorDetectionResponse(request, output);
   if (!detection) return null;
@@ -339,6 +374,8 @@ export async function detectEnvironmentPullRequest(
 
 export const prMonitorService = new PrMonitorService({
   emit: (event, payload) => prMonitorEmit?.(event, payload),
+  admission: prMonitorAdmission,
+  cooldownScope: prMonitorCooldownScope,
   effects: {
     detect: (target, options) => detectEnvironmentPullRequest(target, options),
     persistPr: async (environmentId, detection) => {
@@ -350,7 +387,17 @@ export const prMonitorService = new PrMonitorService({
           ? { prRecheckAfterAgentCompletionArmedAt: undefined }
           : {}),
       });
-      if (detection.state === "merged" && prMonitorContext) {
+    },
+    readTarget: async (environmentId) => {
+      const environment = await requirePrMonitorStorage().getEnvironment(environmentId);
+      return environment ? environmentToPrMonitorTarget(environment) : null;
+    },
+    // Called once the terminal state is persisted and the linked task is
+    // reconciled, so a cleanup deletion can no longer orphan the task comment.
+    // `scheduleMergeCleanupRecovery` reads the durable cleanup intent itself
+    // and de-duplicates per environment, so repeating this is harmless.
+    resumeTerminalEffects: (environmentId, observation) => {
+      if (observation.state === "merged" && prMonitorContext) {
         requestMergeCleanupRecovery(environmentId, prMonitorContext);
       }
     },
@@ -396,6 +443,38 @@ export function environmentToPrMonitorTarget(environment: Environment): PrMonito
     prState: environment.prState ?? null,
     hasMergeConflicts: environment.hasMergeConflicts ?? null,
   };
+}
+
+/**
+ * Agent-completion edge for PR monitoring. Fire on the working → idle
+ * transition (never per idle reading). Resets the due time of a monitored
+ * environment — including a quiet merged/closed one — and gives an unmonitored
+ * environment one provisional discovery that leaves no trace if it finds
+ * nothing.
+ */
+export async function wakePrMonitorForCompletion(
+  environmentId: string,
+  context: CommandContext,
+): Promise<void> {
+  setPrMonitorRuntime(context);
+  const environment = await context.storage.getEnvironment(environmentId);
+  if (!environment) return;
+  prMonitorService.wakeForCompletion(environmentToPrMonitorTarget(environment));
+}
+
+/**
+ * Runs a check now for a monitored environment: an explicit user refresh
+ * (`interactive`, bypasses quiet cadence and rate-limit cooldown) or an armed
+ * agent-completion recheck (`completion`). No-op for unmonitored or paused
+ * environments.
+ */
+export async function requestPrMonitorRefresh(
+  environmentId: string,
+  context: CommandContext,
+  reason: "interactive" | "completion" = "interactive",
+): Promise<void> {
+  await syncPrMonitorTracking(context);
+  prMonitorService.requestCheck(environmentId, reason);
 }
 
 export function invalidatePendingPrMonitorSync(): void {

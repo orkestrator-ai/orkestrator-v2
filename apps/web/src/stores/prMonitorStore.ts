@@ -45,6 +45,7 @@ function isSameState(a: PrMonitorEnvironmentState, b: PrMonitorEnvironmentState)
     a.checkInProgress === b.checkInProgress &&
     a.consecutiveErrors === b.consecutiveErrors &&
     a.lastCheckAt === b.lastCheckAt &&
+    (a.lastSuccessfulCheckAt ?? null) === (b.lastSuccessfulCheckAt ?? null) &&
     a.prUrl === b.prUrl &&
     a.prState === b.prState &&
     a.hasMergeConflicts === b.hasMergeConflicts &&

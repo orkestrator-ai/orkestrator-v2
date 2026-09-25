@@ -1,5 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { useEffect } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { TerminalProvider, useTerminalContext } from "@/contexts";
 import * as realBackend from "@/lib/backend";
 import * as realSonner from "sonner";
 import type {
@@ -40,6 +42,7 @@ const retryAgentMailInject = mock(async () => message("pending-inject"));
 const discardAgentMailInject = mock(async () => message("expired"));
 const updateAgentMailboxPolicy = mock(async () => snapshot.directory[0]!);
 const markAgentMailSeen = mock(async () => message("stored"));
+const openInBrowser = mock(async (_url: string) => undefined);
 const toastError = mock(() => undefined);
 const toastSuccess = mock(() => undefined);
 
@@ -54,6 +57,7 @@ mock.module("@/lib/backend", () => ({
   discardAgentMailInject,
   updateAgentMailboxPolicy,
   markAgentMailSeen,
+  openInBrowser,
 }));
 mock.module("sonner", () => ({
   ...realSonner,
@@ -190,6 +194,15 @@ function installTabMailbox(messages: AgentMailInboxSnapshot["mailboxes"][number]
   });
 }
 
+function RegisterFileTab({ openFile }: { openFile: (path: string) => void }) {
+  const { setCreateFileTab } = useTerminalContext();
+  useEffect(() => {
+    setCreateFileTab(openFile);
+    return () => setCreateFileTab(null);
+  }, [openFile, setCreateFileTab]);
+  return null;
+}
+
 function installBannerMailbox(
   placement: AgentMailMessage["placement"],
   options: { presence?: "idle" | "working"; policy?: "off" | "idle"; reason?: string } = {},
@@ -303,6 +316,7 @@ beforeEach(() => {
   updateAgentMailboxPolicy.mockClear();
   updateAgentMailboxPolicy.mockImplementation(async () => snapshot.directory[0]!);
   markAgentMailSeen.mockClear();
+  openInBrowser.mockClear();
   setMessagingEnabled(true);
 });
 
@@ -1007,7 +1021,87 @@ describe("AgentMailButton", () => {
       "Project: angela-vc",
       "Location: europe-west1",
     ]);
-    expect(screen.queryByText(/\*\*Bucket:\*\*/)).toBeNull();
+    expect(screen.queryByText(/\*\*Bucket:\*\*/) === null).toBe(true);
+  });
+
+  test("does not load remote images and only opens safe web links on click", async () => {
+    const incoming = {
+      ...message("stored"),
+      body: "![tracker](https://example.com/pixel) [Docs](https://example.com/docs) [Unsafe](javascript:alert(1))",
+      userSeenAt: new Date(0).toISOString(),
+    };
+    const { body: _body, ...summary } = incoming;
+    installTabMailbox([summary]);
+    getAgentMailMessage.mockImplementation(async () => incoming);
+    render(<AgentMailButton />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Agent inbox, 1 unseen" }));
+    fireEvent.click(await screen.findByText("From You → To Claude 1 · Agent"));
+
+    expect(await screen.findByText("[Image: tracker]")).toBeTruthy();
+    expect(document.body.querySelector("img") === null).toBe(true);
+    expect(openInBrowser).not.toHaveBeenCalled();
+    expect(screen.queryByRole("link", { name: "Unsafe" }) === null).toBe(true);
+    fireEvent.click(screen.getByRole("link", { name: "Docs" }));
+    await waitFor(() => expect(openInBrowser).toHaveBeenCalledWith("https://example.com/docs"));
+    expect(openInBrowser).toHaveBeenCalledTimes(1);
+  });
+
+  test("leaves file links from another environment as copyable text", async () => {
+    const incoming = {
+      ...message("stored"),
+      from: {
+        kind: "tab" as const,
+        environmentId: "env-2",
+        projectId: "project-1",
+        tabId: "tab-2",
+        incarnationId: "incarnation-2",
+        agent: "claude" as const,
+        title: "Claude 2 · Peer",
+      },
+      body: "[Open source](src/peer.ts:12)",
+      userSeenAt: new Date(0).toISOString(),
+    };
+    const { body: _body, ...summary } = incoming;
+    installTabMailbox([summary]);
+    getAgentMailMessage.mockImplementation(async () => incoming);
+    const openFileInActiveEnvironment = mock((_path: string) => undefined);
+    render(
+      <TerminalProvider>
+        <RegisterFileTab openFile={openFileInActiveEnvironment} />
+        <AgentMailButton />
+      </TerminalProvider>,
+    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Agent inbox, 1 unseen" }));
+    fireEvent.click(await screen.findByText("From Claude 2 · Peer → To Claude 1 · Agent"));
+
+    const path = await screen.findByText("Open source");
+    const filePath = screen.getByText("src/peer.ts:12");
+    expect(filePath.tagName).toBe("CODE");
+    expect(filePath.parentElement?.getAttribute("title")).toContain("sender's workspace");
+    expect(screen.queryByRole("link", { name: "Open source" }) === null).toBe(true);
+    fireEvent.click(path);
+    expect(openFileInActiveEnvironment).not.toHaveBeenCalled();
+    expect(openInBrowser).not.toHaveBeenCalled();
+  });
+
+  test("shows the complete body when it exceeds the markdown parser budget", async () => {
+    const tail = "FINAL_BODY_CHARACTERS";
+    const body = `${"x".repeat(32_700 - tail.length)}${tail}`;
+    const incoming = {
+      ...message("stored"),
+      body,
+      bodyBytes: body.length,
+      userSeenAt: new Date(0).toISOString(),
+    };
+    const { body: _body, ...summary } = incoming;
+    installTabMailbox([summary]);
+    getAgentMailMessage.mockImplementation(async () => incoming);
+    render(<AgentMailButton />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Agent inbox, 1 unseen" }));
+    fireEvent.click(await screen.findByText("From You → To Claude 1 · Agent"));
+
+    await waitFor(() => expect(document.body.textContent?.includes(tail)).toBe(true));
+    expect(document.body.querySelector('[data-markdown-truncated="true"]') === null).toBe(true);
   });
 
   test("closes an expanded body when a newer authoritative revision arrives", async () => {

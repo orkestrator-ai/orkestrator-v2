@@ -630,6 +630,12 @@ export async function resolveUnattendedReviewerInteractions(
  * A host is expected to be cheap to construct per pass: the runner calls it
  * synchronously between awaits and never caches anything across ticks.
  */
+/** See {@link ReviewFanoutHost.pollGate}. Scopes are process-local identifiers. */
+export interface ReviewerPollGate {
+  count(scope: string): boolean;
+  exhausted(scope: string, count: number, limit: number): boolean;
+}
+
 export interface ReviewFanoutHost {
   /** Identifies the owning workflow in session keys and interaction fences. */
   readonly workflowId: string;
@@ -702,6 +708,13 @@ export interface ReviewFanoutHost {
   ): Promise<void>;
   /** Best-effort abort of a session the workflow is discarding. */
   abandonSession(selection: ReviewerModelSelection, providerSessionId: string): Promise<void>;
+  /**
+   * Elapsed-time gate for the attempt-counted reviewer deadlines (idle result
+   * grace, bounded final-usage probes). An observation it does not count
+   * leaves the persisted count unchanged, and `exhausted` also ends a grace
+   * once the duration it stands for has elapsed. Absent, every poll counts.
+   */
+  readonly pollGate?: ReviewerPollGate;
   /** Whether this owner persists provider-session usage for reviewer presentation. */
   readonly captureReviewerUsage?: boolean;
   /**
@@ -1306,11 +1319,19 @@ export class ReviewFanoutRunner {
     if (!parsed.success) {
       return this.prepareReviewerReportRepair(reviewer, parsed.error);
     }
+    const usageScope = `${host.workflowId}\0${reviewer.id}\0usage`;
     if (
       host.captureReviewerUsage &&
       observation.usagePending === true &&
-      (reviewer.usageFinalizationPolls ?? 0) < REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS
+      (reviewer.usageFinalizationPolls ?? 0) < REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS &&
+      !host.pollGate?.exhausted(
+        usageScope,
+        reviewer.usageFinalizationPolls ?? 0,
+        REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS,
+      )
     ) {
+      // A probe that does not count (a wakeup burst) simply looks again later.
+      if (host.pollGate && !host.pollGate.count(usageScope)) return "continue";
       reviewer.usageFinalizationPolls = (reviewer.usageFinalizationPolls ?? 0) + 1;
       await this.commit();
       return "continue";
@@ -1586,8 +1607,17 @@ export class ReviewFanoutRunner {
 
   /** Counts one stalled poll, failing the reviewer once the bound is reached. */
   private async recordStall(reviewer: ReviewerRecord, error: string): Promise<"continue" | "stop"> {
-    reviewer.idleResultPolls = (reviewer.idleResultPolls ?? 0) + 1;
-    if (reviewer.idleResultPolls >= MAX_REVIEW_IDLE_RESULT_POLLS) {
+    const scope = `${this.host.workflowId}\0${reviewer.id}\0idle`;
+    const gate = this.host.pollGate;
+    if (gate && !gate.count(scope)) return "continue";
+    reviewer.idleResultPolls = Math.min(
+      (reviewer.idleResultPolls ?? 0) + 1,
+      MAX_REVIEW_IDLE_RESULT_POLLS,
+    );
+    if (
+      reviewer.idleResultPolls >= MAX_REVIEW_IDLE_RESULT_POLLS ||
+      gate?.exhausted(scope, reviewer.idleResultPolls, MAX_REVIEW_IDLE_RESULT_POLLS)
+    ) {
       if (reviewer.providerSessionId) {
         await this.host.abandonSession(reviewer, reviewer.providerSessionId);
         this.host.progress.forget(reviewer.providerSessionId);

@@ -139,6 +139,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           this.workflowAgentMcp(pipeline, resultKey, provider),
         concurrency: this.options.reviewFanoutConcurrency,
         efficiency: this.options.efficiency,
+        pollGate: (pipeline) => ({
+          count: (scope) => this.reviewerPollGate.count(scope, this.passTrigger(pipeline.id)),
+          exhausted: (scope, count, limit) => this.reviewerPollGate.exhausted(scope, count, limit),
+        }),
       });
     }
     return this.reviewFanoutRunner;

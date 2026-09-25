@@ -31,9 +31,12 @@ describe("native session read policy", () => {
 
   test("quiet backoff needs a qualified provider and a backend that announces transitions", () => {
     // The single qualification switch, shared with the backend capability matrix.
-    expect([...NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS].sort()).toEqual(
-      ["cursor", "grok", "opencode", "pi"].sort(),
-    );
+    expect([...NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS].sort() as string[]).toEqual([
+      "cursor",
+      "grok",
+      "opencode",
+      "pi",
+    ]);
     for (const platform of AGENT_PLATFORMS) {
       // An older backend (no stamped activity announcements) keeps the baseline.
       expect(nativeSessionReadDemand(platform, "idle", { active: true }).quietBackoffMs).toBeNull();

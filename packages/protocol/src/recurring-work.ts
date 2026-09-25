@@ -381,7 +381,8 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   ),
   // Demand-driven by clients (title bar 5 s); concurrent reads join.
   "system-usage-sample": backend("C08", "read", "interactive", 5_000, "join", "none"),
-  "process-usage": backend("C08", "read", "interactive", 3_000, "unguarded", "none"),
+  // Open process panels only (3 s); concurrent reads from every client join.
+  "process-usage": backend("C08", "read", "interactive", 3_000, "join", "none"),
   "opencode-reconnect": backend(
     "B22",
     "event",
@@ -454,13 +455,14 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "skip-while-running",
     "snapshot-rehydrate",
   ),
+  // One read-coordinator key shared by every host-meter consumer (step 09).
   "client-system-meters": external(
     "renderer",
     "C08",
     "interval",
     "interactive",
     5_000,
-    "skip-while-running",
+    "join",
     "none",
   ),
   "client-docker-availability": external(

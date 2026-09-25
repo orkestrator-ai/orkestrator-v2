@@ -179,6 +179,27 @@ export interface KeyedWorkflowSupervisorOptions<O extends string> {
   diagnostics?: RecurringDiagnosticsRegistry | null;
 }
 
+/** Options every keyed workflow service accepts. */
+export interface KeyedWorkflowServiceOptions {
+  /** Keyed driver (step 08). False selects the previous driver; never both. */
+  keyedScheduling?: boolean;
+  /** Safety discovery cadence for the keyed driver. */
+  discoveryIntervalMs?: number;
+  /** Shared `workflow-provider` admission across workflow keys. */
+  workflowAdmission?: WorkAdmissionPool | null;
+  /** Test seam: the keyed driver's monotonic clock and timers. */
+  schedulerClock?: { now: () => number; timers: RecurringTimerFactory };
+}
+
+/** What `index.ts` needs from each keyed workflow owner. */
+export interface KeyedWorkflowOwner {
+  /** Scoped wakeup for every indexed key of one environment. */
+  wakeEnvironment(environmentId: string, reason: WorkflowWakeReason): void;
+  schedulingStatus(): WorkflowSupervisorStatus | null;
+  /** Full diagnostic reconciliation; `null` when the keyed driver is not running. */
+  reconcileScheduling(): Promise<WorkflowReconcileReport | null>;
+}
+
 export interface WorkflowCriticalJob {
   key: string;
   kind: RecurringJobKind;
@@ -191,6 +212,8 @@ export interface WorkflowSupervisorStatus {
   started: boolean;
   keys: number;
   running: number;
+  /** Scheduler runs in flight: key passes, discovery and critical jobs. */
+  inFlight: number;
   byObligation: Record<string, number>;
   wakes: Partial<Record<WorkflowWakeReason, number>>;
   discoveries: number;
@@ -423,11 +446,13 @@ export class KeyedWorkflowSupervisor<O extends string> {
       const name = entry.obligation ?? "settling";
       byObligation[name] = (byObligation[name] ?? 0) + 1;
     }
+    const scheduler = this.scheduler?.status();
     return {
       domain: this.domain,
       started: this.scheduler !== null,
       keys: this.index.size,
       running,
+      inFlight: scheduler ? scheduler.running + scheduler.runningCritical : 0,
       byObligation,
       wakes: Object.fromEntries(this.wakeCounts),
       discoveries: this.discoveries,

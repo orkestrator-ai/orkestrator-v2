@@ -2,6 +2,8 @@ import { DesignService } from "./design-service.js";
 import { PreviewRuntime } from "./preview-runtime.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { WorkAdmissionPool } from "./work-admission.js";
+import type { KeyedWorkflowOwner, WorkflowWakeReason } from "./workflow-supervisor.js";
 import {
   createMcpRuntimeProbe,
   mcpRolloutLoader,
@@ -94,6 +96,12 @@ export class OrkestratorBackend {
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private readonly workflowResults: WorkflowResultService;
   private readonly workflowResultRollout: WorkflowResultRollout;
+  /**
+   * Bounded `workflow-provider` admission shared by every keyed workflow
+   * owner (step 08): a pass holds one slot for its environment while it
+   * reads providers, so many active workflows cannot all hit providers at once.
+   */
+  private readonly workflowAdmission = new WorkAdmissionPool({ name: "workflow-provider" });
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
@@ -286,6 +294,12 @@ export class OrkestratorBackend {
           // idle reading would be a `gh` call per idle environment per sweep.
           // A first observation (`previousState === undefined`) is a backend
           // restart or a newly adopted session, not a turn that ended here.
+          // A provider transition in an environment is a hint for the
+          // workflows running there; it pulls their next pass forward and is
+          // dropped while one is already running.
+          if (event.owner !== "coordinator") {
+            this.wakeWorkflows(event.environmentId, "provider-transition");
+          }
           if (isAgentTurnEndTransition(event)) {
             // A coordinator has no environment row and no PR to probe for.
             if (event.owner !== "coordinator") {
@@ -483,6 +497,7 @@ export class OrkestratorBackend {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
         resolveAgentToolConnection,
+        workflowAdmission: this.workflowAdmission,
       },
     );
     context.featurePlanning = this.featurePlanning;
@@ -499,9 +514,44 @@ export class OrkestratorBackend {
     );
     this.agentMail = new AgentMailService(storage, this.nativeAgents, this.promptQueues);
     context.drainAgentMail = () => this.agentMail.drainInjects();
+    // Scoped workflow wakeups (step 08), subscribed before any owner's first
+    // discovery so nothing that commits during startup is missed. Each wake
+    // reaches only the indexed keys of one environment; a durable record the
+    // index does not hold yet is found by that owner's discovery instead.
+    this.workflowResults.onAccepted(({ environmentId }) => {
+      this.wakeWorkflows(environmentId, "result-accepted");
+    });
+    storage.addResourceChangeListener((change) => {
+      // Readiness and execution identity (status, setup, bridge port/token)
+      // all live on the environment record.
+      if (change.resource === "environment" && !change.deleted) {
+        this.wakeWorkflows(change.id, "environment-change");
+      }
+    });
     this.reapPidServers = options.startupReapers?.localServers ?? reapOrphanedLocalServers;
     this.reapTmuxRuntimes =
       options.startupReapers?.claudeTmuxRuntimes ?? reapOrphanedClaudeTmuxRuntimes;
+  }
+
+  /** Owners driven by a keyed supervisor; an owner on its rollback driver ignores wakes. */
+  private keyedWorkflowOwners(): KeyedWorkflowOwner[] {
+    // Read lazily: a storage change can be announced while the constructor is
+    // still building the owners.
+    const owners: (KeyedWorkflowOwner | undefined)[] = [this.featurePlanning];
+    return owners.filter((owner): owner is KeyedWorkflowOwner => owner !== undefined);
+  }
+
+  private wakeWorkflows(environmentId: string, reason: WorkflowWakeReason): void {
+    for (const owner of this.keyedWorkflowOwners()) {
+      try {
+        owner.wakeEnvironment(environmentId, reason);
+      } catch (error) {
+        console.warn(
+          "[backend] Failed to wake workflow work:",
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
   }
 
   /**
@@ -1051,6 +1101,7 @@ export class OrkestratorBackend {
         } catch (error) {
           console.warn("[backend] Failed to drain agent mail:", error);
         }
+        this.workflowAdmission.close();
         await lifecycleDrain;
         await flushTerminalHistories(true);
         await shutdownLocalServers({

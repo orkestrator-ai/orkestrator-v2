@@ -135,3 +135,43 @@ export function deferred<T = void>(): Deferred<T> {
   };
   return result;
 }
+
+/**
+ * Settles keyed workflow work that mixes a manual scheduler clock with real
+ * storage I/O: fires what is due now, then yields to the event loop until no
+ * run is in flight for two consecutive checks. Bounded; never advances time.
+ */
+export async function settleKeyedWork(
+  time: ManualTime,
+  owners: readonly { schedulingStatus(): { inFlight: number } | null }[],
+  options: { maxRounds?: number; allowInFlight?: number } = {},
+): Promise<void> {
+  const maxRounds = options.maxRounds ?? 400;
+  // Runs a test deliberately holds open (a hung provider) do not count.
+  const allowed = options.allowInFlight ?? 0;
+  let quiet = 0;
+  for (let round = 0; round < maxRounds && quiet < 2; round += 1) {
+    await time.advance(0);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const inFlight = owners.reduce(
+      (sum, owner) => sum + (owner.schedulingStatus()?.inFlight ?? 0),
+      0,
+    );
+    quiet = inFlight > allowed ? 0 : quiet + 1;
+  }
+}
+
+/** Advances a manual clock in steps, settling real I/O between them. */
+export async function advanceKeyedWork(
+  time: ManualTime,
+  owners: readonly { schedulingStatus(): { inFlight: number } | null }[],
+  totalMs: number,
+  stepMs = 250,
+  options: { allowInFlight?: number } = {},
+): Promise<void> {
+  await settleKeyedWork(time, owners, options);
+  for (let elapsed = 0; elapsed < totalMs; elapsed += stepMs) {
+    await time.advance(Math.min(stepMs, totalMs - elapsed));
+    await settleKeyedWork(time, owners, options);
+  }
+}

@@ -49,6 +49,20 @@ import {
   resolveFastMode,
 } from "./build-pipeline-service-helpers.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import {
+  KeyedWorkflowSupervisor,
+  keyedSchedulingEnabled,
+  type KeyedWorkflowOwner,
+  type KeyedWorkflowServiceOptions,
+  type WorkflowReconcileReport,
+  type WorkflowSupervisorStatus,
+  type WorkflowWakeReason,
+} from "./workflow-supervisor.js";
+import {
+  discoverFeaturePlanning,
+  featurePlanningObligation,
+  type FeaturePlanningObligation,
+} from "./feature-planning-scheduling.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -172,7 +186,7 @@ function latestAssistantReply(
   return null;
 }
 
-export interface FeaturePlanningServiceOptions {
+export interface FeaturePlanningServiceOptions extends KeyedWorkflowServiceOptions {
   autoAdvance?: boolean;
   pollIntervalMs?: number;
   environmentReadyDeadlineMs?: number;
@@ -201,7 +215,7 @@ export interface FeaturePlanningServiceOptions {
  * durable at every step, and the reply is written to it before anything is
  * applied to the plan.
  */
-export class FeaturePlanningService {
+export class FeaturePlanningService implements KeyedWorkflowOwner {
   private cachedWorkflowRollout: WorkflowResultRollout | null = null;
 
   private get workflowRollout(): WorkflowResultRollout {
@@ -222,21 +236,35 @@ export class FeaturePlanningService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private tickRun: { pending: boolean; promise: Promise<void> } | null = null;
   private stopped = false;
+  /** Selected once: the keyed driver or the whole-store tick, never both. */
+  private readonly keyed: boolean;
+  private supervisor: KeyedWorkflowSupervisor<FeaturePlanningObligation> | null = null;
 
   constructor(
     private readonly storage: StorageService,
     private readonly invoke: CommandInvoker,
     private readonly options: FeaturePlanningServiceOptions = {},
-  ) {}
+  ) {
+    this.keyed = options.keyedScheduling ?? keyedSchedulingEnabled("feature-planning");
+  }
 
   async init(): Promise<void> {
     this.stopped = false;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.supervisor?.stop();
+    this.supervisor = null;
     await this.adoptLegacyConversations().catch((error) => {
       console.warn("[feature-planning] Failed to adopt legacy conversations:", message(error));
     });
     if (this.options.autoAdvance === false) return;
+    if (this.keyed) {
+      // Non-blocking: the first discovery runs on the scheduler, so startup
+      // never waits on a provider read.
+      this.supervisor = this.createSupervisor();
+      this.supervisor.start();
+      return;
+    }
     this.timer = setInterval(
       () => void this.requestTick(),
       this.options.pollIntervalMs ?? DEFAULT_POLL_MS,
@@ -252,6 +280,8 @@ export class FeaturePlanningService {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.supervisor?.stop();
+    this.supervisor = null;
     await Promise.allSettled([
       ...this.locks.values(),
       ...[...this.scheduledRuns.values()].map((entry) => entry.promise),
@@ -300,9 +330,10 @@ export class FeaturePlanningService {
     if (!started) {
       throw new Error("A planning request is already running for this feature");
     }
+    this.noteRecord(feature.id, feature.planning);
     // The user's message is persisted by the backend so the transcript and the
     // record agree even if the caller never comes back.
-    await this.storage.mutateFeaturePlanning(feature.id, record.operationId, (plan, current) => {
+    await this.mutatePlanning(feature.id, record.operationId, (plan, current) => {
       const persisted = this.appendMessage(plan, current, "user", input.userMessage);
       current.userMessageId = persisted.id;
     });
@@ -326,7 +357,7 @@ export class FeaturePlanningService {
     if (retryPhase === "dispatching" && record.resultTransport === "tool-v1" && record.requestId) {
       await this.options.workflowResults?.close(record.requestId, "superseded");
     }
-    await this.storage.mutateFeaturePlanning(featureId, record.operationId, (_plan, current) => {
+    await this.mutatePlanning(featureId, record.operationId, (_plan, current) => {
       current.phase = retryPhase;
       delete current.failure;
       if (retryPhase === "dispatching") {
@@ -367,13 +398,9 @@ export class FeaturePlanningService {
         if (!current || current.operationId !== record.operationId) return;
         await this.abortForCancellation(current);
         this.idleSince.delete(featureId);
-        await this.storage.mutateFeaturePlanning(
-          featureId,
-          current.operationId,
-          (_plan, candidate) => {
-            candidate.phase = "cancelling";
-          },
-        );
+        await this.mutatePlanning(featureId, current.operationId, (_plan, candidate) => {
+          candidate.phase = "cancelling";
+        });
         const cancelling = await this.read(featureId);
         if (cancelling) await this.finalizeCancellation(cancelling);
       });
@@ -387,6 +414,62 @@ export class FeaturePlanningService {
 
   advanceNow(featureId: string): Promise<void> {
     return this.runLocked(featureId);
+  }
+
+  wakeEnvironment(environmentId: string, reason: WorkflowWakeReason): void {
+    this.supervisor?.wakeTarget(environmentId, reason);
+  }
+
+  schedulingStatus(): WorkflowSupervisorStatus | null {
+    return this.supervisor?.status() ?? null;
+  }
+
+  async reconcileScheduling(): Promise<WorkflowReconcileReport | null> {
+    return this.supervisor ? this.supervisor.reconcileNow() : null;
+  }
+
+  /**
+   * The keyed driver (step 08). Each active record is its own key, progressed
+   * on the previous one-second cadence by the same locked advance; storage is
+   * enumerated only by the safety discovery.
+   */
+  private createSupervisor(): KeyedWorkflowSupervisor<FeaturePlanningObligation> {
+    const pollMs = this.options.pollIntervalMs ?? DEFAULT_POLL_MS;
+    return new KeyedWorkflowSupervisor<FeaturePlanningObligation>({
+      domain: "feature-planning",
+      kind: "feature-planning-tick",
+      progressIntervalMs: pollMs,
+      discoveryIntervalMs: this.options.discoveryIntervalMs ?? pollMs,
+      discover: () => discoverFeaturePlanning(this.storage),
+      advance: (pass) => this.runLocked(pass.key),
+      admission: this.options.workflowAdmission ?? null,
+      ...(this.options.schedulerClock
+        ? { now: this.options.schedulerClock.now, timers: this.options.schedulerClock.timers }
+        : {}),
+    });
+  }
+
+  /** Keeps the keyed index current after an authoritative read or durable write. */
+  private noteRecord(featureId: string, record: unknown): void {
+    const supervisor = this.supervisor;
+    if (!supervisor) return;
+    const environmentId = isFeaturePlanningRecord(record) ? record.environmentId : undefined;
+    supervisor.note(featureId, featurePlanningObligation(record), environmentId);
+  }
+
+  private async mutatePlanning<T>(
+    featureId: string,
+    operationId: string,
+    mutator: (plan: FeaturePlan, record: FeaturePlanningRecord) => T,
+  ): Promise<{ result: T; feature: FeaturePlan }> {
+    const outcome = await this.storage.mutateFeaturePlanning(featureId, operationId, mutator);
+    this.noteRecord(featureId, outcome.feature.planning);
+    return outcome;
+  }
+
+  private async clearPlanning(featureId: string, operationId: string): Promise<void> {
+    const plan = await this.storage.clearFeaturePlanning(featureId, operationId);
+    this.noteRecord(featureId, plan.planning);
   }
 
   /* ---------------------------------------------------------------- *
@@ -756,7 +839,7 @@ export class FeaturePlanningService {
   private async runPersist(record: FeaturePlanningRecord): Promise<void> {
     if (record.resultTransport === "tool-v1" && record.requestId && record.resultAppliedAt) {
       await this.options.workflowResults?.consume(record.requestId);
-      await this.storage.clearFeaturePlanning(record.featureId, record.operationId);
+      await this.clearPlanning(record.featureId, record.operationId);
       this.idleSince.delete(record.featureId);
       return;
     }
@@ -816,7 +899,7 @@ export class FeaturePlanningService {
     });
     if (record.resultTransport === "tool-v1" && record.requestId) {
       await this.options.workflowResults?.consume(record.requestId);
-      await this.storage.clearFeaturePlanning(record.featureId, record.operationId);
+      await this.clearPlanning(record.featureId, record.operationId);
     }
     this.idleSince.delete(record.featureId);
   }
@@ -1261,13 +1344,9 @@ export class FeaturePlanningService {
     if (this.cancellationRequests.get(record.featureId) !== record.operationId) return false;
     await this.abortForCancellation(record, provider, sessionId);
     this.idleSince.delete(record.featureId);
-    await this.storage.mutateFeaturePlanning(
-      record.featureId,
-      record.operationId,
-      (_plan, current) => {
-        current.phase = "cancelling";
-      },
-    );
+    await this.mutatePlanning(record.featureId, record.operationId, (_plan, current) => {
+      current.phase = "cancelling";
+    });
     const cancelling = await this.read(record.featureId);
     if (cancelling) await this.finalizeCancellation(cancelling);
     return true;
@@ -1277,7 +1356,7 @@ export class FeaturePlanningService {
     if (record.resultTransport === "tool-v1" && record.requestId) {
       await this.options.workflowResults?.close(record.requestId, "cancelled");
     }
-    await this.storage.clearFeaturePlanning(record.featureId, record.operationId);
+    await this.clearPlanning(record.featureId, record.operationId);
   }
 
   private async abortForCancellation(
@@ -1320,7 +1399,7 @@ export class FeaturePlanningService {
       return;
     }
     this.idleSince.delete(featureId);
-    await this.storage.mutateFeaturePlanning(featureId, record.operationId, (_plan, current) => {
+    await this.mutatePlanning(featureId, record.operationId, (_plan, current) => {
       current.phase = "failed";
       current.failure = {
         code: definite.code,
@@ -1392,6 +1471,7 @@ export class FeaturePlanningService {
   private async read(featureId: string): Promise<FeaturePlanningRecord | null> {
     const plan = await this.storage.getFeaturePlan(featureId);
     const record = plan?.planning;
+    this.noteRecord(featureId, record);
     return isFeaturePlanningRecord(record) ? record : null;
   }
 
@@ -1399,7 +1479,7 @@ export class FeaturePlanningService {
     record: FeaturePlanningRecord,
     mutator: (plan: FeaturePlan, current: FeaturePlanningRecord) => void,
   ): Promise<void> {
-    await this.storage.mutateFeaturePlanning(record.featureId, record.operationId, mutator);
+    await this.mutatePlanning(record.featureId, record.operationId, mutator);
   }
 
   private environmentDeadlineMs(): number {

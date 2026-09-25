@@ -52,6 +52,48 @@ export const WORKTREE_SNAPSHOT_REVISIONS_COMMAND = "get_worktree_snapshot_revisi
 export const WORKTREE_SNAPSHOT_FRESHNESS = ["current", "stale", "failed"] as const;
 export type WorktreeSnapshotFreshness = (typeof WORKTREE_SNAPSHOT_FRESHNESS)[number];
 
+/**
+ * How current the remote-tracking baseline behind a file list is. Only
+ * container targets report it today (the container fetch policy); it is absent
+ * for local worktrees and from older backends.
+ *
+ * - `not-required`: the baseline is an immutable commit present in the clone,
+ *   so no fetch can change the comparison.
+ * - `current`: the last fetch of the comparison ref succeeded and nothing known
+ *   (a merge, an explicit refresh) has invalidated it since.
+ * - `stale`: the last fetch failed or was invalidated since. The local diff is
+ *   still exact against the refs the clone holds, which may be behind.
+ * - `unknown`: no fetch has completed for this clone and ref yet.
+ *
+ * `lastSuccessAt` (wall clock) lets a client show the age without the backend
+ * republishing on a timer. `failure` is a finite, sanitized category.
+ */
+export const WORKTREE_REMOTE_FRESHNESS_STATES = [
+  "not-required",
+  "current",
+  "stale",
+  "unknown",
+] as const;
+export type WorktreeRemoteFreshnessState = (typeof WORKTREE_REMOTE_FRESHNESS_STATES)[number];
+
+export const WORKTREE_REMOTE_FETCH_FAILURES = [
+  "auth",
+  "network",
+  "missing-ref",
+  "no-remote",
+  "timeout",
+  "unavailable",
+  "capacity",
+  "error",
+] as const;
+export type WorktreeRemoteFetchFailure = (typeof WORKTREE_REMOTE_FETCH_FAILURES)[number];
+
+export interface WorktreeRemoteFreshness {
+  state: WorktreeRemoteFreshnessState;
+  lastSuccessAt?: string;
+  failure?: WorktreeRemoteFetchFailure;
+}
+
 /** One environment's snapshot revisions. */
 export interface WorktreeSnapshotState {
   environmentId: string;
@@ -74,6 +116,8 @@ export interface WorktreeSnapshotState {
    * failure: clients must keep polling for freshness.
    */
   watched: boolean;
+  /** Remote-tracking freshness of the comparison base; see {@link WorktreeRemoteFreshness}. */
+  remote?: WorktreeRemoteFreshness;
 }
 
 export interface WorktreeSnapshotRevisionFields {
@@ -130,7 +174,21 @@ export function isWorktreeSnapshotState(value: unknown): value is WorktreeSnapsh
     isCount(candidate.fileListRevision) &&
     isCount(candidate.treeRevision) &&
     isWorktreeSnapshotFreshness(candidate.freshness) &&
-    typeof candidate.watched === "boolean"
+    typeof candidate.watched === "boolean" &&
+    (candidate.remote === undefined || isWorktreeRemoteFreshness(candidate.remote))
+  );
+}
+
+export function isWorktreeRemoteFreshness(value: unknown): value is WorktreeRemoteFreshness {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.state === "string" &&
+    (WORKTREE_REMOTE_FRESHNESS_STATES as readonly string[]).includes(candidate.state) &&
+    (candidate.lastSuccessAt === undefined || isNonBlankString(candidate.lastSuccessAt)) &&
+    (candidate.failure === undefined ||
+      (typeof candidate.failure === "string" &&
+        (WORKTREE_REMOTE_FETCH_FAILURES as readonly string[]).includes(candidate.failure)))
   );
 }
 

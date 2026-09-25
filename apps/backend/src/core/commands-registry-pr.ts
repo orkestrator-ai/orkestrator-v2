@@ -38,6 +38,7 @@ import {
   verifyEnvironmentReviewPackage,
   generateLoopedReviewPackage,
   mergePullRequestInContainer,
+  containerGitFetchPolicy,
   runStoredEnvironmentMerge,
   validatePrDetectionBranch,
   detectEnvironmentPullRequest,
@@ -197,11 +198,16 @@ export function registerPullRequestCommands(
       resolvedContainerId,
     );
     if (!environment) {
-      return mergePullRequestInContainer(
+      const result = await mergePullRequestInContainer(
         resolvedContainerId,
         parseMergeMethod(method),
         asBoolean(deleteBranch, true),
       );
+      // Stored environments invalidate inside `runStoredEnvironmentMerge`.
+      if (result.outcome !== "pending") {
+        containerGitFetchPolicy.invalidate({ containerId: resolvedContainerId }, "mutation");
+      }
+      return result;
     }
     return runStoredEnvironmentMerge(
       environment,

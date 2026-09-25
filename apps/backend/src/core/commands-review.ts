@@ -23,6 +23,7 @@ import {
 } from "@orkestrator/protocol/review-workflow";
 import {
   deletingLocalServerEnvironments,
+  invalidateEnvironmentRemoteFreshness,
   mergingEnvironments,
   withContainerRuntimeCredential,
 } from "./commands-runtime-state.js";
@@ -1175,6 +1176,10 @@ export async function runStoredEnvironmentMerge<T>(
             environment.worktreePath!,
           )
         : await mergePullRequestInContainer(environment.containerId!, method, deleteBranch);
+    // A merge moved the base branch on the remote (or may have, when the
+    // outcome is unknown): the next diff must not wait out a fetch cooldown to
+    // see it. A still-pending merge changed nothing yet.
+    if (result.outcome !== "pending") invalidateEnvironmentRemoteFreshness(environment);
     // The callback runs before the merge guard is released. A confirmed
     // merge-and-cleanup can therefore transition directly into the deletion
     // tombstone without a user delete racing through the middle.

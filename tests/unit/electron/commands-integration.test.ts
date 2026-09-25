@@ -2309,14 +2309,17 @@ exit 1
               truncated: true,
             });
 
-            const execsBefore = (await fs.readFile(logs.exec, "utf8")).trim().split("\n").length;
+            // Status-script execs only: the container fetch policy may run its
+            // own (separate) fetch exec in the background after the first scan.
+            const statusExecs = async () =>
+              (await fs.readFile(logs.exec, "utf8")).split("ORKESTRATOR_NAME_STATUS").length - 1;
+            const execsBefore = await statusExecs();
             const files = (await commands.get("get_git_status")?.(
               { containerId: environment.containerId, targetBranch: "main" },
               context,
             )) as Array<{ path: string }>;
             expect(files).toHaveLength(2_001);
-            const execsAfter = (await fs.readFile(logs.exec, "utf8")).trim().split("\n").length;
-            expect(execsAfter).toBe(execsBefore);
+            expect(await statusExecs()).toBe(execsBefore);
           },
         );
       } finally {

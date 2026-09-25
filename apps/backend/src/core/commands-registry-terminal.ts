@@ -45,6 +45,7 @@ import {
   CONTAINER_INTERACTIVE_SHELL_COMMAND,
   CONTAINER_SAFE_BASE64_READER,
   diffStatsService,
+  containerGitFetchPolicy,
   syncDiffStatsTracking,
   asString,
   asRecord,
@@ -765,7 +766,12 @@ export function registerTerminalCommands(
   });
   register("refresh_environment_diff_stats", async ({ environmentId }, context) => {
     await syncDiffStatsTracking(context);
-    diffStatsService.refresh(asString(environmentId, "environmentId"));
+    const id = asString(environmentId, "environmentId");
+    const environment = await context.storage.getEnvironment(id).catch(() => null);
+    if (environment && environment.environmentType !== "local" && environment.containerId) {
+      containerGitFetchPolicy.invalidate({ containerId: environment.containerId }, "explicit");
+    }
+    diffStatsService.refresh(id);
   });
   /**
    * File-list and tree revisions of every tracked environment
@@ -865,13 +871,21 @@ export function registerTerminalCommands(
     "get_git_status",
     async ({ containerId, targetBranch, includeUncommitted, knownDigest, refresh }) => {
       const ref = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
+      const id = asString(containerId, "containerId");
+      const explicit = refreshRequested(refresh);
+      // A manual refresh also asks for the remote: the fetch policy makes the
+      // ref due (unless a fetch started or ended in the last 15 s) and the
+      // post-click scan below starts it in the background. The read itself
+      // answers from local refs and never waits for the network; a fetch
+      // that moves the base announces a new file-list revision.
+      if (explicit) containerGitFetchPolicy.invalidate({ containerId: id, ref }, "explicit");
       // A missing baseline surfaces as "Target ref is not present in the
       // container" from the scanner, distinct from a corrupt response.
       const read = await diffStatsService.readFileList({
-        lookup: { containerId: asString(containerId, "containerId") },
+        lookup: { containerId: id },
         comparisonRef: ref,
         includeUncommitted: includeUncommitted !== false,
-        refresh: refreshRequested(refresh),
+        refresh: explicit,
       });
       return snapshotResponse(
         "file-list-read",

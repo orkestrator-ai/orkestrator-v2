@@ -25,8 +25,17 @@ import {
   CONTAINER_CURSOR_CREDENTIAL_DIR,
   HOST_CLAUDE_KEYCHAIN_SERVICE,
   CONTAINER_UNTRACKED_STATS_SCANNER,
+  containerGitFetchPolicy,
   gitFetchScheduler,
 } from "./commands-runtime-state.js";
+import {
+  CONTAINER_FETCH_STDERR_BYTES,
+  CONTAINER_REPO_IDENTITY_SNIPPET,
+  CONTAINER_REPO_MARKER,
+  containerRepoId,
+  type ContainerGitFetchPolicy,
+} from "./container-git-fetch.js";
+import type { WorktreeRemoteFreshness } from "@orkestrator/protocol/worktree-snapshots";
 import {
   UNTRACKED_SCAN_CONCURRENCY,
   UNTRACKED_SCAN_MAX_FILES,
@@ -350,6 +359,7 @@ export const GIT_STATUS_NUMSTAT_MARKER = gitStatusMarker("ORKESTRATOR_NUMSTAT");
 export const GIT_STATUS_UNTRACKED_MARKER = gitStatusMarker("ORKESTRATOR_UNTRACKED");
 export const GIT_STATUS_END_MARKER = gitStatusMarker("ORKESTRATOR_END");
 export const GIT_STATUS_MISSING_REF_MARKER = gitStatusMarker("ORKESTRATOR_TARGET_REF_NOT_FOUND");
+export const GIT_STATUS_BASELINE_MARKER = gitStatusMarker("ORKESTRATOR_BASELINE");
 
 /**
  * Builds the single shell program that collects a container's git status.
@@ -357,6 +367,14 @@ export const GIT_STATUS_MISSING_REF_MARKER = gitStatusMarker("ORKESTRATOR_TARGET
  * Everything is framed so a partial or reordered response is detectable, and the
  * three git payloads are base64'd because they are NUL-delimited and may contain
  * any byte a filename can.
+ *
+ * It reads local Git state only. Fetching is the container fetch policy's job
+ * (`container-git-fetch.ts`, script: {@link buildContainerFetchScript}); this
+ * program reports which clone it read (a framed identity) and how the baseline
+ * resolved — through `origin/<ref>` (`tracking`) or the local `<ref>`
+ * (`local`), in exactly the order the combined script used — so the policy can
+ * decide whether a fetch is worth running. A baseline that resolves to neither
+ * is the framed missing-target marker, never an empty diff.
  */
 export function buildContainerGitStatusScript(ref: string, includeWorkingTree: boolean): string {
   const branch = quoteShell(ref);
@@ -392,12 +410,14 @@ export function buildContainerGitStatusScript(ref: string, includeWorkingTree: b
         done
       }
       maintain_git_exclude || true
+      ${CONTAINER_REPO_IDENTITY_SNIPPET}
       ref=${branch}
-      git fetch origin "$ref" >/dev/null 2>&1 || true
       if git rev-parse --verify --quiet "origin/$ref^{commit}" >/dev/null; then
         base="origin/$ref"
+        baseline=tracking
       else
         base="$ref"
+        baseline=local
       fi
       # Reported on stdout as a framed marker rather than as a non-zero exit: the
       # exec error message echoes the command back, so a literal marker in the
@@ -407,6 +427,7 @@ export function buildContainerGitStatusScript(ref: string, includeWorkingTree: b
         set +e
         exit 0
       fi
+      printf '\\036ORKESTRATOR_BASELINE\\037%s' "$baseline"
       end_ref=${includeWorkingTree ? "" : "HEAD"}
       printf '\\036ORKESTRATOR_NAME_STATUS\\037'
       git diff --name-status -z -M "$base" $end_ref | base64 -w0
@@ -418,8 +439,107 @@ export function buildContainerGitStatusScript(ref: string, includeWorkingTree: b
     `;
 }
 
+/**
+ * Builds the container fetch program the fetch policy runs, separately from
+ * status collection. Runs in the same `docker exec` login shell as the old
+ * embedded fetch, so the container's own Git credential configuration is used
+ * unchanged; interactive prompts are disabled rather than left to hang. It
+ * reports the clone identity, the exit status and `origin/<ref>` before and
+ * after (so a moved baseline is detected), plus at most
+ * {@link CONTAINER_FETCH_STDERR_BYTES} of stderr for classification into a
+ * finite category host-side. `timeout(1)` bounds the in-container process,
+ * which a killed `docker exec` client would not.
+ */
+export function buildContainerFetchScript(ref: string, timeoutMs: number): string {
+  const branch = quoteShell(ref);
+  const seconds = Math.max(1, Math.ceil(timeoutMs / 1000));
+  return `
+      set +e
+      export GIT_TERMINAL_PROMPT=0
+      if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        printf '\\036ORKESTRATOR_FETCH_NO_REPO\\037'
+        exit 0
+      fi
+      ${CONTAINER_REPO_IDENTITY_SNIPPET}
+      ref=${branch}
+      before="$(git rev-parse --verify --quiet "refs/remotes/origin/$ref^{commit}" 2>/dev/null)"
+      err_file="$(mktemp 2>/dev/null)" || err_file=""
+      if command -v timeout >/dev/null 2>&1; then
+        timeout -k 5 ${seconds} git fetch origin "$ref" >/dev/null 2>"\${err_file:-/dev/null}"
+      else
+        git fetch origin "$ref" >/dev/null 2>"\${err_file:-/dev/null}"
+      fi
+      status=$?
+      after="$(git rev-parse --verify --quiet "refs/remotes/origin/$ref^{commit}" 2>/dev/null)"
+      printf '\\036ORKESTRATOR_FETCH\\037%s\\t%s\\t%s\\036ORKESTRATOR_FETCH_ERR\\037' "$status" "$before" "$after"
+      if [ -n "$err_file" ]; then
+        head -c ${CONTAINER_FETCH_STDERR_BYTES} "$err_file" | base64 -w0
+        rm -f "$err_file"
+      fi
+      printf '\\036ORKESTRATOR_FETCH_END\\037'
+      exit 0
+    `;
+}
+
 export function isMissingTargetRefResponse(output: string): boolean {
-  return output === GIT_STATUS_MISSING_REF_MARKER;
+  if (output === GIT_STATUS_MISSING_REF_MARKER) return true;
+  try {
+    return parseContainerGitStatusEnvelope(output, false).kind === "missing";
+  } catch {
+    return false;
+  }
+}
+
+/** A container status response, with the clone identity and baseline class it reported. */
+export type ContainerGitStatusEnvelope =
+  | { kind: "not-repo" }
+  | { kind: "missing"; repoId: string }
+  | {
+      kind: "ok";
+      repoId: string;
+      /** How the base resolved; absent from responses without the section. */
+      baseline?: "tracking" | "local";
+      changes: GitFileChange[];
+      truncated: boolean;
+    };
+
+/**
+ * Parses a whole status response: an optional framed clone identity, then
+ * either the missing-target marker or an optional baseline section followed
+ * by the framed status sections. Anything else is malformed.
+ */
+export function parseContainerGitStatusEnvelope(
+  output: string,
+  includeWorkingTree: boolean,
+): ContainerGitStatusEnvelope {
+  if (output.length === 0) return { kind: "not-repo" };
+  let rest = output;
+  let repoId = "";
+  if (rest.startsWith(CONTAINER_REPO_MARKER)) {
+    const next = rest.indexOf(GIT_STATUS_FRAME_START, CONTAINER_REPO_MARKER.length);
+    if (next === -1) throw new Error("Malformed container git status response");
+    repoId = containerRepoId(
+      decodeGitStatusSection(
+        rest.slice(CONTAINER_REPO_MARKER.length, next),
+        "container git repository identity",
+      ),
+    );
+    rest = rest.slice(next);
+  }
+  if (rest === GIT_STATUS_MISSING_REF_MARKER) return { kind: "missing", repoId };
+  let baseline: "tracking" | "local" | undefined;
+  if (rest.startsWith(GIT_STATUS_BASELINE_MARKER)) {
+    const next = rest.indexOf(GIT_STATUS_FRAME_START, GIT_STATUS_BASELINE_MARKER.length);
+    const value = next === -1 ? "" : rest.slice(GIT_STATUS_BASELINE_MARKER.length, next);
+    if (value !== "tracking" && value !== "local") {
+      throw new Error("Malformed container git status response");
+    }
+    baseline = value;
+    rest = rest.slice(next);
+  }
+  if (rest.length === 0) throw new Error("Malformed container git status response");
+  const detailed = parseContainerGitStatusSections(rest, includeWorkingTree);
+  return { kind: "ok", repoId, ...(baseline ? { baseline } : {}), ...detailed };
 }
 
 export function parseContainerGitStatusResponse(
@@ -430,6 +550,18 @@ export function parseContainerGitStatusResponse(
 }
 
 export function parseContainerGitStatusResponseDetailed(
+  output: string,
+  includeWorkingTree: boolean,
+): { changes: GitFileChange[]; truncated: boolean } {
+  const envelope = parseContainerGitStatusEnvelope(output, includeWorkingTree);
+  if (envelope.kind === "not-repo") return { changes: [], truncated: false };
+  if (envelope.kind === "missing") {
+    throw new Error("Malformed container git status response: target ref is missing");
+  }
+  return { changes: envelope.changes, truncated: envelope.truncated };
+}
+
+function parseContainerGitStatusSections(
   output: string,
   includeWorkingTree: boolean,
 ): { changes: GitFileChange[]; truncated: boolean } {
@@ -482,27 +614,66 @@ export async function getLocalGitStatus(
   return (await getLocalGitStatusDetailed(worktreePath, targetBranch, includeUncommitted)).changes;
 }
 
-/** Reads a container workspace's changes, reporting whether the scan was capped. */
+export interface ContainerGitStatusDeps {
+  /** Runs a script in the container (`dockerExec`). */
+  exec: (containerId: string, script: string) => Promise<string>;
+  fetches: Pick<ContainerGitFetchPolicy, "observe" | "recover">;
+}
+
+/**
+ * Reads a container workspace's changes, reporting whether the scan was capped
+ * and how current the remote-tracking baseline is.
+ *
+ * The status exec reads local refs only. With a resolved baseline the fetch
+ * policy is consulted (and may start a background fetch that never delays
+ * this read). With a missing baseline the policy may perform one bounded
+ * recovery fetch — inside this scan's admission slot — after which the
+ * baseline is resolved exactly once more; if it is still missing, the
+ * missing-target error surfaces as before.
+ */
 export async function getContainerGitStatusDetailed(
   containerId: string,
   targetBranch: string,
   includeWorkingTree: boolean,
-): Promise<{ changes: GitFileChange[]; truncated: boolean }> {
+  deps: ContainerGitStatusDeps = {
+    exec: (id, script) => dockerExec(id, script),
+    fetches: containerGitFetchPolicy,
+  },
+): Promise<{ changes: GitFileChange[]; truncated: boolean; remote?: WorktreeRemoteFreshness }> {
   const ref = validateGitRefName(targetBranch, "target branch");
-  // The status script always attempts `git fetch` inside the container; the
-  // exec itself is charged to whichever scan or read ran it.
-  recurringWorkMetrics.requested("git-fetch-container");
-  const output = await dockerExec(
-    containerId,
-    buildContainerGitStatusScript(ref, includeWorkingTree),
+  const script = buildContainerGitStatusScript(ref, includeWorkingTree);
+  let envelope = parseContainerGitStatusEnvelope(
+    await deps.exec(containerId, script),
+    includeWorkingTree,
   );
-  // Distinguishes "the requested baseline is not in this container" - which
-  // happens when a container is recreated from a different clone - from a
-  // corrupt response, so callers do not see both as one opaque exec failure.
-  if (isMissingTargetRefResponse(output)) {
-    throw new Error(`Target ref is not present in the container: ${ref}`);
+  if (envelope.kind === "missing") {
+    // Distinguishes "the requested baseline is not in this container" - which
+    // happens when a container is recreated from a different clone - from a
+    // corrupt response, so callers do not see both as one opaque exec failure.
+    const recovered = await deps.fetches.recover({
+      containerId,
+      repoId: envelope.repoId,
+      ref,
+    });
+    if (recovered) {
+      envelope = parseContainerGitStatusEnvelope(
+        await deps.exec(containerId, script),
+        includeWorkingTree,
+      );
+    }
+    if (envelope.kind === "missing") {
+      throw new Error(`Target ref is not present in the container: ${ref}`);
+    }
   }
-  return parseContainerGitStatusResponseDetailed(output, includeWorkingTree);
+  if (envelope.kind === "not-repo") return { changes: [], truncated: false };
+  const baseline =
+    envelope.baseline === "local" && isImmutableCommitRef(ref)
+      ? "commit"
+      : envelope.baseline === "local"
+        ? "local-ref"
+        : "tracking-ref";
+  const remote = deps.fetches.observe({ containerId, repoId: envelope.repoId, ref }, baseline);
+  return { changes: envelope.changes, truncated: envelope.truncated, remote };
 }
 
 /**

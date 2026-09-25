@@ -517,8 +517,9 @@ export class OrkestratorBackend {
    *
    * Called once per `isAgentTurnEndTransition` edge from `onActivityTransition`
    * — never per idle observation, and never for a fenced pre-dispatch idle,
-   * which the observer refuses to apply (step 07). Re-point this one function
-   * when the PR monitor grows a dedicated completion wakeup (step 05).
+   * which the observer refuses to apply (step 07). It reaches the PR monitor's
+   * completion wakeup via `pr_monitor_probe_environment` →
+   * `wakePrMonitorForCompletion` (step 05).
    */
   private probeForAgentCreatedPullRequest(environmentId: string, context: CommandContext): void {
     void Promise.resolve(context.probeAgentCreatedPullRequest?.(environmentId)).catch(

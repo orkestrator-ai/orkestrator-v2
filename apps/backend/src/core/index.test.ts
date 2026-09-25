@@ -1385,7 +1385,10 @@ test("shutdown clears backend-owned PR watch state before a new backend starts",
     await first.shutdown();
     second = new OrkestratorBackend(options);
     await second.init();
-    await expect(second.invoke<{ entries: unknown[] }>("get_pr_monitor_state")).resolves.toEqual({
+    // The snapshot is also stamped with the new service's generation/revision.
+    await expect(
+      second.invoke<{ entries: unknown[] }>("get_pr_monitor_state"),
+    ).resolves.toMatchObject({
       entries: [],
     });
   } finally {

@@ -553,6 +553,78 @@ describe("background task reducer", () => {
     }
   });
 
+  test("reclaims a resumed turn from its first streamed partial, before any assistant record", async () => {
+    const created = createSession("long thinking continuation");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "delegate then write the plan");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-export",
+      description: "Inventory export pipeline",
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => created.status === "idle");
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-export",
+      status: "completed",
+    });
+    await waitFor(() => created.backgroundTasks?.["agent-export"]?.status === "completed");
+
+    // Neither a keep-alive ping nor a subagent's partial is the root loop
+    // resuming, so neither may take the foreground.
+    call.push({ type: "stream_event", parent_tool_use_id: null, event: { type: "ping" } });
+    call.push({
+      type: "stream_event",
+      parent_tool_use_id: "agent-tool-use",
+      event: { type: "message_start", message: { id: "subagent-partial" } },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(created.status).toBe("idle");
+
+    // The resumed root turn thinks for minutes: only partials and thinking
+    // estimates arrive, and its first complete assistant record is far away.
+    // Claude is working, so the session must say so from the first partial.
+    call.push({
+      type: "stream_event",
+      parent_tool_use_id: null,
+      event: { type: "message_start", message: { id: "assistant-plan", model: "claude-mock" } },
+    });
+    call.push({
+      type: "stream_event",
+      parent_tool_use_id: null,
+      event: { type: "content_block_start", index: 0, content_block: { type: "thinking" } },
+    });
+    call.push({ type: "system", subtype: "thinking_tokens", estimated_tokens: 1200 });
+    await waitFor(() => created.status === "running");
+    expect(created.turnStartedAt).toBeDefined();
+    expect(created.abortController).toBeDefined();
+    await waitFor(() => created.thinkingTokens === 1200);
+
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-plan",
+        role: "assistant",
+        content: [{ type: "text", text: "The plan is written." }],
+        stop_reason: "end_turn",
+      },
+      parent_tool_use_id: null,
+    });
+    call.push({ type: "result", subtype: "success" });
+    expect((await input.next()).done).toBe(true);
+    call.finish();
+    await promptPromise;
+    expect(created.status).toBe("idle");
+  });
+
   test("can release again when a resumed root turn launches another background task", async () => {
     const created = createSession("repeated background releases");
     track(created.id);

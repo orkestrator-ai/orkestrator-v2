@@ -981,6 +981,35 @@ describe("AgentMailButton", () => {
     });
   });
 
+  test("renders an expanded markdown body as formatted content", async () => {
+    const incoming = {
+      ...message("stored"),
+      id: "incoming",
+      body: "**Bucket:** `gs://assets`\n\n- Project: `angela-vc`\n- Location: `europe-west1`",
+      userSeenAt: new Date(0).toISOString(),
+    };
+    const { body: _body, ...incomingSummary } = incoming;
+    const current = mailboxSnapshot([incomingSummary]);
+    useAgentMailStore.setState({
+      mailboxes: new Map([[current.descriptor.mailboxId, current]]),
+      refreshSummary: mock(async () => undefined),
+    });
+    getAgentMailMessage.mockImplementation(async () => incoming);
+    render(<AgentMailButton />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Agent inbox" }));
+    fireEvent.click(await screen.findByText("From You → To Claude 1 · Agent"));
+
+    const bold = await screen.findByText("Bucket:");
+    expect(bold.tagName).toBe("STRONG");
+    expect(screen.getByText("gs://assets").tagName).toBe("CODE");
+    const items = screen.getAllByRole("listitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      "Project: angela-vc",
+      "Location: europe-west1",
+    ]);
+    expect(screen.queryByText(/\*\*Bucket:\*\*/)).toBeNull();
+  });
+
   test("closes an expanded body when a newer authoritative revision arrives", async () => {
     const incoming = {
       ...message("stored"),

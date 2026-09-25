@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Inbox, Loader2, RotateCcw, Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -717,9 +718,10 @@ export function AgentMailButton() {
                     </button>
                     {active && expanded && (
                       <div className="mt-2 rounded-md border border-zinc-800 bg-black/30 p-3">
-                        <p className="whitespace-pre-wrap text-xs leading-relaxed">
-                          {expanded.body}
-                        </p>
+                        <MessageMarkdown
+                          content={expanded.body}
+                          className="break-words text-xs prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-pre:my-1 prose-pre:p-2 [&>:first-child]:mt-0 [&>:last-child]:mb-0"
+                        />
                         <div className="mt-3 grid gap-1 text-[11px] text-muted-foreground">
                           <p>
                             Seen by you:{" "}

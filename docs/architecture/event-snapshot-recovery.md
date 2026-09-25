@@ -235,6 +235,15 @@ are invalidations only; the file list and tree are re-read with
   owner generation or target lineage differs. A hidden document defers to the
   read coordinator's return reconcile. The 5 s coordinated poll remains; for a
   quiet watched worktree the backend answers it from valid watched state.
+- Container states carry an optional `remote` (step 04):
+  `{ state: not-required | current | stale | unknown, lastSuccessAt?,
+  failure? }` from the container fetch policy (`container-git-fetch.ts`).
+  Container status scans read local refs only; a background fetch that moves
+  `origin/<ref>` calls `invalidateBaseline`, so the rescan's file-list
+  revision (if the list changed) is what tells clients to re-read. A fetch
+  that changes only remote freshness republishes the state without advancing
+  either revision. `stale` means the list is exact against the clone's refs,
+  which may be behind the remote — never that the list is unusable.
 
 ## Adopting the contract
 

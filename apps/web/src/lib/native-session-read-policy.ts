@@ -1,4 +1,5 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS } from "@orkestrator/protocol/native-agent-observation";
 import type { ReadDemand } from "@/lib/read-coordinator";
 
 /**
@@ -12,20 +13,29 @@ export const IDLE_PROJECTION_REFRESH_MS = 1_500;
 
 /**
  * Trial quiet backoff for idle native views (recurring-processes plan, step
- * 06 task 8). **Gated and disabled**: it may be enabled for a provider only
- * after step 07's interaction/completion event coverage and step 11's
- * missed-event recovery tests pass for that provider, and the per-refresh
- * command/provider request counts have been recorded. Until then a quiet idle
- * view keeps polling at {@link IDLE_PROJECTION_REFRESH_MS}.
+ * 06 task 8; qualified per provider in step 07). A qualified provider's idle,
+ * unchanged view slows through these intervals; any invalidation, a phase
+ * change or a visible-document reconcile returns it to
+ * {@link IDLE_PROJECTION_REFRESH_MS} immediately.
  */
 export const NATIVE_QUIET_BACKOFF_TRIAL_MS: readonly number[] = [3_000, 5_000, 10_000, 15_000];
 
 /**
- * Providers qualified for quiet backoff. Empty by design: adding a provider
- * here is the single switch that enables {@link NATIVE_QUIET_BACKOFF_TRIAL_MS}
- * for its idle views, and doing so requires the qualification above.
+ * Providers qualified for quiet backoff — the protocol's single list, shared
+ * with the backend's observation capability matrix. Qualification (step 07):
+ * the backend announces every activity transition of the provider with a
+ * stamped, session-scoped invalidation (`native-observation-events.ts` turns
+ * those into coordinator invalidations, and a revision gap into a re-read of
+ * every view), and an idle view of the provider cannot change without such a
+ * transition. Claude and Codex are not qualified: background task output and
+ * async questions change an idle view without one.
+ *
+ * Backoff additionally requires the connected backend to advertise those
+ * announcements (`observationEvents`); an older backend keeps the baseline.
  */
-export const NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS: ReadonlySet<AgentPlatform> = new Set();
+export const NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS: ReadonlySet<AgentPlatform> = new Set(
+  NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS,
+);
 
 /** Turn phases that keep the responsive cadence and never back off. */
 export function isResponsiveNativeTurnPhase(phase: string | undefined): boolean {
@@ -44,12 +54,14 @@ export function nativeSessionReadDemand(
   options: {
     active: boolean;
     qualifiedProviders?: ReadonlySet<AgentPlatform>;
+    /** The backend announces stamped, session-scoped activity invalidations. */
+    observationEvents?: boolean;
   },
 ): Required<ReadDemand> {
   const responsive = isResponsiveNativeTurnPhase(phase);
-  const qualified = (options.qualifiedProviders ?? NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS).has(
-    platform,
-  );
+  const qualified =
+    options.observationEvents === true &&
+    (options.qualifiedProviders ?? NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS).has(platform);
   return {
     active: options.active,
     intervalMs: responsive ? ACTIVE_PROJECTION_REFRESH_MS : IDLE_PROJECTION_REFRESH_MS,

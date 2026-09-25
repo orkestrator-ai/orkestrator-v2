@@ -603,6 +603,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     provider: NativeAgentRuntimeProvider,
   ): boolean {
     return (
+      this.options.observationSharing !== false &&
       nativeAgentObservationCapabilities(agent)?.idleBackoffWakeup === "provider-event-stream" &&
       provider.observationStreamLive?.() === true
     );
@@ -1461,6 +1462,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         ? (this.queueString(head as Record<string, unknown>, "requestId") ??
           this.queueString(head as Record<string, unknown>, "id"))
         : undefined;
+    if (this.options.observationSharing === false) return false;
     // An async-question answer is delivered *into* a running Codex turn.
     if (agent === "codex" && requestId && nativeAsyncQuestionItemId(requestId)) return false;
     const key = nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey);

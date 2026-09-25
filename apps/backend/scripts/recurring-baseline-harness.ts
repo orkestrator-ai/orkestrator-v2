@@ -16,6 +16,10 @@ import { PrMonitorService, type PrMonitorTarget } from "../src/core/pr-monitor.j
 import { CLAUDE_STATE_POLL_INTERVAL_MS, ClaudeStatePollManager } from "../src/core/tmux-poll.js";
 import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics.js";
 import { ManualTime } from "../src/core/recurring-test-support.js";
+import {
+  runNativeObservationBaseline,
+  type NativeObservationResult,
+} from "./recurring-baseline-native.js";
 
 /**
  * Deterministic recurring-work baseline.
@@ -170,6 +174,11 @@ export interface BaselineArtifact {
   physicalCost: typeof PHYSICAL_COST;
   flags: { recurringMetrics: "enabled"; modelledKinds: RecurringJobKind[] };
   scenarios: ScenarioResult[];
+  /**
+   * Driven native activity sweep and queue scan, rollback vs shared
+   * observation (step 07). Absent from artifacts produced before step 07.
+   */
+  nativeObservation?: NativeObservationResult;
   /** Real-time measurements; excluded from comparisons. */
   overhead?: { observeEnabledNsPerOp: number; observeDisabledNsPerOp: number; iterations: number };
   limitations: string[];
@@ -203,7 +212,8 @@ export const BASELINE_LIMITATIONS = [
   "Call-count model on a manual clock: no process, container, repository, GitHub or provider is touched, and durations are not measured.",
   "Physical units per seam call come from PHYSICAL_COST, read from the production scanners at this commit; the real scanners are not executed.",
   "Driven owners: diff statistics (watched local / polled container), the shared Files-panel cache, local git fetch scheduling, PR monitoring with check rollups, and Claude terminal-state polls (one per running container).",
-  "Native activity sweep, launch/queue scans, mail, coordinator repair, retention, tab cleanup and workflow ticks are modelled from nominal cadence only; their provider reads and storage costs need a live isolated profile.",
+  "Native activity sweep, launch/queue scans, mail, coordinator repair, retention, tab cleanup and workflow ticks are modelled from nominal cadence only in the per-scenario blocks; their provider reads and storage costs need a live isolated profile.",
+  "The nativeObservation block (step 07) drives the real native activity sweep and native queue scan with fake providers counted at the provider boundary, over one 10-environment fixture, in rollback and shared modes; bridge-side cost per read and mail, coordinator and workflow consumers are not driven.",
   "Multi review uses an adaptive due scheduler by default (reconcile every 15 s plus per-workflow due passes); it is not modelled because idle cost depends on active workflows.",
   "Local environments use a branch baseline, so every scan consults the fetch scheduler; environments created from an immutable commit skip that path.",
   "No watcher change events occur in the idle window; burst edits, long reads, outages and approval/completion freshness need the live isolated profile described in the README.",
@@ -547,6 +557,8 @@ export async function runBaseline(options: {
   phases?: BaselinePhases;
   environment: BaselineArtifact["environment"];
   overhead?: boolean;
+  /** Include the driven native observation block (default true). */
+  nativeObservation?: boolean;
 }): Promise<BaselineArtifact> {
   const phases = options.phases ?? DEFAULT_PHASES;
   const scenarios: ScenarioResult[] = [];
@@ -563,6 +575,9 @@ export async function runBaseline(options: {
     physicalCost: PHYSICAL_COST,
     flags: { recurringMetrics: "enabled", modelledKinds: [...MODELLED_KINDS] },
     scenarios,
+    ...(options.nativeObservation === false
+      ? {}
+      : { nativeObservation: await runNativeObservationBaseline() }),
     ...(options.overhead ? { overhead: measureOverhead() } : {}),
     limitations: [...BASELINE_LIMITATIONS],
   };
@@ -570,7 +585,7 @@ export async function runBaseline(options: {
 
 export interface BaselineDifference {
   scenario: string;
-  phase: "startup" | "idle" | "modelledIdle" | "idlePhysicalPerMinute";
+  phase: "startup" | "idle" | "modelledIdle" | "idlePhysicalPerMinute" | "nativeObservation";
   kind: string;
   field: string;
   baseline: number;
@@ -633,6 +648,25 @@ export function compareBaselines(
           candidate: b,
         });
       }
+    }
+  }
+  // Compared only when both artifacts carry the driven native block.
+  if (baseline.nativeObservation && candidate.nativeObservation) {
+    const left = flatten(baseline.nativeObservation.modes as unknown as Record<string, unknown>);
+    const right = flatten(candidate.nativeObservation.modes as unknown as Record<string, unknown>);
+    for (const key of new Set([...left.keys(), ...right.keys()])) {
+      const a = left.get(key) ?? 0;
+      const b = right.get(key) ?? 0;
+      if (a === b) continue;
+      const [mode = "", ...rest] = key.split(".");
+      differences.push({
+        scenario: "native-observation",
+        phase: "nativeObservation",
+        kind: mode,
+        field: rest.join("."),
+        baseline: a,
+        candidate: b,
+      });
     }
   }
   return differences;

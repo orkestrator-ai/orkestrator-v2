@@ -439,6 +439,13 @@ export interface NativeAgentServiceOptions {
   toolDetailCacheMaxBytes?: number;
   /** Test seam for the obsolete-provider disposal grace period. */
   providerRetirementGraceMs?: number;
+  /**
+   * Observation sharing (step 07): stable-idle group backoff and busy-queue
+   * reuse of the sweep's answer. `false` is the rollback — every group is
+   * read on every sweep and every queue pass reads the provider again, as
+   * before. Dispatch/generation fences and the mail freshness gate stay.
+   */
+  observationSharing?: boolean;
 }
 
 export interface AgentInteractionObservation {

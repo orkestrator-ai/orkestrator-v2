@@ -256,6 +256,8 @@ export class OrkestratorBackend {
       },
       {
         interactionMonitorMode,
+        // Rollback for step 07's observation sharing; fences stay either way.
+        observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",
         interactionMonitorAdoptionEnabled:
           process.env.ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH !== "1",
         onActivityTransition: (event) => {

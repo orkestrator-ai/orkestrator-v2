@@ -74,11 +74,13 @@ export const MAIL_INJECT_OBSERVATION_MAX_AGE_MS = 4_000;
 export const STABLE_IDLE_READS_BEFORE_BACKOFF = 3;
 
 /**
- * Safety-read ladder for a qualified, stably idle group. The ceiling is short
- * on purpose: the wakeup path is the primary discovery channel, this is only
- * the repair path for a missed provider event.
+ * Safety-read ladder for a qualified, stably idle group. The provider event
+ * is the primary discovery channel; this is the repair path for a missed one,
+ * and its ceiling is the step 01 budget for the background activity indicator
+ * (p95 <= 4 s), so even a lost event cannot push discovery past it. Longer
+ * rungs need the live profile to show the budget still holds.
  */
-export const STABLE_IDLE_BACKOFF_MS: readonly number[] = [4_000, 8_000, 15_000];
+export const STABLE_IDLE_BACKOFF_MS: readonly number[] = [4_000];
 
 export const MAX_OBSERVATION_RECORDS = 4_096;
 export const MAX_OBSERVATION_GROUPS = 2_048;

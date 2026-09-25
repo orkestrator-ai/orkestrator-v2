@@ -310,6 +310,8 @@ export async function runScenario(
 
   const prMonitor = new PrMonitorService({
     metrics,
+    // Deterministic startup/terminal jitter (production uses Math.random).
+    random: seededRandom(input.id),
     emit: () => undefined,
     now: () => new Date(0).toISOString(),
     monotonicNow: time.now,
@@ -521,6 +523,24 @@ function compact(snapshot: RecurringWorkSnapshot): Partial<Record<RecurringJobKi
 
 function round(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+/**
+ * Seeded uniform [0, 1) source (mulberry32) for owners that jitter their
+ * schedules, so a scenario reproduces exactly while still exercising spread
+ * rather than a degenerate constant.
+ */
+export function seededRandom(seedText: string): () => number {
+  let seed = 2166136261;
+  for (let index = 0; index < seedText.length; index += 1) {
+    seed = Math.imul(seed ^ seedText.charCodeAt(index), 16777619);
+  }
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 /** Real-time cost of one observed attempt, enabled vs disabled. Non-deterministic. */

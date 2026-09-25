@@ -483,13 +483,16 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "unguarded",
     "none",
   ),
+  // Step 09: coordinator view is event-led (scoped `coordinator` changes,
+  // conditional reads, resource-sync safety checks); the 60 s cadence is the
+  // repository-status probe (and the full poll kept for older backends).
   "client-coordinator-panel": external(
     "renderer",
     "C11",
-    "interval",
+    "event",
     "interactive",
     60_000,
-    "unguarded",
+    "join",
     "snapshot-rehydrate",
   ),
   "client-design-canvas": external(

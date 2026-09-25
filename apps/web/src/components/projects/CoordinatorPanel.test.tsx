@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   coordinatorRuntimeId,
@@ -118,12 +118,36 @@ const prepareSwitch = mock(async (_projectId: string, ref: string) => ({
 }));
 const syncGit = mock(async () => ensuredGit);
 const getCoordinator = mock(async () => ensuredSnapshot);
+/** Conditional view reads: a stand-in owner that stamps by body identity. */
+let viewRevision = 0;
+let viewBody: CoordinatorSnapshot | null = null;
+const getCoordinatorView = mock(
+  async (
+    _projectId: string,
+    known: { generation: string; revision: number } | null,
+  ): Promise<unknown> => {
+    if (ensuredSnapshot !== viewBody) {
+      viewBody = ensuredSnapshot;
+      viewRevision += 1;
+    }
+    if (known && known.generation === "view-gen" && known.revision === viewRevision) {
+      return { status: "unchanged", generation: "view-gen", revision: viewRevision };
+    }
+    return {
+      status: "snapshot",
+      generation: "view-gen",
+      revision: viewRevision,
+      snapshot: viewBody,
+    };
+  },
+);
 const assignAgent = mock(async () => ensuredSnapshot);
 
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
   ensureProjectCoordinator: ensure,
   getProjectCoordinator: getCoordinator,
+  getProjectCoordinatorView: getCoordinatorView,
   getProjectGitStatus: getGit,
   fetchProjectGit: mock(async () => ensuredGit),
   switchProjectGitBranch: switchBranch,
@@ -177,6 +201,8 @@ mock.module("@/components/native-agent", () => ({
 }));
 
 import { CoordinatorPanel } from "./CoordinatorPanel";
+import { COORDINATOR_FOCUS_PROBE_MIN_INTERVAL_MS } from "./useCoordinatorPanelData";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { ProjectWorkspace } from "./ProjectWorkspace";
 import { useUIStore } from "@/stores";
 
@@ -194,6 +220,8 @@ describe("CoordinatorPanel", () => {
     nextPreparedSwitch = preparedSwitch;
     syncGit.mockClear();
     getCoordinator.mockClear();
+    getCoordinatorView.mockClear();
+    viewBody = null;
     assignAgent.mockClear();
     renderAgentNativeTab.mockClear();
     ensuredSnapshot = snapshot;
@@ -299,7 +327,7 @@ describe("CoordinatorPanel", () => {
     act(() => {
       ensuredSnapshot = { ...assignedSnapshot };
     });
-    await waitFor(() => expect(getCoordinator).toHaveBeenCalled());
+    await waitFor(() => expect(getCoordinatorView).toHaveBeenCalled());
     expect((await screen.findByTestId("native-agent")).getAttribute("data-initial-prompt")).toBe(
       "Inspect the repository",
     );
@@ -405,7 +433,10 @@ describe("CoordinatorPanel", () => {
     expect(agent.getAttribute("data-platform")).toBe("");
   });
 
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    resetReadCoordinatorForTests();
+  });
   afterAll(() => {
     mock.module("@/lib/backend", () => backendSnapshot);
     mock.module("@/components/native-agent", () => nativeAgentSnapshot);
@@ -568,8 +599,25 @@ describe("CoordinatorPanel", () => {
     expect(screen.getByRole("combobox").textContent).toContain("main");
 
     const callsAfterLoad = getGit.mock.calls.length;
+    // A focus right after opening is served by the opening read.
     fireEvent.focus(window);
-    await waitFor(() => expect(getGit.mock.calls.length).toBeGreaterThan(callsAfterLoad));
+    await act(async () => Promise.resolve());
+    expect(getGit.mock.calls.length).toBe(callsAfterLoad);
+    // Later, focus and visibility arriving together probe once, not twice.
+    const now = Date.now();
+    const nowSpy = spyOn(Date, "now").mockImplementation(
+      () => now + COORDINATOR_FOCUS_PROBE_MIN_INTERVAL_MS + 1,
+    );
+    try {
+      fireEvent.focus(window);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await waitFor(() => expect(getGit.mock.calls.length).toBe(callsAfterLoad + 1));
+      await waitFor(() => expect(getCoordinatorView).toHaveBeenCalled());
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+      expect(getGit.mock.calls.length).toBe(callsAfterLoad + 1);
+    } finally {
+      nowSpy.mockRestore();
+    }
 
     fireEvent.click(screen.getByRole("combobox"));
     fireEvent.click(await screen.findByRole("option", { name: "origin/feature" }));

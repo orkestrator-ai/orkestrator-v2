@@ -85,6 +85,10 @@ export const DEFAULT_SCENARIOS: readonly BaselineScenario[] = [
   scenario("env50-mixed-c0-pr-wf200", 50, 0.5, 0, "mixed", 200),
   scenario("env50-mixed-c2-pr-wf200", 50, 0.5, 2, "mixed", 200),
   scenario("env50-container-c1-pr", 50, 0, 1, "mixed", 0),
+  // Added at step 03 (not in the step 01 artifact): two clients on one target,
+  // where joined reads matter most.
+  scenario("env1-local-c2", 1, 1, 2, "none", 0),
+  scenario("env1-container-c2", 1, 0, 2, "none", 0),
 ];
 
 function scenario(

@@ -278,7 +278,10 @@ describe("scan identity and joined reads", () => {
     ]);
     owner.scans[0]!.gate.resolve(result([change("committed.ts")]));
     owner.scans[1]!.gate.resolve(result([change("develop.ts")]));
-    const [c1, c2] = await Promise.all(committed);
+    const [c1, c2] = (await Promise.all(committed)) as [
+      Awaited<(typeof committed)[0]>,
+      Awaited<(typeof committed)[1]>,
+    ];
     expect(c1.changes).toEqual([change("committed.ts")]);
     expect(c2.changes).toBe(c1.changes);
     // Ad hoc identities are never stamped as the tracked owner's view.

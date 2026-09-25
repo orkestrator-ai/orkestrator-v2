@@ -12,7 +12,7 @@ import {
   recurringMetricsEnabled,
   spawnWorkUnit,
 } from "./recurring-work-metrics.js";
-import { DiffStatsService, readSharedFileList } from "./diff-stats-service.js";
+import { DiffStatsService } from "./diff-stats-service.js";
 import { GitFetchScheduler } from "./git-fetch-scheduler.js";
 import { deferred, flushMicrotasks } from "./recurring-test-support.js";
 
@@ -313,8 +313,8 @@ describe("instrumented owners", () => {
       comparisonRef: "main",
     });
     // Two watcher hints while the first scan runs fold into one rerun.
-    callbacks[1]!();
-    callbacks[1]!();
+    callbacks[0]!();
+    callbacks[0]!();
     scans[0]!.resolve({ stats, changes: [] });
     await flushMicrotasks();
     scans[1]!.resolve({ stats, changes: [] });
@@ -333,9 +333,10 @@ describe("instrumented owners", () => {
     service.shutdown();
   });
 
-  test("a Files-panel read shares a recent scan and counts hits apart from scans", async () => {
+  test("a Files-panel read joins the owner's scan and counts hits apart from scans", async () => {
     const metrics = new RecurringWorkMetrics();
     let now = 0;
+    let scans = 0;
     const service = new DiffStatsService({
       metrics,
       emit: () => undefined,
@@ -343,7 +344,13 @@ describe("instrumented owners", () => {
       schedule: () => 1,
       cancel: () => undefined,
       startWatcher: () => ({ watching: false, close: () => undefined }),
-      scan: async () => ({ stats: {} as never, changes: [] }),
+      scan: async () => {
+        scans += 1;
+        return {
+          stats: { additions: 0, deletions: 0, filesChanged: 0, truncated: false },
+          changes: [],
+        };
+      },
     });
     service.track({
       environmentId: "env",
@@ -352,30 +359,26 @@ describe("instrumented owners", () => {
       comparisonRef: "main",
     });
     await flushMicrotasks();
-    let scans = 0;
     const read = () =>
-      readSharedFileList({
-        service,
-        metrics,
+      service.readFileList({
         lookup: { containerId: "c1" },
         comparisonRef: "main",
-        maxAgeMs: 3_000,
-        scan: async () => {
-          scans += 1;
-          return [];
-        },
+        includeUncommitted: true,
       });
     await read();
     now += 5_000;
     await read();
     await read();
-    expect(scans).toBe(1);
+    // The tracking scan served the first read; the second outlived the
+    // unwatched age bound and ran the owner's own scan, which the third shared.
+    expect(scans).toBe(2);
     expect(metrics.snapshot().kinds["file-list-read"]).toMatchObject({
       requested: 3,
       cacheHits: 2,
       cacheMisses: 1,
-      started: 1,
     });
+    // The physical scan is charged once, to the owner's diff scan.
+    expect(metrics.snapshot().kinds["diff-scan"]).toMatchObject({ started: 2, completed: 2 });
     service.shutdown();
   });
 

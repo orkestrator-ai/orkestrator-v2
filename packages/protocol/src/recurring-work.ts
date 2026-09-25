@@ -225,9 +225,11 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   "pr-check-rollup": backend("B02", "completion", "discovery", 60_000, "join", "next-tick"),
   // Watched local: 400 ms coalesced hints + 120 s safety; container/unwatched: 15 s.
   "diff-scan": backend("B03", "watcher", "discovery", 15_000, "trailing-rerun", "safety-scan"),
-  // Files panel read, 3 s shared cache; panel polls every 5 s.
-  "file-list-read": backend("B04", "read", "interactive", null, "unguarded", "snapshot-rehydrate"),
-  "file-tree-read": backend("B04", "read", "interactive", null, "unguarded", "snapshot-rehydrate"),
+  // Files panel reads, served by the worktree snapshot owner (step 03): they
+  // join the owner's scan/walk; a result stays valid until a watcher hint
+  // (qualified watched worktree) or for 3 s (unwatched). Panel polls every 5 s.
+  "file-list-read": backend("B04", "read", "interactive", null, "join", "snapshot-rehydrate"),
+  "file-tree-read": backend("B04", "read", "interactive", null, "join", "snapshot-rehydrate"),
   // Read-driven, 5 min TTL per common git dir + ref, joined in flight.
   "git-fetch-local": backend("B05", "read", "discovery", 300_000, "join", "next-tick"),
   // Embedded in every container status scan; not separately rate limited.

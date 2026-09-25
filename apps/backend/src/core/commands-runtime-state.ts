@@ -8,6 +8,7 @@ import {
   spawnCommand,
   terminateProcessTree,
 } from "./commands-dependencies.js";
+import { gitDockerScanPool } from "./git-docker-scan-pool.js";
 import type {
   ChildProcessWithoutNullStreams,
   ClientEnvironment,
@@ -526,11 +527,14 @@ export const gitFetchScheduler = new GitFetchScheduler({
 });
 
 /**
- * How stale a cached file list may be before the Files panel reads for itself.
+ * How long an *unwatched* target's file list or tree (a container, or a local
+ * worktree whose watcher failed) is served to a Files-panel reader.
  *
- * Comfortably under the panel's own refresh cadence, so the common case - the
- * panel and the sidebar looking at the same environment - shares one scan
- * without the panel ever showing something older than it would have fetched.
+ * Comfortably under the panel's own refresh cadence, so the panel and the
+ * sidebar looking at the same environment share one scan without the panel
+ * ever showing something older than it would have fetched. Watched worktrees
+ * are not age-bounded: their results stay valid until a watcher hint, a
+ * mutation or an explicit refresh.
  */
 export const DIFF_CACHE_MAX_AGE_MS = 3_000;
 
@@ -546,6 +550,8 @@ export let diffStatsSyncQueue: Promise<void> = Promise.resolve();
 
 export const diffStatsService = new DiffStatsService({
   emit: (event, payload) => diffStatsEmit?.(event, payload),
+  admission: gitDockerScanPool,
+  fileListMaxAgeMs: DIFF_CACHE_MAX_AGE_MS,
   scan: async (target) => {
     // Load the scanners only when a scan runs. `commands-files` consumes shared
     // runtime constants from this module, so a static import here creates an
@@ -565,6 +571,40 @@ export const diffStatsService = new DiffStatsService({
       },
       changes: detailed.changes,
     };
+  },
+  readFiles: async (request) => {
+    const { getContainerGitStatusDetailed, getLocalGitStatusDetailed } =
+      await import("./commands-files.js");
+    return request.kind === "local"
+      ? getLocalGitStatusDetailed(
+          request.worktreePath!,
+          request.comparisonRef,
+          request.includeUncommitted,
+        )
+      : getContainerGitStatusDetailed(
+          request.containerId!,
+          request.comparisonRef,
+          request.includeUncommitted,
+        );
+  },
+  walkTree: async (request) => {
+    const {
+      buildFileTree,
+      parseContainerFileTree,
+      CONTAINER_FILE_TREE_LISTER,
+      MAX_FILE_TREE_NODES,
+    } = await import("./commands-files.js");
+    if (request.kind === "local") return buildFileTree(request.worktreePath!);
+    const [{ dockerExec }, { quoteShell }] = await Promise.all([
+      import("./commands-container-exec.js"),
+      import("./commands-agent-support.js"),
+    ]);
+    return parseContainerFileTree(
+      await dockerExec(
+        request.containerId!,
+        `node -e ${quoteShell(CONTAINER_FILE_TREE_LISTER)} -- /workspace ${MAX_FILE_TREE_NODES}`,
+      ),
+    );
   },
   onWarning: (message, error) => {
     console.warn(`[diff-stats] ${message}:`, error instanceof Error ? error.message : error);

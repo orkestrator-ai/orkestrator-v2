@@ -474,6 +474,24 @@ describe("revisions", () => {
 });
 
 describe("fences and explicit refresh", () => {
+  test("a baseline moved elsewhere (a container fetch) rescans without fencing the running scan", async () => {
+    const owner = createOwner({ watchable: false });
+    track(owner, container());
+    const reading = readList(owner, containerLookup);
+    await flushMicrotasks();
+
+    owner.service.invalidateBaseline(containerLookup);
+    // The running scan still publishes (an older observation, not a wrong one)...
+    await settleScan(owner, 0, result([change("before-fetch.ts")]));
+    expect(owner.diffEvents).toHaveLength(1);
+    // ...and exactly one rescan follows for the moved base.
+    expect(owner.scans).toHaveLength(2);
+    await settleScan(owner, 1, result([change("after-fetch.ts")]));
+    expect((await reading).changes).toEqual([change("before-fetch.ts")]);
+    expect((await readList(owner, containerLookup)).changes).toEqual([change("after-fetch.ts")]);
+    expect(owner.walks).toHaveLength(0);
+  });
+
   test("a mutation while a read is in flight rejects the stale publication", async () => {
     const owner = createOwner();
     track(owner, local());

@@ -615,6 +615,20 @@ export class DiffStatsService {
     this.tree.invalidate(entry.target.environmentId);
   }
 
+  /**
+   * The comparison base behind a target moved outside any watched path — for
+   * example a container fetch (step 04's fetch policy) that advanced
+   * `origin/<ref>`. Marks the file list dirty and rescans once (joining or
+   * following a running scan) without fencing it: an in-flight result is an
+   * older observation, not a wrong one, and the rescan supersedes it. The
+   * tree is unaffected. Ad hoc reads of the target stop being joinable.
+   */
+  invalidateBaseline(lookup: WorktreeLookup): void {
+    this.adhoc.invalidateTarget(lookup);
+    const entry = this.findEntry(lookup);
+    if (entry) this.request(entry, "hint");
+  }
+
   /** Forces a scan now, e.g. after an operation known to change the tree. */
   refresh(environmentId: string): void {
     const entry = this.entries.get(environmentId);

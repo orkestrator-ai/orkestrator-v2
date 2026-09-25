@@ -11,6 +11,13 @@ import type {
   PrMonitorSnapshotOutcome,
 } from "@orkestrator/protocol/pr-monitor";
 import { toViewSnapshotRequestArgs, type ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
+import {
+  isWorktreeReadStamp,
+  WORKTREE_SNAPSHOT_REVISIONS_COMMAND,
+  type WorktreeReadStamp,
+  type WorktreeSnapshotRevisionsOutcome,
+  type WorktreeSnapshotRevisionsSnapshot,
+} from "@orkestrator/protocol/worktree-snapshots";
 import type {
   Environment,
   PortMapping,
@@ -54,6 +61,27 @@ export interface ConditionalSnapshot<T> {
   unchanged: boolean;
   digest: string;
   value?: T;
+  /**
+   * Present when a current backend's tracked read owner served the read: the
+   * owner generation, target lineage and file-list/tree revision of `value`
+   * (see `@orkestrator/protocol/worktree-snapshots`). Absent from legacy
+   * backends and for identities no owner tracks.
+   */
+  view?: WorktreeReadStamp;
+}
+
+/** Options for Files-panel snapshot reads. */
+export interface SnapshotReadOptions {
+  /**
+   * Require an observation made after this call (a manual refresh). Current
+   * backends wait for a scan that starts after the request instead of joining
+   * one already running; legacy backends ignore the flag.
+   */
+  refresh?: boolean;
+}
+
+function refreshArgs(options: SnapshotReadOptions | undefined): { refresh?: true } {
+  return options?.refresh ? { refresh: true } : {};
 }
 
 function normalizeConditionalArraySnapshot<T>(
@@ -69,7 +97,9 @@ function normalizeConditionalArraySnapshot<T>(
     typeof response.unchanged !== "boolean" ||
     typeof response.digest !== "string" ||
     (!response.unchanged && !Array.isArray(response.value)) ||
-    (response.unchanged && response.value !== undefined)
+    (response.unchanged && response.value !== undefined) ||
+    // A malformed stamp is a malformed response, never a legacy one.
+    (response.view !== undefined && !isWorktreeReadStamp(response.view))
   ) {
     throw new Error(`Invalid ${command} response`);
   }
@@ -93,12 +123,14 @@ export async function getGitStatusSnapshot(
   containerId: string,
   targetBranch: string,
   knownDigest?: string,
+  options?: SnapshotReadOptions,
 ): Promise<ConditionalSnapshot<GitFileChange[]>> {
   const response = await invoke<unknown>("get_git_status", {
     containerId,
     targetBranch,
     includeUncommitted: true,
     knownDigest: knownDigest ?? "",
+    ...refreshArgs(options),
   });
   return normalizeConditionalArraySnapshot<GitFileChange>(response, "get_git_status");
 }
@@ -111,10 +143,12 @@ export async function getFileTree(containerId: string): Promise<FileNode[]> {
 export async function getFileTreeSnapshot(
   containerId: string,
   knownDigest?: string,
+  options?: SnapshotReadOptions,
 ): Promise<ConditionalSnapshot<FileNode[]>> {
   const response = await invoke<unknown>("get_file_tree", {
     containerId,
     knownDigest: knownDigest ?? "",
+    ...refreshArgs(options),
   });
   return normalizeConditionalArraySnapshot<FileNode>(response, "get_file_tree");
 }
@@ -258,12 +292,14 @@ export async function getLocalGitStatusSnapshot(
   worktreePath: string,
   targetBranch: string,
   knownDigest?: string,
+  options?: SnapshotReadOptions,
 ): Promise<ConditionalSnapshot<GitFileChange[]>> {
   const response = await invoke<unknown>("get_local_git_status", {
     worktreePath,
     targetBranch,
     includeUncommitted: true,
     knownDigest: knownDigest ?? "",
+    ...refreshArgs(options),
   });
   return normalizeConditionalArraySnapshot<GitFileChange>(response, "get_local_git_status");
 }
@@ -290,6 +326,22 @@ export async function getEnvironmentDiffStats(
   if (!known) return invoke<EnvironmentDiffStatsSnapshot>("get_environment_diff_stats");
   return invoke<EnvironmentDiffStatsSnapshot | EnvironmentDiffStatsSnapshotOutcome>(
     "get_environment_diff_stats",
+    { ...toViewSnapshotRequestArgs(known) },
+  );
+}
+
+/**
+ * File-list and tree revisions of every environment the backend tracks
+ * (`@orkestrator/protocol/worktree-snapshots`). Conditional with `known`, like
+ * {@link getEnvironmentDiffStats}; a backend before step 03 does not know the
+ * command, which callers treat as the `unsupported` capability.
+ */
+export async function getWorktreeSnapshotRevisions(
+  known?: ViewRevisionStamp,
+): Promise<WorktreeSnapshotRevisionsSnapshot | WorktreeSnapshotRevisionsOutcome> {
+  if (!known) return invoke<WorktreeSnapshotRevisionsSnapshot>(WORKTREE_SNAPSHOT_REVISIONS_COMMAND);
+  return invoke<WorktreeSnapshotRevisionsSnapshot | WorktreeSnapshotRevisionsOutcome>(
+    WORKTREE_SNAPSHOT_REVISIONS_COMMAND,
     { ...toViewSnapshotRequestArgs(known) },
   );
 }
@@ -361,10 +413,12 @@ export async function getLocalFileTree(worktreePath: string): Promise<FileNode[]
 export async function getLocalFileTreeSnapshot(
   worktreePath: string,
   knownDigest?: string,
+  options?: SnapshotReadOptions,
 ): Promise<ConditionalSnapshot<FileNode[]>> {
   const response = await invoke<unknown>("get_local_file_tree", {
     worktreePath,
     knownDigest: knownDigest ?? "",
+    ...refreshArgs(options),
   });
   return normalizeConditionalArraySnapshot<FileNode>(response, "get_local_file_tree");
 }

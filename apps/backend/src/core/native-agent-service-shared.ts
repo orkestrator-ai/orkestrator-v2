@@ -77,6 +77,7 @@ import type {
   PersistedNativeAgentPendingSteer,
 } from "./models.js";
 import type { AgentSessionOwner } from "@orkestrator/protocol/coordinator";
+import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import type { TrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
 import type { StorageService } from "./storage.js";
 import { PendingNativeAgentDispatchError, PendingNativeAgentSteerError } from "./storage.js";
@@ -362,6 +363,12 @@ export interface NativeAgentActivityTransition {
    * behaviour without a migration.
    */
   owner?: "environment" | "coordinator";
+  /**
+   * Observation stamp for this announced transition: the observer's lifetime
+   * and a revision that increases by exactly one per announced transition, so
+   * a client can detect a missed invalidation as a gap (step 07/11 contract).
+   */
+  observation?: ViewRevisionStamp;
 }
 
 /**
@@ -430,6 +437,8 @@ export interface NativeAgentServiceOptions {
   toolDetailCacheMaxEntries?: number;
   /** Test seam for exercising deterministic detail-cache byte eviction. */
   toolDetailCacheMaxBytes?: number;
+  /** Test seam for the obsolete-provider disposal grace period. */
+  providerRetirementGraceMs?: number;
 }
 
 export interface AgentInteractionObservation {
@@ -484,6 +493,12 @@ export const OPENCODE_MANUAL_PROMPT_CLAIM_MS = 2 * 60_000;
 export const OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT = 64;
 /** How long "no bridge is running" is trusted before it is re-probed. */
 export const ABSENT_BRIDGE_RECHECK_MS = 15_000;
+/**
+ * How long an evicted or replaced provider is kept before it is disposed,
+ * counted from the moment no dispatch it sent is still in flight. Long enough
+ * for an in-flight projection read or interaction answer to finish.
+ */
+export const PROVIDER_RETIREMENT_GRACE_MS = 30_000;
 export const INTERACTION_MONITOR_MAX_OBSERVATIONS = 64;
 export const INTERACTION_MONITOR_MAX_TRACKED_REQUESTS = 512;
 export const INTERACTION_MONITOR_MAX_ADOPTED_SESSIONS = 1_024;

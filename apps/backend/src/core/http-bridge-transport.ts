@@ -116,6 +116,11 @@ export async function readProviderActivityObservation(
     asyncQuestionItemIds?: unknown;
     readyForInput?: unknown;
   };
+  // Pi bridges before recurring-processes step 07 answer a parked approval
+  // as `blocked`, which is not an activity state. Rejecting it failed the
+  // whole provider group — backoff, eviction, and an environment that stopped
+  // updating — at exactly the moment a person was needed. It means `waiting`.
+  if (connection.agent === "pi" && body.activity === "blocked") body.activity = "waiting";
   if (!isProviderActivityState(body.activity)) {
     throw new ProviderUnavailableError(
       `${connection.agent} returned a malformed activity snapshot`,

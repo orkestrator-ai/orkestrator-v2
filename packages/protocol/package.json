@@ -38,6 +38,7 @@
     "./multi-review": "./src/multi-review.ts",
     "./multi-review-launch": "./src/multi-review-launch.ts",
     "./native-agent": "./src/native-agent.ts",
+    "./native-agent-observation": "./src/native-agent-observation.ts",
     "./notification-sounds": "./src/notification-sounds.ts",
     "./opencode-message-id": "./src/opencode-message-id.ts",
     "./pane-layout": "./src/pane-layout.ts",

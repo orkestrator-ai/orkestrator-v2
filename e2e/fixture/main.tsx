@@ -120,11 +120,57 @@ function DesignLaunchFixture() {
     }));
   }, []);
 
+  // A healthy protocol-v2 backend with an empty design library.
+  const capabilities = {
+    protocolVersion: 2,
+    responseVersion: 1,
+    snapshot: true,
+    operations: true,
+    sync: true,
+    save: true,
+    history: true,
+    lifecycle: true,
+    rendererHealth: true,
+    library: true,
+    batch: true,
+    sessions: true,
+    validation: true,
+    hierarchyPaging: true,
+  };
+  const ok = <T,>(value: unknown) => ({ ok: true, value }) as T;
   window.orkestrator = {
     invoke: async <T,>(command: string) => {
       if (command === "design_status") return { ready: true } as T;
       if (command === "design_action") return [] as T;
-      throw new Error(`Unexpected fixture command: ${command}`);
+      if (command === "design_capabilities") return ok<T>(capabilities);
+      if (command === "design_readiness")
+        return ok<T>({
+          capabilities,
+          storage: { available: true, canvases: 0, limit: 256 },
+          renderer: {
+            state: "ready",
+            ready: true,
+            message: "Design renderer is ready",
+            queued: 0,
+            running: 0,
+            generation: 1,
+            executableConfigured: false,
+          },
+        });
+      if (command === "design_library")
+        return ok<T>({
+          entries: [],
+          total: 0,
+          quota: {
+            live: 0,
+            liveLimit: 256,
+            deleted: 0,
+            deletedLimit: 32,
+            deletedBytes: 0,
+            deletedBytesLimit: 128 * 1024 * 1024,
+          },
+        });
+      throw new Error(`Unknown backend command: ${command}`);
     },
   } as Window["orkestrator"];
 

@@ -16,5 +16,11 @@
   The previous aggregate run on the same commit passed the root group in 107 s.
 - **Context:** observed on the web annotations branch, which does not change
   this test or credential injection.
+- **Earlier occurrence (2026-09-24):** A focused root-group run on the design
+  space branch, `mise run test:logged -- --name root-tests -- bun test ./tests
+  --parallel=4 --only-failures`, hit the same 300-second no-output watchdog.
+  The file had run for 386 seconds when terminated, with no failed assertions.
+  A direct isolated run passed all 28 cases in 0.44 seconds, and the preceding
+  full suite on that branch passed. The branch did not change credential code.
 - **Hypothesis:** none yet. The hang, rather than a slow pass, suggests a child
   process or filesystem wait that never resolves under aggregate load.

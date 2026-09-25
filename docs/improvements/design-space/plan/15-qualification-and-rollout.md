@@ -1,6 +1,6 @@
 # 15 — Qualification and rollout
 
-Status: Planned.  
+Status: Partially qualified (2026-09-24) — see the [implementation record](00-index.md#implementation-record).  
 Dependencies: [01–14](00-index.md#numbered-steps-and-dependencies).  
 Findings: all; use this matrix throughout implementation.
 
@@ -222,3 +222,8 @@ never describe reverting a binary as sufficient once migrated records exist.
   statuses updated together.
 - [ ] Changes land through PRs; verify feature branch/upstream before any push
   and leave merging to the human maintainer.
+
+## Implementation notes (2026-09-24)
+
+- Owning suites, `mise run check`, component browser specs and the benchmark ran; see the implementation record.
+- Passed on `7081ae8c`: `mise run test:agent:design:isolated` (1 test; it was blocked on `2aec227b` by the Electron dev startup failure that #840 fixed). Not performed: live agents, Docker export, Electron window and manual accessibility passes. Rollout, downgrade and migration guidance is in the architecture document.

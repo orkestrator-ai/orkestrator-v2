@@ -1,6 +1,6 @@
 # 09 — Selection and inspector
 
-Status: Planned.  
+Status: Implemented (2026-09-24) — see the [implementation record](00-index.md#implementation-record).  
 Dependencies: [03](03-client-controller-and-reconciliation.md),
 [06](06-validation-deletion-and-recovery.md),
 [07](07-history-and-document-lifecycle.md).  
@@ -110,3 +110,10 @@ structure identity. It is a reference, not authority to bypass current CAS.
 Review slices: identity/revision metadata; inspect schema; backend validation;
 selection continuation; grouped inspector and focus behavior. Browser-test actual
 computed styles and SVG behavior rather than relying solely on a DOM emulator.
+
+## Implementation notes (2026-09-24)
+
+- Structure-scoped references (`design-selection.ts`): style/geometry edits keep the selection (re-inspected), structural changes require Reselect with the draft kept.
+- Runtime: inline vs computed values, `applyStyles` validates the whole set atomically and reports no-op properties; `previewStyles` for local preview only.
+- `DesignInspector.tsx` (grouped controls, inline badges, per-property reset to cascade, local CSS validation, retained drafts, failure/no-op feedback, focus restoration) and `DesignFrameInspector.tsx` (numeric geometry and presets).
+- Tests: `DesignInspector.test.tsx`, `DesignFrameInspector.test.tsx`, `design-css.test.ts`, `design-inspector-drafts.test.ts`, runtime tests.

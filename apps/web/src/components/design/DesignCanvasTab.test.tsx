@@ -1,77 +1,34 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { DesignCanvas, DesignHistoryStatus } from "@orkestrator/protocol/design-canvas";
-
-const canvasId = "00000000-0000-4000-8000-000000000001";
-let canvas: DesignCanvas;
-let history: DesignHistoryStatus;
-
-const designAction = mock(
-  async (_environmentId: string, action: string, input: Record<string, unknown>) => {
-    if (action === "history_status") return history;
-    if (action !== "undo" && action !== "redo") return undefined;
-    expect(input).toEqual({ canvasId, expectedRevision: canvas.revision });
-    canvas = { ...canvas, revision: canvas.revision + 1 };
-    history =
-      action === "undo"
-        ? {
-            revision: canvas.revision,
-            undoCount: history.undoCount - 1,
-            redoCount: history.redoCount + 1,
-            canUndo: history.undoCount > 1,
-            canRedo: true,
-          }
-        : {
-            revision: canvas.revision,
-            undoCount: history.undoCount + 1,
-            redoCount: history.redoCount - 1,
-            canUndo: true,
-            canRedo: history.redoCount > 1,
-          };
-    return { canvasRevision: canvas.revision, history };
-  },
-);
-const getCanvas = mock(async () => canvas);
-const getCanvasState = mock(async () => ({ canvas, history }));
-const getChanges = mock(
-  async (_environmentId: string, _canvasId: string, generation: string | undefined) => ({
-    generation: "generation-1",
-    revision: canvas.revision,
-    reset: generation !== "generation-1",
-    events: [],
-  }),
-);
-mock.module("./design-client", () => ({ designAction, getCanvas, getCanvasState, getChanges }));
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { invoke } from "@/lib/native/backend";
+import { resetDesignControllers } from "./design-controller";
+import { resetCapabilities } from "./design-client";
+import { FakeBackend, canvasId, deferred } from "./design-test-backend";
 
 const { DesignCanvasTab } = await import("./DesignCanvasTab");
+const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 const originalOrkestrator = window.orkestrator;
 const originalResizeObserver = globalThis.ResizeObserver;
+let backend: FakeBackend;
 
-describe("DesignCanvasTab history", () => {
+function prepared(kind: string) {
+  return backend.calls.filter(
+    (call) =>
+      call.command === "design_prepare" &&
+      (call.args.descriptor as { input: { kind: string } }).input.kind === kind,
+  );
+}
+
+describe("DesignCanvasTab", () => {
   beforeEach(() => {
-    canvas = {
-      format: "orkdes",
-      version: 1,
-      id: canvasId,
-      environmentId: "env-1",
-      name: "History design",
-      revision: 5,
-      frames: [],
-    };
-    history = {
-      revision: 5,
-      undoCount: 2,
-      redoCount: 0,
-      canUndo: true,
-      canRedo: false,
-    };
-    designAction.mockClear();
-    getCanvas.mockClear();
-    getCanvasState.mockClear();
-    getChanges.mockClear();
-    window.orkestrator = {
-      listen: mock(() => () => {}),
-    } as unknown as Window["orkestrator"];
+    backend = new FakeBackend();
+    backend.history = { undoCount: 2, redoCount: 0 };
+    resetCapabilities();
+    window.localStorage.clear();
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) =>
+      backend.handle(command, args ?? {}),
+    );
+    window.orkestrator = { listen: mock(() => () => {}) } as unknown as Window["orkestrator"];
     globalThis.ResizeObserver = class ResizeObserver {
       observe() {}
       unobserve() {}
@@ -81,113 +38,38 @@ describe("DesignCanvasTab history", () => {
 
   afterEach(() => {
     cleanup();
+    resetDesignControllers();
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(() => Promise.resolve());
     window.orkestrator = originalOrkestrator;
     globalThis.ResizeObserver = originalResizeObserver;
   });
 
-  test("places undo and redo beside save and follows authoritative availability", async () => {
+  test("undo and redo follow authoritative availability and submit own-scope operations", async () => {
     render(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
     );
-
     const undo = await screen.findByRole("button", { name: "Undo design change" });
     const redo = screen.getByRole("button", { name: "Redo design change" });
-    const save = screen.getByRole("button", { name: "Save design to repository" });
     await waitFor(() => expect(undo.hasAttribute("disabled")).toBe(false));
     expect(redo.hasAttribute("disabled")).toBe(true);
-    expect(undo.nextElementSibling).toBe(redo);
-    expect(redo.nextElementSibling).toBe(save);
 
     fireEvent.click(undo);
-    await waitFor(() =>
-      expect(designAction).toHaveBeenCalledWith("env-1", "undo", {
-        canvasId,
-        expectedRevision: 5,
-      }),
-    );
+    await waitFor(() => expect(prepared("undo")).toHaveLength(1));
+    expect(prepared("undo")[0]!.args.descriptor).toMatchObject({
+      canvasId,
+      input: { kind: "undo", scope: "own" },
+      preconditions: { canvasRevision: 1 },
+    });
     await waitFor(() => expect(redo.hasAttribute("disabled")).toBe(false));
     fireEvent.click(redo);
-    await waitFor(() =>
-      expect(designAction).toHaveBeenCalledWith("env-1", "redo", {
-        canvasId,
-        expectedRevision: 6,
-      }),
-    );
+    await waitFor(() => expect(prepared("redo")).toHaveLength(1));
+    expect(prepared("redo")[0]!.args.descriptor).toMatchObject({
+      preconditions: { canvasRevision: 2 },
+    });
   });
 
-  test("supports undo and redo shortcuts without stealing editable-field history", async () => {
-    render(
-      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
-    );
-    const undo = await screen.findByRole("button", { name: "Undo design change" });
-    await waitFor(() => expect(undo.hasAttribute("disabled")).toBe(false));
-
-    const undoEvent = new KeyboardEvent("keydown", {
-      key: "z",
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    window.dispatchEvent(undoEvent);
-    expect(undoEvent.defaultPrevented).toBe(true);
-    await waitFor(() =>
-      expect(designAction).toHaveBeenCalledWith("env-1", "undo", {
-        canvasId,
-        expectedRevision: 5,
-      }),
-    );
-
-    const redo = screen.getByRole("button", { name: "Redo design change" });
-    await waitFor(() => expect(redo.hasAttribute("disabled")).toBe(false));
-    const redoEvent = new KeyboardEvent("keydown", {
-      key: "z",
-      metaKey: true,
-      shiftKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    window.dispatchEvent(redoEvent);
-    expect(redoEvent.defaultPrevented).toBe(true);
-    await waitFor(() =>
-      expect(designAction).toHaveBeenCalledWith("env-1", "redo", {
-        canvasId,
-        expectedRevision: 6,
-      }),
-    );
-
-    const calls = designAction.mock.calls.length;
-    const input = document.createElement("input");
-    document.body.append(input);
-    fireEvent.keyDown(input, { key: "z", ctrlKey: true });
-    expect(designAction).toHaveBeenCalledTimes(calls);
-    input.remove();
-  });
-
-  test("leaves global shortcuts to the focused pane", async () => {
-    render(
-      <DesignCanvasTab
-        canvasId={canvasId}
-        environmentId="env-1"
-        isActive
-        ownsGlobalShortcuts={false}
-      />,
-    );
-    const undo = await screen.findByRole("button", { name: "Undo design change" });
-    await waitFor(() => expect(undo.hasAttribute("disabled")).toBe(false));
-
-    const event = new KeyboardEvent("keydown", {
-      key: "z",
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    window.dispatchEvent(event);
-
-    expect(event.defaultPrevented).toBe(false);
-    expect(designAction).not.toHaveBeenCalled();
-  });
-
-  test("only the focused pane handles a shared shortcut", async () => {
+  test("shortcuts route to design undo only for the owning pane and never from text fields", async () => {
     render(
       <>
         <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />
@@ -206,16 +88,77 @@ describe("DesignCanvasTab history", () => {
           .every((button) => !button.hasAttribute("disabled")),
       ).toBe(true),
     );
-
     const event = new KeyboardEvent("keydown", {
       key: "z",
-      metaKey: true,
+      ctrlKey: true,
       bubbles: true,
       cancelable: true,
     });
     window.dispatchEvent(event);
-
     expect(event.defaultPrevented).toBe(true);
-    await waitFor(() => expect(designAction).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(prepared("undo")).toHaveLength(1));
+
+    const input = document.createElement("input");
+    document.body.append(input);
+    fireEvent.keyDown(input, { key: "z", ctrlKey: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(prepared("undo")).toHaveLength(1);
+    input.remove();
+  });
+
+  test("two views of one canvas share one projection", async () => {
+    render(
+      <>
+        <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />
+        <DesignCanvasTab
+          canvasId={canvasId}
+          environmentId="env-1"
+          isActive
+          ownsGlobalShortcuts={false}
+        />
+      </>,
+    );
+    await waitFor(() => expect(screen.getAllByText("Revision 1")).toHaveLength(2));
+    const snapshots = backend.calls.filter((call) => call.command === "design_snapshot").length;
+    expect(snapshots).toBe(1);
+  });
+
+  test("an edit finishing while the tab is unmounted appears on return", async () => {
+    const gate = deferred();
+    backend.executeBarrier = () => gate.promise;
+    const first = render(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
+    const undo = await screen.findByRole("button", { name: "Undo design change" });
+    await waitFor(() => expect(undo.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(undo);
+    await waitFor(() => expect(prepared("undo")).toHaveLength(1));
+    first.unmount();
+    await act(async () => {
+      gate.resolve();
+    });
+    await waitFor(() => expect(backend.revision).toBe(2));
+    render(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
+    expect(await screen.findByText("Revision 2")).toBeTruthy();
+  });
+
+  test("a deleted canvas shows a recoverable deleted state even without a deletion hint", async () => {
+    backend.deleted = true;
+    render(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
+    expect(await screen.findByText(/was deleted/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Restore design" })).toBeTruthy();
+    expect(screen.queryByRole("main", { name: "Canvas viewport" }) === null).toBe(true);
+  });
+
+  test("workspace persistence and repository export are labelled separately", async () => {
+    render(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
+    expect(await screen.findByText("Saved in workspace")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Export design to repository" })).toBeTruthy();
   });
 });

@@ -1,6 +1,6 @@
 # 12 — Incremental synchronization
 
-Status: Planned.  
+Status: Implemented (2026-09-24) — see the [implementation record](00-index.md#implementation-record).  
 Dependencies: [02](02-operation-contracts-and-durability.md),
 [03](03-client-controller-and-reconciliation.md),
 [06](06-validation-deletion-and-recovery.md).  
@@ -118,3 +118,10 @@ versions and each partial response names the axis it updates.
 
 Review slices: response contracts; coherent backend delta; controller install
 and fallback; render invalidation; loss/restart and transfer-budget tests.
+
+## Implementation notes (2026-09-24)
+
+- `design-sync.ts` + `design_sync`: `unchanged` / `status` / `delta` / `reset` / snapshot / deleted / missing / problem, built from one immutable record; deltas bounded at 256 KiB / 64 frames; geometry patches omit HTML.
+- The controller installs deltas atomically only for an exact generation/base match and validates every patch first; otherwise it fetches a snapshot.
+- Iframes re-render only on content identity changes; geometry updates move chrome.
+- Measured: ≈1 KiB catch-up per geometry edit at every document size (was 2.5 KiB–4 MB).

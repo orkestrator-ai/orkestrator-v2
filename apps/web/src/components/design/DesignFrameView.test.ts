@@ -11,3 +11,12 @@ describe("element resize commit guard", () => {
     expect(elementResizeChanged({ width: 120, height: 80 }, 120, 81)).toBe(true);
   });
 });
+
+describe("frame keyboard steps", () => {
+  test("arrow keys map to 1px steps and Shift to 10px", async () => {
+    const { keyboardDelta } = await import("./DesignFrameView");
+    expect(keyboardDelta("ArrowLeft", false)).toEqual({ dx: -1, dy: 0 });
+    expect(keyboardDelta("ArrowDown", true)).toEqual({ dx: 0, dy: 10 });
+    expect(keyboardDelta("a", false)).toBeNull();
+  });
+});

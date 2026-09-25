@@ -542,7 +542,15 @@ export class OrkestratorBackend {
 
   async init(): Promise<void> {
     await this.context.storage.init();
-    await this.context.design?.initialize();
+    // Design startup recovery (interrupted operations, migrations, exports)
+    // degrades the design feature on failure, never the backend; every design
+    // command retries initialization lazily.
+    await this.context.design?.initialize().catch((error: unknown) => {
+      console.warn(
+        "[backend] Design storage failed to initialize:",
+        (error as NodeJS.ErrnoException)?.code ?? "error",
+      );
+    });
     await this.webAnnotationRollout.refresh();
     // Unreadable annotation storage degrades that feature, not the backend.
     await this.webAnnotations.initialize().catch((error: unknown) => {

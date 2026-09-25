@@ -1,6 +1,6 @@
 # 02 — Operation contracts and durable records
 
-Status: Planned.  
+Status: Implemented (2026-09-24) — see the [implementation record](00-index.md#implementation-record).  
 Dependencies: [01](01-preserve-editing-intent.md).  
 Findings: R2, R5; foundational contracts for later steps.
 
@@ -167,3 +167,11 @@ flow. Keep response shapes capability/version gated.
 - [ ] Admission/execute/status/cancel with crash and duplicate-execute tests.
 - [ ] Command/MCP adapters and bounded cleanup, followed by migration rollout
   notes. Step 03 switches the UI only after the contracts are ready.
+
+## Implementation notes (2026-09-24)
+
+- Protocol contracts in `packages/protocol/src/design-operations.ts`; typed failures in `design-errors.ts`; capability negotiation via `design_capabilities` (old backends answer "Unknown backend command", which clients treat as v1).
+- Private record `design-canvases/<id>.orkrec` (`design-records.ts`): document + frame identities/validation + receipts + change descriptors + history manifest + export/session metadata, replaced atomically (temp, fsync, rename, directory fsync) with fault hooks.
+- Deviation: prepared descriptors live in a small per-canvas pending file (`pending/<id>.json`), so preparing never rewrites the record; receipts in the record stay authoritative. Restart converts uncommitted pending work into `interrupted` receipts. Create/import reserves a provisional record; duplicate uses a token-derived destination id.
+- Migration: dual reader, lazy migration on the first real edit, verified retirement of the legacy file to `legacy-backups/`, startup completion of an interrupted migration, explicit `record-problem` for corrupt or future-version records.
+- Tests: `design-operations.test.ts`, `design-records.test.ts`, `design-service.test.ts`.

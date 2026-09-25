@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import {
   AlertCircle,
   CheckCircle2,
@@ -92,7 +93,25 @@ export function mergeMultiReviewReviewerTranscript(
   next: MultiReviewReviewerTranscript,
 ): MultiReviewReviewerTranscript {
   if (next.transcript !== "unchanged") return next;
+  // Identical content need not re-render: an unchanged transcript whose
+  // reviewer and workflow state also did not move keeps the same object, so
+  // the message projection below is not rebuilt on every poll.
+  if (previous && sameReviewerState(previous, next)) return previous;
   return { ...next, messages: previous?.messages ?? [] };
+}
+
+/** Every field except the message tail and the answer's own framing. */
+function reviewerStateKey(snapshot: MultiReviewReviewerTranscript): string {
+  const { messages: _messages, transcript: _transcript, ...state } = snapshot;
+  // Both sides are backend answers of the same shape, so key order matches.
+  return JSON.stringify(state);
+}
+
+function sameReviewerState(
+  previous: MultiReviewReviewerTranscript,
+  next: MultiReviewReviewerTranscript,
+): boolean {
+  return reviewerStateKey(previous) === reviewerStateKey(next);
 }
 
 export function toMultiReviewReviewerMessages(snapshot: MultiReviewReviewerTranscript) {
@@ -314,21 +333,39 @@ export function MultiReviewReviewerTab({
     return fenceRequests;
   }, [fenceRequests, isActive, refresh]);
 
-  // Keyed on snapshot?.status: `snapshot` gets a new identity on every poll,
-  // so depending on it would clear and re-arm the interval each refresh.
+  // Activation and every status change (including the final one) read once.
+  // Keyed on snapshot?.status: `snapshot` gets a new identity on real changes.
   /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     if (!isActive) return;
     void refresh();
-    const gone = transcriptError !== null && isGoneError(transcriptError);
-    if (gone || (snapshot && snapshot.status !== "running" && snapshot.status !== "pending"))
-      return;
-    const interval = window.setInterval(() => void refresh(), refreshIntervalMs);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [isActive, refresh, refreshIntervalMs, snapshot?.status, transcriptError]);
+  }, [isActive, refresh, snapshot?.status, transcriptError]);
   /* oxlint-enable react-hooks/exhaustive-deps */
+
+  // The backstop poll runs through the read coordinator: only for an active
+  // tab of a running/pending reviewer, paused while the document is hidden
+  // and reconciled once when it becomes visible again. Reads apply into this
+  // instance's fenced state, so the key is instance-scoped.
+  const pollInstance = useId();
+  const gone = transcriptError !== null && isGoneError(transcriptError);
+  const settled = Boolean(
+    snapshot && snapshot.status !== "running" && snapshot.status !== "pending",
+  );
+  useCoordinatedRead<void>({
+    key: {
+      resource: "multi-review-reviewer-transcript",
+      target: `${data.workflowId}\u0000${data.reviewerId}`,
+      view: pollInstance,
+    },
+    enabled: isActive,
+    readOnSubscribe: false,
+    demand: {
+      active: isActive && !gone && !settled,
+      intervalMs: refreshIntervalMs,
+      priority: "standard",
+    },
+    read: () => refresh(),
+  });
 
   // The workflow's revision moves when the backend checkpoints reviewer
   // progress, which is exactly when this transcript has something new. Read

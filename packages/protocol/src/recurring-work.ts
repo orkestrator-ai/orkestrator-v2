@@ -428,6 +428,9 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "join",
     "snapshot-rehydrate",
   ),
+  // Step 09: C05–C07 are scheduled by the read coordinator (hidden pause,
+  // reconcile on return); reads are conditional (source token, byte offsets)
+  // and init-log tails are shared across clients by the backend.
   "client-reviewer-transcript": external(
     "renderer",
     "C05",
@@ -452,7 +455,7 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "interval",
     "interactive",
     1_000,
-    "skip-while-running",
+    "join",
     "snapshot-rehydrate",
   ),
   // One read-coordinator key shared by every host-meter consumer (step 09).

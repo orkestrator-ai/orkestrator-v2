@@ -312,6 +312,10 @@ export abstract class NativeAgentServiceBase {
     agent: BuildPipelineAgent,
     message: unknown,
   ): ProviderExecutionMode;
+  protected abstract queueDispatchMode(
+    agent: BuildPipelineAgent,
+    message: unknown,
+  ): ProviderExecutionMode | undefined;
   protected abstract queueString(message: unknown, field: string): string | undefined;
   protected abstract queueReasoningEffort(message: unknown): string | undefined;
   protected abstract queueFastMode(

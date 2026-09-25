@@ -1,6 +1,7 @@
 import type {
-  BrowserPreviewAnnotationStatus,
   BrowserPreviewAttachInput,
+  BrowserPreviewCaptureApi,
+  BrowserPreviewCaptureCapabilities,
   BrowserPreviewBounds,
   BrowserPreviewServiceTarget,
   BrowserPreviewState,
@@ -66,29 +67,43 @@ export function openBrowserPreviewDevTools(tabId: string): Promise<BrowserPrevie
   return nativeApi.openDevTools(tabId);
 }
 
-export function startBrowserPreviewAnnotation(
-  tabId: string,
-): Promise<BrowserPreviewAnnotationStatus> {
-  const nativeApi = api();
-  if (!nativeApi?.startAnnotation) {
-    return Promise.reject(new Error("Browser preview annotations are unavailable"));
-  }
-  return nativeApi.startAnnotation(tabId);
+/**
+ * Trusted capture surface (pending spool, selection, pins). Present only on
+ * desktop builds that implement it; every caller feature-detects.
+ */
+export function getBrowserPreviewCaptureApi(): BrowserPreviewCaptureApi | null {
+  return api()?.capture ?? null;
 }
 
-export function getBrowserPreviewAnnotationStatus(
-  tabId: string,
-): Promise<BrowserPreviewAnnotationStatus> {
-  const nativeApi = api();
-  if (!nativeApi?.getAnnotationStatus) {
-    return Promise.reject(new Error("Browser preview annotations are unavailable"));
-  }
-  return nativeApi.getAnnotationStatus(tabId);
+export function hasBrowserPreviewCapture(): boolean {
+  return getBrowserPreviewCaptureApi() !== null;
 }
 
-export function cancelBrowserPreviewAnnotation(tabId: string): Promise<void> {
-  const nativeApi = api();
-  return nativeApi?.cancelAnnotation ? nativeApi.cancelAnnotation(tabId) : Promise.resolve();
+/**
+ * What this desktop build can capture (contract version 2+). Null on clients
+ * without native capture; a capture API without the method is a version 1
+ * desktop, reported as element/text/region/page with no version 2 features.
+ * Intersect `modes` with the backend's advertised capture targets.
+ */
+export async function getBrowserPreviewCaptureCapabilities(): Promise<BrowserPreviewCaptureCapabilities | null> {
+  const capture = getBrowserPreviewCaptureApi();
+  if (!capture) return null;
+  if (capture.getCaptureCapabilities) return capture.getCaptureCapabilities();
+  return {
+    contractVersion: 1,
+    modes: ["element", "text", "region", "page"],
+    features: {
+      keyboardSelection: false,
+      recapture: false,
+      receipts: false,
+      resultCapture: { stability: false, masks: false },
+      regionCrop: false,
+      responsiveSets: null,
+      livePins: false,
+      showOnPage: false,
+      expiredNotices: false,
+    },
+  };
 }
 
 export function destroyBrowserPreview(tabId: string): Promise<void> {

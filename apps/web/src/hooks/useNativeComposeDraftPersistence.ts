@@ -15,6 +15,15 @@ import {
   normalizeTranscriptAnnotationComment,
   type TranscriptAnnotation,
 } from "@/lib/chat/transcript-annotations";
+import type { WebAnnotationMigratedReference } from "@orkestrator/protocol/web-annotations";
+import { getComposeDraft } from "@/lib/backend";
+import { describeWebAnnotationError, webAnnotationErrorDetail } from "@/lib/web-annotations/client";
+import {
+  applyMigratedReferences,
+  hasUnmigratedBrowserNotes,
+  reconcileComposeDraftValue,
+  savedMigrationReferences,
+} from "@/lib/web-annotations/compose-migration";
 
 interface NativeComposeDraftState<TMention, TAttachment> {
   draftText: Map<string, string>;
@@ -165,9 +174,36 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
 
     const reportPersistenceError = (error: unknown): void => {
       if (!(error instanceof DraftRevisionConflictError)) {
+        const typed = webAnnotationErrorDetail(error).detail;
+        if (typed?.code === "upgrade-required" || typed?.code === "conflict") {
+          // An older copy of a migrated browser note: reconcile, then retry
+          // once. The user's text is never dropped.
+          void reconcile()
+            .then(() => persist(store.getState()))
+            .catch((retryError) => {
+              toast.error("Draft not saved", {
+                id: `compose-draft-migration:${key}`,
+                description: describeWebAnnotationError(retryError),
+              });
+            });
+          return;
+        }
         console.warn(`[${namespace}] Failed to persist compose draft:`, error);
         return;
       }
+      const draftAnnotations = readDraft(store.getState(), sessionKey).annotations;
+      if (!hasUnmigratedBrowserNotes(draftAnnotations as TranscriptAnnotation[] | undefined)) {
+        showConflictToast();
+        return;
+      }
+      void resolveMigrationConflict()
+        .catch(() => false)
+        .then((resolved) => {
+          if (!resolved) showConflictToast();
+        });
+    };
+
+    const showConflictToast = (): void => {
       const discarding = isEmptyDraft(readDraft(store.getState(), sessionKey));
       toast.error("Draft changed in another window", {
         id: `compose-draft-conflict:${key}`,
@@ -187,11 +223,88 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
       });
     };
 
+    /** Replace legacy browser notes the backend now holds in threads (in memory only). */
+    const applyReferences = (references: WebAnnotationMigratedReference[]): void => {
+      if (references.length === 0 || disposed) return;
+      const state = store.getState();
+      if (!state.setAnnotations) return;
+      const attachments = (state.attachments.get(sessionKey) ?? []) as Array<
+        TAttachment & { annotationId?: string }
+      >;
+      const next = applyMigratedReferences(
+        state.annotations?.get(sessionKey) ?? [],
+        attachments,
+        references,
+      );
+      if (!next) return;
+      state.setAnnotations(sessionKey, next.annotations);
+      if (next.attachments.length !== attachments.length) {
+        state.clearAttachments(sessionKey);
+        for (const attachment of next.attachments) state.addAttachment(sessionKey, attachment);
+      }
+    };
+
+    /**
+     * A dirty in-memory draft holding legacy browser notes goes through the
+     * backend's idempotent import, keeping the user's text; the next save
+     * then persists lightweight references instead of fanning notes out.
+     */
+    let reconciling: Promise<void> | null = null;
+    const reconcile = (): Promise<void> => {
+      if (reconciling) return reconciling;
+      const draft = readDraft(store.getState(), sessionKey);
+      if (!hasUnmigratedBrowserNotes(draft.annotations as TranscriptAnnotation[] | undefined)) {
+        return Promise.resolve();
+      }
+      reconciling = reconcileComposeDraftValue(environmentId, { ...draft })
+        .then((result) => {
+          if (result) applyReferences(result.references);
+        })
+        .finally(() => {
+          reconciling = null;
+        });
+      return reconciling;
+    };
+
     const persist = (state: NativeComposeDraftState<TMention, TAttachment>): Promise<void> => {
       const draft = readDraft(state, sessionKey);
       return isEmptyDraft(draft)
         ? discardComposeDraft(key)
-        : persistComposeDraft(key, "environment", environmentId, draft);
+        : persistComposeDraft(key, "environment", environmentId, draft).then((saved) => {
+            applyReferences(savedMigrationReferences(saved));
+          });
+    };
+
+    /**
+     * A conflict caused only by server-side migration (the persisted draft
+     * lost its legacy notes, nothing else changed) is saved through the
+     * normal conflict path after reconciling; anything else asks the user.
+     */
+    const resolveMigrationConflict = async (): Promise<boolean> => {
+      if (
+        !hasUnmigratedBrowserNotes(
+          readDraft(store.getState(), sessionKey).annotations as TranscriptAnnotation[] | undefined,
+        )
+      ) {
+        return false;
+      }
+      await reconcile();
+      const current = readDraft(store.getState(), sessionKey);
+      const server = await loadServerValue();
+      if (!server || server.text !== current.text) return false;
+      if (hasUnmigratedBrowserNotes(server.annotations as TranscriptAnnotation[] | undefined)) {
+        return false;
+      }
+      await resolveComposeDraftSaveConflict(key, "environment", environmentId, current);
+      return true;
+    };
+    const loadServerValue = async (): Promise<PersistedNativeComposeDraft | null> => {
+      try {
+        const persisted = await getComposeDraft<PersistedNativeComposeDraft>(key);
+        return persisted?.value ?? null;
+      } catch {
+        return null;
+      }
     };
 
     const schedule = (state: NativeComposeDraftState<TMention, TAttachment>) => {
@@ -287,6 +400,9 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
         if (readSucceeded || locallyChanged) {
           hydrated = true;
           if (!disposed) schedule(store.getState());
+          // Persistence resumed with a draft that may still hold legacy
+          // browser notes typed before migration: reconcile them in memory.
+          if (!disposed) void reconcile().catch(() => undefined);
         }
       });
 

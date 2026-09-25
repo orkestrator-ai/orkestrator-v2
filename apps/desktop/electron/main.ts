@@ -58,6 +58,14 @@ import {
   registerBrowserPreviewWindowActivation,
 } from "./browser-preview-startup.js";
 import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapters.js";
+import {
+  BROWSER_PREVIEW_CAPTURE_DIRECTORY,
+  BrowserPreviewCaptureStore,
+} from "./browser-preview-capture-store.js";
+import {
+  BROWSER_PREVIEW_CAPTURE_EVENT,
+  type BrowserPreviewCaptureEvent,
+} from "@orkestrator/protocol/browser-preview";
 import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
 import {
   handleStartupFailure,
@@ -123,6 +131,7 @@ type DesktopWindowContext = {
   previewTransport: PreviewTransportManager;
 };
 let previewPortHints: ReturnType<typeof createPreviewPortHints> | null = null;
+let browserPreviewCaptures: BrowserPreviewCaptureStore | null = null;
 const previewExternalHandoff = new PreviewExternalHandoff((url) => shell.openExternal(url));
 const windowContexts = new Map<number, DesktopWindowContext>();
 const MAX_DESKTOP_WINDOWS = 32;
@@ -212,6 +221,37 @@ function focusDesktopWindow(id: number): void {
   createMenu();
 }
 
+/**
+ * One pending-capture spool per process, shared by every window's previews, so
+ * a capture survives renderer unmounts, window closes, and connection switches.
+ */
+function browserPreviewCaptureStore(): BrowserPreviewCaptureStore {
+  if (browserPreviewCaptures) return browserPreviewCaptures;
+  const store = new BrowserPreviewCaptureStore({
+    directory: path.join(app.getPath("userData"), BROWSER_PREVIEW_CAPTURE_DIRECTORY),
+    onChange: (change) => {
+      // Content-free: ids, the kind of change, and for an expiry the notice
+      // (sanitized page address and times) so the renderer can say so.
+      const event: BrowserPreviewCaptureEvent = {
+        tabId: change.tabId,
+        captureId: change.captureId,
+        status: "spool-changed",
+        reason: change.reason,
+        ...(change.notice ? { expired: change.notice } : {}),
+      };
+      for (const context of windowContexts.values()) {
+        emitToWindow(context.window, BROWSER_PREVIEW_CAPTURE_EVENT, event);
+      }
+    },
+  });
+  store.ready.catch(() => {
+    console.warn("[BrowserPreview] Pending capture spool could not be loaded");
+  });
+  store.startExpirySweep();
+  browserPreviewCaptures = store;
+  return store;
+}
+
 function createWindowBrowserPreviews(
   createdWindow: BrowserWindow,
   scope: string,
@@ -272,6 +312,8 @@ function createWindowBrowserPreviews(
     getAuthorization: (url) =>
       connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
     transport,
+    captureStore: browserPreviewCaptureStore(),
+    nativeImage,
     // External browsers never inherit Electron's request hooks: they sign in
     // through the private preview origin with a one-use grant POSTed by a
     // loopback handoff page. The grant is never part of a URL.

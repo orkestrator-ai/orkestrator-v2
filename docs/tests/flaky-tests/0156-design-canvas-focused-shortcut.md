@@ -38,3 +38,12 @@
   alone with `mise run test:logged -- --name design-canvas-alone -- bun
   --cwd=apps/web test ./src/components/design/DesignCanvasTab.test.tsx`.
   Artifact: `/tmp/orkestrator-test-run.QcdF6x/workspace-web-backend-desktop-web-public-cli-protocol.log.gz`.
+- **Recurrence (2026-09-24):** `mise run test` failed the same test again in
+  the web workspace group (7,184 tests, 2 failed) during backend-only
+  web-annotation work; the owning file passed alone.
+- **Recurrence (2026-09-25, Linux):** `mise run test` failed it twice more on
+  the web annotations branch (52.94 ms and 71.28 ms), the only failure in the
+  web group each time; that change touches no design-canvas, shortcut or
+  keybinding file. The owning file passed alone with `mise run test:logged --
+  --name design-canvas-alone -- bun --cwd=apps/web test
+  ./src/components/design/DesignCanvasTab.test.tsx`.

@@ -47,6 +47,11 @@ interface VirtualizedMessageListProps<TMessage> {
     scrollerRef?: (el: HTMLElement | Window | null) => void;
   };
   virtuosoRef: RefObject<VirtuosoHandle | null>;
+  /**
+   * Item key (as returned by `computeItemKey`) of a row to highlight briefly,
+   * e.g. the message a "open full conversation" link jumped to.
+   */
+  highlightedItemKey?: string | null;
   find?: {
     isActive: boolean;
     getSearchText: (message: TMessage) => string;
@@ -146,6 +151,7 @@ export function VirtualizedMessageList<TMessage>({
   emptyState,
   scrollProps,
   virtuosoRef,
+  highlightedItemKey = null,
   find,
   annotation,
 }: VirtualizedMessageListProps<TMessage>) {
@@ -326,13 +332,18 @@ export function VirtualizedMessageList<TMessage>({
         itemContent={(index, data) => {
           const isCurrentFindMessage =
             chatFind.isOpen && chatFind.currentMatch?.itemIndex === index;
+          const isHighlighted =
+            highlightedItemKey !== null && computeItemKey(index, data) === highlightedItemKey;
           return (
             <div
               data-chat-message-index={index}
+              data-conversation-target={isHighlighted ? "true" : undefined}
               className={cn(
-                "rounded-sm",
+                "rounded-sm transition-colors duration-700 motion-reduce:transition-none",
                 isCurrentFindMessage &&
                   "outline outline-1 outline-offset-[-1px] outline-amber-400/35",
+                isHighlighted &&
+                  "bg-sky-500/10 outline outline-2 outline-offset-[-2px] outline-sky-500/50",
               )}
             >
               {renderMessage(

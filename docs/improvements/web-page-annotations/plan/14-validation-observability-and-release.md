@@ -1,6 +1,6 @@
 # 14 — Validation, observability, and release gates
 
-Status: Not started. Starts after: 01; applied throughout 02–13. Milestones: A–C.
+Status: Unit, contract, fixture, bound and real-stack specs landed (2026-09-25); live-agent, Docker, remote and iOS gates outstanding. Starts after: 01; applied throughout 02–13. Milestones: A–C.
 
 ## Purpose
 
@@ -199,3 +199,36 @@ Capability matrix and known limitations:
 Migration and rollback verification:
 Reviewer / date:
 ```
+
+## Gate evidence record (2026-09-25)
+
+Partial evidence only; no milestone is signed off. Worktree: integration of
+the gap-closure changes on top of `6edc6e4c`, Linux (Wayland, display `:0`).
+
+| Command | Result |
+| --- | --- |
+| `mise run check` | Pass |
+| `mise run test` | Pass, all four groups (an earlier run hit the registered DesignCanvasTab flake 0156) |
+| `mise run test:agent:electron` | 9 passed (`electron-main.spec.ts` 3, `web-annotations-electron.spec.ts` 6) |
+| `mise run test:agent:browser:isolated` | Pass (58 s); a rerun had 5 passed, 4 skipped (Docker, live agent), 1 failed: the unrelated agent-mail tooltip flake, registered as 0162 |
+| `web-annotation-payloads.bench.test.ts` | 6 passed; largest brief 65,122 B, 16 images / 16.7 MB, 40 pages at ≤ 62.7 KB each |
+
+Exercised on the real stack (synthetic fixture only):
+
+- Gate A: capture with no agent tab, surviving renderer reload and a full
+  app/backend restart; password fields masked in the native screenshot;
+  adversarial strings kept inside the evidence block and forged provenance
+  refused; no synthetic secret in profile storage or logs.
+- Gate B: pins after reorder, hot reload and duplication either match
+  corroborated identity or become `ambiguous`/`stale`, never a different
+  target; hash/query variants keep separate identities and token parameters
+  are stripped; overlapping batches from two clients reserve all-or-none and
+  survive reload; the annotation-count bound holds at the command boundary.
+- Gate C: text, region and page modes captured end to end; iframe and shadow
+  roots resolve to their host element.
+
+Outstanding: live-agent discuss/implement runs per provider (the spec skips
+without `ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1` and credentials), Docker
+materialization, remote backend upload, inactive-environment switching with a
+pending approval, native-window checks at several zoom levels, iOS review, and
+comparison fixtures for unstable animation, fonts and expired sign-in.

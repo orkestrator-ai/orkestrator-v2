@@ -211,6 +211,44 @@ describe("nativeComposeStore", () => {
       attachments: [expect.objectContaining({ annotationId: browserAnnotation.id })],
     });
   });
+  test("never consumes a browser note migrated into a durable web annotation thread", () => {
+    const migrated = {
+      id: "browser-migrated",
+      source: "browser" as const,
+      text: "button#save",
+      comment: "Imported",
+      migratedTo: "annotation-1",
+    };
+    const legacy = {
+      id: "browser-legacy",
+      source: "browser" as const,
+      text: "button#cancel",
+      comment: "Legacy",
+    };
+    for (const sessionKey of ["env-env-3:tab-a", "env-env-3:tab-b"]) {
+      useNativeComposeStore.getState().updateDraft(sessionKey, {
+        text: "draft",
+        annotations: [migrated, legacy],
+        attachments: [
+          {
+            id: `migrated-${sessionKey}`,
+            annotationId: migrated.id,
+            type: "image",
+            path: "/workspace/.orkestrator/annotations/migrated.png",
+            name: "migrated.png",
+          },
+        ],
+      });
+    }
+
+    useNativeComposeStore.getState().consumeBrowserAnnotations("env-3", [migrated.id, legacy.id]);
+
+    for (const sessionKey of ["env-env-3:tab-a", "env-env-3:tab-b"]) {
+      const draft = useNativeComposeStore.getState().drafts.get(sessionKey);
+      expect(draft?.annotations).toEqual([migrated]);
+      expect(draft?.attachments).toEqual([expect.objectContaining({ annotationId: migrated.id })]);
+    }
+  });
   describe("command selection", () => {
     const selection = {
       commandId: "claude:/review",

@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "bun server.ts",
-    "check": "bun test"
+    "check": "bun test",
+    "annotations": "bun annotation-app/server.ts",
+    "annotations:verify": "bun annotation-app/verify-change.ts"
   }
 }

@@ -619,10 +619,22 @@ export interface NativeAgentCapabilities {
     reasoning: boolean;
     speed: boolean;
     mode: boolean;
+    /**
+     * Where a prompt's plan/build mode applies. `turn`: the mode rides on one
+     * prompt and the next prompt chooses its own. `session`: sending a mode
+     * changes the session's persisted mode, so backend-authored prompts must
+     * not send one unless it equals the session's current mode.
+     */
+    modeScope?: "turn" | "session";
     executionProfile?: boolean;
     localSettings?: boolean;
     promptSuggestions?: boolean;
   };
+  /**
+   * Environment-owned sessions of this platform receive the per-tab agent
+   * tools credential (agent tools MCP server) with each dispatch.
+   */
+  agentTools?: boolean;
   /** Platform-specific behavior exposed through the shared session surface. */
   actions?: {
     compact?: boolean;
@@ -673,6 +685,9 @@ function richNativeAgentCapabilities(): NativeAgentCapabilities {
       localSettings: false,
       promptSuggestions: false,
     },
+    // Every bridge-backed platform takes the per-tab agent tools credential;
+    // OpenCode's SDK path does not (see its override below).
+    agentTools: true,
     actions: { compact: true },
     interactions: { kinds: [...AGENT_INTERACTION_KINDS] },
   };
@@ -697,6 +712,9 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
       attachments: { files: false, images: true },
       fork: false,
       slashCommands: agent === "grok",
+      // Cursor applies a prompt's mode as a composer patch and Grok through ACP
+      // `session/set_mode`: both persist on the session.
+      composer: { ...capabilities.composer, modeScope: "session" },
       // `speed` and `mode` stay true because both agents really do own them:
       // Cursor drives fast through a `model_config` config option, Grok through
       // a sibling `…-fast` model id, and both announce session modes. They are
@@ -725,6 +743,8 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
         executionProfile: true,
         localSettings: true,
         promptSuggestions: true,
+        // Claude's permission mode rides on each prompt request.
+        modeScope: "turn",
       },
       actions: { compact: true, rewindFiles: true, steer: true },
       // Questions through `AskUserQuestion`, plan approvals through
@@ -758,6 +778,7 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
         mode: false,
         executionProfile: true,
       },
+      agentTools: false,
       actions: { compact: true, undo: true, redo: true, share: true },
       // `permission.asked` and the v2-only `question.asked`. No MCP
       // elicitation surface on the v1 wire this repo uses.
@@ -787,6 +808,8 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
   return {
     ...capabilities,
     attachments: { files: false, images: true },
+    // Codex binds its collaboration mode to the thread and persists it.
+    composer: { ...capabilities.composer, modeScope: "session" },
     actions: { compact: true, steer: true, review: true, rewindMessages: true },
     // Codex: `item/tool/requestUserInput` questions, MCP elicitations in both
     // form and url modes, and command/file approvals through

@@ -1,6 +1,6 @@
 # 02 — Durable storage, assets, and retention
 
-Status: Not started. Depends on: 01. Milestone: A.
+Status: Implemented (2026-09-24); review gaps closed (2026-09-25); gate evidence partial. Depends on: 01. Milestone: A.
 
 ## Deliverable and code ownership
 

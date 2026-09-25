@@ -1,6 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
+import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { StateSnapshot } from "react-virtuoso";
-import { isRestorableStateSnapshot } from "./useVirtuosoScrollState";
+import { isRestorableStateSnapshot, useVirtuosoScrollState } from "./useVirtuosoScrollState";
+
+afterEach(() => cleanup());
 
 function snapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
   return {
@@ -118,5 +121,44 @@ describe("isRestorableStateSnapshot", () => {
         snapshot({ ranges: undefined as unknown as StateSnapshot["ranges"] }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("useVirtuosoScrollState scrollToIndex", () => {
+  function fakeHandle() {
+    return {
+      scrollToIndex: mock((_location: unknown) => {}),
+      scrollTo: mock((_location: unknown) => {}),
+      getState: mock(() => {}),
+    };
+  }
+
+  test("is false until the list handle exists, and rejects a bad index", () => {
+    const { result } = renderHook(() => useVirtuosoScrollState({ isActive: true }));
+    expect(result.current.scrollToIndex(2)).toBe(false);
+    const handle = fakeHandle();
+    result.current.virtuosoRef.current = handle as never;
+    expect(result.current.scrollToIndex(-1)).toBe(false);
+    expect(result.current.scrollToIndex(1.5)).toBe(false);
+    expect(handle.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  test("centres the row, releases stick intent, and corrects once rows measure", async () => {
+    const { result } = renderHook(() => useVirtuosoScrollState({ isActive: true }));
+    const handle = fakeHandle();
+    result.current.virtuosoRef.current = handle as never;
+
+    expect(result.current.scrollProps.followOutput(true)).toBe("auto");
+    expect(result.current.scrollToIndex(3)).toBe(true);
+
+    expect(handle.scrollToIndex).toHaveBeenCalledWith({
+      index: 3,
+      align: "center",
+      behavior: "auto",
+    });
+    // New output no longer drags the reader back to the tail.
+    expect(result.current.scrollProps.followOutput(true)).toBe(false);
+    await waitFor(() => expect(handle.scrollToIndex.mock.calls.length).toBeGreaterThan(1));
+    expect(handle.scrollTo).not.toHaveBeenCalled();
   });
 });

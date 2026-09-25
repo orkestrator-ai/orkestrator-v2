@@ -852,6 +852,8 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
    */
   notifyPromptQueueChanged(queueKey: string): void {
     if (this.stopped || !nonBlank(queueKey)) return;
+    // Index the key so a busy session's queue keeps its 2 s due check.
+    this.queueScheduling?.wakeQueue(queueKey, "enqueue");
     void this.drainPromptQueue(queueKey);
   }
 
@@ -861,6 +863,8 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     this.unsubscribeObservationWakeups = null;
     if (this.launchTimer) clearInterval(this.launchTimer);
     this.launchTimer = null;
+    this.queueScheduling?.stop();
+    this.queueScheduling = null;
     if (this.interactionTimer) clearInterval(this.interactionTimer);
     this.interactionTimer = null;
     await Promise.allSettled([

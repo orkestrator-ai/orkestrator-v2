@@ -1068,11 +1068,11 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     return task;
   }
 
-  protected async reconcilePendingLaunches(): Promise<void> {
-    if (this.stopped) return;
+  protected async reconcilePendingLaunches(): Promise<number> {
+    if (this.stopped) return 0;
     const now = Date.now();
     const environments = await this.storage.loadEnvironments();
-    if (this.stopped) return;
+    if (this.stopped) return 0;
     await this.pruneProviders(
       new Set(
         environments
@@ -1080,17 +1080,18 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           .map((environment) => environment.id),
       ),
     );
-    if (this.stopped) return;
+    if (this.stopped) return 0;
+    const pending = environments.filter(
+      (environment) =>
+        environment.pendingAgentLaunch &&
+        (environment.status === "creating" || environment.status === "running"),
+    );
     await Promise.allSettled(
-      environments
-        .filter(
-          (environment) =>
-            environment.pendingAgentLaunch &&
-            (environment.status === "creating" || environment.status === "running") &&
-            (this.launchRetryAt.get(environment.id) ?? 0) <= now,
-        )
+      pending
+        .filter((environment) => (this.launchRetryAt.get(environment.id) ?? 0) <= now)
         .map((environment) => this.reconcileInitialLaunch(environment.id)),
     );
+    return pending.length;
   }
 
   /**
@@ -1111,6 +1112,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     if (!BUILD_PIPELINE_AGENTS.includes(agent)) return;
     const queueKey = `${agent}\0${logicalSessionKey}`;
     const queue = await this.storage.getPromptQueue(queueKey);
+    this.queueScheduling?.note(queue, queueKey);
     if (!queue || queue.dispatchError) return;
     if (queue.inFlight === undefined && queue.messages.length === 0) return;
     await this.drainPromptQueue(queueKey);
@@ -1252,6 +1254,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       return;
     }
     const queue = await this.storage.getPromptQueue(queueKey);
+    this.queueScheduling?.note(queue, queueKey);
     if (!queue || queue.dispatchError) return;
     if (queue.inFlight === undefined && queue.messages.length === 0) return;
     const environment = await this.assertEnvironmentLive(queue.environmentId);

@@ -1152,7 +1152,8 @@ describe("NativeAgentService", () => {
       },
       async ({ service }) => {
         await service.init();
-        expect(internals(service).launchTimer).not.toBeNull();
+        // The keyed launch/queue driver replaces the launch timer (step 08).
+        expect((service as unknown as { queueScheduling: unknown }).queueScheduling).not.toBeNull();
         expect(internals(service).interactionTimer).toBeNull();
       },
     );

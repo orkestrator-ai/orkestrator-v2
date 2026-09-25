@@ -412,6 +412,15 @@ export class KeyedWorkflowSupervisor<O extends string> {
     return woken;
   }
 
+  /**
+   * Brings the next discovery forward after a change that may have created
+   * an obligation the index cannot name (a mutation announced only by its
+   * owner). Coalesced: at most one trailing discovery while one runs.
+   */
+  requestDiscovery(): void {
+    this.scheduler?.invalidate(DISCOVERY_KEY);
+  }
+
   /** Registers a critical job (lease renewal) on the scheduler's separate critical pool. */
   addCriticalJob(job: WorkflowCriticalJob): void {
     this.criticalJobs.push(job);

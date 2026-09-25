@@ -30,6 +30,8 @@ import {
 import { NATIVE_AGENT_SESSION_VERSION } from "./models.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { NativeAgentObservationBroker } from "./native-agent-observation.js";
+import { NativeQueueScheduling } from "./native-agent-queue-scheduling.js";
+import { keyedSchedulingEnabled } from "./workflow-supervisor.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
 type PipelineSessionPhase = shared.PipelineSessionPhase;
 type TaskSnapshotImage = shared.TaskSnapshotImage;
@@ -231,6 +233,8 @@ export abstract class NativeAgentServiceBase {
   protected readonly launchRetryAt = new Map<string, number>();
   protected readonly queueTasks = new Map<string, Promise<void>>();
   protected readonly queueRetryAt = new Map<string, number>();
+  /** Keyed launch/queue driver (step 08); `null` on the rollback timer. */
+  protected queueScheduling: NativeQueueScheduling | null = null;
   protected readonly queueAttempts = new Map<string, number>();
   protected readonly scanTasks = new Set<Promise<void>>();
   protected readonly activityRetryAt = new Map<string, number>();
@@ -267,7 +271,8 @@ export abstract class NativeAgentServiceBase {
   protected readonly openCodeRecoveryCandidates = new Map<string, OpenCodeRecoveryCandidate>();
 
   protected abstract trackScan(task: Promise<void>): Promise<void>;
-  protected abstract reconcilePendingLaunches(): Promise<void>;
+  /** Resolves with how many environments still carry a launch intent. */
+  protected abstract reconcilePendingLaunches(): Promise<number>;
   protected abstract drainPromptQueues(): Promise<void>;
   abstract reconcileAgentInteractions(): Promise<void>;
   protected abstract assertAcceptingWork(): void;
@@ -433,6 +438,16 @@ export abstract class NativeAgentServiceBase {
     this.unsubscribeObservationWakeups =
       typeof storage.addResourceChangeListener === "function"
         ? storage.addResourceChangeListener((change) => {
+            // Step 08: queue mutations and environment changes (readiness,
+            // identity, launch intent) wake only their own due keys.
+            if (change.resource === "prompt-queue") {
+              this.queueScheduling?.queueChanged(change.id);
+              return;
+            }
+            if (change.resource === "environment") {
+              this.queueScheduling?.wakeEnvironment(change.id);
+              return;
+            }
             if (change.resource !== "native-agent-session") return;
             this.observations.wakeEnvironment(change.id, "session-mutation", change.agent);
           })
@@ -570,17 +585,38 @@ export abstract class NativeAgentServiceBase {
     ]);
     if (this.stopped) return;
     const launchReconcileIntervalMs = this.options.launchReconcileIntervalMs;
-    this.launchTimer = setInterval(
-      () => {
+    const progressMs = Number.isFinite(launchReconcileIntervalMs)
+      ? Math.max(20, launchReconcileIntervalMs as number)
+      : 2_000;
+    if (this.options.keyedQueueScheduling ?? keyedSchedulingEnabled("native-queues")) {
+      this.queueScheduling = new NativeQueueScheduling(
+        {
+          launchScan: () => this.trackCount(this.observedLaunchCount()),
+          listQueues: () => this.storage.listAllPromptQueues(),
+          drainQueue: (queueKey) => this.trackScan(this.drainPromptQueue(queueKey)),
+          queueRetryDelayMs: (queueKey) =>
+            Math.max(0, (this.queueRetryAt.get(queueKey) ?? 0) - Date.now()),
+        },
+        {
+          progressIntervalMs: progressMs,
+          discoveryIntervalMs: this.options.queueDiscoveryIntervalMs ?? progressMs,
+          ...(this.options.queueSchedulerClock
+            ? {
+                now: this.options.queueSchedulerClock.now,
+                timers: this.options.queueSchedulerClock.timers,
+              }
+            : {}),
+        },
+      );
+      this.queueScheduling.start();
+    } else {
+      this.launchTimer = setInterval(() => {
         if (this.stopped) return;
         void this.trackScan(this.observedLaunchScan()).catch(() => undefined);
         void this.trackScan(this.observedQueueScan()).catch(() => undefined);
-      },
-      Number.isFinite(launchReconcileIntervalMs)
-        ? Math.max(20, launchReconcileIntervalMs as number)
-        : 2_000,
-    );
-    this.launchTimer.unref?.();
+      }, progressMs);
+      this.launchTimer.unref?.();
+    }
     if (this.options.interactionMonitorMode === "observe-only") {
       await this.reconcileAgentInteractions().catch(() => undefined);
       if (this.stopped) return;
@@ -597,9 +633,25 @@ export abstract class NativeAgentServiceBase {
   /** Neither sweep has an overlap guard; every tick is a full started pass. */
   private observedLaunchScan(): Promise<void> {
     recurringWorkMetrics.requested("native-launch-scan");
-    return recurringWorkMetrics.observe("native-launch-scan", () =>
-      this.reconcilePendingLaunches(),
+    return recurringWorkMetrics
+      .observe("native-launch-scan", () => this.reconcilePendingLaunches())
+      .then(() => undefined);
+  }
+
+  /** The keyed launch job: the scheduler already observes it as one attempt. */
+  private observedLaunchCount(): Promise<number> {
+    return this.reconcilePendingLaunches();
+  }
+
+  /** Tracks a counted scan so shutdown drains it like any other scan. */
+  private async trackCount(task: Promise<number>): Promise<number> {
+    let count = 0;
+    await this.trackScan(
+      task.then((value) => {
+        count = value;
+      }),
     );
+    return count;
   }
 
   private observedQueueScan(): Promise<void> {

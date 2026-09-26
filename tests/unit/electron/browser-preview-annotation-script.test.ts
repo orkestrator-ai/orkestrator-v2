@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import {
+  BROWSER_PREVIEW_ANNOTATION_EVENT_MARKER,
   BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT,
+  parseBrowserPreviewAnnotationSignal,
   browserPreviewAnnotationStartScript,
 } from "../../../apps/desktop/electron/browser-preview-annotation-script";
 
@@ -42,6 +44,44 @@ function runtimeStatus(window: Window): Record<string, unknown> {
     unknown
   >;
 }
+
+describe("browser preview annotation terminal hints", () => {
+  test("a cancel announces itself once through the console marker", () => {
+    const { window, document, target } = annotationWindow();
+    const logged: unknown[] = [];
+    (window as unknown as { console: { debug: (value: unknown) => void } }).console.debug = (
+      value: unknown,
+    ) => logged.push(value);
+    window.eval(browserPreviewAnnotationStartScript("session-7"));
+    target.dispatchEvent(new window.PointerEvent("pointermove", { clientX: 15, clientY: 25 }));
+    document.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+    );
+    expect(logged).toHaveLength(1);
+    expect(parseBrowserPreviewAnnotationSignal(logged[0])).toEqual({
+      sessionId: "session-7",
+      status: "cancelled",
+    });
+  });
+
+  test("only well-formed, bounded marker messages parse", () => {
+    const valid = `${BROWSER_PREVIEW_ANNOTATION_EVENT_MARKER}${JSON.stringify({ sessionId: "s", status: "submitted" })}`;
+    expect(parseBrowserPreviewAnnotationSignal(valid)).toEqual({
+      sessionId: "s",
+      status: "submitted",
+    });
+    for (const message of [
+      42,
+      "ordinary log",
+      `${BROWSER_PREVIEW_ANNOTATION_EVENT_MARKER}{`,
+      `${BROWSER_PREVIEW_ANNOTATION_EVENT_MARKER}${JSON.stringify({ sessionId: "s", status: "active" })}`,
+      `${BROWSER_PREVIEW_ANNOTATION_EVENT_MARKER}${JSON.stringify({ sessionId: "", status: "submitted" })}`,
+      `${BROWSER_PREVIEW_ANNOTATION_EVENT_MARKER}${"x".repeat(600)}`,
+    ]) {
+      expect(parseBrowserPreviewAnnotationSignal(message)).toBeNull();
+    }
+  });
+});
 
 describe("browser preview annotation runtime", () => {
   test("Escape cancellation removes capture listeners and lets preview input through", () => {

@@ -1,6 +1,8 @@
-import type {
-  BrowserPreviewOpenLinkEvent,
-  BrowserPreviewState,
+import {
+  BROWSER_PREVIEW_ANNOTATION_EVENT,
+  type BrowserPreviewAnnotationEvent,
+  type BrowserPreviewOpenLinkEvent,
+  type BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
 import type { InitializeBrowserPreviewsOptions } from "./browser-preview-startup.js";
 
@@ -13,7 +15,7 @@ export interface CreateBrowserPreviewMainAdaptersOptions {
 
 export type BrowserPreviewMainAdapters = Pick<
   InitializeBrowserPreviewsOptions,
-  "emitState" | "emitOpenLink" | "openExternal" | "writeClipboardText"
+  "emitState" | "emitOpenLink" | "emitAnnotationEvent" | "openExternal" | "writeClipboardText"
 >;
 
 export function createBrowserPreviewMainAdapters({
@@ -24,6 +26,8 @@ export function createBrowserPreviewMainAdapters({
 }: CreateBrowserPreviewMainAdaptersOptions): BrowserPreviewMainAdapters {
   return {
     emitState: (state: BrowserPreviewState) => emitToRenderers("browser-preview-state", state),
+    emitAnnotationEvent: (event: BrowserPreviewAnnotationEvent) =>
+      emitToRenderers(BROWSER_PREVIEW_ANNOTATION_EVENT, event),
     emitOpenLink: (event: BrowserPreviewOpenLinkEvent) => {
       emitToRenderers("browser-preview-open-link", event);
     },

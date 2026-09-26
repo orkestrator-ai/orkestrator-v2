@@ -105,7 +105,7 @@ export interface BrowserPreviewElementDetails {
   hierarchy: BrowserPreviewElementAncestor[];
 }
 
-export type BrowserPreviewAnnotationStatus =
+export type BrowserPreviewAnnotationStatus = (
   | { status: "inactive" | "active" | "cancelled" }
   | { status: "error"; message: string }
   | {
@@ -114,4 +114,41 @@ export type BrowserPreviewAnnotationStatus =
       element: BrowserPreviewElementDetails;
       /** PNG data URL captured from the browser frame while the element highlight is visible. */
       screenshotDataUrl: string;
-    };
+    }
+) & {
+  /**
+   * Additive (step 09): the annotation operation this status belongs to. A
+   * desktop that returns it from `startAnnotation` also emits
+   * {@link BROWSER_PREVIEW_ANNOTATION_EVENT} when the operation ends.
+   */
+  operationId?: string;
+};
+
+/** Renderer event (via the generic `listen` bus) announcing a terminal annotation state. */
+export const BROWSER_PREVIEW_ANNOTATION_EVENT = "browser-preview-annotation";
+
+/**
+ * A hint only: the renderer answers it with an authoritative status read,
+ * which is also where a submission's screenshot is captured.
+ */
+export interface BrowserPreviewAnnotationEvent {
+  tabId: string;
+  operationId: string;
+  status: "submitted" | "cancelled" | "error";
+}
+
+export function isBrowserPreviewAnnotationEvent(
+  value: unknown,
+): value is BrowserPreviewAnnotationEvent {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.tabId === "string" &&
+    typeof candidate.operationId === "string" &&
+    candidate.operationId.length > 0 &&
+    candidate.operationId.length <= 128 &&
+    (candidate.status === "submitted" ||
+      candidate.status === "cancelled" ||
+      candidate.status === "error")
+  );
+}

@@ -483,7 +483,8 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "interval",
     "discovery",
     30_000,
-    "unguarded",
+    // Step 09: young in-flight probes are joined; only stalled ones superseded.
+    "join",
     "none",
   ),
   // Step 09: coordinator view is event-led (scoped `coordinator` changes,
@@ -507,6 +508,8 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "trailing-rerun",
     "snapshot-rehydrate",
   ),
+  // Step 09: terminal native events plus a 1 s fallback on desktops that
+  // report operation ids; older desktops keep the 150 ms poll listed here.
   "client-browser-annotation": external(
     "renderer",
     "C13",
@@ -522,7 +525,8 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "interval",
     "interactive",
     1_500,
-    "unguarded",
+    // Step 09: read-coordinator key; one read in flight, pending logins only.
+    "join",
     "snapshot-rehydrate",
   ),
   "bridge-sse-keepalive": external(

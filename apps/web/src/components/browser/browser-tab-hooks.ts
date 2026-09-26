@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BrowserPreviewAnnotationStatus } from "@orkestrator/protocol/browser-preview";
+import {
+  BROWSER_PREVIEW_ANNOTATION_EVENT,
+  isBrowserPreviewAnnotationEvent,
+  type BrowserPreviewAnnotationStatus,
+} from "@orkestrator/protocol/browser-preview";
 import { toast } from "sonner";
 
 import { writeContainerFile, writeLocalFile } from "@/lib/backend";
@@ -21,6 +25,15 @@ export const BLOCKING_OVERLAY_SELECTOR = [
   '[role="menu"]',
   '[role="listbox"]',
 ].join(",");
+
+/** Status poll while annotating on a desktop that reports no terminal events. */
+export const ANNOTATION_POLL_INTERVAL_MS = 150;
+/**
+ * Temporary safety net when terminal events are available: catches a missed
+ * event, a page reload (no event is emitted) and an older page runtime. Kept
+ * until native event delivery is proven across supported desktop builds.
+ */
+export const ANNOTATION_FALLBACK_POLL_INTERVAL_MS = 1_000;
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -120,6 +133,12 @@ export function useBrowserPreviewAnnotation({
   const [annotationMode, setAnnotationMode] = useState(false);
   const [annotationSaving, setAnnotationSaving] = useState(false);
   const mountedRef = useRef(true);
+  /** Operation id of the running annotation; null for a desktop without events. */
+  const operationRef = useRef<string | null>(null);
+  /** Last terminal event's operation id for this tab (may precede the start answer). */
+  const lastEventRef = useRef<string | null>(null);
+  /** Status read for the running operation, triggered by its terminal event. */
+  const eventReadRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -218,8 +237,14 @@ export function useBrowserPreviewAnnotation({
       return;
     }
     setAnnotationSaving(true);
+    // The event subscription below is already live: a terminal event that
+    // races this start is kept and matched once the operation id is known.
+    operationRef.current = null;
     void startBrowserPreviewAnnotation(tabId)
-      .then(() => setAnnotationMode(true))
+      .then((started) => {
+        operationRef.current = started.operationId ?? null;
+        setAnnotationMode(true);
+      })
       .catch((annotationError) => {
         toast.error("Could not start annotation mode", {
           description: errorMessage(annotationError),
@@ -228,17 +253,47 @@ export function useBrowserPreviewAnnotation({
       .finally(() => setAnnotationSaving(false));
   }, [annotationMode, annotationSaving, tabId]);
 
+  // Terminal annotation events (desktop builds that report an operation id).
+  // Subscribed for the hook's lifetime, so nothing emitted between start and
+  // the status loop below is lost; each event is only a hint to read status.
+  useEffect(
+    () =>
+      window.orkestrator?.listen?.<unknown>(BROWSER_PREVIEW_ANNOTATION_EVENT, (payload) => {
+        if (!isBrowserPreviewAnnotationEvent(payload) || payload.tabId !== tabId) return;
+        lastEventRef.current = payload.operationId;
+        eventReadRef.current?.();
+      }),
+    [tabId],
+  );
+
   useEffect(() => {
     if (!annotationMode) return;
     let disposed = false;
     let polling = false;
+    let again = false;
+    const operationId = operationRef.current;
+    // With native events the status loop is only a slower safety net
+    // (missed event, page reload, older page runtime); without them it keeps
+    // the original rapid poll.
+    const intervalMs = operationId
+      ? ANNOTATION_FALLBACK_POLL_INTERVAL_MS
+      : ANNOTATION_POLL_INTERVAL_MS;
     const poll = async () => {
-      if (polling || disposed) return;
+      if (disposed) return;
+      if (polling) {
+        again = true;
+        return;
+      }
       polling = true;
       try {
         const status = await getBrowserPreviewAnnotationStatus(tabId);
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || disposed) return;
+        // A status for another operation (an older start) is not ours.
+        if (operationId && status.operationId && status.operationId !== operationId) return;
         if (status.status === "active") return;
+        // Handled once: the event and the fallback read may both see the end,
+        // but only the first terminal answer for this operation acts.
+        disposed = true;
         setAnnotationMode(false);
         if (status.status === "cancelled") return;
         if (status.status === "inactive") {
@@ -264,18 +319,30 @@ export function useBrowserPreviewAnnotation({
         }
       } catch (annotationError) {
         if (!disposed) {
+          disposed = true;
           setAnnotationMode(false);
           toast.error("Annotation mode stopped", { description: errorMessage(annotationError) });
         }
         void cancelBrowserPreviewAnnotation(tabId).catch(() => undefined);
       } finally {
         polling = false;
+        if (again && !disposed) {
+          again = false;
+          void poll();
+        }
       }
     };
-    const timer = window.setInterval(() => void poll(), 150);
+    const onEvent = () => {
+      if (operationId && lastEventRef.current === operationId) void poll();
+    };
+    eventReadRef.current = onEvent;
+    const timer = window.setInterval(() => void poll(), intervalMs);
     void poll();
+    // An event that arrived before the operation id was known.
+    onEvent();
     return () => {
       disposed = true;
+      if (eventReadRef.current === onEvent) eventReadRef.current = null;
       window.clearInterval(timer);
     };
   }, [addSubmittedAnnotation, annotationMode, tabId]);

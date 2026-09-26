@@ -97,6 +97,7 @@ function deferred<T>() {
 function installNativePreview(overrides: Record<string, unknown> = {}) {
   let stateListener: ((state: BrowserPreviewState) => void) | undefined;
   let focusAddressListener: ((tabId: string) => void) | undefined;
+  let annotationListener: ((event: unknown) => void) | undefined;
   const unsubscribe = mock(() => {});
   const state = previewState();
   const browserPreview = {
@@ -124,6 +125,7 @@ function installNativePreview(overrides: Record<string, unknown> = {}) {
       if (event === "browser-preview-state") {
         stateListener = callback as (state: BrowserPreviewState) => void;
       }
+      if (event === "browser-preview-annotation") annotationListener = callback;
       if (event === "browser-preview-focus-address") {
         focusAddressListener = callback as (tabId: string) => void;
       }
@@ -143,6 +145,9 @@ function installNativePreview(overrides: Record<string, unknown> = {}) {
     browserPreview,
     emitState: (next: BrowserPreviewState) => {
       act(() => stateListener?.(next));
+    },
+    emitAnnotationEvent: (event: unknown) => {
+      act(() => annotationListener?.(event));
     },
     focusAddress: (tabId: string) => {
       act(() => focusAddressListener?.(tabId));
@@ -735,6 +740,88 @@ describe("BrowserTab", () => {
     status = { status: "active" };
     fireEvent.click(readyAgain);
     await waitFor(() => expect(native.browserPreview.startAnnotation).toHaveBeenCalledTimes(2));
+  });
+
+  test("a terminal event reads status at once, the fallback is slow, and a submission is handled once", async () => {
+    setBrowserTab("http://localhost:3000/", true);
+    const submitted = {
+      status: "submitted" as const,
+      operationId: "op-1",
+      comment: "Handled once",
+      screenshotDataUrl: "data:image/png;base64,c2NyZWVuc2hvdA==",
+      element: {
+        pageUrl: "http://localhost:3000/",
+        pageTitle: "Dashboard",
+        viewport: { width: 800, height: 600, devicePixelRatio: 2 },
+        tagName: "button",
+        selector: "button#save",
+        cssPath: "html > body > button#save",
+        xpath: "/html/body/button",
+        id: "save",
+        classNames: [],
+        role: null,
+        ariaLabel: null,
+        testId: null,
+        text: "Save",
+        outerHtml: '<button id="save">Save</button>',
+        attributes: {},
+        rect: { x: 0, y: 0, width: 1, height: 1, top: 0, right: 1, bottom: 1, left: 0 },
+        styles: {},
+        hierarchy: [],
+      },
+    };
+    let status: BrowserPreviewAnnotationStatus = { status: "active", operationId: "op-1" };
+    const release = deferred<void>();
+    const getAnnotationStatus = mock(async () => {
+      const answer = status;
+      if (answer.status === "submitted") {
+        // The first terminal read consumes the operation on the desktop side;
+        // a racing second read would see it gone.
+        status = { status: "inactive" };
+        await release.promise;
+      }
+      return answer;
+    });
+    const native = installNativePreview({
+      startAnnotation: mock(async () => ({ status: "active" as const, operationId: "op-1" })),
+      getAnnotationStatus,
+    });
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+    const annotate = screen.getByRole("button", { name: "Annotate preview" });
+    await waitFor(() => expect(annotate.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(annotate);
+    await screen.findByRole("button", { name: "Stop annotating preview" });
+    await waitFor(() => expect(getAnnotationStatus).toHaveBeenCalledTimes(1));
+    // Slow fallback: no 150 ms polling while events are available.
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
+    expect(getAnnotationStatus).toHaveBeenCalledTimes(1);
+
+    // An event for another operation or tab is ignored.
+    native.emitAnnotationEvent({ tabId: "browser-2", operationId: "op-1", status: "submitted" });
+    native.emitAnnotationEvent({ tabId: "browser-1", operationId: "op-0", status: "submitted" });
+    expect(getAnnotationStatus).toHaveBeenCalledTimes(1);
+
+    status = submitted;
+    native.emitAnnotationEvent({ tabId: "browser-1", operationId: "op-1", status: "submitted" });
+    await waitFor(() => expect(getAnnotationStatus).toHaveBeenCalledTimes(2));
+    // A duplicate event while the read is out queues nothing new and never
+    // produces a second submission or a spurious "stopped" error.
+    native.emitAnnotationEvent({ tabId: "browser-1", operationId: "op-1", status: "submitted" });
+    release.resolve();
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledTimes(1));
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(mockToastSuccess).toHaveBeenCalledTimes(1);
+    expect(mockToastError).not.toHaveBeenCalled();
+    expect(useNativeComposeStore.getState().drafts.values().next().value).toMatchObject({
+      annotations: [{ source: "browser", comment: "Handled once" }],
+    });
   });
 
   test("finishes an in-flight submission after the environment object is refreshed", async () => {

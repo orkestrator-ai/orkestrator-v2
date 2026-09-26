@@ -12,6 +12,7 @@ import type {
 } from "electron";
 import { randomUUID } from "node:crypto";
 import type {
+  BrowserPreviewAnnotationEvent,
   BrowserPreviewAnnotationStatus,
   BrowserPreviewAttachInput,
   BrowserPreviewBounds,
@@ -27,6 +28,7 @@ import {
   BROWSER_PREVIEW_ANNOTATION_CANCEL_SCRIPT,
   BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT,
   browserPreviewAnnotationStartScript,
+  parseBrowserPreviewAnnotationSignal,
 } from "./browser-preview-annotation-script.js";
 
 type WebContentsViewConstructor = new (
@@ -78,6 +80,8 @@ export interface BrowserPreviewManagerOptions {
   getWindow: () => BrowserWindow | null;
   emitState: (state: BrowserPreviewState) => void;
   emitOpenLink: (event: BrowserPreviewOpenLinkEvent) => void;
+  /** Terminal annotation hints (submit/cancel) for the renderer; optional for older wiring. */
+  emitAnnotationEvent?: (event: BrowserPreviewAnnotationEvent) => void;
   openExternal: (url: string) => void;
   writeClipboardText: (text: string) => void;
   focusAddressBar: (tabId: string) => void;
@@ -640,16 +644,19 @@ export class BrowserPreviewManager {
       delete preview.annotationSessionId;
       throw error;
     }
-    return { status: "active" };
+    // The operation id lets the renderer match terminal events to this start.
+    return { status: "active", operationId: sessionId };
   }
 
   async getAnnotationStatus(tabId: string): Promise<BrowserPreviewAnnotationStatus> {
     const preview = this.get(tabId);
+    const operationId = preview.annotationSessionId;
     const encoded = await preview.view.webContents.executeJavaScript(
       BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT,
       true,
     );
-    const status = parseAnnotationRuntimeStatus(encoded, preview.annotationSessionId);
+    const parsed = parseAnnotationRuntimeStatus(encoded, preview.annotationSessionId);
+    const status = operationId ? { ...parsed, operationId } : parsed;
     if (status.status === "active") return status;
     if (status.status !== "submitted") {
       delete preview.annotationSessionId;
@@ -754,6 +761,19 @@ export class BrowserPreviewManager {
   private installListeners(tabId: string, preview: ManagedPreview): void {
     const contents = preview.view.webContents;
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
+    // Terminal annotation transitions (submit/cancel) arrive as a console hint
+    // from the page runtime; only the current operation's hint is forwarded.
+    contents.on("console-message", (details) => {
+      const signal = parseBrowserPreviewAnnotationSignal(
+        (details as { message?: unknown } | undefined)?.message,
+      );
+      if (!signal || signal.sessionId !== preview.annotationSessionId) return;
+      this.options.emitAnnotationEvent?.({
+        tabId,
+        operationId: signal.sessionId,
+        status: signal.status,
+      });
+    });
     contents.on("before-input-event", (event, input) => {
       const isAddressShortcut =
         input.type === "keyDown" &&

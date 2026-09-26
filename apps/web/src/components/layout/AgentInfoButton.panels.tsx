@@ -679,12 +679,17 @@ export function AgentRuntimePanel({
 
   const drift = runtime?.drift;
   const notices = (runtime?.notices ?? []).slice(-5);
+  // Only a full history is worth the user's attention: it is why a new steer
+  // is being refused. Counts and limits only; nothing here is actionable
+  // beyond waiting, so no control is offered.
+  const saturatedSteer = runtime?.steer?.saturated ? runtime.steer : undefined;
 
   if (
     metrics.length === 0 &&
     !runtime?.state &&
     !runtime?.version &&
     !drift &&
+    !saturatedSteer &&
     notices.length === 0
   ) {
     return (
@@ -725,6 +730,20 @@ export function AgentRuntimePanel({
           ) : null}
         </div>
       ) : null}
+      {saturatedSteer ? (
+        <div
+          className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2"
+          data-testid="agent-runtime-steer-saturated"
+        >
+          <div className="text-[11px] font-medium text-amber-100/90">
+            Steering is full for this turn
+          </div>
+          <div className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+            New steering is refused until the turn finishes; the turn keeps running.{" "}
+            {`${saturatedSteer.entries} of ${saturatedSteer.limitEntries} records, ${formatSteerBytes(saturatedSteer.bytes)} of ${formatSteerBytes(saturatedSteer.limitBytes)}.`}
+          </div>
+        </div>
+      ) : null}
       {notices.length > 0 ? (
         <div className="space-y-1.5">
           {notices.map((notice) => {
@@ -746,6 +765,12 @@ export function AgentRuntimePanel({
       ) : null}
     </div>
   );
+}
+
+function formatSteerBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 export type AgentInfoUsageSnapshot = Omit<ContextUsageSnapshot, "totalTokens" | "percentUsed"> & {

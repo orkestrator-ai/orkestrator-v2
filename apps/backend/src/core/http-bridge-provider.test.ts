@@ -686,6 +686,7 @@ describe("HTTP bridge provider", () => {
       if (url.endsWith("/messages")) {
         return Response.json({ messages: [{ role: "assistant" }] });
       }
+      if (url.endsWith("/close")) return Response.json({ closed: true, retained: true });
       return Response.json({});
     });
 
@@ -704,9 +705,11 @@ describe("HTTP bridge provider", () => {
       "http://claude.test/session/session%2F1/messages",
       "http://claude.test/session/session%2F1/prompt",
       "http://claude.test/session/session%2F1/abort",
-      "http://claude.test/session/session%2F1",
+      "http://claude.test/session/session%2F1/close",
     ]);
-    expect(requests[4]!.init.method).toBe("DELETE");
+    // Close is the non-destructive route; DELETE would delete the Claude rollout.
+    expect(requests[4]!.init.method).toBe("POST");
+    expect(requests.some((request) => request.init.method === "DELETE")).toBe(false);
     // Every bridge validator requires `path`: the Claude route rejects the whole
     // request without one and the Codex route silently drops the entry. So a
     // base64 image is staged into the workspace and attached by path.
@@ -726,21 +729,10 @@ describe("HTTP bridge provider", () => {
     });
   });
 
-  test("treats a missing close session as success and propagates other close failures", async () => {
-    const missing = httpProvider(() => new Response(null, { status: 404 }));
-    await expect(missing.provider.closeSession!("missing-session")).resolves.toBeUndefined();
-
-    const failed = httpProvider(() =>
-      Response.json({ error: "bridge unavailable" }, { status: 503 }),
-    );
-    await expect(failed.provider.closeSession!("live-session")).rejects.toThrow(
-      "bridge unavailable",
-    );
-  });
-
   test("forgets a closed Codex session's cached execution mode", async () => {
     const { provider, requests } = httpProvider((url, init) => {
       if (url.endsWith("/session/create")) return Response.json({ sessionId: "session-1" });
+      if (url.endsWith("/close")) return Response.json({ closed: true, retained: true });
       if (init.method === "DELETE") return Response.json({});
       if (url.endsWith("/config")) {
         return Response.json({

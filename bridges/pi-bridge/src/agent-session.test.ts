@@ -427,13 +427,13 @@ describe("session ownership", () => {
     });
 
     const closing = closeSession(state);
-    await expect(ensureSession(state)).rejects.toThrow(/closed/);
+    await expect(ensureSession(state)).rejects.toThrow(/closing/);
     publish!();
     await closing;
 
     expect(disposed).toBe(1);
     expect(state.session).toBeNull();
-    await expect(ensureSession(state)).rejects.toThrow(/closed/);
+    await expect(ensureSession(state)).rejects.toThrow(/closing/);
   });
 });
 

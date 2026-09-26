@@ -379,6 +379,13 @@ await client.session.create({ body: { title } });
 await client.session.messages({ path: { id } });
 ```
 
+`client.session.delete` is shown only for its parameter shape. It deletes the
+conversation and all of its data, so tab close must never call it: ordinary
+close is `OpenCodeProvider.closeSession` (abort, settle workflow ownership,
+restore reviewer permissions, reject pending requests, forget the session;
+`apps/backend/src/core/opencode-session-close.ts`). See
+[Tab close and conversation retention](#tab-close-and-conversation-retention).
+
 ### v2-Only Features
 
 These APIs only exist in v2:
@@ -499,6 +506,13 @@ session surface. When touching the session catalogue
   the rollout keeps (a task report, an interruption marker) must be produced
   by both the live loop and `normalizePersistedSessionMessages`, or a reload
   will disagree with the live tab.
+- **`DELETE /session/:id` is destructive.** It calls the SDK's
+  `deleteSession`, which removes the `{sessionId}.jsonl` rollout. Tab close
+  uses `POST /session/:id/close` (`closeSessionRetainingHistory`), which stops
+  the query and keeps the rollout; nothing may fall back from close to DELETE.
+  Close answers 503 pending, keeping the session registered and fenced, when
+  it cannot prove the query stopped (`Query.close()` threw or did not settle,
+  or a racing dispatch claim did not settle).
 - **`app.onError` is registered on purpose.** Hono's default handler passes the
   raw error to `console.error`, which under Bun prints a source-context dump of
   whichever minified vendor file threw, with no indication of which request
@@ -669,6 +683,26 @@ When touching the Pi bridge:
   disconnect, closing session and unparseable answer **denies**. A turn that
   ends with a call still parked denies it too — leaving it unanswered wedges the
   turn and, with it, the environment's activity state.
+- A prompt claims a process-local token (`promptClaim`) synchronously at route
+  entry, before its body is read, when nothing else owns the session; an
+  unused reservation (validation error, duplicate, local answer, busy refusal)
+  is released with its own cancel record only. A cancel that arrives before Pi
+  has produced a cancel handle is parked against that claim and answered 202
+  `{ cancelled: false, pending: true }`, never `cancelled`; so is a provider
+  abort that hangs or rejects (the next request retries it). The prompt route
+  checks for it after every preparation await and settles without calling Pi.
+  In Pi's preflight the cancel calls `session.abort()` at once (pinned SDK
+  0.87 aborts an auto-compaction there) and again when Pi accepts, because the
+  run resets the abort flag when it starts. Acceptance is bounded by
+  `PI_BRIDGE_STARTUP_TIMEOUT_MS` (default 5 min, floor 30 s): past it the route
+  answers 424 with an explicit error, but the claim and `dispatching` are kept
+  until Pi settles the prompt — a late acceptance is aborted and observed — so
+  every status route reports running while something can still reach Pi.
+  Config and compaction take no claim, so a cancel during them cannot stop a
+  later prompt. Close and DELETE mark the session closed before their first
+  await: new prompts get 409, one still preparing settles as cancelled, and
+  `/close` keeps the session registered until its removal is published (503
+  pending otherwise).
 - Project-local `.pi/` resources are opt-in through
   `PI_BRIDGE_PROJECT_RESOURCES`, and only the container launcher opts in. A Pi
   extension is arbitrary TypeScript this process would execute, so cloning a
@@ -730,13 +764,31 @@ When touching the SDK bridge:
   workspace itself afterwards (`applyWorkingDirectory` in `config.ts`, called
   at module load and again from `start()`), which is why `index.ts` exports
   `./config.js` before anything that loads `@cursor/sdk`.
-- `DELETE /session/:id` is not optional. Backend tab teardown reads a 404 there
-  as "already gone", so a bridge that does not answer it leaks a session, its
-  transcript and its attached agent on every closed tab — and once the state
-  file outgrows `MAX_STATE_FILE_BYTES` every later write is skipped, taking
-  live sessions down with the dead ones. A method the bridge does not serve on
-  a session it *does* have answers 405, so a real gap cannot hide as a missing
+- Permanent close (`DELETE /session/:id` and `POST /session/:id/close`, which
+  are the same non-destructive operation here) lives in `src/session-close.ts`.
+  It sets `state.closed` before its first await, and every admission path —
+  prompt, attach, config, steer, same-key create, resume — refuses a closed
+  session. A late attach is disposed instead of installed, and a late
+  `agent.send` result is cancelled and followed. The close answers 503
+  `pending` until owned work has actually stopped, and it publishes the
+  removal before it answers success. Idle detach (`detachAgent`) is not a
+  close and never sets the marker. A method the bridge does not serve on a
+  session it *does* have answers 405, so a real gap cannot hide as a missing
   session.
+- `persistBarrier()` is a mandatory publication: it rejects when nothing
+  reached disk, and prompt/steer dispatch, create, resume and identity-changing
+  attach all wait for it. `schedulePersist()` is best-effort. Both share one
+  serialized queue, so never write the state file directly. When the
+  aggregate state outgrows `MAX_STATE_FILE_BYTES`, the oldest-touched persisted
+  transcript copies are shed (`src/persistence-budget.ts`). If the recovery
+  metadata alone does not fit, the publication fails with a typed error rather
+  than being skipped.
+- The steer journal is bounded by count and bytes (`src/steer-journal.ts`).
+  Records that could still be retried against the running turn are never
+  evicted. A new steer that does not fit is refused with 429
+  `{ outcome: "rejected" }` before anything is journaled or sent. Do not
+  replace this with a FIFO: an evicted record would turn an exact retry into
+  a second delivery.
 - Never compress a response the client did not ask for. `json` reads
   `Accept-Encoding` once per request; this repository already has a hop that
   asks for `identity` on purpose. Compression defers the write past the
@@ -765,6 +817,39 @@ environment as permanently busy. The same applies across a restart: the live
 child registry is deliberately not persisted, so a card restored at `active`
 would spin forever with nothing left that could settle it, and `loadPersistedState`
 closes those out on the way in.
+
+### Tab close and conversation retention
+
+Closing a tab retains the conversation on every platform. Every managed bridge
+(Claude, Codex, Cursor, Grok/ACP, Pi) serves `POST /session/:id/close`; backend
+tab teardown and `HttpBridgeProvider.closeSession` both go through
+`closeBridgeSessionRetaining` (`apps/backend/src/core/bridge-session-close.ts`).
+When touching any of them:
+
+- **Close is non-destructive.** It stops owned work, denies parked approvals,
+  questions and plan approvals, settles dispatch claims, and releases the
+  bridge's live mapping. It never deletes vendor history: no Claude SDK
+  `deleteSession`, no Codex `thread/delete`, no OpenCode
+  `client.session.delete`.
+- **Only a 2xx that affirms `closed: true` is a confirmed close.** 200
+  `{ closed: true, retained: true }` or `{ closed: true, missing: true }`.
+  Anything else, including an empty or malformed 2xx, is not a close.
+- **An unknown session is answered in band, never 404.** 200
+  `{ closed: true, missing: true }`. A 404/405 from the close route means the
+  bridge predates it; it is never evidence that the session is gone.
+- **503 `{ closed: false, pending: true, error }` keeps everything.** The
+  bridge keeps the session registered (and refuses new work on it); the
+  backend keeps its durable teardown intent and the tab mapping, and the
+  periodic reconcile sweep retries. Errors are fixed, content-free strings.
+- **Legacy fallback is per bridge.** On 404/405 the backend may send the old
+  `DELETE /session/:id` only where `LEGACY_DELETE_RETAINS_HISTORY` is `true`
+  (Codex, Cursor, Grok, Pi). **Never for Claude**, whose DELETE deletes the
+  rollout: that teardown stays pending with a `bridge-upgrade-required`
+  failure the renderer shows as a restart notice. Do not add a platform to
+  that table without evidence from every released version of its DELETE.
+- **The last owner closes.** Two tabs can map to one provider session. Backend
+  teardown is serialized per (environment, agent, provider session) and only
+  the tab that finds no other mapping performs the provider close.
 
 ### Native slash commands
 

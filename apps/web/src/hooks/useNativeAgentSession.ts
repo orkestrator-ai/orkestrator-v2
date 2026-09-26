@@ -1622,6 +1622,9 @@ export function useNativeAgentSession<TMessage = unknown>({
             ? {
                 runtime: {
                   ...current.runtime,
+                  // A runtime section is the only source of steer occupancy,
+                  // so its absence there retires a retained saturated value.
+                  ...(runtime ? { steer: undefined } : {}),
                   ...runtime?.summary,
                   ...(runtime ? { notices: runtime.notices } : {}),
                   ...(mcp ? { mcp, mcpServers: mcp.length } : {}),

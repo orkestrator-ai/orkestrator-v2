@@ -524,6 +524,7 @@ export async function reconcileCursorToolMetadata(
   if (
     provider !== "cursor" ||
     shuttingDown ||
+    state.closing !== undefined ||
     sessions.get(state.id) !== state ||
     state.child !== child ||
     state.promptSequence !== promptSequence ||
@@ -549,6 +550,7 @@ export async function reconcileCursorToolMetadata(
     // bridge's process count without bound.
     replayChild = new AcpProcess();
     cursorToolReplayProcesses.add(replayChild);
+    (state.cursorToolReplayChildren ??= new Set()).add(replayChild);
     replayChild.onUpdate = (params) => {
       if (params.sessionId !== state.acpSessionId || !isObject(params.update)) return;
       const update = params.update;
@@ -599,7 +601,10 @@ export async function reconcileCursorToolMetadata(
     try {
       await replayChild?.close();
     } finally {
-      if (replayChild) cursorToolReplayProcesses.delete(replayChild);
+      if (replayChild) {
+        cursorToolReplayProcesses.delete(replayChild);
+        state.cursorToolReplayChildren?.delete(replayChild);
+      }
       adjustActiveCursorToolReplays(-1);
     }
   }
@@ -639,7 +644,9 @@ export function scheduleCursorToolMetadataReconcile(
   state: SessionState,
   options: { final?: boolean } = {},
 ): void {
-  if (provider !== "cursor" || shuttingDown || sessions.get(state.id) !== state) return;
+  if (provider !== "cursor" || shuttingDown || sessions.get(state.id) !== state || state.closing) {
+    return;
+  }
   // Only live passes are rate-limited. The final pass is the completeness
   // guarantee, so a turn that spent its budget still ends fully enriched.
   if (!options.final && liveCursorReplayBudgetExhausted(state)) return;
@@ -658,7 +665,7 @@ export function scheduleCursorToolMetadataReconcile(
 
   const run = () => {
     state.cursorToolReplayTimer = undefined;
-    if (shuttingDown || sessions.get(state.id) !== state) return;
+    if (shuttingDown || sessions.get(state.id) !== state || state.closing) return;
     const mode = state.cursorToolReplayPending;
     state.cursorToolReplayPending = undefined;
     if (!mode) return;

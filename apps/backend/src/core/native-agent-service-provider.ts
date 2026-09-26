@@ -121,6 +121,65 @@ import {
 } from "./coordinator-runtime.js";
 
 export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation {
+  /**
+   * Forget a closed provider session's in-memory registration on the cached
+   * provider, if one exists. Never resolves or starts a bridge: tab teardown
+   * calls this after the provider-side close was confirmed, and only when no
+   * other logical tab still maps to the same provider session.
+   */
+  releaseProviderSession(
+    environmentId: string,
+    agent: EnsureNativeAgentSessionInput["agent"],
+    providerSessionId: string,
+  ): void {
+    this.providers.get(`${environmentId}\0${agent}`)?.releaseSession?.(providerSessionId);
+  }
+
+  /**
+   * Tab close through the provider, so the provider's own close runs: for
+   * OpenCode that settles workflow-turn ownership, restores temporary reviewer
+   * permissions and rejects pending requests before forgetting the session.
+   *
+   * Never starts a bridge. The cached provider is used only while it still
+   * points at the running bridge; a restarted bridge gets a fresh provider,
+   * cached like any other. `not-running` means no bridge answers, so the
+   * caller keeps its durable intent.
+   */
+  async closeProviderSessionIfRunning(
+    environmentId: string,
+    agent: EnsureNativeAgentSessionInput["agent"],
+    providerSessionId: string,
+  ): Promise<"closed" | "not-running" | "unsupported"> {
+    this.assertAcceptingWork();
+    const cacheKey = `${environmentId}\0${agent}`;
+    const input = { environmentId, agent, logicalSessionKey: "tab-close" };
+    let provider: NativeAgentRuntimeProvider | undefined;
+    if (this.options.provider) {
+      this.absentBridgeUntil.delete(cacheKey);
+      provider = await this.observeProvider(input);
+    } else {
+      const environment = await this.assertEnvironmentLive(environmentId);
+      const connection = await this.observeBridgeConnection(agent, environment);
+      if (!connection) return "not-running";
+      const identity = this.bridgeConnectionIdentity(connection);
+      const cached = this.providers.get(cacheKey);
+      if (cached && this.providerConnections.get(cacheKey) === identity) {
+        provider = cached;
+      } else {
+        this.assertAcceptingWork();
+        provider = createNativeAgentProvider(connection, {
+          autoAnswerRequests: false,
+          stageImages: (images) => this.stageImages(environmentId, images),
+        });
+        this.cacheProvider(cacheKey, provider, identity);
+      }
+    }
+    if (!provider) return "not-running";
+    if (!provider.closeSession) return "unsupported";
+    await provider.closeSession(providerSessionId);
+    return "closed";
+  }
+
   protected async provider(
     input: EnsureNativeAgentSessionInput,
   ): Promise<NativeAgentRuntimeProvider> {

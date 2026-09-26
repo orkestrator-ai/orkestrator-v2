@@ -39,7 +39,7 @@ import {
   PromptAcceptedResult,
   AppServerRuntimeBase,
 } from "./app-server-runtime-base.js";
-import { AppServerRuntimeSessions } from "./app-server-runtime-sessions.js";
+import { AppServerRuntimeSessions, SESSION_CLOSING_ERROR } from "./app-server-runtime-sessions.js";
 import { createHash } from "node:crypto";
 import type { AppServerEngine } from "./engine/app-server-engine.js";
 import type {
@@ -153,6 +153,11 @@ function commandRefusal(message: string): PromptDispatchOutcome {
   return { ok: false, status: 422, error: message, kind: "command-unavailable" };
 }
 
+/** Nothing was journaled or sent: a close is retiring this session. */
+function closingRefusal(): PromptDispatchOutcome {
+  return { ok: false, status: 409, error: SESSION_CLOSING_ERROR };
+}
+
 export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
   async prompt(
     sessionId: string,
@@ -172,6 +177,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
   ): Promise<PromptDispatchOutcome> {
     const session = this.registry.getSession(sessionId);
     if (!session) return { ok: false, status: 404, error: "Session not found" };
+    if (this.sessionAdmissionClosed(session)) return closingRefusal();
     if (!input.requestId?.trim()) {
       return { ok: false, status: 400, error: "requestId is required" };
     }
@@ -437,8 +443,16 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     const hadAttachedContext = context !== undefined;
     // 4. Lazily create the Codex thread on first prompt.
     if (!context) {
+      if (this.sessionAdmissionClosed(session)) return closingRefusal();
       const thread = await this.options.engine.startThread({ config: promptConfig() });
       if (!thread.id) return { ok: false, status: 503, error: "Codex did not return a thread id" };
+      if (this.sessionAdmissionClosed(session)) {
+        // Close retired the session during `thread/start`. Attaching now would
+        // bind a thread to a session nothing references; the empty thread has
+        // no rollout, so releasing it loses nothing.
+        await this.options.engine.unsubscribeThread(thread.handle).catch(() => undefined);
+        return closingRefusal();
+      }
       // A new thread means a new rollout on disk; the next /session/list must
       // not answer from a catalog scanned before it existed.
       invalidateTranscriptCatalogCache();
@@ -461,6 +475,10 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       context = await this.resumeThreadForPrompt(session.id, context, turnConfig);
     }
 
+    // Last admission check, with no await between it and the claim below: a
+    // close that fenced the session during any of the awaits above must not
+    // find a turn starting after it decided the thread was quiet.
+    if (this.sessionAdmissionClosed(session)) return closingRefusal();
     context.dispatchInFlight = true;
     this.registry.setPhase(context, "starting");
 
@@ -500,6 +518,17 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         userMessage.id,
         assistantMessage.id,
       ]);
+    };
+    // A close fenced this session while an overload retry was waiting. The
+    // overload proved the first attempt did not run, so the thread is idle and
+    // the request id is safe to forget.
+    const refuseRetryForClose = async (): Promise<PromptDispatchOutcome> => {
+      context!.dispatchInFlight = false;
+      retractProvisionalMessages();
+      this.registry.setPhase(context!, "idle");
+      this.emitStatus(context!);
+      await this.journal.forget(requestId);
+      return closingRefusal();
     };
     // Set only after app-server explicitly says an initial attempt did not run.
     // It stays true throughout retry preparation, where any failure is still a
@@ -574,6 +603,9 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
           ),
         );
         let liveSession = this.registry.getSession(session.id);
+        if (!this.stopping && liveSession === session && this.sessionAdmissionClosed(session)) {
+          return await refuseRetryForClose();
+        }
         if (this.stopping || liveSession !== session) {
           context.dispatchInFlight = false;
           // The phase was moved to `starting` before the dispatch, and `starting`
@@ -610,6 +642,9 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         // optimistic transcript onto the replacement context.
         await this.generationRecovery;
         liveSession = this.registry.getSession(session.id);
+        if (!this.stopping && liveSession === session && this.sessionAdmissionClosed(session)) {
+          return await refuseRetryForClose();
+        }
         if (this.stopping || liveSession !== session) {
           context.dispatchInFlight = false;
           const message = this.stopping

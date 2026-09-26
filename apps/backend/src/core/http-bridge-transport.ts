@@ -358,3 +358,24 @@ export async function resolvePromptAttachments(
   }
   return attachments.length > 0 ? attachments : undefined;
 }
+
+/**
+ * Drop the staged `dataUrl` before an attachment reaches a bridge that reads
+ * the workspace itself.
+ *
+ * Workspace-reading bridges ignore `dataUrl` but cap request bodies at 2MiB.
+ * Forwarding it could make a valid screenshot fail with HTTP 413. Claude and Codex consume it.
+ */
+export function bridgePromptAttachments(
+  agent: ProviderAgent,
+  attachments: PromptAttachment[] | undefined,
+): PromptAttachment[] | undefined {
+  if (!attachments || (agent !== "cursor" && agent !== "grok" && agent !== "pi")) {
+    return attachments;
+  }
+  return attachments.map((attachment) => ({
+    type: attachment.type,
+    path: attachment.path,
+    ...(attachment.filename ? { filename: attachment.filename } : {}),
+  }));
+}

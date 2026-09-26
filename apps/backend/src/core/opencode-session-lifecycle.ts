@@ -62,6 +62,15 @@ export class OpenCodeSessionLifecycle {
     this.ownedSessions.add(sessionId);
   }
 
+  /** Stop tracking a session this provider no longer owns. The vendor session is untouched. */
+  release(sessionId: string): void {
+    this.ownedSessions.delete(sessionId);
+    this.sessionExistenceCache.delete(sessionId);
+    this.sessionExistenceRetryAt.delete(sessionId);
+    this.streamObservationVersion.delete(sessionId);
+    this.eventLifecycle.delete(sessionId);
+  }
+
   observeStreamEvent(sessionId: string, state: "running" | "idle" | "missing"): void {
     setBoundedMapEntry(
       this.streamObservationVersion,

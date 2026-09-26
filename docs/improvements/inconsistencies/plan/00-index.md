@@ -1,6 +1,6 @@
 # Inconsistency remediation — implementation plan
 
-Status: Planned; implementation has not started.  
+Status: Implemented on branch (2026-09-26); partially verified — see the table and the step 11 evidence record. Awaiting the maintainer's retention decision, the outstanding live checks, review and merge.  
 Prepared: 2026-09-21  
 Source revision: `88c2f9ccfaa68045573b658dd4f172bc5ff7c51b`
 
@@ -18,26 +18,26 @@ supported draft attachments survive reload; steer history stays bounded without
 enabling duplicates; conversation retention is explicit; and equivalent message
 routes parse cursors consistently.
 
-These documents specify future work. The passing tests recorded in the source
-review are a baseline, not evidence that any proposed fix is implemented. Only
-planning documents and the documentation catalog are changed by this planning
-task.
+These documents specified the work. It was implemented on 2026-09-26; the
+[step 11 evidence record](11-conformance-verification-and-release-handoff.md#evidence-record-2026-09-26)
+maps every finding to its change, tests and real-stack results. The original
+review is kept unchanged as a dated snapshot.
 
 ## Numbered steps
 
 | Step | Plan | Findings | Required predecessors | Status |
 | --- | --- | --- | --- | --- |
-| 01 | [Contract baseline and deterministic regression fixtures](01-contract-baseline-and-regression-fixtures.md) | All | None | Planned |
-| 02 | [Mandatory persistence and dispatch barriers](02-mandatory-persistence-and-dispatch-barriers.md) | INC-01; failure part of INC-03 | 01 | Planned |
-| 03 | [Aggregate persistence budgeting and recovery](03-aggregate-persistence-budgeting-and-recovery.md) | INC-03 | 02 | Planned |
-| 04 | [Durable session lifecycle acknowledgements](04-durable-session-lifecycle-acknowledgements.md) | INC-04 | 02, 03 | Planned |
-| 05 | [Cursor permanent close and late-work ownership](05-cursor-permanent-close-and-late-work-ownership.md) | INC-02 | 02, 03 | Planned |
-| 06 | [Pi cancellation during startup and preflight](06-pi-cancellation-during-startup-and-preflight.md) | INC-05 | 01 | Planned |
-| 07 | [Capability-driven attachment draft restoration](07-capability-driven-attachment-draft-restoration.md) | INC-06 | 01 | Planned |
-| 08 | [Bounded steer history with safe replay behavior](08-bounded-steer-history-with-safe-replay.md) | INC-07 | 02, 03 | Planned |
-| 09 | [Conversation retention and close semantics](09-conversation-retention-and-close-semantics.md) | INC-08 | 04, 05; recorded retention decision | Planned; decision open |
-| 10 | [Shared transcript cursor validation](10-shared-transcript-cursor-validation.md) | INC-09 | 01 | Planned |
-| 11 | [Conformance, real-stack verification, and release handoff](11-conformance-verification-and-release-handoff.md) | All | 02–10 | Planned |
+| 01 | [Contract baseline and deterministic regression fixtures](01-contract-baseline-and-regression-fixtures.md) | All | None | Verified |
+| 02 | [Mandatory persistence and dispatch barriers](02-mandatory-persistence-and-dispatch-barriers.md) | INC-01; failure part of INC-03 | 01 | Verified |
+| 03 | [Aggregate persistence budgeting and recovery](03-aggregate-persistence-budgeting-and-recovery.md) | INC-03 | 02 | Implemented; browser recovery check outstanding |
+| 04 | [Durable session lifecycle acknowledgements](04-durable-session-lifecycle-acknowledgements.md) | INC-04 | 02, 03 | Verified |
+| 05 | [Cursor permanent close and late-work ownership](05-cursor-permanent-close-and-late-work-ownership.md) | INC-02 | 02, 03 | Implemented; live Cursor startup-close outstanding |
+| 06 | [Pi cancellation during startup and preflight](06-pi-cancellation-during-startup-and-preflight.md) | INC-05 | 01 | Implemented; live Pi interrupt outstanding |
+| 07 | [Capability-driven attachment draft restoration](07-capability-driven-attachment-draft-restoration.md) | INC-06 | 01 | Implemented; live assigned-Grok check outstanding |
+| 08 | [Bounded steer history with safe replay behavior](08-bounded-steer-history-with-safe-replay.md) | INC-07 | 02, 03 | Implemented; browser saturation check outstanding |
+| 09 | [Conversation retention and close semantics](09-conversation-retention-and-close-semantics.md) | INC-08 | 04, 05; recorded retention decision | Implemented; decision confirmation and remaining live retention checks outstanding |
+| 10 | [Shared transcript cursor validation](10-shared-transcript-cursor-validation.md) | INC-09 | 01 | Verified |
+| 11 | [Conformance, real-stack verification, and release handoff](11-conformance-verification-and-release-handoff.md) | All | 02–10 | In progress |
 
 Numeric order is the default execution order. Steps 06, 07, and 10 do not depend
 on the persistence work and may be implemented independently after their fixtures
@@ -96,7 +96,7 @@ consumer work, and never merge an implementation PR into `main` as an agent.
 
 | Topic | Planning default | Decision/evidence needed |
 | --- | --- | --- |
-| Conversation retention | Ordinary tab close preserves resumable history | Record the product choice in step 09 before changing destructive behavior |
+| Conversation retention | Ordinary tab close preserves resumable history | Recorded in step 09 on 2026-09-26 (recommended default adopted; confirm at review) |
 | Mandatory persistence | Serialize writes, propagate failure, publish before side effects | Prove all interleavings with a controlled writer and process-restart tests |
 | Oversized state | Shed persisted transcript copies; retain essential records | Establish bounded serialization and explicit admission failure for metadata-only overflow |
 | Steer retention | Protect all records that could target the current run; reject admission when necessary | Validate recovered-run identity and the negative-acknowledgement path; FIFO alone is insufficient |
@@ -152,12 +152,12 @@ index rather than rewriting the original observations as if they never existed.
 ## Overall acceptance
 
 - [ ] Every finding maps to a verified change or a documented product resolution.
-- [ ] Mandatory publications fail truthfully and protect all relevant side effects.
-- [ ] Restart and size-bound tests retain essential recovery state.
-- [ ] No closed-session race leaves executing work outside authoritative ownership.
+- [x] Mandatory publications fail truthfully and protect all relevant side effects.
+- [x] Restart and size-bound tests retain essential recovery state.
+- [x] No closed-session race leaves executing work outside authoritative ownership.
 - [ ] Pi startup cancellation and Cursor/Grok draft reloads work in real-stack QA.
-- [ ] Steer bounds preserve uncertainty and cannot enable an exact-key duplicate.
-- [ ] Close semantics are documented and compatibility-tested across all platforms.
-- [ ] Cursor parsing has one tested contract for equivalent bridge routes.
+- [x] Steer bounds preserve uncertainty and cannot enable an exact-key duplicate.
+- [x] Close semantics are documented and compatibility-tested across all platforms.
+- [x] Cursor parsing has one tested contract for equivalent bridge routes.
 - [ ] Full validation evidence and cleanup are recorded in step 11.
 

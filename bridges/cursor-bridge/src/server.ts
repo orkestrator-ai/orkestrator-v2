@@ -16,6 +16,7 @@ import { detachAgent } from "./agent-session.js";
 import { json, route } from "./http.js";
 import { settleIdleDetaches, sweepIdleSessions } from "./idle-detach.js";
 import { drainPersistence, loadPersistedState } from "./persistence.js";
+import { finishRestoredTombstones } from "./session-close.js";
 import { sessions } from "./state.js";
 
 const IDLE_SWEEP_MS = 60 * 1000;
@@ -78,6 +79,10 @@ function lifecycleFor(listenPort: number, options: ServerLifecycleOptions): Brid
     open: async () => {
       applyWorkingDirectory();
       await loadPersistedState();
+      // Finish durable closes left by a previous process without delaying startup.
+      void finishRestoredTombstones().catch(() => {
+        console.warn("[cursor-bridge] restored closes could not be finished at startup");
+      });
       await new Promise<void>((resolve) => server.listen(listenPort, hostname, resolve));
     },
     close: releaseEverything,

@@ -129,11 +129,12 @@ export function messageWindow(state: SessionState, fromIndex: number | null): Js
   };
 }
 
-export function parseFromIndex(value: string | null): number | null {
-  if (value === null) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
-}
+/**
+ * `fromIndex` shares one grammar with every other bridge's `/messages` route:
+ * canonical nonnegative safe decimal, anything else is `null` (the retained
+ * window). See `parseTranscriptFromIndex` in the protocol package.
+ */
+export { parseTranscriptFromIndex as parseFromIndex } from "@orkestrator/protocol/transcript-window";
 
 export function publicApprovals(state: SessionState): unknown[] {
   return [...state.approvals.values()].map(({ id, title, options, requestedAt, expiresAt }) => ({

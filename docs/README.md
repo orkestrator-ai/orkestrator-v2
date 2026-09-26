@@ -81,7 +81,7 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 | Document | Status | Notes |
 | --- | --- | --- |
 | [CLI commands plan](improvements/cli-commands/plan/00-cli-commands-index.md) | Active | Steps 01–14 verified (unit, real-backend, packaged, local and container scenarios, live Claude/Codex/OpenCode, real-browser CLI→UI and question rehydration); step 15 awaits review and merge. Pi/Cursor/Grok live runs and macOS are outstanding. Living guide: [public-cli.md](architecture/public-cli.md). Source: [CLI review](improvements/cli-commands.md). |
-| [Inconsistency remediation plan](improvements/inconsistencies/plan/00-index.md) | Active | Planned work in eleven numbered steps, based on the 2026-09-21 inconsistency review; implementation has not started. |
+| [Inconsistency remediation plan](improvements/inconsistencies/plan/00-index.md) | Active | Eleven steps from the 2026-09-21 inconsistency review. Implemented 2026-09-26 and partly verified. Step 11 records the evidence and the outstanding live checks, plus the retention decision awaiting confirmation. |
 | [Inconsistency review](improvements/incocnsistencies.md) | Historical | Nine findings against revision `88c2f9c`; the implementation plan tracks resolution. Original requested filename retained. |
 
 ## Todos

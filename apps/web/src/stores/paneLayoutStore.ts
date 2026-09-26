@@ -31,6 +31,7 @@ import { boundBrowserHistory, sanitizeBrowserHistoryForPersistence } from "@/lib
 import { createUuid } from "@/lib/uuid";
 import { destroyBrowserPreview } from "@/lib/native/browser-preview";
 import { forgetAgentHandoff } from "@/lib/agent-handoff";
+import { reportNativeTabTeardownFailure } from "@/lib/tab-teardown-notice";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 /**
@@ -378,7 +379,7 @@ function cleanupClaudeNativeTab(envId: string, tabId: string) {
       kind: "claude-native",
       sessionId: session?.sessionId,
     })
-    .catch((err) => console.debug("[PaneLayout] Claude teardown remains pending:", err));
+    .catch((err) => reportNativeTabTeardownFailure(envId, "Claude", err));
 }
 
 function cleanupOpenCodeNativeTab(envId: string, tabId: string) {
@@ -395,7 +396,7 @@ function cleanupOpenCodeNativeTab(envId: string, tabId: string) {
       kind: "opencode-native",
       sessionId: session?.sessionId,
     })
-    .catch((err) => console.debug("[PaneLayout] OpenCode teardown remains pending:", err));
+    .catch((err) => reportNativeTabTeardownFailure(envId, "OpenCode", err));
 }
 
 function cleanupCodexNativeTab(envId: string, tabId: string) {
@@ -412,7 +413,7 @@ function cleanupCodexNativeTab(envId: string, tabId: string) {
       kind: "codex-native",
       sessionId: session?.sessionId,
     })
-    .catch((err) => console.debug("[PaneLayout] Codex teardown remains pending:", err));
+    .catch((err) => reportNativeTabTeardownFailure(envId, "Codex", err));
 }
 
 function cleanupSharedNativeTab(envId: string, tab: TabInfo) {
@@ -425,7 +426,7 @@ function cleanupSharedNativeTab(envId: string, tab: TabInfo) {
       kind: `${data.platform}-native`,
       sessionId: data.sessionId,
     })
-    .catch((err) => console.debug("[PaneLayout] shared native teardown remains pending:", err));
+    .catch((err) => reportNativeTabTeardownFailure(envId, "shared native", err));
 }
 
 function cleanupClaudeTmuxTab(envId: string, tabId: string) {

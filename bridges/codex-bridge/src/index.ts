@@ -24,6 +24,7 @@ import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transc
 import { streamSSE } from "hono/streaming";
 import { readCachedTranscript } from "./transcript-cache.js";
 import { registerMcpReloadRoute } from "./mcp-reload-route.js";
+import { registerSessionCloseRoute } from "./session-close-route.js";
 import {
   applyCodexCollabStateToSubagentParts,
   CODEX_TIMELINE_ITEM_PREFIX,
@@ -41,7 +42,7 @@ import {
   shutdownSessionTitleGeneration,
   type PersistedSessionTitleSource,
 } from "./session-titles.js";
-import { AppServerRuntime } from "./app-server-runtime.js";
+import { AppServerRuntime, SESSION_CLOSING_ERROR } from "./app-server-runtime.js";
 import { AppServerEngine, type AppServerEngineOptions } from "./engine/app-server-engine.js";
 import { codexAppServerConfigOverrides } from "./codex-config.js";
 import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
@@ -1590,6 +1591,7 @@ app.post("/session/:id/compact", async (c) => {
   const outcome = await appServerRuntime.compactSession(c.req.param("id"));
   if (outcome === "not-found") return c.json({ error: "Session not found" }, 404);
   if (outcome === "running") return c.json({ error: "Session is running" }, 409);
+  if (outcome === "closing") return c.json({ error: SESSION_CLOSING_ERROR }, 409);
   if (outcome === "unavailable") return c.json({ error: "Compaction could not be started" }, 503);
   // 202: `thread/compact/start` returns before the rewrite has happened. The
   // session stays busy until the bridge sees `thread/compacted`.
@@ -1624,6 +1626,8 @@ app.post("/session/:id/steer", async (c) => {
     requestId,
   );
   if (outcome === "not-found") return c.json({ error: "Session not found" }, 404);
+  // No `outcome` field: the backend reads this as a definite refusal, not "idle".
+  if (outcome === "closing") return c.json({ error: SESSION_CLOSING_ERROR }, 409);
   if (outcome === "idle") {
     return c.json({ error: "There is no active turn", outcome: "idle" }, 409);
   }
@@ -1716,6 +1720,7 @@ app.post("/session/:id/review", async (c) => {
   const result = await appServerRuntime.startNativeReview(c.req.param("id"), target);
   if (result.outcome === "not-found") return c.json({ error: "Session not found" }, 404);
   if (result.outcome === "running") return c.json({ error: "Session is running" }, 409);
+  if (result.outcome === "closing") return c.json({ error: SESSION_CLOSING_ERROR }, 409);
   if (result.outcome === "unavailable") return c.json({ error: "Native review failed" }, 503);
   return c.json({ status: "processing", turnId: result.turnId }, 202);
 });
@@ -1780,6 +1785,7 @@ app.get("/session/:id/mcp", async (c) => {
 });
 
 registerMcpReloadRoute(app, appServerRuntime);
+registerSessionCloseRoute(app, appServerRuntime);
 
 app.post("/session/:id/mcp/:name/:action", async (c) => {
   const action = c.req.param("action");

@@ -128,6 +128,22 @@ export const PROMPT_TIMEOUT_MS = parseBoundedInteger(
   60 * 1000,
   24 * 60 * 60 * 1000,
 );
+/**
+ * How long Pi may take to accept a prompt before the bridge fails the turn.
+ *
+ * Acceptance is Pi's `preflightResult`: input hooks, auth, a possible
+ * auto-compaction (a full model round trip on a large context) and
+ * `before_agent_start`. That can legitimately take minutes, so the default is
+ * generous and the floor keeps a misconfiguration from failing ordinary
+ * compacting turns; past it the prompt route answers with an explicit error
+ * rather than holding the request, and the at-most-once window, open forever.
+ */
+export const STARTUP_TIMEOUT_MS = parseBoundedInteger(
+  process.env.PI_BRIDGE_STARTUP_TIMEOUT_MS,
+  5 * 60 * 1000,
+  30 * 1000,
+  60 * 60 * 1000,
+);
 /** Bounded budget for catalogue and history reads, which are never on a turn. */
 export const CATALOG_TIMEOUT_MS = 30_000;
 /**

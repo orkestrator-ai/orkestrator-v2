@@ -28,7 +28,12 @@
     },
     "test:bridge": {
       "cache": false,
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/bunfig.toml", "$TURBO_ROOT$/tests/setup-node.ts"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/bunfig.toml",
+        "$TURBO_ROOT$/tests/setup-node.ts",
+        "$TURBO_ROOT$/tests/conformance/**"
+      ],
       "outputs": [],
       "passThroughEnv": ["ORKESTRATOR_TEST_WORKERS", "ORKESTRATOR_TEST_TIMINGS_DIR"]
     },

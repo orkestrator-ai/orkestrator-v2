@@ -11,7 +11,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { newSessionState } from "./agent-session.js";
-import { drainPersistence, loadPersistedState } from "./persistence.js";
+import { drainPersistence, loadPersistedState, reopenPersistenceForTests } from "./persistence.js";
 import { clientSessionKeys, sessionIsWorking, sessions, type BridgeToolPart } from "./state.js";
 import { ABANDONED_COMPACTION_NOTE } from "./translate.js";
 
@@ -28,6 +28,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // `persist()` drains, which closes admission for the rest of the process.
+  reopenPersistenceForTests();
   sessions.clear();
   clientSessionKeys.clear();
   // Restored rather than merely deleted: leaving it set would have any other

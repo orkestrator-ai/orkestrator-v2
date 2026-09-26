@@ -651,7 +651,10 @@ describe("prompt dispatch", () => {
       method: "POST",
       body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
     });
-    expect(response.status).toBe(500);
+    // `send` was called, so whether the run started is unknown: a distinct
+    // answer the backend parks, never a plain failure it would resubmit.
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ kind: "dispatch-outcome-unknown" });
     expect(state.status).toBe("error");
     // Prompt claim, delivered token delta, then rollback. This proves the
     // estimate existed inside the failure window before the rollback cleared it.
@@ -661,9 +664,12 @@ describe("prompt dispatch", () => {
     expect((await (await call(`/session/${state.id}/status`)).json()) as object).not.toHaveProperty(
       "contextUsage.estimated",
     );
-    // The id was released, so the caller may retry under the same one: nothing
-    // ran, and that is provable rather than assumed.
-    expect(state.promptJournal.has("r1")).toBe(false);
+    // The record is kept as ambiguous evidence, so the dispatch probe cannot
+    // answer that this id was never sent.
+    expect(state.promptJournal.get("r1")).toMatchObject({ state: "ambiguous", sendFailed: true });
+    expect(await (await call(`/session/${state.id}/dispatch?requestId=r1`)).json()).toEqual({
+      dispatch: "unknown",
+    });
     expect(state.messages).toEqual([]);
     expect(state.uncheckedTranscriptBytes).toBe(0);
     // The SDK agent that refused `send` must not be reused. Leaving it attached
@@ -680,10 +686,10 @@ describe("prompt dispatch", () => {
       method: "POST",
       body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
     });
-    expect(failed.status).toBe(500);
+    expect(failed.status).toBe(502);
     expect(state.agent).toBeNull();
     expect(state.agentId).toBe(conversationId);
-    expect(state.promptJournal.has("r1")).toBe(false);
+    expect(state.promptJournal.get("r1")?.state).toBe("ambiguous");
     expect(refused.sends).toHaveLength(1);
 
     const replacement = fakeAgent();
@@ -700,6 +706,11 @@ describe("prompt dispatch", () => {
       expect(state.agentId).toBe(conversationId);
       expect(refused.sends).toHaveLength(1);
       expect(replacement.sends).toHaveLength(1);
+      // A same-process retry of the parked id re-dispatches under the same
+      // SDK idempotency key, and its success settles the ambiguous record.
+      expect(replacement.sends[0]!.options).toMatchObject({ idempotencyKey: "r1" });
+      expect(["accepted", "completed"]).toContain(state.promptJournal.get("r1")!.state);
+      expect(state.promptJournal.get("r1")?.sendFailed).toBeUndefined();
       expect(state.messages[0]).toMatchObject({ role: "user", content: "hi" });
     } finally {
       restore();
@@ -757,7 +768,7 @@ describe("prompt dispatch", () => {
     }
   });
 
-  test("a stalled detach does not hold the prompt 500 or steal a replacement agent", async () => {
+  test("a stalled detach does not hold the prompt 502 or steal a replacement agent", async () => {
     const state = await createSession();
     let finishCleanup: () => void = () => undefined;
     const cleanup = new Promise<void>((resolve) => {
@@ -776,12 +787,12 @@ describe("prompt dispatch", () => {
         body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
       }),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("prompt 500 was held by detach cleanup")), 200),
+        setTimeout(() => reject(new Error("prompt 502 was held by detach cleanup")), 200),
       ),
     ]);
-    expect(failed.status).toBe(500);
+    expect(failed.status).toBe(502);
     expect(state.agent).toBeNull();
-    expect(state.promptJournal.has("r1")).toBe(false);
+    expect(state.promptJournal.get("r1")?.state).toBe("ambiguous");
     expect(refused.sends).toHaveLength(1);
 
     const replacement = fakeAgent();
@@ -811,7 +822,7 @@ describe("prompt dispatch", () => {
     }
   });
 
-  test("a rejected detach still returns the prompt 500", async () => {
+  test("a rejected detach still returns the prompt 502", async () => {
     const state = await createSession();
     const refused = attachFake(state, {
       failToStart: new Error("provider refused"),
@@ -830,12 +841,12 @@ describe("prompt dispatch", () => {
         body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
       }),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("prompt 500 was held by a rejected detach")), 200),
+        setTimeout(() => reject(new Error("prompt 502 was held by a rejected detach")), 200),
       ),
     ]);
-    expect(failed.status).toBe(500);
+    expect(failed.status).toBe(502);
     expect(state.agent).toBeNull();
-    expect(state.promptJournal.has("r1")).toBe(false);
+    expect(state.promptJournal.get("r1")?.state).toBe("ambiguous");
     expect(refused.sends).toHaveLength(1);
 
     const replacement = fakeAgent();

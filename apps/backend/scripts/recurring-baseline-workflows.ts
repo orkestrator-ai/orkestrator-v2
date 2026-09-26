@@ -313,7 +313,7 @@ async function runDomain(
   const keyed = mode === "keyed";
   const clock = { schedulerClock: { now: time.now, timers: time.timerFactory } };
   let provider: BusyProvider;
-  let owner: Owner;
+  let owner: Owner | undefined;
   try {
     if (domain === "feature-planning") {
       await seedFeaturePlanning(storage, fixture);
@@ -359,7 +359,7 @@ async function runDomain(
       providerReads: provider.reads,
     };
   } finally {
-    await owner!?.shutdown().catch(() => undefined);
+    await owner?.shutdown().catch(() => undefined);
     await rm(dataDir, { recursive: true, force: true });
   }
 }

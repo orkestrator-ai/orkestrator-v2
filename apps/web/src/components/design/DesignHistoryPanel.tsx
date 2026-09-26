@@ -283,7 +283,7 @@ export function DesignHistoryPanel({
 
       <section
         aria-label="Undo and redo"
-        className="grid grid-cols-1 gap-1.5 border-b border-divider px-3 py-2 break-words [overflow-wrap:anywhere]"
+        className="grid grid-cols-1 gap-1.5 border-b border-divider px-3 py-2 [overflow-wrap:anywhere]"
       >
         <div className="flex min-w-0 flex-wrap gap-1.5">
           <Button

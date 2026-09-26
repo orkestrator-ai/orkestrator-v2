@@ -267,6 +267,7 @@ describe("DesignHistoryPanel", () => {
     // button label would push every row past the pane edge.
     expect(section.className).toContain("grid-cols-1");
     expect(section.className).toContain("[overflow-wrap:anywhere]");
+    expect(section.className).not.toContain("break-words");
     for (const name of [/^Undo Change styles/, /^Redo Change styles/]) {
       const button = within(section).getByRole("button", { name });
       expect(button.className).toContain("whitespace-normal");

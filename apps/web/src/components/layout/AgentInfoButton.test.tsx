@@ -1155,7 +1155,7 @@ describe("AgentInfoButton usage panel", () => {
     // Failures keep the last sample until it ages past the freshness window.
     rejectUsage = true;
     await advance(AGENT_INFO_SYSTEM_USAGE_INTERVAL_MS);
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status") === null).toBe(true);
     await advance(SYSTEM_USAGE_STALE_AFTER_MS);
     expect(screen.getByRole("status").textContent).toBe("Data unavailable");
     expect(
@@ -1165,7 +1165,7 @@ describe("AgentInfoButton usage panel", () => {
     rejectUsage = false;
     cpuPercent = 39;
     await advance(30_000);
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status") === null).toBe(true);
     expect(
       screen.getByRole("button", { name: "Central processing unit (CPU) usage: 39%" }),
     ).toBeTruthy();

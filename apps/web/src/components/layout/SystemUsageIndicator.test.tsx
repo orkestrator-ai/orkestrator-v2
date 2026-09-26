@@ -582,7 +582,7 @@ describe("SystemUsageIndicator", () => {
     render(<SystemUsageIndicator />);
     openPanel();
     await waitFor(() => expect(screen.getByText("node")).toBeTruthy());
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status") === null).toBe(true);
     // Every refresh fails; the retained list ages past the freshness window.
     await advance(SYSTEM_USAGE_STALE_AFTER_MS + 1);
     expect(processCalls).toBeGreaterThan(1);

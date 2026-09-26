@@ -470,7 +470,7 @@ describe("ReviewValidationStatus", () => {
     });
     expect(loadOutput).toHaveBeenCalledTimes(4);
     await waitFor(() => expect(screen.getByText(/fresh/)).toBeTruthy());
-    expect(screen.queryByText(/two/)).toBeNull();
+    expect(screen.queryByText(/two/) === null).toBe(true);
   });
 
   test("shows a clickable environment state changed note with the drifted files", () => {

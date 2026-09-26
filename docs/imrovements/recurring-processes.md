@@ -1,6 +1,9 @@
 # Recurring processes: investigation and recommendations
 
-Status: Investigation complete; implementation proposed, not started.
+Status: Investigation complete; implemented. See the
+[plan index](../improvements/recurring-processes/plan/00-index.md) and step 12's
+qualification notes. Claude terminal-state polling (B18) was measured but left
+unchanged, and it now dominates the remaining container idle cost.
 
 Date: 2026-09-21. Source baseline: `88c2f9ccfaa68045573b658dd4f172bc5ff7c51b`.
 

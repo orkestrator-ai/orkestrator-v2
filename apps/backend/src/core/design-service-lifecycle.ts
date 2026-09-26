@@ -494,6 +494,8 @@ async function removeCanvasFiles(service: DesignService, canvasId: string) {
   await service.store.remove(canvasId);
   await rm(service.store.historyDir(canvasId), { recursive: true, force: true });
   await rm(service.store.exportBackupDir(canvasId), { recursive: true, force: true });
+  // Kept after a legacy migration for recovery; permanent removal ends that.
+  await rm(service.store.legacyBackupFile(canvasId), { force: true });
   service.forget(canvasId);
   service.library.remove(canvasId);
 }

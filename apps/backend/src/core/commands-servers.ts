@@ -1,7 +1,6 @@
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import {
   existsSync,
-  fs,
   path,
   createHash,
   randomBytes,
@@ -17,7 +16,6 @@ import {
   ORKESTRATOR_AGENT_MCP_SERVER_NAME,
   ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
   ORKESTRATOR_AGENT_MCP_URL_ENV,
-  runCommand,
   cleanupEnvironmentTmux,
   shutdownClaudeStatePolling,
   AGENT_PLATFORM_LABELS,
@@ -88,14 +86,20 @@ import {
   resolveManagedAcpBinary,
   resolveBunBinary,
 } from "./commands-agent-support.js";
-import { cleanupTerminalSessionsForEnvironment } from "./commands-terminal.js";
+import {
+  cleanupTerminalSessionsForEnvironment,
+  terminateTerminalSessionsForEnvironment,
+} from "./commands-terminal.js";
 import { deleteTerminalHistories } from "./terminal-history.js";
+import { environmentStateDirectory } from "./environment-state-paths.js";
+import { environmentCleanupLedger } from "./environment-cleanup-ledger.js";
+import { buildEnvironmentCleanupEntry, runEnvironmentCleanupStep } from "./environment-cleanup.js";
+import { scheduleEnvironmentCleanupReconcile } from "./environment-cleanup-reconciler.js";
 import {
   assertDockerContainerOwned,
   cleanupEnvironmentSetupState,
   enqueueEnvironmentLifecycleOperation,
   invalidateEnvironmentStartDedupe,
-  removeLocalWorktree,
   deleteMergedEnvironmentRemoteBranch,
 } from "./commands-environment.js";
 import { getHostPort } from "./commands-container-exec.js";
@@ -1094,15 +1098,15 @@ export async function startLocalServerUnlocked(
       // explicit `0` also closes the deprecated env override.
       env.PI_BRIDGE_PROJECT_RESOURCES = "0";
     }
-    env.PI_SESSION_DIR = path.join(
+    env.PI_SESSION_DIR = environmentStateDirectory(
       context.storage.getDataDir(),
       "pi-bridge-sessions",
-      createHash("sha256").update(environmentId).digest("hex").slice(0, 32),
+      environmentId,
     );
-    env.PI_BRIDGE_STATE_DIR = path.join(
+    env.PI_BRIDGE_STATE_DIR = environmentStateDirectory(
       context.storage.getDataDir(),
       "pi-bridge-state",
-      createHash("sha256").update(environmentId).digest("hex").slice(0, 32),
+      environmentId,
     );
   } else if (kind === "cursor") {
     command = resolveBunBinary(context);
@@ -1117,10 +1121,10 @@ export async function startLocalServerUnlocked(
     // omits `workingDirectory`, so the bridge enters `CWD` itself once bun has
     // bootstrapped: see `applyWorkingDirectory` in the bridge's `config.ts`.
     cwd = getBridgePath(context, "cursor-bridge");
-    env.CURSOR_BRIDGE_STATE_DIR = path.join(
+    env.CURSOR_BRIDGE_STATE_DIR = environmentStateDirectory(
       context.storage.getDataDir(),
       "cursor-bridge-state",
-      createHash("sha256").update(environmentId).digest("hex").slice(0, 32),
+      environmentId,
     );
     env.CURSOR_BRIDGE_AUTH_FILE = cursorSdkCredentialPath(context);
     if (cursorApiKey) env.CURSOR_API_KEY = cursorApiKey;
@@ -1130,9 +1134,7 @@ export async function startLocalServerUnlocked(
     cwd = getBridgePath(context, "acp-bridge");
     env.ACP_PROVIDER = kind;
     env.ACP_STATE_DIR = path.join(
-      context.storage.getDataDir(),
-      "acp-bridge-state",
-      createHash("sha256").update(environmentId).digest("hex").slice(0, 32),
+      environmentStateDirectory(context.storage.getDataDir(), "acp-bridge-state", environmentId),
       kind,
     );
     // Toolchains are downloaded once at app startup from the stored platform
@@ -1432,8 +1434,25 @@ export async function deleteEnvironment(
         lifecycleOperation: "deleting",
         lifecycleOperationStartedAt: new Date().toISOString(),
       });
+      // Record what the host still owes before anything is removed. The
+      // best-effort steps below may fail after the environment record is gone;
+      // the ledger is what lets the reconciler finish them later.
+      const project = environment
+        ? await storage.getProject(environment.projectId).catch(() => null)
+        : null;
+      const cleanup = environment
+        ? buildEnvironmentCleanupEntry(environment, project, storage.getDataDir())
+        : null;
+      if (cleanup) await environmentCleanupLedger(storage.getDataDir()).record(cleanup);
       await stopEnvironmentReviewValidation(environmentId, context);
-      cleanupTerminalSessionsForEnvironment(environmentId);
+      // Waits for every terminal tree, including setup's build descendants, so
+      // nothing re-creates files in the worktree after it is removed below.
+      const survivingTerminals = await terminateTerminalSessionsForEnvironment(environmentId);
+      if (survivingTerminals.length > 0) {
+        console.warn(
+          `[backend] ${survivingTerminals.length} terminal process tree(s) outlived termination for ${environmentId}`,
+        );
+      }
       await deleteTerminalHistories({
         dataDir: storage.getDataDir(),
         environmentId,
@@ -1454,21 +1473,20 @@ export async function deleteEnvironment(
         // execs into something that no longer exists.
         shutdownClaudeStatePolling(environment.containerId);
         cancelOpenCodeAgentToolsConfiguration(`container:${environment.containerId}`);
-        await runCommand("docker", ["rm", "-f", environment.containerId], {
-          timeoutMs: 60_000,
-        }).catch(() => undefined);
+        // Ownership was asserted before the tombstone, above.
+        if (cleanup) {
+          await runEnvironmentCleanupStep(cleanup, "container", context, {
+            containerOwnershipVerified: true,
+          });
+        }
       }
       await stopLocalServersForEnvironmentUnlocked(environmentId, context);
-      if (environment?.worktreePath) {
-        const project = await storage.getProject(environment.projectId).catch(() => null);
-        if (project?.localPath) {
-          await removeLocalWorktree(project.localPath, environment.worktreePath).catch(
-            () => undefined,
-          );
-        } else {
-          await fs
-            .rm(environment.worktreePath, { recursive: true, force: true })
-            .catch(() => undefined);
+      if (cleanup?.worktreePath) {
+        const worktreeRemoved = await runEnvironmentCleanupStep(cleanup, "worktree", context);
+        // A branch still checked out in a surviving worktree cannot be judged or
+        // deleted; the reconciler retries it after the worktree step succeeds.
+        if (worktreeRemoved && cleanup.branch) {
+          await runEnvironmentCleanupStep(cleanup, "branch", context);
         }
       }
       await storage.removeSessionsByEnvironment(environmentId).catch(() => undefined);
@@ -1508,6 +1526,9 @@ export async function deleteEnvironment(
       await storage.deleteComposeDraftsByEnvironment(environmentId);
       await storage.deleteFileDraftsByEnvironment(environmentId);
       await storage.deleteAgentHandoffsByEnvironment(environmentId);
+      // The environment's workflows were deleted above; their open result
+      // slots would otherwise count against the active-entry limit forever.
+      await context.deleteWorkflowResultsByEnvironment?.(environmentId);
       await context.design?.deleteEnvironment(environmentId);
       // Stops annotation writes for this environment, then removes its store.
       await context.webAnnotations?.deleteEnvironment(environmentId).catch((error: unknown) => {
@@ -1518,6 +1539,8 @@ export async function deleteEnvironment(
       });
       context.agentTools?.revokeEnvironment(environmentId);
       await storage.removeEnvironment(environmentId);
+      // Bridges were stopped above, so nothing is writing bridge state now.
+      if (cleanup) await runEnvironmentCleanupStep(cleanup, "state-dirs", context);
       await storage.deletePaneLayout(environmentId).catch(() => undefined);
       // A terminal start that began before the tombstone may have been awaiting
       // storage or filesystem I/O during the first sweep. Close anything that
@@ -1538,6 +1561,9 @@ export async function deleteEnvironment(
       prMonitorService.untrack(environmentId);
       if (environment?.worktreePath) gitFetchScheduler.forget(environment.worktreePath);
     });
+    // Other deletions may have left steps pending; a successful one is a cheap
+    // moment to retry them without waiting for the next startup.
+    scheduleEnvironmentCleanupReconcile(context);
   } catch (error) {
     const environment = await context.storage.getEnvironment(environmentId).catch(() => null);
     if (environment?.cleanupAfterMergeRequestedAt) {

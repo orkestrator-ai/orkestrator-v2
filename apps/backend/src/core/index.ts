@@ -74,6 +74,10 @@ import {
   flushTerminalHistories,
   pruneTerminalHistoryStorage,
 } from "./terminal-history.js";
+import {
+  cancelScheduledEnvironmentCleanup,
+  runStartupEnvironmentCleanup,
+} from "./environment-cleanup-reconciler.js";
 
 export class OrkestratorBackend {
   private readonly commands = createCommandRegistry();
@@ -221,6 +225,8 @@ export class OrkestratorBackend {
       if (!handler) return;
       await handler({ environmentId }, context);
     };
+    context.deleteWorkflowResultsByEnvironment = (environmentId: string) =>
+      this.workflowResults.deleteByEnvironment(environmentId);
     this.context = context;
     this.coordinators = new CoordinatorService(
       storage,
@@ -703,6 +709,10 @@ export class OrkestratorBackend {
         console.warn(`[backend] Interrupted deletion remains pending for ${environmentId}`);
       });
     }
+    // Finishes cleanup that earlier deletions could not, and removes bridge
+    // state whose environment is gone. Background work: it never blocks the
+    // gateway and never rejects.
+    void runStartupEnvironmentCleanup(this.context);
     const reconcileTabTeardowns = this.commands.get("reconcile_tab_teardowns");
     if (reconcileTabTeardowns) {
       await Promise.resolve(reconcileTabTeardowns({}, this.context)).catch((error: unknown) => {
@@ -1001,6 +1011,7 @@ export class OrkestratorBackend {
     // than racing it: every watcher holds a file descriptor and a debounce timer.
     shutdownDiffStatsTracking();
     shutdownPrMonitorTracking();
+    cancelScheduledEnvironmentCleanup(this.context.storage.getDataDir());
     const attempt = (async () => {
       try {
         const lifecycleDeadline = Date.now() + this.environmentLifecycleDrainTimeoutMs;

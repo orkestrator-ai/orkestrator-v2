@@ -810,6 +810,23 @@ export class WorkflowResultService {
     });
   }
 
+  /**
+   * Environment deletion. Pruning only reclaims settled slots, so an open slot
+   * whose environment is gone would otherwise count against the active-entry
+   * limit forever. Returns the number of slots removed.
+   */
+  async deleteByEnvironment(environmentId: string): Promise<number> {
+    return this.mutate((store) => {
+      let removed = 0;
+      for (const [resultKey, entry] of Object.entries(store.entries)) {
+        if (entry.environmentId !== environmentId) continue;
+        delete store.entries[resultKey];
+        removed += 1;
+      }
+      return removed;
+    });
+  }
+
   async close(resultKey: string, lifecycle: "cancelled" | "superseded"): Promise<void> {
     await this.mutate(async (store) => {
       const entry = store.entries[resultKey];

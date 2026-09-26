@@ -120,6 +120,16 @@ describe("design private records, legacy migration and recovery states", () => {
     });
   });
 
+  test("deleting the environment also removes a migrated canvas's legacy backup", async () => {
+    const canvas = legacyCanvas();
+    await writeLegacy(canvas);
+    await service().mutate(canvas.id, "env-1", canvas.frames[0]!.id, 3, { x: 1 }, "user");
+    expect(await readdir(join(root(), "legacy-backups"))).toContain(`${canvas.id}.orkdes`);
+
+    expect(await service().deleteEnvironment("env-1")).toBe(1);
+    expect(await readdir(join(root(), "legacy-backups"))).not.toContain(`${canvas.id}.orkdes`);
+  });
+
   test("an interrupted migration (record written, legacy not retired) reads the record", async () => {
     const canvas = legacyCanvas();
     await writeLegacy(canvas);

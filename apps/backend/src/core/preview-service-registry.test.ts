@@ -303,6 +303,24 @@ describe("PreviewServiceRegistry", () => {
     expect(Object.keys(stored.store.definitions)).toEqual([]);
   });
 
+  test("startup drops definitions whose environment was deleted while the backend was down", async () => {
+    await harness.addContainerEnvironment("a", { entryPort: 3000 });
+    await harness.addContainerEnvironment("b", { entryPort: 3000 });
+    const registry = await started();
+    expect(registry.listDefinitions("a")).toHaveLength(1);
+    // The listener that normally removes them is gone with the old backend.
+    registry.dispose();
+    await harness.storage.removeEnvironment("a");
+
+    const restarted = await started(harness.newRuntime());
+    expect(restarted.listDefinitions("a")).toEqual([]);
+    expect(restarted.listDefinitions("b")).toHaveLength(1);
+    const stored = await harness.storage.loadPreviewServiceStore();
+    expect(
+      Object.values(stored.store.definitions).map((definition) => definition.environmentId),
+    ).toEqual(["b"]);
+  });
+
   test("user overrides survive removal of the generated source", async () => {
     await harness.addContainerEnvironment("a", {
       portMappings: [{ containerPort: 8080, hostPort: 18080, protocol: "tcp" }],

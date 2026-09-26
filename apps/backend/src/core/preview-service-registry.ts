@@ -288,8 +288,16 @@ export class PreviewServiceRegistry {
     });
     this.revision = 1;
     // Seed and resolve outside init so a slow Docker daemon cannot delay startup.
-    const environments = await this.options.storage.loadEnvironments();
-    for (const environment of environments) this.scheduleEnvironmentReconcile(environment.id);
+    // Definitions whose environment is gone are included: the change event
+    // that normally removes them is lost if the backend stopped in between,
+    // and reconciling a missing environment drops its definitions.
+    const environmentIds = new Set(
+      (await this.options.storage.loadEnvironments()).map((environment) => environment.id),
+    );
+    for (const definition of this.definitions.values()) {
+      environmentIds.add(definition.environmentId);
+    }
+    for (const environmentId of environmentIds) this.scheduleEnvironmentReconcile(environmentId);
   }
 
   dispose(): void {

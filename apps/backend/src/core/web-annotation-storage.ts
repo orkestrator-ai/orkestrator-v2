@@ -1276,12 +1276,31 @@ export class WebAnnotationStorage {
     this.root = join(options.dataDir, "web-annotations");
   }
 
-  /** Load every persisted environment so background work runs unmounted. */
-  async init(): Promise<void> {
+  /**
+   * Load every persisted environment so background work runs unmounted.
+   *
+   * `environmentExists` lets the host drop stores whose environment was
+   * deleted while their removal failed or was interrupted; loading them would
+   * restart background work for an environment nobody can see. It must
+   * resolve `true` when it cannot tell, so an unreadable environment store
+   * never deletes annotations.
+   */
+  async init(
+    options: { environmentExists?: (environmentId: string) => Promise<boolean> } = {},
+  ): Promise<void> {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     const names = await readdir(this.root).catch(() => [] as string[]);
     for (const name of names) {
       if (!isEnvironmentDirectoryName(name)) continue;
+      if (options.environmentExists && !(await options.environmentExists(name))) {
+        await this.deleteEnvironment(name).catch((error: unknown) => {
+          console.warn(
+            "[web-annotations] Failed to remove orphaned environment storage:",
+            error instanceof Error ? error.name : "unknown",
+          );
+        });
+        continue;
+      }
       await this.environment(name).catch((error: unknown) => {
         console.warn(
           "[web-annotations] Failed to load environment storage:",

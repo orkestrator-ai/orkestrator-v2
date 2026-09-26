@@ -59,6 +59,26 @@ describe("WorkflowResultService", () => {
     return resultKey;
   }
 
+  test("environment deletion removes only that environment's slots, open or settled", async () => {
+    const open = await prepare();
+    const accepted = await prepare();
+    await service.submit(scope, accepted, { phase: "confirming", title: "T", summary: "S" });
+    const other = crypto.randomUUID();
+    await service.prepare({
+      resultKey: other,
+      kind: "feature-plan-state",
+      environmentId: "env-2",
+      projectId: scope.projectId,
+      provider: "codex",
+    });
+
+    expect(await service.deleteByEnvironment(scope.environmentId)).toBe(2);
+    expect(await service.registered(open)).toBe(false);
+    expect(await service.registered(accepted)).toBe(false);
+    expect(await service.registered(other)).toBe(true);
+    expect(await service.deleteByEnvironment(scope.environmentId)).toBe(0);
+  });
+
   test("persists an accepted result and receipt across service restarts", async () => {
     const resultKey = await prepare();
     const value = { phase: "confirming", title: "Tool results", summary: "Use callbacks." };

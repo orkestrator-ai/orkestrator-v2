@@ -96,6 +96,8 @@ export async function createCommandFixtures() {
       clear: mock(() => undefined),
       write: process.write,
       kill: process.kill,
+      // The real tree wait resolves once every descendant has exited.
+      terminate: mock(async () => true),
       pause: mock(() => undefined),
       resume: mock(() => undefined),
     };

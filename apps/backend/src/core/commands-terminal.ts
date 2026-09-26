@@ -757,7 +757,7 @@ export function terminalStableKeyEnvironmentId(id: string): string | null {
   return stableKey?.split("\0")[1] ?? null;
 }
 
-export function cleanupTerminalSessionsForEnvironment(environmentId: string): void {
+function terminalSessionIdsForEnvironment(environmentId: string): Set<string> {
   const sessionIds = new Set<string>([setupTerminalSessionId(environmentId)]);
   for (const [id, config] of terminalSessionConfigs) {
     if (
@@ -770,7 +770,38 @@ export function cleanupTerminalSessionsForEnvironment(environmentId: string): vo
       sessionIds.add(id);
     }
   }
+  return sessionIds;
+}
+
+export function cleanupTerminalSessionsForEnvironment(environmentId: string): void {
+  for (const id of terminalSessionIdsForEnvironment(environmentId)) {
+    explicitlyCloseTerminalSession(id);
+  }
+}
+
+/**
+ * Closes every terminal of an environment and waits for each process tree,
+ * including the setup session's build descendants, to exit. Deletion calls this
+ * before removing the worktree so nothing can write into it afterwards.
+ * Resolves with the sessions whose tree was still alive after SIGKILL.
+ */
+export async function terminateTerminalSessionsForEnvironment(
+  environmentId: string,
+): Promise<string[]> {
+  const sessionIds = [...terminalSessionIdsForEnvironment(environmentId)];
+  const survivors: string[] = [];
+  await Promise.all(
+    sessionIds.map(async (id) => {
+      const process = terminalProcesses.get(id);
+      if (!process) return;
+      const exited = await Promise.resolve()
+        .then(() => process.terminate())
+        .catch(() => false);
+      if (!exited) survivors.push(id);
+    }),
+  );
   for (const id of sessionIds) explicitlyCloseTerminalSession(id);
+  return survivors;
 }
 
 export function assertEnvironmentNotDeleting(environmentId: string | undefined): void {

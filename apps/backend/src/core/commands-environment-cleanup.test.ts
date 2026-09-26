@@ -6,6 +6,12 @@ import { createCommandRegistry, type CommandContext } from "./commands.js";
 import type { Environment } from "./models.js";
 import { StorageService } from "./storage.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import {
+  ENVIRONMENT_CLEANUP_LEDGER_FILE,
+  environmentCleanupLedger,
+} from "./environment-cleanup-ledger.js";
+import { reconcileEnvironmentCleanup } from "./environment-cleanup-reconciler.js";
+import { environmentStateDirectories } from "./environment-state-paths.js";
 
 function environment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -34,7 +40,10 @@ async function withDeleteCommand<T>(
     context: CommandContext,
   ) => Promise<T>,
 ): Promise<T> {
-  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-delete-state-"));
+  const dataDir = await fs.realpath(
+    await fs.mkdtemp(path.join(tmpdir(), "orkestrator-delete-state-")),
+  );
+  const worktreeDir = path.join(dataDir, "workspaces");
   const storage = new StorageService(dataDir);
   await storage.init();
   await seed(storage);
@@ -44,6 +53,7 @@ async function withDeleteCommand<T>(
     appRoot: "",
     resourceRoot: "",
     toolchainBinDir: "",
+    worktreeDir,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
     emit: () => undefined,
   } as CommandContext;
@@ -55,9 +65,95 @@ async function withDeleteCommand<T>(
   try {
     return await run(invokeDelete, storage, context);
   } finally {
+    await fs.chmod(worktreeDir, 0o700).catch(() => undefined);
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }
+
+async function exists(target: string): Promise<boolean> {
+  return fs.stat(target).then(
+    () => true,
+    () => false,
+  );
+}
+
+/** A worktree leftover inside the workspaces root, with no project checkout. */
+async function seedWorktree(storage: StorageService): Promise<string> {
+  const worktreePath = path.join(storage.getDataDir(), "workspaces", "project-e1");
+  await fs.mkdir(path.join(worktreePath, "bridges"), { recursive: true });
+  await storage.addEnvironment(environment({ worktreePath }));
+  return worktreePath;
+}
+
+describe("delete_environment host cleanup", () => {
+  test("removes the worktree and every bridge state directory", async () => {
+    let worktreePath = "";
+    await withDeleteCommand(
+      async (storage) => {
+        worktreePath = await seedWorktree(storage);
+        for (const directory of environmentStateDirectories(storage.getDataDir(), "e1")) {
+          await fs.mkdir(directory, { recursive: true });
+          await fs.writeFile(path.join(directory, "checkpoints.ndjson"), "{}\n");
+        }
+      },
+      async (invokeDelete, storage) => {
+        await invokeDelete();
+        expect(await storage.getEnvironment("e1")).toBeNull();
+        expect(await exists(worktreePath)).toBe(false);
+        for (const directory of environmentStateDirectories(storage.getDataDir(), "e1")) {
+          expect(await exists(directory)).toBe(false);
+        }
+        expect(await environmentCleanupLedger(storage.getDataDir()).list()).toEqual([]);
+      },
+    );
+  });
+
+  test("keeps a failed worktree removal in the ledger and the reconciler finishes it", async () => {
+    // Root ignores directory permissions, so the failure cannot be staged.
+    if (process.getuid?.() === 0) return;
+    let worktreePath = "";
+    await withDeleteCommand(
+      async (storage) => {
+        worktreePath = await seedWorktree(storage);
+      },
+      async (invokeDelete, storage, context) => {
+        const workspaces = path.dirname(worktreePath);
+        await fs.chmod(workspaces, 0o500);
+        await invokeDelete();
+        // The environment record is still removed on time.
+        expect(await storage.getEnvironment("e1")).toBeNull();
+        expect(await exists(worktreePath)).toBe(true);
+        const ledger = environmentCleanupLedger(storage.getDataDir());
+        expect(await ledger.get("e1")).toMatchObject({ pending: ["worktree"] });
+
+        await fs.chmod(workspaces, 0o700);
+        const later = new Date(Date.now() + 60 * 60_000);
+        await reconcileEnvironmentCleanup(context, { now: () => later });
+        expect(await exists(worktreePath)).toBe(false);
+        expect(await ledger.get("e1")).toBeNull();
+      },
+    );
+  });
+
+  test("records cleanup before removing anything, and keeps the environment if it cannot", async () => {
+    let worktreePath = "";
+    await withDeleteCommand(
+      async (storage) => {
+        worktreePath = await seedWorktree(storage);
+        // A directory where the ledger file belongs makes the write fail.
+        await fs.mkdir(path.join(storage.getDataDir(), ENVIRONMENT_CLEANUP_LEDGER_FILE));
+      },
+      async (invokeDelete, storage) => {
+        await expect(invokeDelete()).rejects.toThrow();
+        expect(await exists(worktreePath)).toBe(true);
+        expect(await storage.getEnvironment("e1")).toMatchObject({
+          id: "e1",
+          deletionRequestedAt: expect.any(String),
+        });
+      },
+    );
+  });
+});
 
 describe("delete_environment durable child-state cleanup", () => {
   test("purges agent mail before removing the environment", async () => {

@@ -22,6 +22,10 @@ import {
   type NativeObservationResult,
 } from "./recurring-baseline-native.js";
 import { WorkAdmissionPool } from "../src/core/work-admission.js";
+import {
+  runWorkflowBaseline,
+  type WorkflowBaselineResult,
+} from "./recurring-baseline-workflows.js";
 
 /**
  * Deterministic recurring-work baseline.
@@ -193,6 +197,12 @@ export interface BaselineArtifact {
    * observation (step 07). Absent from artifacts produced before step 07.
    */
   nativeObservation?: NativeObservationResult;
+  /**
+   * Driven feature-planning, build-pipeline and looped-review supervision over
+   * many completed and a few active records, rollback vs keyed (step 08).
+   * Absent from artifacts produced before step 08.
+   */
+  workflows?: WorkflowBaselineResult;
   /** Real-time measurements; excluded from comparisons. */
   overhead?: { observeEnabledNsPerOp: number; observeDisabledNsPerOp: number; iterations: number };
   limitations: string[];
@@ -211,22 +221,14 @@ const MODELLED_KINDS: readonly RecurringJobKind[] = [
   "mail-retention",
   "activity-lease-expiry",
   "tab-cleanup",
-  "build-supervisor-tick",
-  "looped-review-tick",
-  "feature-planning-tick",
 ];
-
-/** Workflow ticks enumerate every stored record of their store per tick. */
-const RECORD_SCANNING_TICKS: ReadonlySet<RecurringJobKind> = new Set([
-  "build-supervisor-tick",
-  "looped-review-tick",
-]);
 
 export const BASELINE_LIMITATIONS = [
   "Call-count model on a manual clock: no process, container, repository, GitHub or provider is touched, and durations are not measured.",
   "Physical units per seam call come from PHYSICAL_COST, read from the production scanners at this commit; the real scanners are not executed.",
   "Driven owners: the worktree snapshot owner (diff statistics, Files-panel file-list and tree reads; watched local / polled container) behind the git-docker-scan admission pool, local git fetch scheduling, the container fetch policy (step 04; fetches share the admission pool), PR monitoring with check rollups, and Claude terminal-state polls (one per running container).",
-  "Native activity sweep, launch/queue scans, mail, coordinator repair, retention, tab cleanup and workflow ticks are modelled from nominal cadence only in the per-scenario blocks; their provider reads and storage costs need a live isolated profile.",
+  "Native activity sweep, launch/queue scans, mail, coordinator repair, retention and tab cleanup are modelled from nominal cadence only in the per-scenario blocks; their provider reads and storage costs need a live isolated profile.",
+  "The workflows block (step 08) drives the real feature-planning, build-pipeline and looped-review supervisors over a real temporary store with many completed and a few active records whose fake provider turns stay running, in rollback (whole-store tick) and keyed modes; storage reads count calls, not bytes (each store is one JSON file, so a read still parses every retained record). Multi Review is not driven.",
   "The nativeObservation block (step 07) drives the real native activity sweep and native queue scan with fake providers counted at the provider boundary, over one 10-environment fixture, in rollback and shared modes; bridge-side cost per read and mail, coordinator and workflow consumers are not driven.",
   "Multi review uses an adaptive due scheduler by default (reconcile every 15 s plus per-workflow due passes); it is not modelled because idle cost depends on active workflows.",
   "Local and container environments use a branch baseline (`main`), so every scan consults its fetch owner; environments created from an immutable commit skip that path. The modelled remote is idle: container fetches succeed and never move `origin/main`, so no fetch-triggered rescan occurs.",
@@ -528,26 +530,18 @@ export async function runScenario(
     startup,
     idle,
     idlePhysicalPerMinute,
-    modelledIdle: modelled(input, phases.idleMs),
+    modelledIdle: modelled(phases.idleMs),
   };
 }
 
-function modelled(
-  input: BaselineScenario,
-  windowMs: number,
-): Partial<Record<RecurringJobKind, ModelledKind>> {
+function modelled(windowMs: number): Partial<Record<RecurringJobKind, ModelledKind>> {
   const result: Partial<Record<RecurringJobKind, ModelledKind>> = {};
   for (const kind of MODELLED_KINDS) {
     const cadence = RECURRING_JOB_CATALOGUE[kind].nominalCadenceMs;
     if (!cadence) continue;
     const attempts = Math.floor(windowMs / cadence);
-    result[kind] = {
-      nominalCadenceMs: cadence,
-      attempts,
-      ...(RECORD_SCANNING_TICKS.has(kind)
-        ? { recordsScanned: attempts * input.completedWorkflows }
-        : {}),
-    };
+    // Workflow ticks, the only record-scanning kinds, are driven since step 08.
+    result[kind] = { nominalCadenceMs: cadence, attempts };
   }
   return result;
 }
@@ -629,6 +623,8 @@ export async function runBaseline(options: {
   overhead?: boolean;
   /** Include the driven native observation block (default true). */
   nativeObservation?: boolean;
+  /** Include the driven workflow block (default true). */
+  workflows?: boolean;
 }): Promise<BaselineArtifact> {
   const phases = options.phases ?? DEFAULT_PHASES;
   const scenarios: ScenarioResult[] = [];
@@ -648,6 +644,7 @@ export async function runBaseline(options: {
     ...(options.nativeObservation === false
       ? {}
       : { nativeObservation: await runNativeObservationBaseline() }),
+    ...(options.workflows === false ? {} : { workflows: await runWorkflowBaseline() }),
     ...(options.overhead ? { overhead: measureOverhead() } : {}),
     limitations: [...BASELINE_LIMITATIONS],
   };
@@ -655,7 +652,13 @@ export async function runBaseline(options: {
 
 export interface BaselineDifference {
   scenario: string;
-  phase: "startup" | "idle" | "modelledIdle" | "idlePhysicalPerMinute" | "nativeObservation";
+  phase:
+    | "startup"
+    | "idle"
+    | "modelledIdle"
+    | "idlePhysicalPerMinute"
+    | "nativeObservation"
+    | "workflows";
   kind: string;
   field: string;
   baseline: number;
@@ -732,6 +735,25 @@ export function compareBaselines(
       differences.push({
         scenario: "native-observation",
         phase: "nativeObservation",
+        kind: mode,
+        field: rest.join("."),
+        baseline: a,
+        candidate: b,
+      });
+    }
+  }
+  // Compared only when both artifacts carry the driven workflow block.
+  if (baseline.workflows && candidate.workflows) {
+    const left = flatten(baseline.workflows.modes as unknown as Record<string, unknown>);
+    const right = flatten(candidate.workflows.modes as unknown as Record<string, unknown>);
+    for (const key of new Set([...left.keys(), ...right.keys()])) {
+      const a = left.get(key) ?? 0;
+      const b = right.get(key) ?? 0;
+      if (a === b) continue;
+      const [mode = "", ...rest] = key.split(".");
+      differences.push({
+        scenario: "workflows",
+        phase: "workflows",
         kind: mode,
         field: rest.join("."),
         baseline: a,

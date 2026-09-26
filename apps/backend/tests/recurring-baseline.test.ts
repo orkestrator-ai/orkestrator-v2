@@ -10,6 +10,7 @@ import {
   DEFAULT_NATIVE_FIXTURE,
   runNativeObservationBaseline,
 } from "../scripts/recurring-baseline-native.js";
+import { runWorkflowBaseline } from "../scripts/recurring-baseline-workflows.js";
 
 const SHORT: BaselinePhases = { startupMs: 30_000, idleMs: 6 * 60_000, clientRefreshMs: 5_000 };
 const environment = { commit: "test", platform: "test", arch: "test", runtime: "test" };
@@ -24,12 +25,14 @@ describe("recurring-work baseline harness", () => {
       phases: SHORT,
       environment,
       nativeObservation: false,
+      workflows: false,
     });
     const second = await runBaseline({
       scenarios,
       phases: SHORT,
       environment,
       nativeObservation: false,
+      workflows: false,
     });
     expect(second).toEqual(first);
     expect(compareBaselines(first, second)).toEqual([]);
@@ -63,6 +66,7 @@ describe("recurring-work baseline harness", () => {
       phases: SHORT,
       environment,
       nativeObservation: false,
+      workflows: false,
     });
     const candidate = structuredClone(baseline);
     candidate.scenarios[0]!.idle["diff-scan"]!.started = 999;
@@ -114,5 +118,34 @@ describe("driven native observation baseline (step 07)", () => {
       expect(counts.externalEndDiscoveryMs!).toBeLessThanOrEqual(4_000);
     }
     expect(shared.turnEndEdges).toBe(rollback.turnEndEdges);
+  });
+});
+
+describe("driven workflow supervision baseline (step 08)", () => {
+  test("is deterministic, content-free, and keyed selection no longer scales with history", async () => {
+    const fixture = { completedPerStore: 30, activePerStore: 2, windowMs: 90_000 };
+    const first = await runWorkflowBaseline(fixture);
+    const second = await runWorkflowBaseline(fixture);
+    expect(second).toEqual(first);
+    const serialized = JSON.stringify(first);
+    expect(serialized).not.toContain("env-");
+    expect(serialized).not.toContain("synthetic");
+    const { rollback, keyed } = first.modes;
+    for (const domain of ["build-pipeline", "looped-review"] as const) {
+      // The whole-store tick enumerates every record every tick…
+      expect(rollback[domain].recordsScanned).toBeGreaterThanOrEqual(
+        (fixture.windowMs / 1_500) * (fixture.completedPerStore + fixture.activePerStore),
+      );
+      // …the keyed driver only at start and every 30 s.
+      expect(keyed[domain].recordsScanned).toBe(
+        4 * (fixture.completedPerStore + fixture.activePerStore),
+      );
+    }
+    for (const domain of ["feature-planning", "build-pipeline", "looped-review"] as const) {
+      // Active work is supervised at the same cadence in both modes.
+      expect(
+        Math.abs(keyed[domain].providerReads - rollback[domain].providerReads),
+      ).toBeLessThanOrEqual(fixture.activePerStore * 2);
+    }
   });
 });

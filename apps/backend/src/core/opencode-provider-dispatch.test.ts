@@ -655,6 +655,71 @@ describe("OpenCode provider dispatch", () => {
     }
   });
 
+  test("reads a turn's failure from the request's last assistant message", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    const user = (requestId: string) => ({
+      info: { id: expectedOpenCodeMessageId(requestId), role: "user" },
+      parts: [],
+    });
+    const assistant = (requestId: string, error?: unknown, finished = true) => ({
+      info: {
+        id: `msg_assistant_${requestId}`,
+        role: "assistant",
+        parentID: expectedOpenCodeMessageId(requestId),
+        time: { created: 1, ...(finished ? { completed: 2 } : {}) },
+        ...(error === undefined ? {} : { error }),
+      },
+      parts: [],
+    });
+    try {
+      fake.setMessagesResponse({
+        data: [
+          user("request-1"),
+          assistant("request-1", {
+            name: "APIError",
+            data: { message: "Cannot connect to API" },
+          }),
+          user("request-2"),
+          assistant("request-2"),
+          user("request-3"),
+          assistant("request-3", { name: "APIError", data: { message: "transient" } }),
+          assistant("request-3"),
+          user("request-4"),
+          assistant("request-4", { name: "MessageAbortedError", data: {} }, false),
+          user("request-5"),
+          assistant("request-5", undefined, false),
+          user("request-6"),
+        ],
+      });
+      // Idle lifecycle aside, request-1 failed; request-2 did not.
+      await expect(provider.turnTerminalError?.("owned-session", "request-1")).resolves.toBe(
+        "Cannot connect to API",
+      );
+      await expect(provider.turnTerminalError?.("owned-session", "request-2")).resolves.toBeNull();
+      // Only the last assistant message of the turn decides.
+      await expect(provider.turnTerminalError?.("owned-session", "request-3")).resolves.toBeNull();
+      // An aborted turn is not a success either.
+      await expect(provider.turnTerminalError?.("owned-session", "request-4")).resolves.toBe(
+        "Query stopped by user.",
+      );
+      // An unfinished answer, or none yet (idle can be read just after the
+      // prompt is accepted), is not evidence that the turn succeeded.
+      await expect(provider.turnTerminalError?.("owned-session", "request-5")).rejects.toThrow();
+      await expect(provider.turnTerminalError?.("owned-session", "request-6")).rejects.toThrow();
+
+      // An unreadable history is not evidence either way.
+      fake.setMessagesHandler(async () => {
+        throw new Error("offline");
+      });
+      await expect(provider.turnTerminalError?.("owned-session", "request-1")).rejects.toThrow();
+      fake.setMessagesHandler(async () => ({ error: { message: "unavailable" } }));
+      await expect(provider.turnTerminalError?.("owned-session", "request-1")).rejects.toThrow();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("refuses a malformed request id without consulting OpenCode", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);

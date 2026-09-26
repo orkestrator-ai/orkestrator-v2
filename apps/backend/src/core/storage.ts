@@ -11,13 +11,13 @@ import {
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
 
-import { StoragePreviewServices } from "./storage-preview-services.js";
+import { StoragePublicOperations } from "./storage-public-operations.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 
 const MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS = 2_000;
 const MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES = 256;
 
-export class StorageService extends StoragePreviewServices {
+export class StorageService extends StoragePublicOperations {
   override async init(): Promise<void> {
     await super.init();
     await this.migrateConfigSchema();

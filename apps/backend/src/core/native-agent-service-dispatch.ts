@@ -989,6 +989,8 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       input.interactionId,
       input.resolution,
     );
+    // Observers must re-read instead of reporting an answered question as pending.
+    this.forgetPendingInteractions(resolved.key);
     void this.refreshProjection(input, true).catch(() => undefined);
     return outcome;
   }

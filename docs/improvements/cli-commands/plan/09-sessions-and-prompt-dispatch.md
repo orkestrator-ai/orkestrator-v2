@@ -1,9 +1,6 @@
 # 09 — Launch sessions and dispatch prompt intent
 
-Status: Planned.
-Depends on: [04](04-shared-actions-and-discovery.md),
-[05](05-operation-receipts-and-idempotency.md), [07](07-environment-lifecycle.md),
-[08](08-settings-and-concurrent-edits.md).
+Status: Verified — see record.
 Index: [CLI commands plan](00-cli-commands-index.md).
 
 ## Target behavior
@@ -75,11 +72,24 @@ Qualify actual provider submission in step 14's opt-in matrix.
 
 ## Acceptance and handoff
 
-- [ ] New-session and continuation intent target distinct explicit actions.
-- [ ] Backend state owns launch and first-prompt progression.
-- [ ] Every possibly submitted prompt retains request/run recovery identity.
-- [ ] Busy, unsupported, and unknown cases do not silently change intent.
-- [ ] CLI and MCP reuse launch behavior without broadening authority.
+- [x] New-session and continuation intent target distinct explicit actions.
+- [x] Backend state owns launch and first-prompt progression.
+- [x] Every possibly submitted prompt retains request/run recovery identity.
+- [x] Busy, unsupported, and unknown cases do not silently change intent.
+- [x] CLI and MCP reuse launch behavior without broadening authority.
 
 Expose submission-only semantics until step 10 qualifies waiting. Disabling
 new launches must not stop reconciliation of accepted startup or prompt intent.
+
+## Implementation record
+
+Revision: working tree on `a9337716`, 2026-09-26.
+
+- `session start` uses `launch_native_agent_job` (backend-owned tab,
+  exactly-once first prompt, `activateTab: false`); `session prompt` uses
+  `dispatch_native_agent_intent` with busy/parked checks and mode
+  preservation ([`actions-sessions.ts`](../../../../apps/backend/src/core/public-api/actions-sessions.ts)).
+  `environment launch` composes create/start/first prompt with one receipt.
+- Tests: `public-api-sessions.test.ts` (replayed start sends once, not-ready
+  refused, busy never queued/steered, parked dispatch), `public-api-launch.test.ts`;
+  live runs for Claude, Codex, OpenCode (step 14).

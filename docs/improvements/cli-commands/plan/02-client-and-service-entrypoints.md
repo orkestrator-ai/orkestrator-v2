@@ -1,7 +1,6 @@
 # 02 — Separate client commands from service startup
 
-Status: Planned.
-Depends on: [01](01-public-command-and-compatibility-contract.md).
+Status: Verified — see record.
 Index: [CLI commands plan](00-cli-commands-index.md).
 
 ## Target behavior
@@ -61,12 +60,28 @@ not prove the distributed executable takes the correct branch.
 
 ## Acceptance and handoff
 
-- [ ] Existing launcher invocations still serve and stop cleanly.
-- [ ] `serve` reaches the same backend lifecycle as legacy startup.
-- [ ] Help/version run without a backend or backend credentials.
-- [ ] Client invocations do not import service initialization.
-- [ ] Output and parser behavior match step 01 in subprocess tests.
+- [x] Existing launcher invocations still serve and stop cleanly.
+- [x] `serve` reaches the same backend lifecycle as legacy startup.
+- [x] Help/version run without a backend or backend credentials.
+- [x] Client invocations do not import service initialization.
+- [x] Output and parser behavior match step 01 in subprocess tests.
 
 Keep the service/client split independently revertible. Do not remove the
 legacy startup form as part of this feature; any later deprecation is a
 separate compatibility decision.
+
+## Implementation record
+
+Revision: working tree on `a9337716`, 2026-09-26.
+
+- Launcher [`packages/cli/bin/orkestrator.js`](../../../../packages/cli/bin/orkestrator.js)
+  imports `dist/client.js` first; [`src/client.ts`](../../../../packages/cli/src/client.ts)
+  classifies argv (historical service forms and `serve` → service; groups,
+  `help`, `version` → client; typos refused, values never echoed).
+- `serve` and legacy forms reach the same `main.ts`; server flags have one
+  inventory (`apps/backend/src/server-flags.ts`, scan-based test in
+  `options.test.ts`).
+- Tests: `client-parsing.test.ts` (13), `cli-client.test.ts` (help/version/errors
+  never initialise a backend; descriptor lifecycle), `cli.test.ts` artifact
+  list includes `dist/client.js`; `mise run smoke:cli` against the installed
+  tarball.

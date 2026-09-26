@@ -47,6 +47,7 @@ import { registerServerCommands } from "./commands-registry-servers.js";
 import { registerSessionCommands } from "./commands-registry-sessions.js";
 import { registerSystemCommands } from "./commands-registry-system.js";
 import { registerTeardownCommands } from "./commands-registry-teardown.js";
+import { registerPublicApiCommands } from "./public-api/registry.js";
 import { registerTerminalCommands } from "./commands-registry-terminal.js";
 import { registerToolingCommands } from "./commands-registry-tools.js";
 import { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
@@ -267,6 +268,8 @@ export function createCommandRegistry(
   registerAgentMailCommands(register);
   registerWorkflowResultCommands(register);
   registerTeardownCommands(register, dependencies);
+  // Last: the public contract composes the commands registered above.
+  registerPublicApiCommands(register, dependencies);
 
   return commands;
 }

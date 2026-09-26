@@ -1,8 +1,6 @@
 # 05 — Persist operation receipts and enforce idempotency
 
-Status: Planned.
-Depends on: [01](01-public-command-and-compatibility-contract.md),
-[04](04-shared-actions-and-discovery.md).
+Status: Verified — see record.
 Index: [CLI commands plan](00-cli-commands-index.md).
 
 ## Target behavior
@@ -84,13 +82,29 @@ automatic submission under a fresh key.
 
 ## Acceptance and handoff
 
-- [ ] One key admits one canonical intent and conflicting reuse is rejected.
-- [ ] Acknowledged mandatory records survive the tested restart boundary.
-- [ ] Lost responses and partial failures remain queryable by stable identity.
-- [ ] No uncertainty, deletion, or expiry path enables automatic duplicate execution.
-- [ ] Store limits reject safely without forgetting unresolved work.
+- [x] One key admits one canonical intent and conflicting reuse is rejected.
+- [x] Acknowledged mandatory records survive the tested restart boundary.
+- [x] Lost responses and partial failures remain queryable by stable identity.
+- [x] No uncertainty, deletion, or expiry path enables automatic duplicate execution.
+- [x] Store limits reject safely without forgetting unresolved work.
 
 Document the actual durability scope: process-restart recovery is not a claim
 of power-loss durability without filesystem synchronization evidence. Rollback
 must retain receipt data and expose unresolved records for recovery; do not
 delete the store when withdrawing a CLI feature.
+
+## Implementation record
+
+Revision: working tree on `a9337716`, 2026-09-26.
+
+- Operation store: [`storage-public-operations.ts`](../../../../apps/backend/src/core/storage-public-operations.ts)
+  (`public-operations/` index + per-namespace files under the cross-process
+  mutation lock; strict reads). Ledger/dispatch/reconciler under
+  `apps/backend/src/core/public-api/`.
+- Durability scope: records are written before side effects and survive a
+  process restart (tested); power-loss durability is not claimed.
+- Tests: `public-api-projects.test.ts` (replay, conflict, concurrent
+  convergence, restart replay, retired namespace, corrupt store),
+  `public-api-recovery.test.ts` (two writers, full namespace, dead generation,
+  ambiguous GitHub creation stays unknown). Client receipts saved before
+  sending (`client-transport.test.ts`).

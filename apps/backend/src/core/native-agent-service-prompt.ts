@@ -290,9 +290,24 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       this.turnOutcomeAttempts.delete(attemptKey);
       return { outcome: "unknown" };
     }
+    let terminalError: string | null = null;
+    if (observation.status === "idle" && provider.turnTerminalError) {
+      try {
+        terminalError = await provider.turnTerminalError(
+          session.providerSessionId,
+          input.requestId,
+        );
+      } catch {
+        return retry();
+      }
+    }
     this.turnOutcomeAttempts.delete(attemptKey);
-    const outcome = observation.status === "error" ? ("failed" as const) : ("completed" as const);
-    const error = outcome === "failed" ? observation.error?.slice(0, 500) : undefined;
+    const outcome =
+      observation.status === "error" || terminalError !== null
+        ? ("failed" as const)
+        : ("completed" as const);
+    const error =
+      outcome === "failed" ? (terminalError ?? observation.error)?.slice(0, 500) : undefined;
     try {
       await this.storage.recordNativeAgentTurnOutcome(key, session.providerSessionId, {
         requestId: input.requestId,
@@ -315,10 +330,12 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     session: PersistedNativeAgentSession,
     status: string,
     detail: string | undefined,
+    provider?: Pick<NativeAgentRuntimeProvider, "turnTerminalError">,
   ): Promise<void> {
     const requestId = session.dispatchedRequestIds?.at(-1);
     if (!requestId || session.turnOutcomes?.some((entry) => entry.requestId === requestId)) return;
     if (status !== "idle" && status !== "error") return;
+    let failure = status === "error" ? detail : undefined;
     if (status === "idle") {
       const activity = this.sessionTurnActivitySnapshot(
         session.environmentId,
@@ -326,12 +343,22 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         session.logicalSessionKey,
       );
       if (activity === "working" || activity === "waiting") return;
+      if (provider?.turnTerminalError) {
+        try {
+          failure =
+            (await provider.turnTerminalError(session.providerSessionId, requestId)) ?? undefined;
+        } catch {
+          // Unreadable: leave the outcome for an observer rather than
+          // recording a success nobody proved.
+          return;
+        }
+      }
     }
     try {
       await this.storage.recordNativeAgentTurnOutcome(session.key, session.providerSessionId, {
         requestId,
-        outcome: status === "error" ? "failed" : "completed",
-        ...(status === "error" && detail ? { error: detail.slice(0, 500) } : {}),
+        outcome: status === "error" || failure !== undefined ? "failed" : "completed",
+        ...(failure ? { error: failure.slice(0, 500) } : {}),
         observedAt: new Date(this.now()).toISOString(),
       });
     } catch {
@@ -345,6 +372,10 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
    * ten seconds per session (callers ask only while a turn is `waiting`),
    * falling back to the in-memory projection; `null` when neither is known.
    */
+  protected forgetPendingInteractions(key: string): void {
+    this.pendingInteractionReads.delete(key);
+  }
+
   async sessionPendingInteractions(
     input: NativeAgentProjectionInput,
   ): Promise<AgentInteractionRequest[] | null> {

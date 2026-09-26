@@ -1,8 +1,6 @@
 # 04 — Share backend actions and expose read-only discovery
 
-Status: Planned.
-Depends on: [01](01-public-command-and-compatibility-contract.md),
-[03](03-connections-and-authenticated-transport.md).
+Status: Verified — see record.
 Index: [CLI commands plan](00-cli-commands-index.md).
 
 ## Target behavior
@@ -69,11 +67,25 @@ real gateway → registry → storage read scenario in step 14's initial harness
 
 ## Acceptance and handoff
 
-- [ ] CLI read commands work with no renderer and stable explicit IDs.
-- [ ] Shared resolution/validation has one owner for CLI and MCP consumers.
-- [ ] Public summaries and pages enforce content and size boundaries.
-- [ ] Cheap observation does not revive idle sessions or hide stale state.
-- [ ] Existing MCP tools retain their outputs and authority restrictions.
+- [x] CLI read commands work with no renderer and stable explicit IDs.
+- [x] Shared resolution/validation has one owner for CLI and MCP consumers.
+- [x] Public summaries and pages enforce content and size boundaries.
+- [x] Cheap observation does not revive idle sessions or hide stale state.
+- [x] Existing MCP tools retain their outputs and authority restrictions.
 
 Keep the extraction behavior-preserving for existing consumers. New read
 capabilities can be disabled independently if qualification finds an issue.
+
+## Implementation record
+
+Revision: working tree on `a9337716`, 2026-09-26.
+
+- Shared helpers extracted to
+  [`control-shared-actions.ts`](../../../../apps/backend/src/core/control-shared-actions.ts)
+  and used by both the control MCP server and `public-api/actions-discovery.ts`;
+  MCP formatting, annotations and coordinator scope unchanged (existing MCP
+  tests pass in `mise run test`).
+- Reads never hydrate transcripts or attach providers
+  (`public-api-sessions.test.ts`: list/get/run reads, coalesced status reads).
+  `agent options --refresh` asks providers explicitly; a failed refresh with
+  known models reports `stale`.

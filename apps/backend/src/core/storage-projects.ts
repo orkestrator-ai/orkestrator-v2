@@ -114,7 +114,7 @@ import { normalizeProjectFolderName } from "@orkestrator/protocol/project-folder
  * serialize identically. That keeps projects.json from accumulating a null
  * folder on every record the first time anyone uses the feature.
  */
-function applyProjectFolder(project: Project, folder: unknown): void {
+export function applyProjectFolder(project: Project, folder: unknown): void {
   const normalized = normalizeProjectFolderName(folder);
   if (normalized) project.folder = normalized;
   else delete project.folder;
@@ -184,6 +184,30 @@ export type StorageLayerTypes = [
   PersistedOpenCodeModelCatalogStore,
   ResourceChangeListener,
 ];
+
+const MAX_PROJECT_REMOVAL_FENCES = 1_000;
+
+/** A project still owns environments; removal would orphan them. */
+export class ProjectHasEnvironmentsError extends Error {
+  constructor(
+    readonly projectId: string,
+    readonly environmentCount: number,
+  ) {
+    super(`Project has ${environmentCount} environment(s); delete them before removing it`);
+    this.name = "ProjectHasEnvironmentsError";
+  }
+}
+
+/** A control request ID was reused with a different creation intent. */
+export class ControlRequestConflictError extends Error {
+  constructor(
+    readonly controlRequestId: string,
+    readonly environmentId: string,
+  ) {
+    super("controlRequestId was already used with a different environment request");
+    this.name = "ControlRequestConflictError";
+  }
+}
 
 export abstract class StorageProjects extends StorageBase {
   async loadProjects(): Promise<Project[]> {
@@ -392,6 +416,57 @@ export abstract class StorageProjects extends StorageBase {
     );
   }
 
+  protected projectRemovalFencesFile(): string {
+    return this.file("project-removal-fences.json");
+  }
+
+  /** Projects whose removal was admitted; read under the environment lock. */
+  protected async loadProjectRemovalFences(): Promise<Record<string, string>> {
+    const value = await this.loadJsonCached<unknown>(this.projectRemovalFencesFile(), () => ({}));
+    if (!isRecord(value)) return {};
+    const fences: Record<string, string> = {};
+    for (const [projectId, requestedAt] of Object.entries(value)) {
+      if (typeof requestedAt === "string") fences[projectId] = requestedAt;
+    }
+    return fences;
+  }
+
+  /**
+   * Admit the removal of a project that has no environments.
+   *
+   * The emptiness check and the fence are written under the environment lock,
+   * and `addEnvironment` consults the fence under the same lock, so a create
+   * racing the removal either lands first (and the removal is refused) or is
+   * refused itself. The fence outlives the removal, so a late create can never
+   * attach an environment to a project that no longer exists.
+   */
+  async fenceEmptyProjectForRemoval(projectId: string): Promise<void> {
+    await this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const count = environments.filter(
+        (environment) => environment.projectId === projectId,
+      ).length;
+      if (count > 0) throw new ProjectHasEnvironmentsError(projectId, count);
+      const fences = await this.loadProjectRemovalFences();
+      if (fences[projectId]) return;
+      fences[projectId] = new Date().toISOString();
+      const entries = Object.entries(fences)
+        .sort(([, a], [, b]) => a.localeCompare(b))
+        .slice(-MAX_PROJECT_REMOVAL_FENCES);
+      await this.saveJson(this.projectRemovalFencesFile(), Object.fromEntries(entries));
+    });
+  }
+
+  /** Undo a fence whose removal did not complete, so the project stays usable. */
+  async releaseProjectRemovalFence(projectId: string): Promise<void> {
+    await this.enqueueEnvironmentMutation(async () => {
+      const fences = await this.loadProjectRemovalFences();
+      if (!fences[projectId]) return;
+      delete fences[projectId];
+      await this.saveJson(this.projectRemovalFencesFile(), fences);
+    });
+  }
+
   async addEnvironment(environment: Environment): Promise<Environment> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
@@ -401,7 +476,21 @@ export abstract class StorageProjects extends StorageBase {
             candidate.projectId === environment.projectId &&
             candidate.controlRequestId === environment.controlRequestId,
         );
-        if (existing) return existing;
+        if (existing) {
+          // Legacy records carry no fingerprint and cannot prove the intent
+          // matches; they converge as before. A recorded fingerprint must match.
+          if (
+            existing.controlRequestFingerprint &&
+            environment.controlRequestFingerprint &&
+            existing.controlRequestFingerprint !== environment.controlRequestFingerprint
+          ) {
+            throw new ControlRequestConflictError(environment.controlRequestId, existing.id);
+          }
+          return existing;
+        }
+      }
+      if ((await this.loadProjectRemovalFences())[environment.projectId]) {
+        throw new Error(`Project is being removed: ${environment.projectId}`);
       }
       environment.order =
         Math.max(
@@ -644,6 +733,12 @@ export abstract class StorageProjects extends StorageBase {
         if (value == null) environment.initialAgentPlatform = undefined;
         else if (isAgentPlatform(value)) environment.initialAgentPlatform = value;
         else throw new Error("Invalid initial agent platform");
+      }
+      if ("initialConversationMode" in updates) {
+        const value = updates.initialConversationMode;
+        if (value == null) environment.initialConversationMode = undefined;
+        else if (value === "plan" || value === "build") environment.initialConversationMode = value;
+        else throw new Error("Invalid initial conversation mode");
       }
       if ("initialFastMode" in updates) {
         const value = updates.initialFastMode;

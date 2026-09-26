@@ -247,6 +247,8 @@ export abstract class NativeAgentServiceBase {
   protected abstract trackScan(task: Promise<void>): Promise<void>;
   protected abstract reconcilePendingLaunches(): Promise<void>;
   protected abstract drainPromptQueues(): Promise<void>;
+  /** Drop cached pending-interaction reads after one of them is answered. */
+  protected abstract forgetPendingInteractions(key: string): void;
   abstract reconcileAgentInteractions(): Promise<void>;
   protected abstract assertAcceptingWork(): void;
   protected abstract assertEnvironmentLive(environmentId: string): Promise<Environment>;

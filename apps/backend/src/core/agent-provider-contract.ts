@@ -444,6 +444,14 @@ export interface AgentSessionProvider {
    * observers must not call this; the backend workflow supplies its request id.
    */
   settleTurn?(sessionId: string, requestId: string): Promise<boolean>;
+  /**
+   * The terminal error recorded for one request's turn, or null when that
+   * turn visibly finished without one. For providers whose lifecycle reads
+   * idle after a failed turn because the failure is kept in the transcript
+   * instead (OpenCode). Throws while no finished answer is visible, so an
+   * early idle read is never taken as success.
+   */
+  turnTerminalError?(sessionId: string, requestId: string): Promise<string | null>;
   status(sessionId: string): Promise<ProviderStatus>;
   /**
    * Read lifecycle and cumulative usage from one authoritative provider

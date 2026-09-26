@@ -1,6 +1,7 @@
 # CLI commands — implementation plan
 
-Status: Planned; implementation has not started.
+Status: In progress — steps 01–14 verified on an uncommitted working tree on
+`a9337716` (2026-09-26); step 15 awaits human review and merge.
 Prepared: 2026-09-26.
 Source review: [CLI commands for composability and targeted testing](../../cli-commands.md),
 against revision `06af4d86`.
@@ -14,31 +15,29 @@ operation remains owned by the existing backend, bridge, or external process.
 Scripts can disconnect and return using a durable receipt; a visible desktop
 tab is never required for progress or recovery.
 
-The plans describe future implementation. They do not claim that proposed
-commands, public operation records, or qualification tests already exist.
 Keep the source review as the dated findings document and track implementation
-and evidence here.
+and evidence here. Each step file ends with an implementation record; step 14
+holds the qualification evidence table.
 
 ## Numbered steps
 
 | Step | Plan | Required predecessors | Status |
 | --- | --- | --- | --- |
-| 01 | [Public command and compatibility contract](01-public-command-and-compatibility-contract.md) | None | Planned |
-| 02 | [Separate CLI client and service startup](02-client-and-service-entrypoints.md) | 01 | Planned |
-| 03 | [Connection discovery and authenticated transport](03-connections-and-authenticated-transport.md) | 01, 02 | Planned |
-| 04 | [Shared backend actions and read-only discovery](04-shared-actions-and-discovery.md) | 01, 03 | Planned |
-| 05 | [Durable operation receipts and idempotency](05-operation-receipts-and-idempotency.md) | 01, 04 | Planned |
-| 06 | [Project creation, metadata, and removal](06-project-commands.md) | 04, 05 | Planned |
-| 07 | [Environment creation and lifecycle](07-environment-lifecycle.md) | 04, 05, 06 | Planned |
-| 08 | [Project and environment settings](08-settings-and-concurrent-edits.md) | 06, 07 | Planned |
-| 09 | [Session creation and prompt dispatch](09-sessions-and-prompt-dispatch.md) | 04, 05, 07, 08 | Planned |
-| 10 | [Request-specific completion and waiting](10-run-completion-and-waiting.md) | 05, 09 | Planned |
-| 11 | [Session controls and pending interactions](11-session-controls-and-interactions.md) | 09, 10 | Planned |
-| 12 | [Bounded transcripts and resumable observation](12-transcripts-and-observation.md) | 04, 09, 10 | Planned |
-| 13 | [Structured environment command execution](13-environment-command-execution.md) | 05, 07, 10 | Planned; second stage |
-| 14 | [Targeted scenarios and real-stack qualification](14-targeted-testing-and-qualification.md) | 06–12 for full qualification; 13 for exec cases | Planned |
-| 15 | [Packaging, operator documentation, and rollout](15-packaging-documentation-and-rollout.md) | 01–12, 14; 13 if shipped | Planned |
-
+| 01 | [Public command and compatibility contract](01-public-command-and-compatibility-contract.md) | None | Verified |
+| 02 | [Separate CLI client and service startup](02-client-and-service-entrypoints.md) | 01 | Verified |
+| 03 | [Connection discovery and authenticated transport](03-connections-and-authenticated-transport.md) | 01, 02 | Verified |
+| 04 | [Shared backend actions and read-only discovery](04-shared-actions-and-discovery.md) | 01, 03 | Verified |
+| 05 | [Durable operation receipts and idempotency](05-operation-receipts-and-idempotency.md) | 01, 04 | Verified |
+| 06 | [Project creation, metadata, and removal](06-project-commands.md) | 04, 05 | Verified |
+| 07 | [Environment creation and lifecycle](07-environment-lifecycle.md) | 04, 05, 06 | Verified (local + container) |
+| 08 | [Project and environment settings](08-settings-and-concurrent-edits.md) | 06, 07 | Verified |
+| 09 | [Session creation and prompt dispatch](09-sessions-and-prompt-dispatch.md) | 04, 05, 07, 08 | Verified |
+| 10 | [Request-specific completion and waiting](10-run-completion-and-waiting.md) | 05, 09 | Verified (Claude, Codex, OpenCode; others `unsupported`) |
+| 11 | [Session controls and pending interactions](11-session-controls-and-interactions.md) | 09, 10 | Verified |
+| 12 | [Bounded transcripts and resumable observation](12-transcripts-and-observation.md) | 04, 09, 10 | Verified (snapshot following) |
+| 13 | [Structured environment command execution](13-environment-command-execution.md) | 05, 07, 10 | Verified (local + container) |
+| 14 | [Targeted scenarios and real-stack qualification](14-targeted-testing-and-qualification.md) | 06–12 for full qualification; 13 for exec cases | Verified |
+| 15 | [Packaging, operator documentation, and rollout](15-packaging-documentation-and-rollout.md) | 01–12, 14; 13 if shipped | In progress — awaiting review and merge |
 Numeric order is the default. Step 14's harness and first local-worktree smoke
 should be built incrementally with steps 04–07, not postponed until all commands
 exist. Step 15's packaging checks also accompany step 02 and each new command.
@@ -161,15 +160,19 @@ human-maintainer merge; agents must not merge into `main`. Dependencies should
 be verified before a dependent contract is released, even if implementation
 changes share a PR.
 
-- [ ] Existing service startup remains compatible and client commands stay clients.
-- [ ] Explicit connection identity prevents accidental production targeting.
-- [ ] Projects/environments can be created, edited, started, and cleaned up.
-- [ ] Same-key replay and conflicting reuse behave correctly through restart/deletion.
-- [ ] Prompt runs have request-specific, recoverable outcomes.
-- [ ] Controls/interactions remain correct with inactive environments and concurrent tabs.
-- [ ] Snapshot/transcript reads are bounded and do not alter background liveness.
-- [ ] Credential-free, live-provider, UI, and Docker evidence are distinguished.
-- [ ] Packed distribution and operator documentation match shipped capabilities.
+- [x] Existing service startup remains compatible and client commands stay clients.
+- [x] Explicit connection identity prevents accidental production targeting.
+- [x] Projects/environments can be created, edited, started, and cleaned up.
+- [x] Same-key replay and conflicting reuse behave correctly through restart/deletion.
+- [x] Prompt runs have request-specific, recoverable outcomes.
+- [x] Controls/interactions remain correct with inactive environments and concurrent tabs.
+- [x] Snapshot/transcript reads are bounded and do not alter background liveness.
+- [x] Credential-free, live-provider, UI, and Docker evidence are distinguished.
+- [x] Packed distribution and operator documentation match shipped capabilities.
+
+Outstanding before the plan is complete: human review and merge (step 15),
+macOS runs, and live qualification of Pi, Cursor and Grok (their completion
+stays `unsupported` until then).
 
 ## Related work
 

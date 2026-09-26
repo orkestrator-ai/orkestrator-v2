@@ -1,9 +1,17 @@
 # 10 — Tighten lifecycle timers and transport retry policy
 
-Status: Partially implemented (2026-09-25). Cursor/Pi lifecycle ownership, ACP
-disconnect-poll removal, and backoff for two read-stream reconnects landed.
-The remaining transports are inventoried and deferred, and before/after
-measurements await steps 01/02; see Completion notes. Dependencies: 01, 02.
+Status: Implemented with recorded deferrals. Cursor/Pi lifecycle ownership,
+removal of ACP's 50 ms disconnect poll, and capped jittered backoff for the
+OpenCode event monitor and web gateway stream all landed. The remaining
+transports are inventoried with reasons; the plan treats step 10's
+optimizations as optional where there's no measured benefit. They are:
+- terminal WebSocket jitter (already exponential);
+- the gateway terminal fallbacks (each reopen forces a snapshot);
+- the Codex supervisor breaker and its non-cancellable backoff sleep (bounded
+  at 10 s; the permanent breaker is an intentional failure policy with no
+  recurring cost).
+The ACP reduction is derived (20 wakeups/s per in-flight request removed);
+step 12 records the aggregate results. See Completion notes. Dependencies: 01, 02.
 Finding: F09; inventory L01–L14.
 
 ## Outcome

@@ -1,8 +1,12 @@
 # 02 — Add bounded scheduling and admission mechanics
 
-Status: Primitive landed with tests (`14f4bd0f`); no owner migrated yet —
-migrations belong to steps 03, 05, 07 and 08. Dependencies: 01. Findings: F04,
-F06.
+Status: Implemented. Primitive landed with tests (`14f4bd0f`). The scheduler
+drives step 08's keyed workflow supervisor, native queues and backend activity
+jobs. Admission pools are used by steps 03/04 (`git-docker-scan`), 05
+(`external-pr`) and 08 (`workflow-provider`). Host sleep/resume reconciliation
+landed in `649a7816`: a `HostSuspendDetector` re-times every live scheduler so
+overdue keys run once. Steps 03 and 05 kept their per-entry timers and use the
+pools only (see their notes). Dependencies: 01. Findings: F04, F06.
 
 ## Outcome and boundary
 

@@ -1,9 +1,12 @@
 # 06 — Coordinate client reads and document visibility
 
-Status: In progress — coordinator and first migration (native session hook,
-Files panel) landed with baseline foreground cadence and hidden-document pause;
-step 09 consumers migrated since; quiet backoff (task 8), data-saving
-preference (task 9) and real-stack qualification remain. See
+Status: Implemented, with one recorded deferral. The coordinator, the native
+session and Files panel migrations, and the step 09 consumers have landed.
+Quiet native backoff (task 8) is enabled by step 07 for Cursor, Pi, Grok and
+OpenCode against revision-announcing backends; Claude and Codex are not
+qualified and keep baseline cadence. The data-saving preference (task 9) is a
+recorded deferral: the plan makes it conditional ("if adopted"), and it needs a
+user-facing control. Real-stack results are recorded in step 12. See
 [Completion notes](#completion-notes).
 Dependencies: 01; relevant step 11 recovery contract before slower polling.
 Finding: F05. Related proposal: client data-saving mode.

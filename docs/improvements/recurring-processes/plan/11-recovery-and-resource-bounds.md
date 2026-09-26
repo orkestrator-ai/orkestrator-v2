@@ -1,8 +1,11 @@
 # 11 — Qualify bounded event and snapshot recovery
 
-Status: Contracts and PR/diff migration implemented (see
-[completion notes](#completion-notes)); real-stack/browser qualification and
-the file/tree/coordinator/native adopters remain open. Dependencies: 01;
+Status: Implemented. Contracts and the PR/diff migration landed here (see
+[completion notes](#completion-notes)). Adopters followed: file-list/tree
+revisions (step 03), native observation invalidations (step 07) and the
+coordinator view (step 09). Native-session transcript views keep their own
+progressive-token contract and use stamped invalidations only. Real-stack
+results are recorded in step 12. Dependencies: 01;
 coordinate contracts with 03, 06 and 07. Finding: F07. This is a prerequisite
 for dependent polling reductions.
 

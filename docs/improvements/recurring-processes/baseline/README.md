@@ -18,6 +18,7 @@ IDs (B01–B25, C01–C16, L01–L14) referenced below.
 | `step-07-baseline.json` | Same scenarios at the step 07 commit (identical counters), plus the driven `nativeObservation` block: the real native activity sweep and queue scan in rollback vs shared mode. |
 | `step-03-snapshots.json` | Same harness after step 03 (shared worktree snapshots), plus two appended two-client scenarios. Compare with `--compare step-01-baseline.json`. |
 | `step-04-container-fetch.json` | Same harness after step 04 (container fetch policy), on the branch that also carries steps 05 and 07. Container fetches are driven through the real `ContainerGitFetchPolicy`; see "Step 04" below. |
+| `step-12-final.json` | Same harness on the fully merged branch (steps 01–11), including the driven `nativeObservation` and `workflows` blocks. The step 12 comparison below is against `step-01-baseline.json`. |
 
 ## How to run
 
@@ -297,6 +298,59 @@ reduction, e.g. `env50-container-c1-pr` 3,384 → 3,304.2 = −89.8 from step 05
   makes the key due at once; explicit refreshes coalesce within 15 s), and
   fetch durations (a slow fetch holds the container's single scan slot, see
   the plan's completion notes).
+
+## Step 08 — keyed workflow supervision (driven)
+
+`recurring-baseline-workflows.ts` drives the real feature-planning,
+build-pipeline and looped-review supervisors over a real temporary store with
+200 completed and 2 active records per store for 10 minutes, in rollback
+(whole-store tick, `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK`) and keyed modes.
+The three workflow ticks therefore leave the modelled block. Numbers are the
+`workflows` block of `step-12-final.json`:
+
+| Domain | Mode | Attempts | Records scanned | Storage reads | Provider reads |
+| --- | --- | --- | --- | --- | --- |
+| Feature planning | rollback | 600 | 0 | 1,800 | 1,200 |
+| Feature planning | keyed | 1,223 | 4,242 | 1,223 | 1,202 |
+| Build pipeline | rollback | 400 | 80,800 | 1,200 | 800 |
+| Build pipeline | keyed | 823 | 4,242 | 823 | 802 |
+| Looped review | rollback | 600 | 121,200 | 6,604 | 1,200 |
+| Looped review | keyed | 1,223 | 4,242 | 6,035 | 1,202 |
+
+Records scanned follow active obligations plus one 30 s discovery instead of
+retained history (−95 % build, −96.5 % looped review at 200 completed records;
+feature planning already listed active records only). Attempts roughly double
+because every active key is its own short pass; each reads only its record,
+so storage reads fall. Provider reads keep one per active key per pass: the
+progress cadence was not slowed. Multi review is not driven.
+
+## Step 12 — final comparison (deterministic)
+
+`step-12-final.json` against `step-01-baseline.json`, 10-minute warm idle,
+physical work per minute (all owners). Scenario ids encode environments,
+local/container mix, clients (`c0`–`c2`), PR mix and completed workflows.
+
+| Scenario | git spawns | directory reads | tree walks | file reads | gh spawns | docker exec |
+| --- | --- | --- | --- | --- | --- | --- |
+| `env1-local-c0` | 2.6 → 2.6 | 0 → 0 | 0 → 0 | 2 → 2 | — | — |
+| `env1-local-c1` | 60.2 → 2.6 | 480 → 0 | 12 → 0 | 48 → 2 | — | — |
+| `env1-container-c1` | — | — | 12 → 12 | — | — | 84 → 84.2 |
+| `env10-local-c0-pr` | 34.1 → 25.7 | — | — | 20 → 20 | 21 → 12.6 | — |
+| `env10-mixed-c1-pr-wf200` | 73.2 → 12.8 | 480 → 0 | 12 → 0 | 56 → 10 | 11 → 8.2 | 336 → 325.8 |
+| `env10-mixed-c2-pr-wf200` | 130.7 → 12.8 | 960 → 0 | 24 → 0 | 102 → 10 | 11 → 8.2 | 336 → 325.8 |
+| `env10-container-c0-pr` | — | — | — | — | — | 670 → 655.2 |
+| `env50-mixed-c2-pr-wf200` | 201.7 → 64.2 | 960 → 0 | 24 → 0 | 142 → 50 | 56 → 33.6 | 1,684 → 1,644.2 |
+| `env50-container-c1-pr` | — | — | 12 → 12 | — | — | 3,384 → 3,304.2 |
+
+Network fetch attempts inside containers are not visible in this table because
+the old status script fetched inside the same `docker exec`; step 04's section
+shows them separately (−95 % to −98 %). Container `docker exec` volume is
+dominated by Claude terminal-state polls (one exec per running container per
+second, B18), which this project measured but deliberately did not change.
+Driven native observation: provider reads 420 → 272.2 per minute and
+tab-facing status reads 1,200 → 0 per 10 minutes (step 07 section). A second
+client adds no backend scans for a quiet watched worktree
+(`env10-mixed-c1` vs `c2`).
 
 ## Limitations — what this does not measure
 

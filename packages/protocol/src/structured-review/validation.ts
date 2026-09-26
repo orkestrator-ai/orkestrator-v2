@@ -7,6 +7,7 @@ import {
   type ReviewContractName,
   type ReviewFindingPool,
   type ReviewReconciliation,
+  type StructuredReviewFindings,
   type StructuredReviewReport,
 } from "./types.js";
 
@@ -591,6 +592,25 @@ function validateStructuredReviewReportValue(value: unknown, issues: Issues): vo
   validateString(readRequired(object, "reviewSummary", path, issues), "$.reviewSummary", issues);
 }
 
+function validateStructuredReviewFindingsValue(value: unknown, issues: Issues): void {
+  const path = "$";
+  const object = readObject(value, path, issues, ["issues", "testCoverageGaps"]);
+  if (!object) return;
+
+  validateArray(
+    readRequired(object, "issues", path, issues),
+    "$.issues",
+    issues,
+    validateReviewIssue,
+  );
+  validateArray(
+    readRequired(object, "testCoverageGaps", path, issues),
+    "$.testCoverageGaps",
+    issues,
+    validateCoverageGap,
+  );
+}
+
 function reportDuplicatePoolIds(
   entries: unknown,
   path: string,
@@ -857,6 +877,21 @@ export function isStructuredReviewReport(
   options?: StructuredReviewParseOptions,
 ): value is StructuredReviewReport {
   return safeParseStructuredReviewReport(value, options).success;
+}
+
+/** Project a report onto the findings a fix turn is asked to address. */
+export function structuredReviewFindings(report: StructuredReviewReport): StructuredReviewFindings {
+  return { issues: report.issues, testCoverageGaps: report.testCoverageGaps };
+}
+
+export function safeParseStructuredReviewFindings(
+  value: unknown,
+): ReviewContractParseResult<StructuredReviewFindings> {
+  return safeParseContract(
+    "structured-review-findings",
+    value,
+    validateStructuredReviewFindingsValue,
+  );
 }
 
 export function parseReviewFindingPool(value: unknown): ReviewFindingPool {

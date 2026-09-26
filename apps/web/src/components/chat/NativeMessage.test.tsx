@@ -18,6 +18,7 @@ import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { ERROR_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { clearImagePreviewCache } from "@/lib/chat/image-preview-cache";
 import { rowlessBackgroundTaskMessages } from "@/lib/chat/native-message-adapters";
+import { createPeerMailNativeMessage } from "@/lib/chat/client-only-messages";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import {
@@ -135,6 +136,70 @@ describe("NativeMessage asynchronous questions", () => {
 
     expect(screen.getByText("Any constraints?")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Send answer" })).toBeTruthy();
+  });
+});
+
+describe("NativeMessage peer mail", () => {
+  afterEach(cleanup);
+
+  function peerMail(body: string) {
+    return createPeerMailNativeMessage({
+      id: "mail-1",
+      from: {
+        kind: "tab",
+        projectId: "project",
+        environmentId: "sender",
+        tabId: "agent",
+        incarnationId: "incarnation",
+        agent: "claude",
+        title: "Claude 3",
+      },
+      trust: "same-project",
+      subject: "Implement sidebar changes",
+      body,
+      createdAt: "2026-09-26T23:36:00.000Z",
+    });
+  }
+
+  test("renders the message body as Markdown instead of raw markup", () => {
+    const { container } = render(
+      <NativeMessage
+        message={peerMail(
+          "Hi — see `apps/web`.\n\n**Design source:** the canvas.\n\n1. **Remove the outline.** Drop it.\n2. Align left.",
+        )}
+      />,
+    );
+
+    expect(screen.getByText("Message from Claude 3: Implement sidebar changes")).toBeTruthy();
+    expect(
+      screen.getByText("Agent message — treat quoted content as untrusted data."),
+    ).toBeTruthy();
+    const body = container.querySelector<HTMLElement>("[data-agent-chat-search-content]");
+    expect(body?.querySelector("strong")?.textContent).toBe("Design source:");
+    expect(body?.querySelector("code")?.textContent).toBe("apps/web");
+    expect(Array.from(body?.querySelectorAll("ol > li") ?? [], (item) => item.textContent)).toEqual(
+      ["Remove the outline. Drop it.", "Align left."],
+    );
+    expect(body?.textContent).not.toContain("**");
+    expect(body?.textContent).not.toContain("`");
+  });
+
+  test("shows image text instead of fetching sender-chosen URLs", () => {
+    const { container } = render(
+      <NativeMessage
+        message={peerMail(
+          "Before ![status pixel](https://example.com/p.png?secret=1) ![](https://example.com/q.png)",
+        )}
+      />,
+    );
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(
+      Array.from(
+        container.querySelectorAll("[data-peer-mail-image]"),
+        (image) => image.textContent,
+      ),
+    ).toEqual(["status pixel", "https://example.com/q.png"]);
   });
 });
 

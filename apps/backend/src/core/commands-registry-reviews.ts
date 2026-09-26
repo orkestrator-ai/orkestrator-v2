@@ -42,12 +42,13 @@ export function registerReviewWorkflowCommands(
       ),
     );
   }
-  register("get_review_validation_output", ({ environmentId, runId, resultId }, context) =>
+  register("get_review_validation_output", ({ environmentId, runId, resultId, known }, context) =>
     readReviewValidationOutput(
       asNonBlankString(environmentId, "environmentId"),
       asNonBlankString(runId, "runId"),
       asNonBlankString(resultId, "resultId"),
       context,
+      known,
     ),
   );
 

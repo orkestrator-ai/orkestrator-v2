@@ -2,19 +2,37 @@
  * Process lifecycle: the HTTP server, idle detaching, and a clean shutdown.
  */
 import { createServer, type Server } from "node:http";
+import {
+  BridgeLifecycle,
+  type LifecycleSignalTarget,
+} from "@orkestrator/protocol/bridge-lifecycle";
+import {
+  type IntervalTimers,
+  PARENT_PID_ENV,
+  parseParentPid,
+} from "@orkestrator/protocol/parent-watchdog";
 import { applyWorkingDirectory, hostname, port } from "./config.js";
 import { detachAgent } from "./agent-session.js";
 import { json, route } from "./http.js";
+import { settleIdleDetaches, sweepIdleSessions } from "./idle-detach.js";
 import { drainPersistence, loadPersistedState } from "./persistence.js";
-import { sessionIsWorking, sessions } from "./state.js";
+import { finishRestoredTombstones } from "./session-close.js";
+import { sessions } from "./state.js";
 
-/** How long a session may sit untouched before its SDK agent is released. */
-const IDLE_DETACH_MS = 10 * 60 * 1000;
 const IDLE_SWEEP_MS = 60 * 1000;
 /** How often to check that the backend that spawned us is still alive. */
 const PARENT_WATCH_MS = 5_000;
 
-let shuttingDown = false;
+/** Seams for the lifecycle's clock, parent probe and exit; production passes none. */
+export interface ServerLifecycleOptions {
+  timers?: IntervalTimers;
+  parentPid?: number | null;
+  isParentAlive?: (pid: number) => boolean;
+  exit?: (code: number) => void;
+  signals?: LifecycleSignalTarget | null;
+}
+
+let lifecycle: BridgeLifecycle | undefined;
 
 export const server: Server = createServer((request, response) => {
   const controller = new AbortController();
@@ -23,7 +41,7 @@ export const server: Server = createServer((request, response) => {
   // not the user asking the agent to stop.
   request.once("aborted", () => controller.abort());
 
-  if (shuttingDown) {
+  if (lifecycle?.closing) {
     json(response, 503, { error: "Bridge is shutting down" });
     return;
   }
@@ -39,58 +57,71 @@ export const server: Server = createServer((request, response) => {
   });
 });
 
-/**
- * Release the SDK agent behind a session nobody has touched recently.
- *
- * The session, its transcript and its agent id all survive, so the next
- * request re-attaches to the same conversation transparently. A session with a
- * turn or a background child still running is never detached.
- */
-function sweepIdleSessions(): void {
-  const now = Date.now();
-  for (const state of Array.from(sessions.values())) {
-    if (!state.agent || sessionIsWorking(state) || state.dispatching) continue;
-    if (now - state.lastAccessed < IDLE_DETACH_MS) continue;
-    void detachAgent(state).catch(() => undefined);
-  }
-}
-
-export async function start(): Promise<void> {
-  applyWorkingDirectory();
-  await loadPersistedState();
-  await new Promise<void>((resolve) => server.listen(port, hostname, resolve));
-
-  const idleSweep = setInterval(sweepIdleSessions, IDLE_SWEEP_MS);
-  idleSweep.unref();
-
-  // Bridges are spawned detached so they outlive a backend that dies without
-  // running its shutdown path. Watching the advertised PID is what stops this
-  // process — and every agent it owns — from being orphaned.
-  const parentPid = Number.parseInt(process.env.ORKESTRATOR_PARENT_PID?.trim() || "", 10);
-  if (Number.isInteger(parentPid) && parentPid > 1) {
-    const watch = setInterval(() => {
-      try {
-        process.kill(parentPid, 0);
-      } catch {
-        void shutdown().then(() => process.exit(0));
-      }
-    }, PARENT_WATCH_MS);
-    watch.unref();
-  }
-
-  for (const signal of ["SIGTERM", "SIGINT"] as const) {
-    process.once(signal, () => {
-      void shutdown().then(() => process.exit(0));
-    });
-  }
-}
-
-export async function shutdown(): Promise<void> {
-  if (shuttingDown) return;
-  shuttingDown = true;
+async function releaseEverything(): Promise<void> {
+  // Cursor has no parked approvals to deny: its `/approvals` route answers an
+  // empty list by contract, and the SDK's sandbox approval path fails closed.
   // Persist before releasing agents: a transcript written after the agents are
   // gone is the same transcript, but one lost to a hung dispose is not.
   await drainPersistence();
-  await Promise.allSettled(Array.from(sessions.values()).map((state) => detachAgent(state)));
+  await Promise.allSettled([
+    ...Array.from(sessions.values()).map((state) => detachAgent(state)),
+    // An idle detach that started before shutdown is still disposing; the
+    // shutdown is not finished until it is.
+    settleIdleDetaches(),
+  ]);
+  if (!server.listening) return;
   await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
+function lifecycleFor(listenPort: number, options: ServerLifecycleOptions): BridgeLifecycle {
+  return new BridgeLifecycle({
+    label: "[cursor-bridge]",
+    open: async () => {
+      applyWorkingDirectory();
+      await loadPersistedState();
+      // Finish durable closes left by a previous process without delaying startup.
+      void finishRestoredTombstones().catch(() => {
+        console.warn("[cursor-bridge] restored closes could not be finished at startup");
+      });
+      await new Promise<void>((resolve) => server.listen(listenPort, hostname, resolve));
+    },
+    close: releaseEverything,
+    idleSweep: { intervalMs: IDLE_SWEEP_MS, run: () => void sweepIdleSessions() },
+    parentPid:
+      options.parentPid !== undefined
+        ? options.parentPid
+        : parseParentPid(process.env[PARENT_PID_ENV]),
+    parentWatchMs: PARENT_WATCH_MS,
+    exit: options.exit ?? ((code) => process.exit(code)),
+    ...(options.timers ? { timers: options.timers } : {}),
+    ...(options.isParentAlive ? { isParentAlive: options.isParentAlive } : {}),
+    ...(options.signals !== undefined ? { signals: options.signals } : {}),
+  });
+}
+
+/**
+ * Bind the server and arm its background sweeps. Starts once: a second call,
+ * including one after shutdown, rejects without arming anything.
+ *
+ * `listenPort` exists for tests; production passes nothing and keeps the
+ * configured port.
+ */
+export async function start(
+  listenPort: number = port,
+  options: ServerLifecycleOptions = {},
+): Promise<void> {
+  if (lifecycle) throw new Error("The Cursor bridge server was already started");
+  lifecycle = lifecycleFor(listenPort, options);
+  await lifecycle.start();
+}
+
+/**
+ * Clear the lifecycle timers, then release every agent and close the server.
+ * Idempotent. Does not exit the process.
+ */
+export async function shutdown(): Promise<void> {
+  // A shutdown before any start still releases whatever was loaded, and
+  // leaves the bridge closed: a later start is refused.
+  lifecycle ??= lifecycleFor(port, { signals: null, parentPid: null });
+  await lifecycle.shutdown();
 }

@@ -56,6 +56,75 @@ The renderer reaches a bridge over HTTP and SSE — directly on loopback when it
 runs inside Electron, and through the gateway's authenticated loopback proxy
 when it runs in a remote browser.
 
+## Closing a tab retains the conversation
+
+Closing a native agent tab releases what Orkestrator holds for it and keeps
+the conversation resumable on every platform. Four operations stay distinct:
+
+| Operation | Execution | Bridge mapping / resources | Vendor history |
+| --- | --- | --- | --- |
+| Unmount / switch away | Continues | Kept | Kept |
+| Idle detach | Already idle | Expensive handle released, identity kept | Kept |
+| Tab close | Owned work stopped, parked approvals denied | Mapping retired, resources released | **Kept** |
+| Explicit delete | Provider-specific | Removed | Deleted where supported |
+
+Tab close is `POST /session/:id/close` on every bridge. It answers 200
+`{closed:true,retained:true}`, or 200 `{closed:true,missing:true}` for an id it
+does not hold (never 404), or 503 `{closed:false,pending:true,error}` when it
+cannot prove the work stopped — in which case the session stays registered.
+The backend (`commands-registry-teardown.ts`, `bridge-session-close.ts`) keeps
+its durable teardown intent until a 2xx arrives. A 404/405 from the route
+means the bridge predates it: the backend may then use a legacy
+`DELETE /session/:id` only for platforms whose DELETE has never deleted history
+(`LEGACY_DELETE_RETAINS_HISTORY`: Codex, Pi, Grok, Cursor). Claude's DELETE
+calls the SDK's `deleteSession`, so an old Claude bridge leaves the close
+pending with a "restart the environment" error instead.
+
+Only a 2xx whose body affirms `closed: true` confirms a close; an empty or
+malformed 2xx leaves the intent pending. Pending intents are retried at
+startup and by the backend's coalesced 60-second sweep, with a per-intent
+backoff (30 s, doubling, capped at 15 minutes) so a bridge that keeps refusing
+is not polled every minute. The old-Claude-bridge failure carries a stable
+`bridge-upgrade-required` marker (`@orkestrator/protocol/tab-teardown`), and
+the renderer shows one non-destructive toast per environment asking the user
+to restart it; the conversation is not deleted and the close is retried.
+
+Per bridge, "stop proven" means:
+
+- **Claude** — every owned `Query.close()` returned within a 10-second budget
+  and any racing prompt-dispatch claim settled. Otherwise 503, and the session
+  stays registered with its `deleting` claim so prompts and DELETE are refused
+  until a retry completes the close.
+- **Codex** — the last-reference turn is interrupted and terminal (an
+  in-flight `turn/start` is waited for and then interrupted), approvals are
+  denied, and the removal tombstone is written before the thread is
+  unsubscribed. A failed tombstone write answers 503 with the session, its
+  record and its subscription intact. From the start of close until it is
+  confirmed, prompt, steer, compact and review answer 409 `Session is closing`.
+- **Pi, Cursor** — see their bridge sections; both answer 503 until owned work
+  has stopped and the removal is published.
+- **Grok (ACP)** — see [Grok Build](#grok-build).
+
+OpenCode has no bridge. Tab close goes through the native agent service to the
+cached (or freshly peeked, never started) `OpenCodeProvider.closeSession`: it
+aborts the owned turn through the same path as a user stop, which settles
+workflow-turn ownership; restores temporary reviewer permissions; rejects every
+permission and question still pending for that session (neither the pinned SDK
+nor the server docs promise that abort withdraws them, so close fails closed);
+treats a 404 on abort as a session already gone; and forgets the provider's
+registration. OpenCode's `DELETE /session/:id` removes the session and all its
+data and is not used, so the conversation stays in `session.list` for resume.
+
+When two tabs map the same provider session, closing one retires only its
+mapping; the last one performs the close. Teardowns are serialized per
+(environment, agent, provider session), so two such tabs closed together (or a
+close racing the reconcile sweep) cannot both skip the provider close.
+`NativeAgentRuntimeProvider.closeSession` has the same non-destructive meaning
+for every caller (Multi Review included).
+New teardown intents carry a `retain-history-close:` session-id fence so an
+older backend reading them after a downgrade refuses them instead of replaying
+a DELETE. Step 09 of the inconsistency plan holds the caller inventory.
+
 ## Claude Code
 
 **Bridge:** `bridges/claude-bridge/` · **Transport:** HTTP + SSE (Hono)
@@ -122,7 +191,9 @@ revision, because a browser `EventSource` adopts every id it sees.
 
 Idle threads are detached (`thread/unsubscribe`, state freed) and transparently
 re-attached on the next request. `thread/delete` is never called: closing a
-session unsubscribes, whereas deleting would destroy the user's rollout.
+session unsubscribes, whereas deleting would destroy the user's rollout. Tab
+close (`POST /session/:id/close`) additionally confirms that a last-reference
+turn has actually stopped before releasing the thread.
 
 `session-titles.ts` is the one deliberate exception to all of the above — it
 still spawns a hermetic `codex exec` with a custom model catalog, a read-only
@@ -265,6 +336,26 @@ policy opts into project settings (containers). Native Cursor mail is on:
 `agentMailCapabilities("agent-native", "cursor")` is
 `{canPull,canSend,canInject}=true`.
 
+Durability and bounds:
+
+- **Mandatory publication.** `persistBarrier()` (`src/persistence.ts`) must
+  write the state file before a prompt or steer reaches the SDK. It also runs
+  before create, resume and an identity-changing attach are acknowledged. It
+  rejects when nothing was written; it never resolves on a swallowed failure.
+- **Oversized state.** When the whole state file would exceed its cap, the
+  oldest-touched persisted transcript copies are shed. Session identities,
+  journals and (bounded) structured results are never shed, and a snapshot
+  that still does not fit is refused with a typed error.
+- **Unknown dispatch outcome.** A `send` that rejects after it was called is
+  kept as ambiguous evidence and answered 502 `dispatch-outcome-unknown`. The
+  backend parks it with retry-under-the-same-id and discard controls.
+- **Steer history.** It is bounded at 256 records and 512 KiB. A steer that
+  does not fit, or whose prepared record could not be written, is refused with
+  429 `{ outcome: "rejected", reason }` before anything is sent. A retry whose
+  record was evicted against a fenced run answers `unknown`, never
+  non-delivery. Saturation appears as `steer` in `/runtime-health` and as a
+  card in the runtime panel.
+
 ## Grok Build
 
 **Bridge:** `bridges/acp-bridge/` · **Transport:** ACP JSON-RPC over stdio
@@ -305,6 +396,25 @@ which costs nothing because notifications expect no reply.
 Agent stderr is drained but never logged: it may contain prompts or file
 contents. Vendor wire formats stay inside the adapter — `session-config.ts`
 converts them to the shared `NativeAgentComposerState` that HTTP clients see.
+
+Tab close (`POST /session/:id/close`, `acp-session-close.ts`) runs one
+operation per session id; a second close or DELETE joins it. It fences the
+session first (`closing`: prompt, attach, config, resume, create-by-key and
+approval/interaction answers get 409 `Session is closing`; reads, cancel and
+close still work), denies every parked permission, question and plan approval
+with its cancel outcome, and sends `session/cancel` to a running turn. It then
+waits for an in-flight attach (`ACP_CLOSE_ATTACH_WAIT_MS`, 5 s) and for the
+cancelled `session/prompt` to answer (`ACP_CLOSE_CANCEL_WAIT_MS`, 2 s; after
+that it carries on), terminates every child, writes the state file without
+the session, and only then drops the registry entry. The session stays
+registered throughout, so a retry never sees an early `missing`: an attach
+that outlasts its wait, a child that does not exit, or a failed state write
+answers 503 pending and leaves the session fenced until a retry completes.
+`closing` is not persisted, so a bridge restart restores the session unfenced
+and the backend's retry closes it. ACP has no release call and no delete
+method: close stops work by terminating the CLI child, drops the bridge's own
+journal and usage for the session, and leaves Grok's store untouched, so
+`/session/list` + `session/load` reopen the conversation.
 
 ## Pi
 
@@ -364,6 +474,13 @@ session close and a malformed answer all deny, and a turn that ends with a call
 still parked denies it rather than leaving the turn awaiting a promise nobody
 will settle. The same policy controls project-local `.pi/` extensions, skills
 and prompt templates through Pi's resource loader and project-trust callback.
+
+A prompt owns a claim from the moment its request is admitted. A cancel that
+arrives before Pi has produced a cancel handle is parked against that claim and
+answered 202 `{ cancelled: false, pending: true }`. It is honoured at the next
+preparation boundary without calling Pi, or through `session.abort()` once Pi
+is starting the turn. Startup is bounded by `PI_BRIDGE_STARTUP_TIMEOUT_MS`. The
+session reports running on every read route while a claim exists.
 
 Pi's vendor SDK has no MCP client. The bridge owns one (`bridges/pi-bridge/src/mcp.ts`)
 and loads it through `extensionFactories` next to the approval gate: Orkestrator

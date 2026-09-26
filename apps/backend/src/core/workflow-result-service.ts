@@ -47,6 +47,12 @@ export interface WorkflowResultCallerScope {
   projectId: string;
 }
 
+/** A committed, first acceptance of a workflow result. Identifiers stay in-process. */
+export interface WorkflowResultAcceptance {
+  resultKey: string;
+  environmentId: string;
+}
+
 interface StoredWorkflowResult extends WorkflowResultSlotInput {
   schemaVersion: number;
   lifecycle: "open" | "accepted" | "consumed" | "cancelled" | "superseded" | "exhausted";
@@ -207,6 +213,7 @@ export class WorkflowResultService {
   private pendingCalls = 0;
   private pendingBytes = 0;
   private readonly pendingCallsByKey = new Map<string, number>();
+  private readonly acceptanceListeners = new Set<(event: WorkflowResultAcceptance) => void>();
   readonly metrics: WorkflowResultMetrics;
 
   constructor(dataDir: string, metrics: WorkflowResultMetrics = new WorkflowResultMetrics()) {
@@ -505,7 +512,35 @@ export class WorkflowResultService {
     }
   }
 
+  /**
+   * Observes durable acceptances, after the commit, so a workflow supervisor
+   * can wake the waiting workflow instead of finding the result on its next
+   * poll. A listener must not throw; one that does is isolated.
+   */
+  onAccepted(listener: (event: WorkflowResultAcceptance) => void): () => void {
+    this.acceptanceListeners.add(listener);
+    return () => this.acceptanceListeners.delete(listener);
+  }
+
   async submit(
+    scope: WorkflowResultCallerScope,
+    resultKey: string,
+    result: unknown,
+  ): Promise<WorkflowResultSubmission> {
+    const submission = await this.submitOnce(scope, resultKey, result);
+    if (submission.ok && !submission.duplicate) {
+      for (const listener of Array.from(this.acceptanceListeners)) {
+        try {
+          listener({ resultKey, environmentId: scope.environmentId });
+        } catch {
+          // Waking is an optimization; the workflow still polls the result.
+        }
+      }
+    }
+    return submission;
+  }
+
+  private async submitOnce(
     scope: WorkflowResultCallerScope,
     resultKey: string,
     result: unknown,

@@ -72,6 +72,7 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     pendingRenamePrompt: _pendingRenamePrompt,
     prRecheckAfterAgentCompletionArmedAt: _prRecheckArm,
     controlRequestId: _controlRequestId,
+    controlRequestFingerprint: _controlRequestFingerprint,
     branchRevision: _branchRevision,
     ...client
   } = environment;

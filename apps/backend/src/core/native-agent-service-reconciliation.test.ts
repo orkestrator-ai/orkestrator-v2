@@ -40,6 +40,8 @@ import {
 
 import { StorageService } from "./storage.js";
 
+import { deferred } from "./recurring-test-support.js";
+
 import {
   COORDINATOR_EXECUTION_POLICY,
   COORDINATOR_WORKSPACE_VERSION,
@@ -48,6 +50,8 @@ import {
 
 import {
   OPENCODE_INCOMPLETE_TURN_CONTINUATION,
+  OPENCODE_PROVIDER_ERROR_CONTINUATION,
+  OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS,
   openCodeIncompleteTurnRequestId,
 } from "./opencode-turn-recovery.js";
 
@@ -91,6 +95,7 @@ function createProviderStub(
     refreshCatalog?: NativeAgentRuntimeProvider["refreshCatalog"];
     prepareDispatch?: NativeAgentRuntimeProvider["prepareDispatch"];
     dispatchStatus?: NativeAgentRuntimeProvider["dispatchStatus"];
+    observationStreamLive?: () => boolean;
   } = {},
 ) {
   const createSession = mock(behaviour.createSession ?? (async () => "provider-session"));
@@ -144,6 +149,9 @@ function createProviderStub(
     prepareDispatch,
     dispatchStatus,
     dispose,
+    ...(behaviour.observationStreamLive
+      ? { observationStreamLive: behaviour.observationStreamLive }
+      : {}),
   } as unknown as NativeAgentRuntimeProvider;
   return {
     provider,
@@ -264,6 +272,7 @@ async function withService(
     onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
+    providerRetirementGraceMs?: number;
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -311,6 +320,9 @@ async function withService(
     ...(setup.toolDetailCacheMaxBytes === undefined
       ? {}
       : { toolDetailCacheMaxBytes: setup.toolDetailCacheMaxBytes }),
+    ...(setup.providerRetirementGraceMs === undefined
+      ? {}
+      : { providerRetirementGraceMs: setup.providerRetirementGraceMs }),
   });
   try {
     await run({ storage, service });
@@ -1142,7 +1154,8 @@ describe("NativeAgentService", () => {
       },
       async ({ service }) => {
         await service.init();
-        expect(internals(service).launchTimer).not.toBeNull();
+        // The keyed launch/queue driver replaces the launch timer (step 08).
+        expect((service as unknown as { queueScheduling: unknown }).queueScheduling).not.toBeNull();
         expect(internals(service).interactionTimer).toBeNull();
       },
     );
@@ -1183,7 +1196,16 @@ describe("NativeAgentService", () => {
         activityState = "waiting";
         await service.reconcileAgentActivity();
 
-        expect(transitions).toEqual([
+        // Every announced transition is stamped by the observer: one lifetime
+        // (`generation`) and a revision that advances by exactly one per
+        // announcement, so a client can detect a missed one as a gap.
+        const generation = transitions[0]?.observation?.generation as string;
+        expect(typeof generation).toBe("string");
+        expect(transitions.map((transition) => transition.observation)).toEqual([
+          { generation, revision: 1 },
+          { generation, revision: 2 },
+        ]);
+        expect(transitions.map(({ observation: _stamp, ...transition }) => transition)).toEqual([
           {
             environmentId: "env-1",
             sessionKey: key,
@@ -1631,6 +1653,173 @@ describe("NativeAgentService", () => {
           ).toMatchObject({
             kind: "exhausted",
             assistantMessageId: "assistant-2",
+          });
+        },
+      );
+    });
+
+    test("retries a provider-error turn only after its backoff elapses", async () => {
+      const failedAt = 1_790_422_344_987;
+      let clock = failedAt + 1_000;
+      let activityState: ProviderActivityState = "working";
+      const failedAssistant = {
+        info: {
+          id: "assistant-failed",
+          role: "assistant",
+          providerID: "opencode-go",
+          modelID: "deepseek-v4-flash",
+          agent: "build",
+          time: { created: failedAt - 2_000, completed: failedAt },
+          error: {
+            name: "APIError",
+            data: { message: "Bad Request", statusCode: 400, isRetryable: false },
+          },
+        },
+        parts: [],
+      };
+      const { provider, send } = createProviderStub("opencode", {
+        activity: async () => activityState,
+        messages: async () => [stalledUser, failedAssistant],
+      });
+
+      await withService(
+        {
+          prefix: "orkestrator-native-opencode-provider-error-",
+          provider: async () => provider,
+          now: () => clock,
+        },
+        async ({ storage, service }) => {
+          const key = nativeAgentSessionStorageKey("env-1", "opencode", "tab-1");
+          await storage.adoptNativeAgentSession({
+            key,
+            environmentId: "env-1",
+            agent: "opencode",
+            logicalSessionKey: "tab-1",
+            providerSessionId: "provider-1",
+          });
+
+          await service.reconcileAgentActivity();
+          activityState = "idle";
+          await service.reconcileAgentActivity();
+          await waitForCondition(() => recoveryTasks(service).size === 0);
+          // Still inside the first backoff window: nothing is sent yet.
+          expect(send).not.toHaveBeenCalled();
+
+          clock = failedAt + OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS[0];
+          await captureWarnings(async () => {
+            await service.reconcileAgentActivity();
+            await waitForCondition(() => send.mock.calls.length === 1);
+            await waitForCondition(() => recoveryTasks(service).size === 0);
+          });
+          const [sessionId, prompt, options] = send.mock.calls[0]! as [
+            string,
+            string,
+            ProviderSendOptions,
+          ];
+          expect(sessionId).toBe("provider-1");
+          expect(prompt).toBe(OPENCODE_PROVIDER_ERROR_CONTINUATION);
+          expect(options).toMatchObject({
+            requestId: openCodeIncompleteTurnRequestId("assistant-failed"),
+            model: "opencode-go/deepseek-v4-flash",
+            executionAgent: "reviewer",
+          });
+        },
+      );
+    });
+
+    test("does not revive old or undated provider errors on the first idle observation", async () => {
+      const now = 1_790_422_344_987;
+      for (const time of [{ created: now - 86_400_000, completed: now - 86_399_000 }, {}]) {
+        const { provider, send } = createProviderStub("opencode", {
+          activity: async () => "idle",
+          messages: async () => [
+            stalledUser,
+            {
+              info: {
+                id: "assistant-abandoned",
+                role: "assistant",
+                time,
+                error: { name: "APIError", data: { message: "Gateway failed", statusCode: 503 } },
+              },
+              parts: [],
+            },
+          ],
+        });
+        await withService(
+          {
+            prefix: "orkestrator-native-opencode-abandoned-error-",
+            provider: async () => provider,
+            now: () => now,
+          },
+          async ({ storage, service }) => {
+            await storage.adoptNativeAgentSession({
+              key: nativeAgentSessionStorageKey("env-1", "opencode", "tab-1"),
+              environmentId: "env-1",
+              agent: "opencode",
+              logicalSessionKey: "tab-1",
+              providerSessionId: "provider-1",
+            });
+            await service.reconcileAgentActivity();
+            await waitForCondition(() => recoveryTasks(service).size === 0);
+            expect(send).not.toHaveBeenCalled();
+          },
+        );
+      }
+    });
+
+    test("exhausts a retry budget clipped by the 64-message window after restart", async () => {
+      const now = 1_790_422_344_987;
+      const transcript: unknown[] = [stalledUser];
+      for (let retry = 0; retry < 4; retry += 1) {
+        transcript.push({
+          info: { id: `retry-${retry}`, role: "user" },
+          parts: [{ type: "text", text: OPENCODE_PROVIDER_ERROR_CONTINUATION }],
+        });
+        transcript.push(
+          ...Array.from({ length: 62 }, (_, index) => ({
+            info: { id: `tool-${retry}-${index}`, role: "assistant" },
+            parts: [{ type: "tool", state: { status: "completed" } }],
+          })),
+        );
+        transcript.push({
+          info: {
+            id: `failed-${retry}`,
+            role: "assistant",
+            time: { created: now - 2_000, completed: now - 1_000 },
+            error: { name: "APIError", data: { message: "Gateway failed", statusCode: 503 } },
+          },
+          parts: [],
+        });
+      }
+      const { provider, send } = createProviderStub("opencode", {
+        activity: async () => "idle",
+        messages: async () => transcript.slice(-64),
+      });
+      await withService(
+        {
+          prefix: "orkestrator-native-opencode-clipped-retries-",
+          provider: async () => provider,
+          now: () => now,
+        },
+        async ({ storage, service }) => {
+          const key = nativeAgentSessionStorageKey("env-1", "opencode", "tab-1");
+          await storage.adoptNativeAgentSession({
+            key,
+            environmentId: "env-1",
+            agent: "opencode",
+            logicalSessionKey: "tab-1",
+            providerSessionId: "provider-1",
+          });
+          await captureWarnings(async () => {
+            await service.reconcileAgentActivity();
+            await waitForCondition(() => recoveryTasks(service).size === 0);
+          });
+          expect(send).not.toHaveBeenCalled();
+          expect(
+            (await storage.getNativeAgentSession(key))?.openCodeIncompleteTurnNotice,
+          ).toMatchObject({
+            kind: "exhausted",
+            assistantMessageId: "failed-3",
           });
         },
       );
@@ -4160,6 +4349,584 @@ describe("NativeAgentService", () => {
         } finally {
           await fs.rm(checkout, { recursive: true, force: true });
         }
+      },
+    );
+  });
+});
+
+/**
+ * Recurring-processes step 07: one shared observer, dispatch and generation
+ * fences, next-due provider groups and the consumers that reuse them.
+ */
+describe("NativeAgentService shared observations", () => {
+  const TAB = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey: "tab-1" };
+
+  async function adopt(
+    storage: StorageService,
+    logicalSessionKey: string,
+    providerSessionId: string,
+    agent: BuildPipelineAgent = "codex",
+  ): Promise<string> {
+    const key = nativeAgentSessionStorageKey("env-1", agent, logicalSessionKey);
+    await storage.adoptNativeAgentSession({
+      key,
+      environmentId: "env-1",
+      agent,
+      logicalSessionKey,
+      providerSessionId,
+    });
+    return key;
+  }
+
+  function turnEnds(
+    transitions: Array<
+      Parameters<NonNullable<NativeAgentServiceOptions["onActivityTransition"]>>[0]
+    >,
+  ) {
+    return transitions.filter(
+      (transition) =>
+        transition.state === "idle" &&
+        (transition.previousState === "working" || transition.previousState === "waiting"),
+    );
+  }
+
+  test("observation never starts a bridge, hydrates or touches a session", async () => {
+    const paths: string[] = [];
+    let activity: ProviderActivityState = "working";
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        paths.push(`${request.method} ${url.pathname}`);
+        if (url.pathname.endsWith("/activity")) return Response.json({ activity });
+        return new Response("unexpected route", { status: 500 });
+      },
+    });
+    const commands: string[] = [];
+    const invoke = (async <T>(command: string): Promise<T> => {
+      commands.push(command);
+      if (command === "peek_local_agent_bridge") {
+        return { port: server.port, authToken: "token" } as T;
+      }
+      throw new Error(`Unexpected backend command: ${command}`);
+    }) as Invoke;
+    try {
+      await withService(
+        { prefix: "orkestrator-native-observation-no-touch-", invoke },
+        async ({ storage, service }) => {
+          await adopt(storage, "tab-1", "provider-1");
+          await storage.savePromptQueue("codex\u0000tab-1", "env-1", [
+            { id: "row-1", text: "Queued while busy" },
+          ]);
+
+          await service.reconcileAgentActivity();
+          // Consumers reuse the sweep's answer or demand a newer one; the busy
+          // queue is released by the turn-end edge instead of its own reads.
+          await service.observeSessionActivity(TAB);
+          await service.observeSessionActivity(TAB, { maxAgeMs: -1, requirePostDispatch: true });
+          await internals(service).drainPromptQueues();
+          activity = "idle";
+          await service.reconcileAgentActivity();
+
+          expect(paths.length).toBeGreaterThanOrEqual(3);
+          // Only the no-touch observation route: no `/status`, no session
+          // resource (Claude hydrates it), no transcript, no attach.
+          expect(new Set(paths)).toEqual(new Set(["GET /session/provider-1/activity"]));
+          // Only the read-only peek: never a start command.
+          expect(new Set(commands)).toEqual(new Set(["peek_local_agent_bridge"]));
+        },
+      );
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("consumers share a fresh observation and join one follow-up read", async () => {
+    let clock = 10_000;
+    const reads: Array<ReturnType<typeof deferred<ProviderActivityState>>> = [];
+    let hold = false;
+    const { provider, activity } = createProviderStub("codex", {
+      activity: async () => {
+        if (!hold) return "working";
+        const read = deferred<ProviderActivityState>();
+        reads.push(read);
+        return read.promise;
+      },
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-observation-join-",
+        provider: async () => provider,
+        now: () => clock,
+      },
+      async ({ storage, service }) => {
+        await adopt(storage, "tab-1", "provider-1");
+        await service.reconcileAgentActivity();
+        expect(activity).toHaveBeenCalledTimes(1);
+
+        // A fresh answer is shared, not re-read.
+        const shared = await Promise.all([
+          service.observeSessionActivity(TAB),
+          service.observeSessionActivity(TAB),
+          service.observeSessionActivity(TAB, { maxAgeMs: 500 }),
+        ]);
+        expect(activity).toHaveBeenCalledTimes(1);
+        for (const view of shared) {
+          expect(view).toMatchObject({ freshness: "fresh", record: { activity: "working" } });
+        }
+
+        // A sweep in flight may have read before these demands: every demand
+        // shares exactly one follow-up instead of joining the old read.
+        hold = true;
+        clock += 5_000;
+        const inFlight = service.reconcileAgentActivity();
+        await waitForCondition(() => reads.length === 1);
+        // `maxAgeMs: -1` refuses every retained answer, so each demand needs a
+        // sweep that started after it.
+        const demands = Promise.all([
+          service.observeSessionActivity(TAB, { maxAgeMs: -1 }),
+          service.observeSessionActivity(TAB, { maxAgeMs: -1 }),
+          service.observeSessionActivity(TAB, { maxAgeMs: -1 }),
+        ]);
+        const joined = service.reconcileAgentActivity();
+        reads[0]!.resolve("working");
+        await waitForCondition(() => reads.length === 2);
+        reads[1]!.resolve("idle");
+        await Promise.all([inFlight, joined]);
+        const views = await demands;
+
+        expect(activity).toHaveBeenCalledTimes(3);
+        for (const view of views) expect(view.record?.activity).toBe("idle");
+      },
+    );
+  });
+
+  test("a stale pre-dispatch idle never ends the turn it raced", async () => {
+    const transitions: Array<
+      Parameters<NonNullable<NativeAgentServiceOptions["onActivityTransition"]>>[0]
+    > = [];
+    let next: ProviderActivityState = "idle";
+    let held: ReturnType<typeof deferred<ProviderActivityState>> | undefined;
+    const { provider, send, activity } = createProviderStub("codex", {
+      activity: async () => (held ? held.promise : next),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-observation-dispatch-fence-",
+        provider: async () => provider,
+        onActivityTransition: (event) => transitions.push(event),
+      },
+      async ({ storage, service }) => {
+        const key = await adopt(storage, "tab-1", "provider-1");
+        await service.reconcileAgentActivity();
+
+        // The sweep reads before the prompt reaches the provider...
+        held = deferred<ProviderActivityState>();
+        const racingSweep = service.reconcileAgentActivity();
+        await waitForCondition(() => activity!.mock.calls.length === 2);
+        await service.dispatchPrompt({ ...TAB, prompt: "Start", requestId: "request-1" });
+        expect(send).toHaveBeenCalledTimes(1);
+        // ...and answers idle after the dispatch recorded the new turn.
+        held.resolve("idle");
+        held = undefined;
+        await racingSweep;
+
+        expect(internals(service).observedSessionActivity.get(key)?.state).toBe("working");
+        expect(turnEnds(transitions)).toEqual([]);
+        // Nothing waiting for idle may trust the dispatch-time `working`
+        // either: a post-dispatch demand reads the provider again.
+        next = "working";
+        const readsBefore = activity!.mock.calls.length;
+        const postDispatch = await service.observeSessionActivity(TAB, {
+          requirePostDispatch: true,
+        });
+        expect(activity!.mock.calls.length).toBe(readsBefore + 1);
+        expect(postDispatch).toMatchObject({ postDispatch: true, record: { activity: "working" } });
+
+        next = "idle";
+        await service.reconcileAgentActivity();
+        await service.reconcileAgentActivity();
+        await service.reconcileAgentActivity();
+
+        // Exactly one completion edge — the one the provider actually reported —
+        // so a PR probe hanging off it runs once per completion.
+        expect(turnEnds(transitions)).toHaveLength(1);
+      },
+    );
+  });
+
+  test("dispatch during completion persistence keeps the new turn working", async () => {
+    let activityState: ProviderActivityState = "working";
+    const { provider, send } = createProviderStub("codex", {
+      activity: async () => activityState,
+    });
+    await withService(
+      { prefix: "orkestrator-native-completion-write-fence-", provider: async () => provider },
+      async ({ storage, service }) => {
+        const key = await adopt(storage, "tab-1", "provider-1");
+        await service.reconcileAgentActivity();
+        const entered = deferred<void>();
+        const release = deferred<void>();
+        const originalCompletion = storage.recordEnvironmentSessionCompletion.bind(storage);
+        storage.recordEnvironmentSessionCompletion = async (environmentId, occurredAt) => {
+          entered.resolve();
+          await release.promise;
+          return originalCompletion(environmentId, occurredAt);
+        };
+        activityState = "idle";
+        const sweep = service.reconcileAgentActivity();
+        await entered.promise;
+        await service.dispatchPrompt({ ...TAB, prompt: "Next turn", requestId: "request-2" });
+        expect(send).toHaveBeenCalledTimes(1);
+        release.resolve();
+        await sweep;
+        expect(internals(service).observedSessionActivity.get(key)?.state).toBe("working");
+      },
+    );
+  });
+
+  test("failed reads stay recovering or unknown, never idle", async () => {
+    let fail = false;
+    const { provider } = createProviderStub("codex", {
+      activity: async () => {
+        if (fail) throw new ProviderUnavailableError("bridge restarting");
+        return "working";
+      },
+    });
+    await withService(
+      { prefix: "orkestrator-native-observation-failure-", provider: async () => provider },
+      async ({ storage, service }) => {
+        await adopt(storage, "tab-1", "provider-1");
+        await adopt(storage, "tab-2", "provider-2", "cursor");
+        await service.reconcileAgentActivity();
+        fail = true;
+        await captureWarnings(async () => {
+          const view = await service.observeSessionActivity(TAB, { maxAgeMs: -1 });
+          expect(view.freshness).toBe("recovering");
+          expect(view.record?.activity).toBe("working");
+          const unknown = await service.observeSessionActivity({
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey: "never-observed",
+          });
+          expect(unknown).toEqual({ freshness: "unknown", postDispatch: false });
+        });
+        expect(service.sessionActivitySnapshot("env-1", "codex", "tab-1")).toBe("working");
+        expect((await storage.getEnvironment("env-1"))?.agentActivityState).toBe("working");
+      },
+    );
+  });
+
+  test("one completed session drains its queue while a sibling stays busy", async () => {
+    const sessionActivity = new Map<string, ProviderActivityState>([
+      ["provider-1", "working"],
+      ["provider-2", "working"],
+    ]);
+    const statusReads: string[] = [];
+    const { provider, send } = createProviderStub("codex", {
+      activity: async (sessionId) => sessionActivity.get(sessionId) ?? "missing",
+      status: async (sessionId) => {
+        statusReads.push(sessionId);
+        return sessionActivity.get(sessionId) === "idle" ? "idle" : "running";
+      },
+    });
+    const drains: Promise<void>[] = [];
+    let service!: NativeAgentService;
+    await withService(
+      {
+        prefix: "orkestrator-native-observation-sibling-drain-",
+        provider: async () => provider,
+        onActivityTransition: (event) => {
+          if (event.previousState === "working" && event.state === "idle") {
+            drains.push(service.drainPromptQueueForSession(event));
+          }
+        },
+      },
+      async (context) => {
+        service = context.service;
+        const { storage } = context;
+        await adopt(storage, "tab-1", "provider-1");
+        await adopt(storage, "tab-2", "provider-2");
+        for (const tab of ["tab-1", "tab-2"]) {
+          await storage.savePromptQueue(`codex\u0000${tab}`, "env-1", [
+            { id: `row-${tab}`, text: `Queued for ${tab}` },
+          ]);
+        }
+        await service.reconcileAgentActivity();
+
+        // Both busy: the queue pass reuses the observation — no status reads,
+        // no liveness touches, nothing sent.
+        await internals(service).drainPromptQueues();
+        expect(statusReads).toEqual([]);
+        expect(send).not.toHaveBeenCalled();
+
+        sessionActivity.set("provider-1", "idle");
+        await service.reconcileAgentActivity();
+        await Promise.all(drains);
+
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(send.mock.calls[0]?.[0]).toBe("provider-1");
+        expect(send.mock.calls[0]?.[1]).toBe("Queued for tab-1");
+        expect(new Set(statusReads)).toEqual(new Set(["provider-1"]));
+        expect((await storage.getPromptQueue("codex\u0000tab-2"))?.messages).toHaveLength(1);
+        expect((await storage.getEnvironment("env-1"))?.agentActivityState).toBe("working");
+      },
+    );
+  });
+
+  test("a qualified idle group backs off yet still discovers externally started work", async () => {
+    let clock = 50_000;
+    let streamLive = true;
+    const sessionActivity = new Map<string, ProviderActivityState>([["provider-1", "idle"]]);
+    const { provider, activityBatch } = createProviderStub("opencode", {
+      activityBatch: async (sessionIds) =>
+        new Map(sessionIds.map((id) => [id, sessionActivity.get(id) ?? "missing"])),
+      observationStreamLive: () => streamLive,
+    });
+    const transitions: Array<
+      Parameters<NonNullable<NativeAgentServiceOptions["onActivityTransition"]>>[0]
+    > = [];
+    await withService(
+      {
+        prefix: "orkestrator-native-observation-due-groups-",
+        provider: async () => provider,
+        now: () => clock,
+        onActivityTransition: (event) => transitions.push(event),
+      },
+      async ({ storage, service }) => {
+        await adopt(storage, "tab-1", "provider-1", "opencode");
+        /** Sweep until a sweep reads nothing; returns how many sweeps read. */
+        const sweepUntilQuiet = async (): Promise<number> => {
+          for (let sweep = 0; sweep < 8; sweep += 1) {
+            const before = activityBatch!.mock.calls.length;
+            await service.reconcileAgentActivity();
+            // The first idle can arm OpenCode's asynchronous incomplete-turn
+            // check; let it settle so it does not hold the group responsive.
+            await new Promise((resolve) => setTimeout(resolve, 1));
+            if (activityBatch!.mock.calls.length === before) return sweep;
+          }
+          throw new Error("group never backed off");
+        };
+        // A few settled idle reads first — never fewer than the threshold.
+        expect(await sweepUntilQuiet()).toBeGreaterThanOrEqual(3);
+        const settledReads = activityBatch!.mock.calls.length;
+
+        // Stably idle with a live event stream: not due until the safety read.
+        await service.reconcileAgentActivity();
+        expect(activityBatch).toHaveBeenCalledTimes(settledReads);
+        expect((await storage.getEnvironment("env-1"))?.agentActivityState).toBe("idle");
+
+        // Work started by another client with its event missed entirely is
+        // still discovered, by the bounded safety read.
+        sessionActivity.set("provider-1", "working");
+        await service.reconcileAgentActivity();
+        expect(activityBatch).toHaveBeenCalledTimes(settledReads);
+        clock += 4_000;
+        await service.reconcileAgentActivity();
+        expect(activityBatch).toHaveBeenCalledTimes(settledReads + 1);
+        expect(transitions.at(-1)).toMatchObject({ previousState: "idle", state: "working" });
+
+        // A working group is observed on every sweep.
+        await service.reconcileAgentActivity();
+        await service.reconcileAgentActivity();
+        expect(activityBatch).toHaveBeenCalledTimes(settledReads + 3);
+
+        // Back to stably idle, then a provider event wakes it immediately.
+        sessionActivity.set("provider-1", "idle");
+        await sweepUntilQuiet();
+        const settled = activityBatch!.mock.calls.length;
+        sessionActivity.set("provider-1", "working");
+        service.wakeObservation("env-1", "provider-event", "opencode");
+        await service.reconcileAgentActivity();
+        expect(activityBatch).toHaveBeenCalledTimes(settled + 1);
+        expect(transitions.at(-1)).toMatchObject({ state: "working" });
+
+        // A durable session mutation wakes it too.
+        sessionActivity.set("provider-1", "idle");
+        await sweepUntilQuiet();
+        const quiet = activityBatch!.mock.calls.length;
+        sessionActivity.set("provider-2", "idle");
+        await adopt(storage, "tab-2", "provider-2", "opencode");
+        await service.reconcileAgentActivity();
+        expect(activityBatch).toHaveBeenCalledTimes(quiet + 1);
+
+        // Without a live stream there is no qualified wakeup: every sweep reads.
+        streamLive = false;
+        const before = activityBatch!.mock.calls.length;
+        for (let sweep = 0; sweep < 6; sweep += 1) await service.reconcileAgentActivity();
+        expect(activityBatch).toHaveBeenCalledTimes(before + 6);
+      },
+    );
+  });
+
+  test("an unqualified provider's idle group is read on every sweep", async () => {
+    const { provider, activity } = createProviderStub("claude", {
+      activity: async () => "idle",
+      observationStreamLive: () => true,
+    });
+    await withService(
+      { prefix: "orkestrator-native-observation-unqualified-", provider: async () => provider },
+      async ({ storage, service }) => {
+        await adopt(storage, "tab-1", "provider-1", "claude");
+        for (let sweep = 0; sweep < 8; sweep += 1) await service.reconcileAgentActivity();
+        expect(activity).toHaveBeenCalledTimes(8);
+      },
+    );
+  });
+
+  test("mail injection trusts only a fresh, post-dispatch idle", async () => {
+    let clock = 100_000;
+    let providerStatus: ProviderStatus = "idle";
+    const { provider, status, send } = createProviderStub("codex", {
+      activity: async () => "idle",
+      status: async () => providerStatus,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-observation-mail-",
+        provider: async () => provider,
+        now: () => clock,
+      },
+      async ({ storage, service }) => {
+        await adopt(storage, "tab-1", "provider-1");
+        await service.reconcileAgentActivity();
+
+        // Older than the presence lease: the gate reads the provider itself,
+        // and a turn another client started is held rather than interrupted.
+        clock += 5_000;
+        providerStatus = "running";
+        const readsBefore = status.mock.calls.length;
+        const held = await service.dispatchMailInject({
+          ...TAB,
+          prompt: "Mail",
+          requestId: "mail-1",
+          allowProviderCommands: false,
+        });
+        expect(held).toEqual({ outcome: "held", reason: "busy" });
+        expect(status.mock.calls.length).toBeGreaterThan(readsBefore);
+        expect(send).not.toHaveBeenCalled();
+
+        // A fresh idle observation is enough on its own.
+        providerStatus = "idle";
+        await service.reconcileAgentActivity();
+        const accepted = await service.dispatchMailInject({
+          ...TAB,
+          prompt: "Mail",
+          requestId: "mail-2",
+          allowProviderCommands: false,
+        });
+        expect(accepted).toEqual({ outcome: "accepted", requestId: "mail-2" });
+        expect(send).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  test("a replaced provider fences late results and retires the obsolete observer", async () => {
+    const transitions: Array<
+      Parameters<NonNullable<NativeAgentServiceOptions["onActivityTransition"]>>[0]
+    > = [];
+    const late = deferred<ProviderActivityState>();
+    let holdA = false;
+    const first = createProviderStub("codex", {
+      activity: async () => (holdA ? late.promise : "working"),
+    });
+    const second = createProviderStub("codex", { activity: async () => "working" });
+    let current = first.provider;
+    await withService(
+      {
+        prefix: "orkestrator-native-observation-generation-",
+        provider: async () => current,
+        providerRetirementGraceMs: 0,
+        onActivityTransition: (event) => transitions.push(event),
+      },
+      async ({ storage, service }) => {
+        const key = await adopt(storage, "tab-1", "provider-1");
+        await service.reconcileAgentActivity();
+        holdA = true;
+        const sweep = service.reconcileAgentActivity();
+        await waitForCondition(() => first.activity!.mock.calls.length === 2);
+
+        // A new bridge generation replaces the provider mid-read.
+        current = second.provider;
+        (
+          service as unknown as {
+            cacheProvider(key: string, provider: NativeAgentRuntimeProvider, id?: string): void;
+          }
+        ).cacheProvider("env-1\u0000codex", second.provider, "bridge-generation-2");
+        late.resolve("idle");
+        await sweep;
+
+        expect(internals(service).observedSessionActivity.get(key)?.state).toBe("working");
+        expect(turnEnds(transitions)).toEqual([]);
+        await waitForCondition(() => first.dispose.mock.calls.length === 1);
+        expect(second.dispose).not.toHaveBeenCalled();
+
+        await service.reconcileAgentActivity();
+        expect(second.activity).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  test("a failed observation never disposes a provider with a prompt in flight", async () => {
+    const sendGate = deferred<void>();
+    let failActivity = false;
+    const first = createProviderStub("codex", {
+      activity: async () => {
+        if (failActivity) throw new ProviderUnavailableError("read failed");
+        return "idle";
+      },
+      send: async () => sendGate.promise,
+    });
+    const second = createProviderStub("codex", { activity: async () => "working" });
+    let current = first.provider;
+    await withService(
+      {
+        prefix: "orkestrator-native-observation-retire-",
+        provider: async () => current,
+        providerRetirementGraceMs: 0,
+      },
+      async ({ storage, service }) => {
+        await adopt(storage, "tab-1", "provider-1");
+        await service.reconcileAgentActivity();
+        const dispatch = service.dispatchPrompt({ ...TAB, prompt: "Go", requestId: "request-1" });
+        await waitForCondition(() => first.send.mock.calls.length === 1);
+
+        failActivity = true;
+        current = second.provider;
+        await captureWarnings(() => service.reconcileAgentActivity());
+        // Evicted, but its send is inside the at-most-once window.
+        expect(internals(service).providers.get("env-1\u0000codex")).toBeUndefined();
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        expect(first.dispose).not.toHaveBeenCalled();
+
+        sendGate.resolve();
+        await expect(dispatch).resolves.toMatchObject({ providerSessionId: "provider-1" });
+        await waitForCondition(() => first.dispose.mock.calls.length === 1);
+      },
+    );
+  });
+
+  test("a re-cached provider is never retired", async () => {
+    let fail = true;
+    const stub = createProviderStub("codex", {
+      activity: async () => {
+        if (fail) throw new ProviderUnavailableError("blip");
+        return "idle";
+      },
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-observation-recache-",
+        provider: async () => stub.provider,
+        providerRetirementGraceMs: 0,
+      },
+      async ({ storage, service }) => {
+        await adopt(storage, "tab-1", "provider-1");
+        await captureWarnings(() => service.reconcileAgentActivity());
+        fail = false;
+        await internals(service).provider(TAB);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        expect(stub.dispose).not.toHaveBeenCalled();
       },
     );
   });

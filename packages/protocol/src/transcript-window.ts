@@ -60,6 +60,33 @@ interface BoundableMessage {
   parts: unknown[];
 }
 
+/** Decimal digits in `Number.MAX_SAFE_INTEGER`; longer input is never safe. */
+const MAX_TRANSCRIPT_INDEX_DIGITS = 16;
+const CANONICAL_TRANSCRIPT_INDEX = /^(?:0|[1-9][0-9]*)$/;
+
+/**
+ * Parse the `fromIndex` query parameter of an incremental `/messages` read.
+ *
+ * The grammar is deliberately narrow: `0`, or a nonzero ASCII digit followed by
+ * ASCII digits, no greater than `Number.MAX_SAFE_INTEGER`. Signs, fractions,
+ * exponent or hex notation, whitespace, suffixes, leading zeros and non-ASCII
+ * numerals are all rejected, so a malformed cursor can never be partially
+ * consumed or rounded onto a real index. The length is checked before any
+ * numeric conversion, so an oversized value costs nothing.
+ *
+ * `null` — missing or unusable — means "send the retained authoritative
+ * window". Callers must keep that fallback rather than answering 400: an older
+ * client that cannot produce a valid cursor still has to be able to recover.
+ */
+export function parseTranscriptFromIndex(value: string | null): number | null {
+  if (value === null || value.length === 0 || value.length > MAX_TRANSCRIPT_INDEX_DIGITS) {
+    return null;
+  }
+  if (!CANONICAL_TRANSCRIPT_INDEX.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
 /**
  * The last `maximumBytes` bytes of `value`, starting on a code-point boundary.
  *

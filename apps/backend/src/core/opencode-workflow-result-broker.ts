@@ -19,8 +19,10 @@ import {
   openCodeWorkflowResultPermissionRules,
 } from "./opencode-provider-helpers.js";
 import { openCodeMessageFinishReason } from "./opencode-turn-recovery.js";
+import { closeOpenCodeSessionRetaining } from "./opencode-session-close.js";
 
 const TURN_METADATA_KEY = "orkestrator.workflowResultTurn";
+class MissingOpenCodeSessionError extends Error {}
 
 /**
  * Registration may be warmed up, but permissions belong to a dispatched request.
@@ -235,11 +237,20 @@ export class OpenCodeWorkflowResultBroker {
     }
   }
 
+  /**
+   * Abort the session's turn, then settle its workflow-turn ownership.
+   *
+   * With `missingIsGone`, a 404 from the server is its own answer for a session
+   * it no longer has: nothing is running and there is no ownership to settle,
+   * so the call resolves `missing` instead of failing. Tab close uses this;
+   * ordinary aborts keep treating any failure as unavailable.
+   */
   async abort(
     sessionId: string,
     endTurn: () => void,
     restoreReviewer: () => Promise<unknown>,
-  ): Promise<void> {
+    options: { missingIsGone?: boolean } = {},
+  ): Promise<"aborted" | "missing"> {
     try {
       // Interrupt transport immediately. Cleanup is serialized afterwards so
       // it cannot race a newer dispatch, but the user-visible stop never waits
@@ -248,15 +259,35 @@ export class OpenCodeWorkflowResultBroker {
         { sessionID: sessionId, directory: this.directory },
         this.requestOptions(),
       );
+      if (options.missingIsGone && response.response?.status === 404) {
+        endTurn();
+        return "missing";
+      }
       assertSdkResponse(response, "OpenCode abort");
       endTurn();
       await this.runExclusive(sessionId, async () => {
         const requestId = await this.requestId(sessionId);
         if (requestId) await this.settle(sessionId, requestId, restoreReviewer);
       });
+      return "aborted";
     } catch (error) {
+      if (options.missingIsGone && error instanceof MissingOpenCodeSessionError) return "missing";
       throw new ProviderUnavailableError("OpenCode abort is unavailable", { cause: error });
     }
+  }
+
+  /** Ordinary tab close, never OpenCode's destructive DELETE: see `closeOpenCodeSessionRetaining`. */
+  closeRetaining(
+    sessionId: string,
+    endTurn: () => void,
+    restoreReviewer: () => Promise<unknown>,
+  ): Promise<void> {
+    return closeOpenCodeSessionRetaining(this.client, this.directory, sessionId, {
+      broker: this,
+      endTurn,
+      restoreReviewer,
+      requestOptions: this.requestOptions,
+    });
   }
 
   private owner(session: Record<string, unknown>) {
@@ -276,6 +307,7 @@ export class OpenCodeWorkflowResultBroker {
       { sessionID: sessionId, directory: this.directory },
       this.requestOptions(),
     );
+    if (response.response?.status === 404) throw new MissingOpenCodeSessionError();
     assertSdkResponse(response, "OpenCode workflow-result permission read");
     const session = asRecord(response.data);
     if (!session) throw new Error("OpenCode returned no session permission state");

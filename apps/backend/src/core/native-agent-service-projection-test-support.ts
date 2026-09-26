@@ -198,7 +198,7 @@ export function internals(service: NativeAgentService) {
   return service as unknown as {
     drainPromptQueues(): Promise<void>;
     drainPromptQueueOnce(queueKey: string): Promise<void>;
-    reconcilePendingLaunches(): Promise<void>;
+    reconcilePendingLaunches(): Promise<number>;
     provider(input: EnsureNativeAgentSessionInput): Promise<AgentSessionProvider>;
     bridgeConnection(
       agent: BuildPipelineAgent,

@@ -85,7 +85,10 @@ type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogSt
 type ResourceChangeListener = shared.ResourceChangeListener;
 
 import { StorageReviews } from "./storage-reviews.ts";
-import type { NativeAgentSessionActionOutcome } from "@orkestrator/protocol/native-agent";
+import {
+  isNativeAgentSteerRejectedOutcome,
+  type NativeAgentSessionActionOutcome,
+} from "@orkestrator/protocol/native-agent";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import {
   NATIVE_DISPLAY_TAIL_MAX_SESSIONS,
@@ -1036,6 +1039,8 @@ export abstract class StorageNative extends StorageReviews {
    * A provider exception is ambiguous by default: once the request was handed
    * off, this layer cannot prove which side of admission it occurred on. The
    * exact record therefore stays parked as `unknown` and every retry reuses it.
+   * Only a returned, verified `rejected` outcome (never a thrown error) proves
+   * the provider refused the request before delivery.
    */
   async dispatchNativeAgentSteerOnce(
     key: string,
@@ -1102,6 +1107,15 @@ export abstract class StorageNative extends StorageReviews {
       try {
         outcome = await dispatch(session);
       } catch {
+        outcome = { outcome: "unknown", requestId: pendingSteer.requestId };
+      }
+      // A refusal is definitive only in its verified shape for this exact
+      // request. It then settles like idle/mismatch: the parked record and its
+      // backups go, and the id never joins the delivered history.
+      if (
+        outcome.outcome === "rejected" &&
+        !isNativeAgentSteerRejectedOutcome(outcome, pendingSteer.requestId)
+      ) {
         outcome = { outcome: "unknown", requestId: pendingSteer.requestId };
       }
 

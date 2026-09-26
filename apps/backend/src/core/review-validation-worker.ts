@@ -148,10 +148,15 @@ async function execute(cmd, index) {
       const workers = Math.max(1, Math.min(suiteBudget, profile.workers ?? (cmd.weight === 2 ? suiteBudget : Math.max(1, Math.floor(suiteBudget / 2)))));
       ticket = scheduler.enqueue({ owner, workers, memoryMiB: Math.max(1, Math.min(capacity.memoryMiB, profile.memoryMiB ?? workers * 1024)), resources });
       tickets.add(ticket);
-      persist();
+      let published = false;
       while (true) {
         const status = scheduler.poll(ticket);
         result.queueReason = status.queueReason;
+        // Publish the queued state together with its reason, never before it.
+        if (!published) {
+          published = true;
+          persist();
+        }
         if (status.state === "running") break;
         result.queuedMs = Date.now() - queuedAt;
         if (stopping) throw new Error("Validation was cancelled while queued");

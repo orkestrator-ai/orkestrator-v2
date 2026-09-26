@@ -35,6 +35,9 @@ export type CommandRegistryOptions = {
     ) => Promise<{ port: number; authToken: string } | null>;
     fetch?: typeof fetch;
     deleteTimeoutMs?: number;
+    closeTimeoutMs?: number;
+    /** Clock for the per-intent retry backoff (tests). */
+    now?: () => number;
   };
 };
 
@@ -69,5 +72,6 @@ export type RegistryDependencies = {
     prompt: string,
     context: CommandContext,
   ) => Promise<void>;
-  reconcilePendingEnvironmentRenames: (context: CommandContext) => Promise<void>;
+  /** Resolves with how many environments still carry a rename intent. */
+  reconcilePendingEnvironmentRenames: (context: CommandContext) => Promise<number>;
 };

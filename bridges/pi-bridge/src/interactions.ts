@@ -27,7 +27,13 @@ import {
 } from "./config.js";
 import { isOrkestratorMcpTool } from "./mcp.js";
 import { schedulePersist } from "./persistence.js";
-import { isObject, nonBlank, type JsonObject, type SessionState } from "./state.js";
+import {
+  isObject,
+  nonBlank,
+  turnCancellationRequested,
+  type JsonObject,
+  type SessionState,
+} from "./state.js";
 
 /** Built-ins that only observe. Gating these is noise, not safety. */
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
@@ -58,6 +64,13 @@ export async function requestToolApproval(
       reason:
         "This review session is read-only. Read the supplied package; commands, edits, and extension tools are disabled.",
     };
+  }
+  // A cancel recorded before the run's abort landed — including one that
+  // arrived during startup and is only now being applied — is not consent to
+  // start new work, and parking the call would leave it awaiting a turn that
+  // is being torn down. Refuse at once, whatever the approval policy.
+  if (turnCancellationRequested(state)) {
+    return { block: true, reason: "The turn was cancelled before this tool call was approved." };
   }
   const approvals = state.policy?.approvals ?? (approvalsEnabled() ? "ask" : "auto-approve");
   if (approvals === "auto-approve") return { block: false };

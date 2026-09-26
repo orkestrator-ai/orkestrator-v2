@@ -1,4 +1,5 @@
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
+import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import {
   existsSync,
   path,
@@ -71,6 +72,7 @@ import {
   setLocalServerShutdownPromise,
   spawnLocalServerCommandImpl,
   gitFetchScheduler,
+  containerGitFetchPolicy,
   diffStatsService,
   invalidatePendingDiffStatsSync,
 } from "./commands-runtime-state.js";
@@ -1445,6 +1447,7 @@ export async function deleteEnvironment(
         : null;
       if (cleanup) await environmentCleanupLedger(storage.getDataDir()).record(cleanup);
       await stopEnvironmentReviewValidation(environmentId, context);
+      await stopEnvironmentExecWorkers(environmentId, context);
       // Waits for every terminal tree, including setup's build descendants, so
       // nothing re-creates files in the worktree after it is removed below.
       const survivingTerminals = await terminateTerminalSessionsForEnvironment(environmentId);
@@ -1564,6 +1567,9 @@ export async function deleteEnvironment(
       invalidatePendingPrMonitorSync();
       prMonitorService.untrack(environmentId);
       if (environment?.worktreePath) gitFetchScheduler.forget(environment.worktreePath);
+      // Its clone is gone; a fetch still running for it can no longer stamp.
+      if (environment?.containerId)
+        containerGitFetchPolicy.forgetContainer(environment.containerId);
     });
     // Other deletions may have left steps pending; a successful one is a cheap
     // moment to retry them without waiting for the next startup.

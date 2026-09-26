@@ -1,16 +1,19 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import { type AgentPlatform, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 import { APP_SLUG, PRODUCT_NAME } from "./app-constants.js";
+import {
+  defaultRuntimeProfileRoots,
+  normalizeRuntimeProfileId,
+  type RuntimeFlavor,
+  type RuntimeProfileRoots,
+} from "@orkestrator/protocol/runtime-profile-status";
 
 export const DEV_PROFILE_SENTINEL = ".orkestrator-dev-profile";
 export const DEV_PROFILE_FORMAT_VERSION = 1;
-
-export type RuntimeFlavor = "production" | "development" | "agent-test";
 
 export type RuntimeProfile = {
   version: 1;
@@ -42,118 +45,18 @@ export type RuntimeProfile = {
   agentPlatforms: AgentPlatform[];
 };
 
-export type RuntimeProcessName = "launcher" | "vite" | "electron" | "backend";
-
-export type RuntimeStatusManifest = {
-  version: 1;
-  status: "starting" | "ready" | "stopping" | "stopped" | "failed";
-  profile: string;
-  flavor: RuntimeFlavor;
-  dataDir: string;
-  testProject?: string;
-  electronTitle: string;
-  rendererUrl: string;
-  browserUrl?: string;
-  authFile?: string;
-  logDir: string;
-  statusPath: string;
-  startedAt: string;
-  updatedAt: string;
-  error?: string;
-  pids: Partial<Record<RuntimeProcessName, number>>;
-  processStartTimes: Partial<Record<RuntimeProcessName, number>>;
-};
-
-const RUNTIME_STATUS_KEYS = new Set([
-  "version",
-  "status",
-  "profile",
-  "flavor",
-  "dataDir",
-  "testProject",
-  "electronTitle",
-  "rendererUrl",
-  "browserUrl",
-  "authFile",
-  "logDir",
-  "statusPath",
-  "startedAt",
-  "updatedAt",
-  "error",
-  "pids",
-  "processStartTimes",
-]);
-
-export function parseRuntimeStatusManifest(value: unknown): RuntimeStatusManifest {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Runtime status must be an object");
-  }
-  const candidate = value as Record<string, unknown>;
-  for (const key of Object.keys(candidate)) {
-    if (!RUNTIME_STATUS_KEYS.has(key))
-      throw new Error(`Runtime status contains unsupported field: ${key}`);
-  }
-  if (
-    candidate.version !== 1 ||
-    !["starting", "ready", "stopping", "stopped", "failed"].includes(String(candidate.status)) ||
-    typeof candidate.profile !== "string" ||
-    typeof candidate.statusPath !== "string" ||
-    typeof candidate.pids !== "object" ||
-    candidate.pids === null ||
-    typeof candidate.processStartTimes !== "object" ||
-    candidate.processStartTimes === null
-  ) {
-    throw new Error("Runtime status format is invalid");
-  }
-  return candidate as RuntimeStatusManifest;
-}
-
-export type RuntimeProfileRoots = {
-  developmentRoot: string;
-  productionDataDir: string;
-  homeDir: string;
-};
+export {
+  defaultRuntimeProfileRoots,
+  normalizeRuntimeProfileId,
+  parseRuntimeStatusManifest,
+  type RuntimeFlavor,
+  type RuntimeProcessName,
+  type RuntimeProfileRoots,
+  type RuntimeStatusManifest,
+} from "@orkestrator/protocol/runtime-profile-status";
 
 function shortHash(value: string, length = 12): string {
   return createHash("sha256").update(path.resolve(value)).digest("hex").slice(0, length);
-}
-
-export function normalizeRuntimeProfileId(value: string): string {
-  const normalized = value
-    .normalize("NFKD")
-    .toLowerCase()
-    .replace(/[^a-z0-9_.-]+/g, "-")
-    .replace(/^[._-]+|[._-]+$/g, "")
-    .replace(/[-_.]{2,}/g, "-")
-    .slice(0, 48);
-  if (!normalized || normalized === "." || normalized === "..") {
-    throw new Error("Development profile names must contain a letter or number");
-  }
-  return normalized;
-}
-
-export function defaultRuntimeProfileRoots(
-  platform: NodeJS.Platform = process.platform,
-  env: NodeJS.ProcessEnv = process.env,
-  homeDir = os.homedir(),
-): RuntimeProfileRoots {
-  if (platform === "darwin") {
-    const appSupport = path.join(homeDir, "Library", "Application Support");
-    return {
-      developmentRoot: path.join(appSupport, `${APP_SLUG}-dev`),
-      productionDataDir: path.join(appSupport, APP_SLUG),
-      homeDir,
-    };
-  }
-  if (platform === "win32") {
-    throw new Error("Orkestrator development profiles support macOS and Linux only");
-  }
-  const configRoot = env.XDG_CONFIG_HOME ?? path.join(homeDir, ".config");
-  return {
-    developmentRoot: path.join(configRoot, `${APP_SLUG}-dev`),
-    productionDataDir: path.join(configRoot, APP_SLUG),
-    homeDir,
-  };
 }
 
 function isSameOrInside(candidate: string, root: string): boolean {

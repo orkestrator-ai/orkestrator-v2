@@ -1,6 +1,6 @@
 # 10 — Use one transcript cursor validation contract
 
-Status: Planned.  
+Status: Verified (2026-09-26); not yet merged. See [step 11 evidence](11-conformance-verification-and-release-handoff.md#evidence-record-2026-09-26).  
 Depends on: [01](01-contract-baseline-and-regression-fixtures.md).  
 Finding: INC-09.
 
@@ -51,23 +51,23 @@ one shared compatible grammar instead of silently breaking those clients.
 
 ## Implementation tasks
 
-- [ ] Search both renderer and backend consumers for construction of `fromIndex`
+- [x] Search both renderer and backend consumers for construction of `fromIndex`
   query parameters. Record their output syntax and whether values can be strings
   supplied by persisted state or external callers.
-- [ ] Implement the pure parser and exhaustive table-driven cases in protocol.
+- [x] Implement the pure parser and exhaustive table-driven cases in protocol.
   No bridge types, filesystem access, or browser globals belong in this helper.
-- [ ] Replace Pi, Cursor, and ACP implementations with the shared helper or thin
+- [x] Replace Pi, Cursor, and ACP implementations with the shared helper or thin
   compatibility exports while updating imports. Keep one parsing implementation.
-- [ ] Preserve message-window math, retained indexes, revision/generation fields,
+- [x] Preserve message-window math, retained indexes, revision/generation fields,
   and truncated/omitted metadata. This is input normalization, not a transcript
   pagination redesign.
-- [ ] Audit Claude/Codex routes for the same literal parameter. Adopt the helper
+- [x] Audit Claude/Codex routes for the same literal parameter. Adopt the helper
   only where the semantics match; do not apply an integer parser to opaque
   replay cursors, SSE Last-Event-ID, or different transcript cursor types.
-- [ ] Keep input validation bounded before allocating response work. Invalid
+- [x] Keep input validation bounded before allocating response work. Invalid
   input must select an already bounded retained window, not an unbounded full
   vendor transcript read.
-- [ ] Reuse the existing package export. If an implementation instead adds a new
+- [x] Reuse the existing package export. If an implementation instead adds a new
   export/metadata entry, follow the pinned-Bun lockfile workflow in AGENTS.md.
 
 ## Test matrix
@@ -114,11 +114,11 @@ exercise reload/reconciliation after transcript shedding together with it.
 
 ## Acceptance
 
-- [ ] All equivalent routes use one parser and documented grammar.
-- [ ] Malformed and unsafe values cannot be partially consumed or rounded.
-- [ ] Correct existing clients remain compatible; alternate syntax changes are
+- [x] All equivalent routes use one parser and documented grammar.
+- [x] Malformed and unsafe values cannot be partially consumed or rounded.
+- [x] Correct existing clients remain compatible; alternate syntax changes are
   explicitly reviewed against emitters.
-- [ ] Invalid input selects a bounded authoritative fallback.
-- [ ] No SSE or opaque cursor protocol is altered accidentally.
-- [ ] Protocol, route, and type checks pass with the new boundary cases.
+- [x] Invalid input selects a bounded authoritative fallback.
+- [x] No SSE or opaque cursor protocol is altered accidentally.
+- [x] Protocol, route, and type checks pass with the new boundary cases.
 

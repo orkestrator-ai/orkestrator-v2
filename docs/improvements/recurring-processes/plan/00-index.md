@@ -1,6 +1,12 @@
 # Recurring-process improvements: implementation plan
 
-Status: Proposed. No implementation steps have been executed.
+Status: Implemented and qualified on Linux (2026-09-26) on branch
+`implement-recurring-processes-aaceef7ccc03-r1`. Steps 01–11 have landed, and
+step 12 records the qualification evidence, before/after tables and remaining
+gaps. Recorded deferrals: the data-saving preference (06), optional
+step 09/10 items, and live-provider, GitHub, macOS and iOS qualification. See
+each step's Completion notes and
+[12](12-qualification-and-rollout.md#completion-notes).
 
 Prepared 2026-09-21 against `88c2f9ccfaa68045573b658dd4f172bc5ff7c51b`.
 Evidence and inventory: [investigation](../../../imrovements/recurring-processes.md).

@@ -686,6 +686,7 @@ describe("HTTP bridge provider", () => {
       if (url.endsWith("/messages")) {
         return Response.json({ messages: [{ role: "assistant" }] });
       }
+      if (url.endsWith("/close")) return Response.json({ closed: true, retained: true });
       return Response.json({});
     });
 
@@ -704,9 +705,11 @@ describe("HTTP bridge provider", () => {
       "http://claude.test/session/session%2F1/messages",
       "http://claude.test/session/session%2F1/prompt",
       "http://claude.test/session/session%2F1/abort",
-      "http://claude.test/session/session%2F1",
+      "http://claude.test/session/session%2F1/close",
     ]);
-    expect(requests[4]!.init.method).toBe("DELETE");
+    // Close is the non-destructive route; DELETE would delete the Claude rollout.
+    expect(requests[4]!.init.method).toBe("POST");
+    expect(requests.some((request) => request.init.method === "DELETE")).toBe(false);
     // Every bridge validator requires `path`: the Claude route rejects the whole
     // request without one and the Codex route silently drops the entry. So a
     // base64 image is staged into the workspace and attached by path.
@@ -726,21 +729,10 @@ describe("HTTP bridge provider", () => {
     });
   });
 
-  test("treats a missing close session as success and propagates other close failures", async () => {
-    const missing = httpProvider(() => new Response(null, { status: 404 }));
-    await expect(missing.provider.closeSession!("missing-session")).resolves.toBeUndefined();
-
-    const failed = httpProvider(() =>
-      Response.json({ error: "bridge unavailable" }, { status: 503 }),
-    );
-    await expect(failed.provider.closeSession!("live-session")).rejects.toThrow(
-      "bridge unavailable",
-    );
-  });
-
   test("forgets a closed Codex session's cached execution mode", async () => {
     const { provider, requests } = httpProvider((url, init) => {
       if (url.endsWith("/session/create")) return Response.json({ sessionId: "session-1" });
+      if (url.endsWith("/close")) return Response.json({ closed: true, retained: true });
       if (init.method === "DELETE") return Response.json({});
       if (url.endsWith("/config")) {
         return Response.json({
@@ -1541,6 +1533,22 @@ describe("HTTP bridge provider", () => {
     }
   });
 
+  test("reads an older Pi bridge's parked-approval `blocked` as waiting", async () => {
+    const piConnection = { ...codexConnection, agent: "pi" as const, baseUrl: "http://pi.test" };
+    const { provider } = httpProvider(() => Response.json({ activity: "blocked" }), piConnection);
+    // Rejecting it failed the whole provider group — backoff, eviction and a
+    // frozen indicator — at exactly the moment a person was needed.
+    await expect(provider.observeActivity?.("session-1")).resolves.toEqual({ state: "waiting" });
+    // The legacy token is Pi's alone: any other bridge sending it is malformed.
+    const { provider: codex } = httpProvider(
+      () => Response.json({ activity: "blocked" }),
+      codexConnection,
+    );
+    await expect(codex.observeActivity?.("session-1")).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+  });
+
   test.each([
     ["claude" as const, claudeConnection],
     ["codex" as const, codexConnection],
@@ -2108,6 +2116,51 @@ describe("HTTP bridge progressive transcript", () => {
     const snapshot = await provider.transcriptSnapshot!("session-1", transcriptOptions);
     if ("unchanged" in snapshot) throw new Error("expected a snapshot");
     expect(snapshot.omittedParts).toBeUndefined();
+  });
+
+  test.each([
+    {
+      name: "a byte trim",
+      value: { truncated: true, truncationReason: "bytes", omittedMessages: 19 },
+      expected: 19,
+    },
+    {
+      name: "a count trim",
+      value: { truncated: true, truncationReason: "count", omittedMessages: 19 },
+      expected: undefined,
+    },
+    {
+      name: "a byte trim without whole messages",
+      value: { truncated: true, truncationReason: "bytes", omittedParts: 3 },
+      expected: undefined,
+    },
+    {
+      name: "a malformed count",
+      value: { truncated: true, truncationReason: "bytes", omittedMessages: "19" },
+      expected: undefined,
+    },
+  ])("reads byte-omitted messages from $name", async ({ value, expected }) => {
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          version: 1,
+          status: "snapshot",
+          token: "bt1.byte-omitted",
+          value: {
+            messages: [{ id: "m1", content: "hello", parts: [] }],
+            startIndex: 19,
+            messageWindow: value,
+            complete: false,
+            generation: 1,
+            contentEpoch: 1,
+          },
+        }),
+      codexConnection,
+    );
+
+    const snapshot = await provider.transcriptSnapshot!("session-1", transcriptOptions);
+    if ("unchanged" in snapshot) throw new Error("expected a snapshot");
+    expect(snapshot.byteOmittedMessages).toBe(expected);
   });
 
   test("rejects a malformed transcript envelope instead of showing an empty tab", async () => {

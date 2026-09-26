@@ -16,6 +16,7 @@ import {
   isTransientHttpStatus,
   nonEmptyString,
 } from "./agent-provider-runtime.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
 const ACP_SESSION_START_TIMEOUT_MS = 75_000;
@@ -115,6 +116,11 @@ export async function readProviderActivityObservation(
     asyncQuestionItemIds?: unknown;
     readyForInput?: unknown;
   };
+  // Pi bridges before recurring-processes step 07 answer a parked approval
+  // as `blocked`, which is not an activity state. Rejecting it failed the
+  // whole provider group — backoff, eviction, and an environment that stopped
+  // updating — at exactly the moment a person was needed. It means `waiting`.
+  if (connection.agent === "pi" && body.activity === "blocked") body.activity = "waiting";
   if (!isProviderActivityState(body.activity)) {
     throw new ProviderUnavailableError(
       `${connection.agent} returned a malformed activity snapshot`,
@@ -277,6 +283,9 @@ export async function bridgeFetch(
   const timeoutMs = bridgeRequestTimeoutMs(connection, timeoutKind);
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+  // Every bridge request crosses here once; charged to the recurring job that
+  // issued it, or to the unattributed bucket for user-initiated calls.
+  recurringWorkMetrics.work("provider-request");
   try {
     return await fetchImpl(`${connection.baseUrl}${path}`, {
       ...init,
@@ -348,4 +357,25 @@ export async function resolvePromptAttachments(
     attachments.push(...(await stageImages(images)));
   }
   return attachments.length > 0 ? attachments : undefined;
+}
+
+/**
+ * Drop the staged `dataUrl` before an attachment reaches a bridge that reads
+ * the workspace itself.
+ *
+ * Workspace-reading bridges ignore `dataUrl` but cap request bodies at 2MiB.
+ * Forwarding it could make a valid screenshot fail with HTTP 413. Claude and Codex consume it.
+ */
+export function bridgePromptAttachments(
+  agent: ProviderAgent,
+  attachments: PromptAttachment[] | undefined,
+): PromptAttachment[] | undefined {
+  if (!attachments || (agent !== "cursor" && agent !== "grok" && agent !== "pi")) {
+    return attachments;
+  }
+  return attachments.map((attachment) => ({
+    type: attachment.type,
+    path: attachment.path,
+    ...(attachment.filename ? { filename: attachment.filename } : {}),
+  }));
 }

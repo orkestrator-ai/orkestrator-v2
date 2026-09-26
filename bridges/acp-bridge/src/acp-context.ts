@@ -304,6 +304,8 @@ export interface SessionState {
   /** Coalesces best-effort Cursor metadata replays within one live session. */
   cursorToolReplayTimer?: ReturnType<typeof setTimeout>;
   cursorToolReplayRunning?: boolean;
+  /** Replay children that close must terminate before acknowledging removal. */
+  cursorToolReplayChildren?: Set<AcpProcess>;
   /**
    * The pass this session still owes. `live` runs mid-turn and may only touch
    * settled calls; `final` runs once the turn is over and supersedes a pending
@@ -350,6 +352,28 @@ export interface SessionState {
    * dead process means nothing to its successor.
    */
   attaching?: Promise<AcpProcess>;
+  /**
+   * Set by `POST /session/:id/close` (see `acp-session-close.ts`) for as long
+   * as that close owns the session. The entry stays in `sessions` throughout,
+   * so a lookup during the window finds a closing session rather than a
+   * missing one, and every admission path (prompt, attach, config, resume,
+   * create-by-key, new child, parked agent request) is refused.
+   *
+   * - `fenced`: admission refused; still written to the state file.
+   * - `committing`: the child exited and the state-file write that omits this
+   *   session is in flight. Only once that write lands does the entry leave
+   *   the registry.
+   *
+   * A close that ends `pending` leaves the session `fenced` (fail closed): the
+   * backend keeps its close intent and retries. Never persisted.
+   */
+  closing?: "fenced" | "committing";
+  /**
+   * Settles after the dispatched turn's completion handler ran (the
+   * `session/prompt` response, e.g. `stopReason: "cancelled"`, or its
+   * failure). Close waits on it after `session/cancel`. Never persisted.
+   */
+  turnSettlement?: Promise<void>;
   /**
    * Token accounting for the most recently completed turn, or undefined while
    * the agent has never reported any. Persisted so the agent info panel still
@@ -732,6 +756,15 @@ export const MAX_RESUMABLE_SESSIONS = 512;
 export const MAX_SESSION_LIST_PAGES = 64;
 export const RPC_TIMEOUT_MS = parseDuration(process.env.ACP_RPC_TIMEOUT_MS, 30_000);
 export const PROMPT_TIMEOUT_MS = parseDuration(process.env.ACP_PROMPT_TIMEOUT_MS, 30 * 60_000);
+/** How long `POST /session/:id/close` waits for an in-flight attach. */
+export const CLOSE_ATTACH_WAIT_MS = parseDuration(process.env.ACP_CLOSE_ATTACH_WAIT_MS, 5_000);
+/**
+ * How long `POST /session/:id/close` waits, after `session/cancel`, for the
+ * running `session/prompt` to answer before terminating the child.
+ */
+export const CLOSE_CANCEL_WAIT_MS = parseDuration(process.env.ACP_CLOSE_CANCEL_WAIT_MS, 2_000);
+/** Fixed, content-free refusal for work aimed at a session that is closing. */
+export const SESSION_CLOSING_ERROR = "Session is closing";
 /**
  * How long a Cursor parent generation may wait for live background children
  * before continuing without them. Grok never reads this: it settles through

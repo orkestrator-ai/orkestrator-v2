@@ -1,6 +1,9 @@
 import * as shared from "./native-agent-service-shared.js";
 import { randomUUID } from "node:crypto";
-import { nativeAsyncQuestionItemId } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentSteerRejectionMessage,
+  nativeAsyncQuestionItemId,
+} from "@orkestrator/protocol/native-agent";
 import {
   AmbiguousPromptDispatchError,
   BUILD_PIPELINE_AGENTS,
@@ -460,6 +463,9 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
           requestId: input.requestId,
           error: "The steering instruction is still being reconciled.",
         };
+      }
+      if (outcome.outcome === "rejected") {
+        return { outcome: "rejected", error: nativeAgentSteerRejectionMessage(outcome) };
       }
       return {
         outcome: "rejected",
@@ -989,6 +995,8 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       input.interactionId,
       input.resolution,
     );
+    // Observers must re-read instead of reporting an answered question as pending.
+    this.forgetPendingInteractions(resolved.key);
     void this.refreshProjection(input, true).catch(() => undefined);
     return outcome;
   }

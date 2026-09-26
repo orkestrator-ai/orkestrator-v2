@@ -14,6 +14,7 @@ import { approvalsEnabled, PROVIDER } from "./config.js";
 import { publicPiMcpServers } from "./mcp.js";
 import {
   piRunId,
+  publicTurnStatus,
   sessionIsBlocked,
   sessionIsWorking,
   type JsonObject,
@@ -25,9 +26,9 @@ export function publicSession(state: SessionState): JsonObject {
   return {
     id: state.id,
     provider: PROVIDER,
-    status: state.status,
+    status: publicTurnStatus(state),
     ...(state.status === "running" ? { turnId: piRunId(state) } : {}),
-    error: state.error,
+    error: publicTurnError(state),
     ...(state.title ? { title: state.title } : {}),
     messages: state.messages,
     // Absolute index of `messages[0]`. Clients anchor incremental reads to it
@@ -69,9 +70,12 @@ export function publicSessionReference(state: SessionState): JsonObject {
 export function publicStatus(state: SessionState): JsonObject {
   const contextUsage = publicContextUsage(state);
   return {
-    status: state.status,
+    // A claimed prompt Pi has not settled yet is reported as running for the
+    // same reason `/activity` reports it working: the backend's stop ladder
+    // polls this, and idle here would read as a completed stop.
+    status: publicTurnStatus(state),
     ...(state.status === "running" ? { turnId: piRunId(state) } : {}),
-    error: state.error,
+    error: publicTurnError(state),
     revision: state.revision,
     ...publicCommandRevision(state),
     ...(state.sessionFile ? { resumableSessionId: state.sessionFile } : {}),
@@ -118,27 +122,38 @@ export function messageWindow(state: SessionState, fromIndex: number | null): Js
       ...(state.droppedParts > 0 ? { omittedParts: state.droppedParts } : {}),
     },
     revision: state.revision,
-    status: state.status,
-    error: state.error,
+    status: publicTurnStatus(state),
+    error: publicTurnError(state),
   };
 }
 
-export function parseFromIndex(value: string | null): number | null {
-  if (value === null) return null;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+/**
+ * The error that goes with {@link publicTurnStatus}. While a claim reports the
+ * turn as running, an error from an earlier turn — or the startup deadline's,
+ * before Pi has settled the abandoned prompt — would contradict it.
+ */
+function publicTurnError(state: SessionState): string | undefined {
+  return state.promptClaim !== undefined ? undefined : state.error;
 }
+
+/**
+ * `fromIndex` shares one grammar with every other bridge's `/messages` route:
+ * canonical nonnegative safe decimal, anything else is `null` (the retained
+ * window). See `parseTranscriptFromIndex` in the protocol package.
+ */
+export { parseTranscriptFromIndex as parseFromIndex } from "@orkestrator/protocol/transcript-window";
 
 /**
  * Liveness for the backend's activity sweep.
  *
- * `blocked` outranks `working` because it is the more actionable answer: a
- * session parked on an approval is not going to progress on its own, and a
- * build pipeline that reads it as merely busy will wait for a turn that is
- * waiting for a person.
+ * A parked approval outranks `working` because it is the more actionable
+ * answer: a session parked on an approval is not going to progress on its
+ * own. It is reported in the shared activity vocabulary as `waiting` — the
+ * backend's observer accepts only `idle`/`working`/`waiting`/`missing`, and
+ * the `blocked` this route used to answer failed the whole provider group.
  */
 export function publicActivity(state: SessionState): JsonObject {
-  if (sessionIsBlocked(state)) return { activity: "blocked" };
+  if (sessionIsBlocked(state)) return { activity: "waiting" };
   return { activity: sessionIsWorking(state) ? "working" : "idle" };
 }
 

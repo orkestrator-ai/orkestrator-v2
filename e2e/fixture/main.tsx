@@ -1,5 +1,6 @@
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
+import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { StrictMode, createRef, useEffect, useRef, useState } from "react";
@@ -1557,6 +1558,7 @@ function fixtureForPath() {
   }
   if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;
   if (window.location.pathname === "/streaming-transcript") return <StreamingTranscriptFixture />;
+  if (window.location.pathname === "/read-coordinator") return <ReadCoordinatorFixture />;
   return <CreateEnvironmentFixture />;
 }
 

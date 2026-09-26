@@ -18,6 +18,7 @@ import { readTodos } from "./tool-rendering.js";
 import {
   clientSessionKeys,
   isObject,
+  isPendingRemoval,
   nonBlank,
   setSteerJournal,
   sessions,
@@ -31,6 +32,16 @@ import { restoreCommandCatalogue } from "./commands.js";
 let tail: Promise<void> = Promise.resolve();
 let scheduled = false;
 let shuttingDown = false;
+let writeGateForTests: (() => Promise<void>) | undefined;
+
+/**
+ * Hold every state-file publication at its write boundary in deterministic
+ * tests. Serialization, queueing and failure propagation stay real; only the
+ * moment the bytes are written is controlled. Pass nothing to remove it.
+ */
+export function setPersistWriteGateForTests(gate?: () => Promise<void>): void {
+  writeGateForTests = gate;
+}
 
 /**
  * Queue a write, coalescing bursts.
@@ -128,7 +139,9 @@ function shedToFit(payload: PersistedState, order: Map<string, number>): boolean
 async function persistNow(): Promise<void> {
   const stateFile = stateFilePath();
   if (!stateFile) return;
-  const live = Array.from(sessions.values());
+  // A session whose close is publishing its removal is still registered (so a
+  // retry reaches it) but must already be absent from what is written.
+  const live = Array.from(sessions.values()).filter((state) => !isPendingRemoval(state));
   const payload: PersistedState = {
     version: 1,
     provider: "pi",
@@ -145,6 +158,7 @@ async function persistNow(): Promise<void> {
     serialized = JSON.stringify(payload);
   }
   await mkdir(dirname(stateFile), { recursive: true, mode: 0o700 });
+  if (writeGateForTests) await writeGateForTests();
   const temporary = `${stateFile}.tmp`;
   // Write-then-rename: a bridge killed mid-write must not leave a truncated
   // file that the next start reads as a session with no history.

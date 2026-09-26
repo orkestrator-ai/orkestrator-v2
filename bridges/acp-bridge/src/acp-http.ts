@@ -44,6 +44,7 @@ import {
   MAX_STRUCTURED_RESULT_BYTES,
   MAX_STRUCTURED_RESULTS,
   PROMPT_TIMEOUT_MS,
+  SESSION_CLOSING_ERROR,
   HttpError,
   authToken,
   agentRuntime,
@@ -79,6 +80,7 @@ import {
 } from "./acp-public.js";
 import { listNormalizedModels } from "./acp-persistence.js";
 import { persistState } from "./acp-persist-writer.js";
+import { closeSessionRetaining, denyPendingRequests } from "./acp-session-close.js";
 import {
   cancelCursorToolMetadataReconcile,
   scheduleCursorToolMetadataReconcile,
@@ -200,7 +202,7 @@ export async function route(
     return json(response, 201, publicSession(state));
   }
   const match =
-    /^\/session\/([^/]+)(?:\/(messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
+    /^\/session\/([^/]+)(?:\/(close|messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
       url.pathname,
     );
   if (!match) return json(response, 404, { error: "Not found" });
@@ -218,9 +220,29 @@ export async function route(
     if (match[2] === "commands/refresh" && request.method === "POST") {
       return json(response, 200, refreshCommandCatalogue(undefined));
     }
+    // Close is idempotent and answered in band: 404/405 from this route must
+    // only ever mean "this bridge predates it".
+    if (match[2] === "close" && request.method === "POST") {
+      return json(response, 200, { closed: true, missing: true });
+    }
     return json(response, 404, { error: "Session not found" });
   }
   const action = match[2];
+  // A closing session stays registered (and readable) until its close lands,
+  // but admits no new work: nothing may start, attach or be answered on a
+  // session whose child is being stopped. Close itself joins the one close in
+  // flight; cancel/abort and reads stay harmless.
+  if (
+    state.closing &&
+    request.method === "POST" &&
+    (action === "prompt" ||
+      action === "attach" ||
+      action === "config" ||
+      action?.startsWith("approvals/") ||
+      action?.startsWith("interactions/"))
+  ) {
+    return json(response, 409, { error: SESSION_CLOSING_ERROR });
+  }
   if (!action && request.method === "GET") {
     boundTranscriptForRead(state);
     return json(response, 200, publicSession(state));
@@ -363,6 +385,8 @@ export async function route(
     const body = await readJson(request).catch(() => ({}) as JsonObject);
     storeAgentMcp(state, body.agentMcp);
     await ensureSessionProcess(state, clientSignal);
+    // A close that started during the attach terminates the child it produced.
+    if (state.closing) return json(response, 409, { error: SESSION_CLOSING_ERROR });
     return json(response, 200, { attached: true });
   }
   if (action === "approvals" && request.method === "GET")
@@ -550,6 +574,9 @@ export async function route(
         if (!resolved.ok) throw new CommandUnavailableError(resolved.message);
         prompt = resolved.text;
       }
+      // A close that began while this turn was still preparing owns the
+      // session now; the turn must not reach the agent.
+      if (state.closing) throw new HttpError(409, SESSION_CLOSING_ERROR);
     } catch (error) {
       // The turn definitely did not run, so release the claim and let the
       // caller retry with the same requestId.
@@ -561,6 +588,9 @@ export async function route(
         state.retryCancelledPromptSequence = undefined;
       }
       if (requestId) state.promptJournal.delete(requestId);
+      // Whatever failed (the fence itself, or an RPC against the child the
+      // close is stopping), the turn was refused because the session is closing.
+      if (state.closing) return json(response, 409, { error: SESSION_CLOSING_ERROR });
       if (error instanceof PromptAttachmentError) {
         return json(response, 400, { error: error.message });
       }
@@ -609,6 +639,22 @@ export async function route(
     state.revision += 1;
     boundTranscript(state);
     await persistState();
+    if (state.closing) {
+      // The close started during that write. The turn has not been handed to
+      // the agent, so withdraw it exactly as a failed preparation would.
+      if (state.messages.at(-1)?.id === userMessageId) state.messages.pop();
+      state.status = "idle";
+      state.dispatching = false;
+      state.turnStartedAt = undefined;
+      state.currentTurnUsage = undefined;
+      state.currentTurnRequestId = undefined;
+      state.currentTurnSawVendorUsage = undefined;
+      state.currentTurnOutput = null;
+      if (requestId) state.promptJournal.delete(requestId);
+      state.revision += 1;
+      schedulePersist();
+      return json(response, 409, { error: SESSION_CLOSING_ERROR });
+    }
     const acpPrompt = schema ? `${prompt}\n\n${structuredPromptInstruction(schema)}` : prompt;
     const promptCompletion = dispatchAcpPrompt(
       state,
@@ -650,7 +696,7 @@ export async function route(
     // The turn is now dispatched and `status` is "running", so the busy check
     // is authoritative again and the claim can be released.
     state.dispatching = false;
-    void promptCompletion.then(
+    const turnCompletion = promptCompletion.then(
       (result) => {
         const stopReason = promptStopReason(result);
         if (stopReason !== "end_turn" && stopReason !== "cancelled") {
@@ -757,10 +803,21 @@ export async function route(
         schedulePersist();
       },
     );
+    // What close awaits after `session/cancel`: the turn's own bookkeeping has
+    // run, whichever way the prompt ended. Owning the rejection here also keeps
+    // a throwing completion handler from becoming an unhandled rejection.
+    state.turnSettlement = turnCompletion.then(
+      () => undefined,
+      () => undefined,
+    );
     return json(response, 202, { accepted: true });
   }
   if ((action === "cancel" || action === "abort") && request.method === "POST") {
-    for (const approval of Array.from(state.approvals.values())) approval.respond();
+    // Fail closed, exactly as close does: every request parked on a person —
+    // permission, Grok question and plan approval — is answered with its
+    // cancel outcome. Denying only permissions left a question or plan card
+    // actionable against a turn the user had already stopped.
+    denyPendingRequests(state);
     if (state.dispatching) {
       // The turn is claimed but has not taken its sequence yet, and dispatch can
       // sit in a process spawn for seconds. Record the sequence it is about to
@@ -773,8 +830,25 @@ export async function route(
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
     return json(response, 202, { accepted: true });
   }
+  if (action === "close" && request.method === "POST") {
+    // Ordinary tab close: release this session, keep the vendor conversation.
+    return (await closeSessionRetaining(state)) === "closed"
+      ? json(response, 200, { closed: true, retained: true })
+      : json(response, 503, {
+          closed: false,
+          pending: true,
+          error: "Session close did not complete",
+        });
+  }
   if (!action && request.method === "DELETE") {
-    for (const approval of Array.from(state.approvals.values())) approval.respond();
+    // DELETE is the legacy release (vendor history is kept either way). Racing
+    // a close, it joins that close rather than tearing down underneath it.
+    if (state.closing) {
+      return (await closeSessionRetaining(state)) === "closed"
+        ? json(response, 200, { deleted: true })
+        : json(response, 503, { error: "Session close did not complete" });
+    }
+    denyPendingRequests(state);
     cancelCursorToolMetadataReconcile(state);
     await state.child?.close();
     sessions.delete(state.id);

@@ -108,7 +108,13 @@ export function persistedSnapshot(): PersistedState {
   const promptJournalBySession = new Map<string, PromptJournalEntry[]>();
   const grokInterjectionBySession = new Map<string, GrokInterjectionJournalEntry[]>();
   const sessionConfigBySession = new Map<string, AcpNormalizedSessionConfig>();
-  const newestSessions = [...sessions.values()].reverse();
+  // A session whose close is committing is written *without* it: the close
+  // only drops the registry entry once this very write has landed, so a failed
+  // write leaves it registered and retryable (see `acp-session-close.ts`).
+  const persistedSessions = [...sessions.values()].filter(
+    (state) => state.closing !== "committing",
+  );
+  const newestSessions = [...persistedSessions].reverse();
   // Prefer the newest sessions and newest results while enforcing one global
   // budget for the single state file that owns all of them.
   for (const state of newestSessions) {
@@ -169,7 +175,7 @@ export function persistedSnapshot(): PersistedState {
   const snapshot: PersistedState = {
     version: 3,
     provider,
-    sessions: [...sessions.values()].map((state) => ({
+    sessions: persistedSessions.map((state) => ({
       id: state.id,
       ...(state.policy ? { policy: state.policy } : {}),
       ...(typeof state.readOnly === "boolean" ? { readOnly: state.readOnly } : {}),

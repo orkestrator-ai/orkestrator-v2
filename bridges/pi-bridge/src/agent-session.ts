@@ -84,6 +84,35 @@ import {
 /** Bridge sessions that have been permanently closed by their owner. */
 const closingSessions = new WeakSet<SessionState>();
 
+/**
+ * Whether this bridge session has been permanently closed (DELETE or close).
+ * Marked synchronously, before the close's first await, so a prompt still
+ * preparing can observe it at its next boundary and never reach Pi.
+ */
+/** Work refused because the session's permanent close has begun. Answered 409. */
+export class SessionClosingError extends Error {
+  override readonly name = "SessionClosingError";
+
+  constructor() {
+    super("This Pi session is closing; retry once the close completes");
+  }
+}
+
+export function isSessionClosed(state: SessionState): boolean {
+  return closingSessions.has(state);
+}
+
+/**
+ * Mark a bridge session permanently closed, synchronously.
+ *
+ * Close and DELETE call this before their first await: from here on no prompt
+ * is admitted (409), a prompt already preparing settles at its next boundary,
+ * and a cold attach in flight refuses to publish. Idempotent.
+ */
+export function markSessionClosed(state: SessionState): void {
+  closingSessions.add(state);
+}
+
 /** One in-flight adoption per canonical Pi session file. */
 const sessionResumptions = new Map<string, Promise<SessionState>>();
 
@@ -264,6 +293,10 @@ export async function createSession(
   if (clientSessionKey) {
     const existingId = clientSessionKeys.get(clientSessionKey);
     const existing = existingId ? sessions.get(existingId) : undefined;
+    // A session whose close is in flight is never handed back: the caller
+    // would receive an id that is about to disappear. Once the close settles
+    // the key is released and a deliberate create gets a new session.
+    if (existing && isSessionClosed(existing)) throw new SessionClosingError();
     if (existing) {
       const resolved = resolvePiExecutionPolicy(policy);
       if (policy || resolved.id === "coordinator-read-only") existing.policy = resolved;
@@ -312,7 +345,7 @@ export async function createSession(
  * rather than a corner case.
  */
 export async function ensureSession(state: SessionState): Promise<AgentSession> {
-  if (closingSessions.has(state)) throw new Error("This Pi session is closed");
+  if (closingSessions.has(state)) throw new SessionClosingError();
   if (state.session) return state.session;
   state.attaching ??= attach(state).finally(() => {
     state.attaching = undefined;
@@ -542,7 +575,7 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
       // The state is already closed. Disposal is best-effort, and the attach
       // still fails authoritatively below rather than resurrecting it.
     }
-    throw new Error("This Pi session was closed while it was attaching");
+    throw new SessionClosingError();
   }
   state.session = session;
   state.piSessionId = session.sessionId;
@@ -912,7 +945,7 @@ export async function detachSession(state: SessionState): Promise<void> {
  * the mark and dispose itself before this function returns.
  */
 export async function closeSession(state: SessionState): Promise<void> {
-  closingSessions.add(state);
+  markSessionClosed(state);
   await state.attaching?.catch(() => undefined);
   await detachSession(state);
 }
@@ -1113,11 +1146,13 @@ export async function resumeSession(
   // session that already owns the file.
   for (const existing of sessions.values()) {
     if (existing.sessionFile === resolved) {
+      if (isSessionClosed(existing)) throw new SessionClosingError();
       if (policy && JSON.stringify(existing.policy) !== JSON.stringify(policy)) {
         if (existing.status === "running" || existing.dispatching) {
           throw new Error("The Pi session is already running");
         }
         await detachSession(existing);
+        if (isSessionClosed(existing)) throw new SessionClosingError();
         existing.policy = resolvePiExecutionPolicy(policy);
       }
       applyComposerPatch(existing, patch);
@@ -1133,6 +1168,7 @@ export async function resumeSession(
   const inFlight = sessionResumptions.get(resolved);
   if (inFlight) {
     const existing = await inFlight;
+    if (isSessionClosed(existing)) throw new SessionClosingError();
     applyComposerPatch(existing, patch);
     existing.lastAccessed = Date.now();
     return existing;

@@ -396,6 +396,93 @@ export function appendInterruptedNotice(session: SessionState, sessionId: string
   eventEmitter.emit({ type: "message.updated", sessionId, data: { message } });
 }
 
+/** Transcript row for a subagent the CLI stopped, named when its task is known. */
+export function subagentInterruptedNoticeText(description?: string): string {
+  const name = boundedNoticeText(description);
+  return name ? `Subagent stopped: ${name}` : "A subagent was stopped";
+}
+
+const subagentNoticeSources = new WeakMap<NormalizedMessage, string>();
+
+/**
+ * Append the row for a stopped subagent. Repeated markers for the same task
+ * collapse at the transcript tail, but distinct tasks keep distinct rows.
+ *
+ * Kept apart from that row on purpose: the CLI writes its interruption marker
+ * into a subagent's sidechain whenever it stops the agent, including when it
+ * winds down background work on its own, so relaying it as "Interrupted by
+ * user" told the user they had stopped a conversation they never touched.
+ */
+export function appendSubagentInterruptedNotice(
+  session: SessionState,
+  sessionId: string,
+  description?: string,
+  sourceToolUseId?: string,
+): void {
+  const content = subagentInterruptedNoticeText(description);
+  const last = session.messages.at(-1);
+  if (
+    last?.role === "system" &&
+    last.parts.length === 1 &&
+    last.parts[0]?.type === "status" &&
+    last.parts[0].content === content &&
+    sourceToolUseId !== undefined &&
+    subagentNoticeSources.get(last) === sourceToolUseId
+  ) {
+    return;
+  }
+  const createdAt = new Date().toISOString();
+  const part: NormalizedPart = { type: "status", content, severity: "info", createdAt };
+  const message: NormalizedMessage = {
+    id: generateMessageId(),
+    role: "system",
+    content,
+    parts: [part],
+    createdAt,
+  };
+  if (sourceToolUseId) subagentNoticeSources.set(message, sourceToolUseId);
+  session.messages.push(message);
+  eventEmitter.emit({ type: "message.updated", sessionId, data: { message } });
+}
+
+/**
+ * Whether a `result` answers some input other than the prompt that opened
+ * this turn.
+ *
+ * A resumed CLI can finish a turn it started itself — the answer to a
+ * replayed background-task notification — before it reaches the prompt it
+ * was just sent. Taking that result as this turn's own closed the CLI's input
+ * while the real turn was only starting, and a print-mode CLI whose input is
+ * closed stops its background agents a fixed interval after going idle.
+ *
+ * The prompt carries a client uuid, which every result for it echoes —
+ * including one for a batch or a meta turn it was folded into. A producer that
+ * numbers its results (`result_index`) is new enough to do that, so from one,
+ * a successful result that does not name the prompt answers other input:
+ * another send, or a turn the CLI started itself, which names none. Errors
+ * without a uuid can be session-scoped startup failures and must be surfaced.
+ * An older producer is trusted as before, whatever uuid it reports.
+ */
+export function resultAnswersOtherInput(
+  result: {
+    user_message_uuid?: unknown;
+    user_message_uuids?: unknown;
+    result_index?: unknown;
+    subtype?: unknown;
+    is_error?: unknown;
+  },
+  promptUuid: string,
+): boolean {
+  if (result.subtype !== "success" || result.is_error === true) return false;
+  const uuids = Array.isArray(result.user_message_uuids)
+    ? result.user_message_uuids
+    : typeof result.user_message_uuid === "string"
+      ? [result.user_message_uuid]
+      : [];
+  if (uuids.includes(promptUuid)) return false;
+  return Number.isSafeInteger(result.result_index);
+}
+
 /**
  * Re-publish finished tool rows whose tracked state changed after the message
  * holding them stopped being the one the turn rebuilds.
@@ -528,6 +615,12 @@ export function parseMessageContent(
   attachedTaskToolUseIds: string[];
   /** This user turn is the CLI's record of an interruption, not user input. */
   interrupted: boolean;
+  /**
+   * A subagent's own interruption record. The CLI writes the same marker into
+   * a subagent's sidechain when it stops that agent — at process teardown, for
+   * instance — and that says nothing about the main conversation.
+   */
+  subagentInterrupted: boolean;
 } {
   const thinkingParts: NormalizedPart[] = [];
   const orderedParts: OrderedPartEntry[] = [];
@@ -543,6 +636,7 @@ export function parseMessageContent(
     }
   };
   let interrupted = false;
+  let subagentInterrupted = false;
   let textContent = "";
 
   const messageUuid = typeof message.uuid === "string" ? message.uuid : undefined;
@@ -579,6 +673,7 @@ export function parseMessageContent(
       unattachedTaskNotifications,
       attachedTaskToolUseIds,
       interrupted,
+      subagentInterrupted,
     };
   }
   // Handle message.message.content array (from Anthropic SDK format)
@@ -598,7 +693,11 @@ export function parseMessageContent(
         continue;
       }
       if (isInterruptMarker(block.text)) {
-        interrupted = true;
+        if (isRootAssistantRecord(message.parent_tool_use_id, message.isSidechain)) {
+          interrupted = true;
+        } else {
+          subagentInterrupted = true;
+        }
         continue;
       }
     }
@@ -751,6 +850,7 @@ export function parseMessageContent(
     unattachedTaskNotifications,
     attachedTaskToolUseIds,
     interrupted,
+    subagentInterrupted,
   };
 }
 
@@ -1380,8 +1480,10 @@ export function normalizePersistedSessionMessages(
     timestamp: string;
     /** Status rows this record stands for instead of, or beside, a bubble. */
     notices: NormalizedPart[];
+    subagentNoticeSource?: string;
   }> = [];
   const informationalRowsByToolUse = new Map<string, number>();
+  let lastSubagentNoticeSource: string | undefined;
 
   // Older emitters omitted record timestamps. Give every such record one
   // clock for this materialization and use that same value both while parsing
@@ -1447,6 +1549,7 @@ export function normalizePersistedSessionMessages(
         }
       }
       if (notice) {
+        lastSubagentNoticeSource = undefined;
         const toolUseId =
           system.subtype === "informational" && typeof system.tool_use_id === "string"
             ? system.tool_use_id
@@ -1471,27 +1574,51 @@ export function normalizePersistedSessionMessages(
     );
     for (const taskId of result.newTaskIds) activeTaskIds.add(taskId);
     for (const taskId of result.completedTaskIds) activeTaskIds.delete(taskId);
+    const subagentNoticeSource = result.subagentInterrupted
+      ? (raw.parent_tool_use_id ?? undefined)
+      : undefined;
+    const emitSubagentNotice =
+      result.subagentInterrupted &&
+      (subagentNoticeSource === undefined || subagentNoticeSource !== lastSubagentNoticeSource);
     // The same rows the live turn appends, so a reload shows what the user saw
     // rather than the CLI's own bookkeeping as if the user had typed it.
     const notices: NormalizedPart[] = [
       ...(result.interrupted ? [interruptedNoticePart(timestamp)] : []),
+      ...(emitSubagentNotice
+        ? [
+            {
+              type: "status" as const,
+              severity: "info" as const,
+              content: subagentInterruptedNoticeText(
+                Object.values(backgroundTasks ?? {}).find(
+                  (task) => task.toolUseId === raw.parent_tool_use_id,
+                )?.description,
+              ),
+              createdAt: timestamp,
+            },
+          ]
+        : []),
       ...result.unattachedTaskNotifications.map((report) =>
         taskNotificationNoticePart(report, timestamp),
       ),
     ];
+    if (result.content.trim() || result.orderedParts.length > 0 || notices.length > 0) {
+      lastSubagentNoticeSource = emitSubagentNotice ? subagentNoticeSource : undefined;
+    }
     parsed.push({
       raw,
       content: result.content,
       orderedParts: result.orderedParts,
       timestamp,
       notices,
+      ...(emitSubagentNotice && subagentNoticeSource ? { subagentNoticeSource } : {}),
     });
   }
 
   const messages: NormalizedMessage[] = [];
   for (const entry of parsed) {
     entry.notices.forEach((part, index) => {
-      messages.push({
+      const message: NormalizedMessage = {
         // Stable across rehydrations so a client holding the row keeps it.
         // Never an `sdkUuid`: a notice is not a record a fork can address.
         id: entry.raw.uuid ? `${entry.raw.uuid}:notice:${index}` : generateMessageId(),
@@ -1499,7 +1626,11 @@ export function normalizePersistedSessionMessages(
         content: part.content,
         parts: [part],
         createdAt: entry.timestamp,
-      });
+      };
+      if (index === 0 && entry.subagentNoticeSource) {
+        subagentNoticeSources.set(message, entry.subagentNoticeSource);
+      }
+      messages.push(message);
     });
     if (entry.raw.type === "system") continue;
     const parts = buildMessageParts(entry.orderedParts, toolTracker);

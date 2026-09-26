@@ -264,6 +264,27 @@ describe("bridge authentication and origin policy", () => {
       },
     );
   });
+
+  test("public health reports how the previous app-server exited", async () => {
+    await withRuntimeMethod(
+      "getHealth",
+      () => ({
+        state: "ready",
+        generation: 2,
+        circuitOpen: false,
+        restartCount: 1,
+        lastExitCode: null,
+        lastExitSignal: "SIGKILL",
+        storage: {},
+      }),
+      async () => {
+        const body = (await (await app.request("/global/health")).json()) as {
+          appServer: Record<string, unknown>;
+        };
+        expect(body.appServer).toMatchObject({ lastExitCode: null, lastExitSignal: "SIGKILL" });
+      },
+    );
+  });
 });
 
 describe("session collection route outcomes", () => {

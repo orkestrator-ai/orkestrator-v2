@@ -387,6 +387,9 @@ describe("Electron backend process supervisor", () => {
         ORKESTRATOR_TEST_SCHEDULER_DIR: "/profiles/qa/test-scheduler",
         ORKESTRATOR_TEST_HOST_WORKERS: "2",
         ORKESTRATOR_TEST_HOST_MEMORY_MIB: "2048",
+        ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK: "all",
+        ORKESTRATOR_NATIVE_OBSERVATION_SHARING: "0",
+        ORKESTRATOR_RECURRING_METRICS: "1",
       },
       "2.8.2",
       {
@@ -409,6 +412,11 @@ describe("Electron backend process supervisor", () => {
     expect(isolated.ORKESTRATOR_TEST_SCHEDULER_DIR).toBe("/profiles/qa/test-scheduler");
     expect(isolated.ORKESTRATOR_TEST_HOST_WORKERS).toBe("2");
     expect(isolated.ORKESTRATOR_TEST_HOST_MEMORY_MIB).toBe("2048");
+    // Recurring-work policy switches reach the backend so a profile can
+    // qualify the rollback drivers.
+    expect(isolated.ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK).toBe("all");
+    expect(isolated.ORKESTRATOR_NATIVE_OBSERVATION_SHARING).toBe("0");
+    expect(isolated.ORKESTRATOR_RECURRING_METRICS).toBe("1");
     expect(isolated.HOME).toBe("/profiles/qa/credentials/home");
     expect(isolated.ORKESTRATOR_AGENT_TEST_HOST_HOME).toBe("/Users/tester");
     expect(isolated.CODEX_HOME).toBe("/profiles/qa/credentials/codex");

@@ -2,6 +2,7 @@ import "./testing/unit-test-env.js";
 import { describe, expect, test } from "bun:test";
 import { sessions, type AcpProcess, type SessionState } from "./acp-context.js";
 import { attachChild, ensureSessionProcess, parkGrokInteraction } from "./acp-session.js";
+import { closeSessionRetaining } from "./acp-session-close.js";
 import { publicInteractions } from "./acp-public.js";
 
 describe("ensureSessionProcess fingerprint", () => {
@@ -24,6 +25,50 @@ describe("ensureSessionProcess fingerprint", () => {
     expect(first).toBe(child);
     expect(second).toBe(child);
     expect(closed).toBe(0);
+  });
+});
+
+describe("close of Cursor tool metadata replay", () => {
+  test("waits for the replay child to exit before confirming close", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let closes = 0;
+    const childState = { exitCode: null as number | null, signalCode: null as string | null };
+    const replayChild = {
+      child: childState,
+      close: async () => {
+        closes += 1;
+        await gate;
+        childState.exitCode = 0;
+      },
+    } as AcpProcess;
+    const state = {
+      id: "replay-close-test",
+      acpSessionId: "vendor-session",
+      child: null,
+      approvals: new Map(),
+      interactions: new Map(),
+      cursorToolReplayChildren: new Set([replayChild]),
+      status: "idle",
+    } as SessionState;
+    sessions.set(state.id, state);
+    try {
+      let settled = false;
+      const closing = closeSessionRetaining(state).finally(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(closes).toBe(1);
+      expect(settled).toBe(false);
+      release();
+      expect(await closing).toBe("closed");
+      expect(sessions.has(state.id)).toBe(false);
+    } finally {
+      release();
+      sessions.delete(state.id);
+    }
   });
 });
 

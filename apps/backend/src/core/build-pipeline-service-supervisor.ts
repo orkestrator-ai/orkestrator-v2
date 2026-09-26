@@ -9,6 +9,7 @@ import {
 } from "./review-validation-prompts.js";
 import { validationPreparation } from "./review-validation-service.js";
 import { randomUUID } from "node:crypto";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import type {
   BuildPipeline,
   BuildPipelineAgent,
@@ -138,20 +139,27 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           this.workflowAgentMcp(pipeline, resultKey, provider),
         concurrency: this.options.reviewFanoutConcurrency,
         efficiency: this.options.efficiency,
+        pollGate: (pipeline) => ({
+          count: (scope) => this.reviewerPollGate.count(scope, this.passTrigger(pipeline.id)),
+          exhausted: (scope, count, limit) => this.reviewerPollGate.exhausted(scope, count, limit),
+          clear: (scope) => this.reviewerPollGate.clear(scope),
+        }),
       });
     }
     return this.reviewFanoutRunner;
   }
 
   protected requestTick(): Promise<void> {
+    recurringWorkMetrics.requested("build-supervisor-tick");
     if (this.tickPromise) {
+      recurringWorkMetrics.coalesced("build-supervisor-tick");
       this.tickRequested = true;
       return this.tickPromise;
     }
     const operation = (async () => {
       do {
         this.tickRequested = false;
-        await this.tickPass();
+        await recurringWorkMetrics.observe("build-supervisor-tick", () => this.tickPass());
       } while (!this.stopped && this.tickRequested);
     })().finally(() => {
       if (this.tickPromise === operation) this.tickPromise = null;
@@ -163,6 +171,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
   protected async tickPass(): Promise<void> {
     if (this.stopped) return;
     const records = await this.storage.listAllBuildPipelines();
+    recurringWorkMetrics.work("record-scanned", records.length);
     await Promise.all(
       records.flatMap((record) => {
         if (
@@ -172,6 +181,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         ) {
           return [];
         }
+        recurringWorkMetrics.work("record-selected");
         return [this.runLocked(record.id)];
       }),
     );

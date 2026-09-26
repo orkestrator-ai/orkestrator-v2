@@ -64,6 +64,15 @@ the profile's readiness and descriptor data.
 - Discover durable agent mailboxes with `list_mailboxes`.
 - Send an inbox-only external message to one mailbox with `send_message`.
 
+Discovery summaries, native-tab resolution, launch options and selection
+validation live in `apps/backend/src/core/control-shared-actions.ts`, shared
+with the public CLI contract ([public-cli.md](public-cli.md)); this adapter
+keeps its tool formatting, annotations and coordinator scope.
+`launch_environment` sends a fingerprint of its creation intent with its
+`requestId`: retrying with the same content returns the same environment, and
+reusing a `requestId` for a different launch is rejected rather than silently
+returning the first environment.
+
 Control-MCP messages are always classified as external and are never injected
 into an agent turn. The destination's user can inspect and acknowledge them in
 the global inbox. `send_message` requires a stable `requestId`; retrying the

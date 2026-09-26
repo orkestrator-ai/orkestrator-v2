@@ -27,7 +27,11 @@ import {
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
   multiReviewCustomFixPrompt,
 } from "@orkestrator/protocol/multi-review";
-import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import {
+  structuredReviewFindings,
+  type StructuredReviewReport,
+} from "@orkestrator/protocol/structured-review";
+import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 import { MAX_JSON_PAYLOAD_LENGTH } from "./json-payload";
 import {
   USER_PROMPT_RENDER_CHARACTER_LIMIT,
@@ -220,6 +224,28 @@ describe("userPromptDisplayText", () => {
       kind: "json",
       value: { issues: [{ title: "Address finding" }] },
     });
+  });
+
+  test("presents a build pipeline address prompt's findings as review findings", () => {
+    const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
+    const findings = structuredReviewFindings(TEST_STRUCTURED_REVIEW_REPORT);
+    // The producer escapes markup-significant characters so evidence cannot
+    // forge a frame marker; the reader has to decode them back.
+    const carrier = JSON.stringify(findings, null, 2).replace(
+      /[<>&]/g,
+      (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
+    const source = `${wrapSystemInstructions(
+      STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
+      `${contract.openMarker}\n${carrier}\n${contract.closeMarker}`,
+    )}\n\n${contract.continuationPrefix}\n\n${wrapSystemInstructions(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION)}`;
+    const presentation = userPromptPresentation(source);
+
+    expect(presentation.displayText).toBe(contract.continuationPrefix);
+    expect(presentation.evidencePayload?.kind).toBe("review-findings");
+    if (presentation.evidencePayload?.kind !== "review-findings") throw new Error("unreachable");
+    expect(presentation.evidencePayload.findings).toEqual(findings);
+    expect(isFixOpeningPrompt(source)).toBe(true);
   });
 
   test("keeps legacy custom-fix transcripts focused on the user instruction", () => {

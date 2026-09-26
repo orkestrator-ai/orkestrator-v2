@@ -1,7 +1,15 @@
 # 06 — Coordinate client reads and document visibility
 
-Status: Not started. Dependencies: 01; relevant step 11 recovery contract before
-slower polling. Finding: F05. Related proposal: client data-saving mode.
+Status: Implemented, with one recorded deferral. The coordinator, the native
+session and Files panel migrations, and the step 09 consumers have landed.
+Quiet native backoff (task 8) is enabled by step 07 for Cursor, Pi, Grok and
+OpenCode against revision-announcing backends; Claude and Codex are not
+qualified and keep baseline cadence. The data-saving preference (task 9) is a
+recorded deferral: the plan makes it conditional ("if adopted"), and it needs a
+user-facing control. Real-stack results are recorded in step 12. See
+[Completion notes](#completion-notes).
+Dependencies: 01; relevant step 11 recovery contract before slower polling.
+Finding: F05. Related proposal: client data-saving mode.
 
 ## Outcome
 
@@ -83,3 +91,126 @@ authoritative state within its agreed latency. Equivalent subscribers join one
 read, and no response crosses connection/session generations. Foreground behavior
 matches baseline in the first migration. Roll back cadence/backoff separately
 from coordinator ownership, avoiding simultaneous old and new timers.
+
+## Completion notes
+
+Recorded 2026-09-25 on branch `worktree-agent-a5ac9eb6e70b38e2b` (based on
+`b9bd00fa`). Commits: `e43a0967` (coordinator), `4f636f0e` (native session and
+Files panel migration), `df75da2a` and `92e1c1fa` (browser coverage),
+`0d55ce20` (reconcile dedupe), plus this note.
+
+### What landed
+
+- `apps/web/src/lib/read-coordinator.ts`: `createReadCoordinator(options)` with
+  injected clock/document/window/random, the renderer singleton
+  `getReadCoordinator()`, `setReadCoordinatorConnection()`,
+  `notifyReadCoordinatorReconnected()` and `resetReadCoordinatorForTests()`.
+  Keys are `{ resource, target, options?, view? }` under a connection identity
+  and generation. Tasks 1–3, 5–7 and 10 are implemented as specified:
+  aggregated demand with one fixed-rate timer per key, bounded retention of
+  subscriber-less entries (32), in-flight joining with one dirty flag, explicit
+  refresh that always obtains a post-call read, hidden-document and
+  transport-declared-disconnect pause, coalesced (50 ms) visibility / focus /
+  pageshow / online / reconnect reconcile, critical first; standard spread
+  100–600 ms, auxiliary 300–1,500 ms; documented maximum delay for a visible
+  critical read `CRITICAL_READ_RESUME_MAX_DELAY_MS` = 50 ms plus event-loop
+  latency. Failed reads use capped (30 s) jittered backoff that never polls
+  faster than the key's healthy cadence, keep stale values with their original
+  `observedAt`, never cache auth failures as empty data, and stop automatic
+  reads of permanently unsupported APIs until reconnect/server switch/explicit
+  refresh. A server switch aborts and fences in-flight results; eviction and key
+  changes make late results inert, and they never rearm timers.
+- Browser `offline` is deliberately **not** treated as disconnected: a desktop
+  Local backend stays reachable without internet access. `online` only triggers
+  a reconcile. `setDisconnected()` is the hook for a transport-declared
+  disconnect; no transport calls it yet (step 10 owns reconnect lifecycle).
+- `apps/web/src/hooks/useCoordinatedRead.ts`: React binding (latest-closure
+  reads, resubscribe on key change only, in-place demand updates, opt-in
+  `trackState`).
+- `resource-sync.ts` forwards its existing confirmed-reconnect signal (fresh
+  stream / replay miss / generation change, after its boot-announcement
+  suppression) to the coordinator; `App.tsx` records the active connection from
+  the existing connection-list subscription. No new transport listeners.
+- `useNativeAgentSession.ts`: the 500/1,500 ms interval, resource-change and
+  resync refreshes and the trailing reconcile now go through the coordinator
+  (`critical`). Cadence, sequence/epoch fences, progressive transcript/state/
+  discovery separation and unavailable/cached/current/empty handling are
+  unchanged; connect, explicit and post-mutation reads stay direct. The key's
+  `view` is the hook instance because reads apply into instance-local fenced
+  state (conditional tokens), so cross-instance sharing waits for step 07.
+- `useFilesPanel.ts`: the 5 s poll is coordinated (`standard`), keyed by
+  environment snapshot key and active tab; the open/tab/target read and
+  post-mutation reads stay direct. The manual refresh now obtains a post-click
+  snapshot instead of joining an older in-flight one.
+- `apps/web/src/lib/native-session-read-policy.ts`: cadence constants and the
+  quiet-backoff policy hook (see below).
+
+Foreground behavior matches baseline: fixed-rate ticks anchored at the cadence
+change (as the recreated `setInterval` was), ticks skipped while a read is in
+flight, same intervals. Differences: reads pause while the document is hidden
+(invalidations are deferred into one reconcile on return), and one reconcile
+read per active key happens after a confirmed transport reconnect.
+
+### Gated / deferred
+
+- **Quiet native backoff (task 8)** is implemented only as a disabled policy
+  hook: `ReadDemand.quietBackoffMs` in the coordinator plus
+  `NATIVE_QUIET_BACKOFF_TRIAL_MS` (3/5/10/15 s) and the empty
+  `NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS` set. Adding a provider enables it
+  for that provider's idle views only (never running/blocked/cancelling/
+  recovering). Gate: step 07 interaction/completion event coverage and step 11
+  missed-event recovery tests for that provider, plus recorded per-refresh
+  command/provider request counts.
+- **Data-saving preference (task 9)** deferred: there is no existing
+  client-local preference layer to extend trivially, and the proposal requires
+  a user-facing control. It should set per-client demand through this
+  coordinator.
+- **Step 09 consumers** — migrated by step 09 (see its
+  [completion notes](09-secondary-client-processes.md#completion-notes)):
+  system and process meters (one shared key per backend sample), coordinator
+  view and repository status probe, reviewer transcript backstop, validation
+  output, initialization logs, Cursor login and the design canvas cursor check
+  all schedule through this coordinator. Step 09 added one additive member,
+  `ReadCoordinator.clock`, so consumers can age a retained value on the same
+  timeline as `ReadState.observedAt`. The browser-annotation fallback poll and
+  the connection-switcher probe keep their own guarded timers (they are
+  operation/probe state machines rather than presentation reads).
+- **Real-stack qualification** not run: isolated-stack browser QA (inactive
+  environment switch, two clients with different settings, parked approvals,
+  completion while hidden, queued prompts, reload, missed final invalidation),
+  old-backend coverage and measured request counts/latency remain for step 12.
+  Headless Chromium keeps pages `visible`, so the component browser spec
+  emulates visibility.
+
+### Checks
+
+- Focused: `read-coordinator.test.ts` (fake clock/document/transport, deferred
+  reads: two subscribers, option mismatch, delayed visibility change, rapid
+  hide/show, focus + reconnect, invalidation and explicit refresh during a read,
+  network failure/backoff, auth, permanent unsupported API, server switch,
+  target change, unmount/remount, cancellation cleanup, retention bound, quiet
+  policy), `native-session-read-policy.test.ts`,
+  `useNativeAgentSession.visibility.test.tsx`, extended `useFilesPanel.test.tsx`
+  and `resource-sync.test.ts`; interval-spy tests in `AgentNativeTab*.test.tsx`
+  and `tests/unit/hooks/useFilesPanel.test.tsx` now drive the coordinator clock.
+- `mise run test:logged -- --name check -- mise run check`: pass.
+- Full web package (`bun test --cwd apps/web ./src --parallel=3`): 7,256 pass;
+  one failure, `MobileAppShellLayout > closes the initial project drawer…`
+  (55 s timeout under host load average ~35–50), known open flake 0068, passes
+  in isolation.
+- `mise run test:changed`: web-related groups green; failures were
+  `GlobalSettings > copies the current web client URL` (1.2 s copy-feedback
+  window exceeded under load; passes in isolation) and desktop
+  `isolated-browser.test.ts > a profile exit during Playwright…` (5 s timeout;
+  passes in isolation). Neither imports changed code.
+- `mise run test:browser`: new `ReadCoordinator.spec.ts` passes on both
+  projects; `DesignCanvas.spec.ts` and `DiffViewerMobile.spec.ts` failed and
+  fail identically with the base-commit web sources, so they are pre-existing
+  or environmental (Monaco/visibility timeouts under load).
+
+### Rollback
+
+Cadence/backoff rolls back independently of ownership: quiet backoff is already
+off, and each migration is one hook-local `useCoordinatedRead` call replacing
+one interval effect, so reverting a migration restores its old timer without
+running both.

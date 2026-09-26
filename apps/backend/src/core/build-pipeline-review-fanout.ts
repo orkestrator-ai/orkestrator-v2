@@ -84,6 +84,7 @@ import {
   reviewFanoutErrorMessage,
   reviewFanoutNowIso,
   type ReviewFanoutHost,
+  type ReviewerPollGate,
 } from "./review-fanout.js";
 import {
   DEFAULT_STALL_ABANDON_MS,
@@ -146,6 +147,8 @@ export interface BuildPipelineReviewFanoutDeps {
   concurrency?: Partial<ReviewFanoutConcurrency>;
   /** Content-free measurement sink. */
   efficiency?: MultiReviewEfficiencyObserver;
+  /** Elapsed-time gate for reviewer poll counts during this pipeline's pass. */
+  pollGate?(pipeline: BuildPipeline): ReviewerPollGate;
 }
 
 /** What the supervisor should do after one fan-out pass. */
@@ -292,6 +295,7 @@ export class BuildPipelineReviewFanout {
       workflowId: pipeline.id,
       targetBranch,
       label: FANOUT_LABEL,
+      ...(this.deps.pollGate ? { pollGate: this.deps.pollGate(pipeline) } : {}),
       sessionKeyFor: (reviewer) => `${pipeline.id}:review:${pipeline.iteration}:${reviewer.id}`,
       sessionLabelFor: (_reviewer, index) => pipelineIndependentReviewLabel(index),
       provider: (selection) => this.deps.provider(pipeline, selection.agent as BuildPipelineAgent),

@@ -1,6 +1,6 @@
 # 11 — Prove the combined behavior and prepare release handoff
 
-Status: Planned.  
+Status: In progress (2026-09-26) — automated gates and the recorded live checks are done; the outstanding items in the evidence record remain. Not merged.  
 Depends on: [02](02-mandatory-persistence-and-dispatch-barriers.md) through
 [10](10-shared-transcript-cursor-validation.md), including step 09's recorded
 product resolution.  
@@ -51,18 +51,18 @@ dependency must remain visible in the evidence.
 
 ## B. Test interactions between the fixes
 
-- [ ] Hold a prepared-record write, cancel the prompt, then close its tab. Release
+- [x] Hold a prepared-record write, cancel the prompt, then close its tab. Release
   the writer/attach and verify zero new sends, safe cleanup, and a final snapshot
   that cannot revive the closed session.
-- [ ] Fill aggregate transcript capacity, create a new session, then dispatch a
+- [x] Fill aggregate transcript capacity, create a new session, then dispatch a
   prompt. Verify essential identity and prepared intent both precede acceptance.
-- [ ] Fail mandatory publication after a prior successful create. Confirm the
+- [x] Fail mandatory publication after a prior successful create. Confirm the
   backend parks/rejects only what the bridge can prove and the session remains
   recoverable after the disk path is repaired.
-- [ ] Reach steer capacity, lose a response, restart/recover the run, and exercise
+- [x] Reach steer capacity, lose a response, restart/recover the run, and exercise
   the same parked request. There must be no duplicate provider delivery and no
   fabricated `absent` status.
-- [ ] Shed transcript display data, reload the bridge, then make incremental
+- [x] Shed transcript display data, reload the bridge, then make incremental
   reads with both stale-valid and malformed cursors. Verify exact base indexes,
   truncation metadata, and bounded snapshot recovery.
 - [ ] Restore an attachment-only Cursor/Grok draft after a bridge/backend restart.
@@ -70,7 +70,7 @@ dependency must remain visible in the evidence.
 - [ ] Close while a permission/question is pending. Any still-live provider
   request is denied according to its contract; dead-generation cards are
   withdrawn, and a reload cannot resurrect an actionable stale card.
-- [ ] Repeat lifecycle requests after a lost response. Idempotency must survive
+- [x] Repeat lifecycle requests after a lost response. Idempotency must survive
   the backend's own durable intents, not just duplicate requests in one process.
 
 ## C. Run the standard automated gates
@@ -154,22 +154,22 @@ use or retag the production image for these tests.
 
 ## E. Observability, rollout, and rollback
 
-- [ ] Inspect logs/notices for bounded error codes, counts, state generations,
+- [x] Inspect logs/notices for bounded error codes, counts, state generations,
   and actionable recovery guidance. Verify no serialized state, prompt text,
   credentials, attachment bytes, or raw vendor error dumps are introduced.
-- [ ] Confirm a publication failure degrades the affected feature while the
+- [x] Confirm a publication failure degrades the affected feature while the
   backend/bridge process stays alive and errors remain observed.
-- [ ] Record format changes and compatible bridge/backend versions. Exercise
+- [x] Record format changes and compatible bridge/backend versions. Exercise
   old persisted snapshots, old route capability responses, and pending teardown
   intents; do not rely on synchronized upgrades without testing the assumption.
-- [ ] Use additive fields or unchanged formats where possible. Any new closed
+- [x] Use additive fields or unchanged formats where possible. Any new closed
   state or steering uncertainty fence must have safe old-record defaults and
   an explicit downgrade policy.
 - [ ] Keep rollback non-destructive: never delete provider conversations or
   journals to make an older binary load. If a downgrade cannot preserve a safety
   fence, retain the state and refuse affected operations until compatible code
   runs. Do not silently remove the fence.
-- [ ] No new global feature flag is required for the correctness fixes. If a
+- [x] No new global feature flag is required for the correctness fixes. If a
   retention rollout needs staged enablement, tie it to explicit negotiated
   support and record the cleanup behavior for each version combination.
 
@@ -189,13 +189,13 @@ PR's checked-in test report. Keep the original review unchanged as a snapshot.
 | Limitations | Any unsupported/untested provider or required QA still outstanding |
 | Cleanup | Profile stopped/reset, no surviving owned fixture processes |
 
-- [ ] Update [the plan index](00-index.md) and each step's status together.
-- [ ] Update [the living architecture](../../../architecture/agent-engines.md)
+- [x] Update [the plan index](00-index.md) and each step's status together.
+- [x] Update [the living architecture](../../../architecture/agent-engines.md)
   for settled lifecycle/retention contracts and meaningful route changes.
-- [ ] Keep [the documentation catalog](../../../README.md) current.
-- [ ] Link the source findings to resolution evidence through this index, without
+- [x] Keep [the documentation catalog](../../../README.md) current.
+- [x] Link the source findings to resolution evidence through this index, without
   erasing their original revision/evidence.
-- [ ] Stop and reset each isolated profile with `dev:stop` and `dev:reset`.
+- [x] Stop and reset each isolated profile with `dev:stop` and `dev:reset`.
   If preserving a fixture intentionally, state exactly why and how it is owned.
 - [ ] Before any push, verify branch and upstream do not target `main`. Prepare
   reviewable PRs when authorized; leave every merge to a human maintainer.
@@ -204,15 +204,119 @@ PR's checked-in test report. Keep the original review unchanged as a snapshot.
 
 - [ ] All nine findings have an implemented/tested resolution or an explicit
   accepted product outcome with truthful UI and tests.
-- [ ] Every new mandatory barrier and lifecycle race has deterministic evidence.
-- [ ] Shared conformance cases catch the original drift without hiding legitimate
+- [x] Every new mandatory barrier and lifecycle race has deterministic evidence.
+- [x] Shared conformance cases catch the original drift without hiding legitimate
   provider differences.
-- [ ] Format, lint, affected typechecks, and the full repository test suite pass.
+- [x] Format, lint, affected typechecks, and the full repository test suite pass.
 - [ ] Required inactive/reload browser paths pass and optional-layer limits are recorded.
 - [ ] No pending product decision, unsafe compatibility fallback, or missing
   required validation is labeled complete.
-- [ ] Only intended changes and bounded, non-sensitive artifacts remain.
+- [x] Only intended changes and bounded, non-sensitive artifacts remain.
 
 The implementation is ready for maintainer review when these conditions hold.
 A passing old baseline, passing mocks alone, or documentation of a still-broken
 behavior is not sufficient to mark remediation complete.
+
+## Evidence record (2026-09-26)
+
+Tested state: uncommitted working tree on branch
+`implement-improvements-ecf7c41c13cd-r1` over base `06af4d86`. Not yet in a
+PR; merge is left to a human maintainer. Work happened in two passes: the
+first implementation, then a gap-closing pass after an item-by-item audit of
+every step against the code. This record describes the result of both.
+
+### Finding → change → regression evidence
+
+| Finding | Change (owner) | Regression coverage |
+| --- | --- | --- |
+| INC-01 | Mandatory serialized `persistBarrier` (rejects on write/rename/budget/shutdown; one running + one waiting write). Prompt and steer publish the prepared record and the final agent identity before the SDK call and re-check close after it. A cancel parked during the barrier settles locally without calling the SDK. A `send` that rejects keeps ambiguous evidence and answers 502 `dispatch-outcome-unknown`, which the backend parks as `AmbiguousPromptDispatchError`. The prompt journal never evicts unresolved entries (Cursor `persistence.ts`, `http.ts`, `prompt.ts`; backend `http-bridge-provider.ts`) | `cursor-bridge/src/http-dispatch-durability.test.ts`, `http-prompt-outcome.test.ts`, `process-restart.test.ts` (real process, SIGKILL, fresh start); backend `http-bridge-provider-prompt-outcome.test.ts` |
+| INC-02 | Permanent close: synchronous `closed` marker, one shared close operation, late attach disposed, late run cancelled and followed until the SDK reports terminal, rewind owned by close and blocking prompts, removal published before success, `closing` visible in reads, tombstones finished at bridge start and before any resume of the same agent (`session-close.ts`, `agent-session.ts`, `prompt.ts`, `public.ts`, `server.ts`) | `http-close-races.test.ts`, `http-close-tombstones.test.ts`, `http-prompt-outcome.test.ts` |
+| INC-03 | Budgeted snapshot: oldest-touched transcripts shed; identities, journals and structured results kept; structured results bounded per session (4 MiB); typed `persistence-budget-exceeded` naming the largest sessions; a failing attempt holds at most budget + one record (`persistence-budget.ts`, `structured-results.ts`) | `persistence-budget.test.ts`, `persistence-bounds.test.ts` |
+| INC-04 | Create, resume, identity-changing attach and composer config publish before acknowledging; each re-checks close after publishing; an unchanged warm attach writes nothing | `http-session-durability.test.ts`, `process-restart.test.ts` |
+| INC-05 | Pi claim reserved at route entry (admission window), parked cancel answered 202 pending, SDK `abort()` on cancel during preflight, bounded startup deadline (`PI_BRIDGE_STARTUP_TIMEOUT_MS`), status/activity/messages report running while claimed, closing sessions refuse prompts and same-key creates, close stays registered until published | `pi-bridge/src/http-cancel-startup.test.ts`, `prompt-cancel-preflight.test.ts`, `session-close.test.ts`; backend `native-agent-service-abort-ladder.test.ts` |
+| INC-06 | Structural validation + `nativeAgentCapabilities(platform).attachments`; undecided drafts kept and reconciled once after hydration (`native-draft-attachments.ts`, `useNativeComposeDraftPersistence.ts`, unassigned composer) | `apps/web/src/lib/native-draft-attachments.test.tsx` (renders the real unassigned composer); `e2e/agent-testing/native-draft-attachments.spec.ts` |
+| INC-07 | Bounded steer journal (256 records / 512 KiB, persisted-form byte accounting), protected active-run records, time-bounded run fence, 429 refusals (`steer-capacity-exceeded`, `steer-not-recorded`), a missing record on a fenced run answered `unknown`, saturation in `runtime-health` and a transition notice, projected by the backend and shown in the runtime panel | `cursor-bridge/src/steer-journal.test.ts`, `conformance-interactions.test.ts`; protocol `native-agent-steer-rejection.test.ts`; backend `http-bridge-provider-steer-rejection.test.ts`, `native-agent-service-steer-rejection.test.ts`, `http-bridge-runtime-health.test.ts`; web `AgentNativeTab.steer-rejection.test.tsx`, `AgentInfoButton.steer-rejection.test.tsx` |
+| INC-08 | Non-destructive `POST /session/:id/close` on every bridge. Close stays registered until complete, denies all parked interaction kinds, and answers 503 pending when a stop or publication is unproven. OpenCode closes through the provider (ownership settled, permissions restored, pending requests rejected, no `session.delete`). Teardown is serialized per provider session, 2xx must affirm `closed: true`, pending intents retry with backoff, and an old Claude bridge never falls back to DELETE and shows a restart notice (see the step 09 record) | Claude, Codex, Pi, ACP close tests; backend `commands-registry-teardown.test.ts`, `http-bridge-provider-close.test.ts`, `opencode-provider-close.test.ts`, `native-agent-service-close.test.ts`; web `paneLayoutStore.teardown-notice.test.ts` |
+| INC-09 | `parseTranscriptFromIndex` shared by Pi, Cursor and ACP | protocol table tests; the shared conformance suite below |
+| Cross-provider drift | Shared bridge HTTP-contract conformance suite: scenario definitions in `tests/conformance/bridge-contract/`, a capability table per bridge where every skip carries a reason, and one real-router runner per bridge (`bridges/*/src/conformance-bridge-contract.test.ts`), guarded by `tests/unit/bridge-contract-conformance.test.ts` | see the table below |
+
+### Shared conformance suite
+
+| Scenario | Cursor | Pi | Claude | Codex | ACP |
+| --- | --- | --- | --- | --- | --- |
+| Unknown session answered in band (`/activity`, `/close`) | run | run | run | run | run |
+| Close retains, then answers missing | run | run | run | run | run |
+| Pending close fences new prompts | run | run | run | run | run |
+| Idle cancel/abort in band | run | run | skip: no `/cancel`; idle `/abort` answers `not_running` | skip: no `/cancel`; `/abort` answers 202 | skip: cancel/abort always 202 |
+| Abort on idle acknowledged | run | run | run | run | run |
+| Transcript cursor grammar parity | run | run | skip: no `fromIndex` | skip: no `fromIndex` | run |
+| Create acknowledgement recoverable without a drain | run | run | skip: id derived from the client key, nothing saved at create | skip: id derived from cwd + key | run (hard kill + restart) |
+| Dispatch probe answers `unknown` | run | run | run | run | run |
+| Steer dispatch probe answers `unknown` | run | run | run | run | skip: no steer route |
+| Bounded recovery summary | run | skip: no limits reported | skip | skip | skip |
+
+The differing cancel/abort answers are recorded rather than changed; aligning
+them is a product decision.
+
+### Automated gates
+
+| Command | Result |
+| --- | --- |
+| `mise run test:logged -- --name final-check -- mise run check` | PASS (format, lint with warnings only, all typechecks) |
+| `mise run test` (final pass) | PASS: workspace 319.2 s, root 114.2 s, bridges 134.4 s, codex protocol lockfile. Two earlier full runs each hit one unrelated load flake (0165, 0166); both pass alone three times |
+| Each changed owner's focused suites through `test:logged` | PASS |
+
+No package export entries or dependency versions changed, so no lockfile
+regeneration was needed.
+
+### Real-stack evidence
+
+Profile `inconsistency-remediation-qa` (`mise run dev:test --fixture
+--agent-platforms cursor,grok,pi,claude,codex,opencode`), browser client. The
+bridge bundles (`bridges/*/dist`, git-ignored) were rebuilt first: the dev
+profile runs those bundles, not the sources.
+
+| Scenario | Result |
+| --- | --- |
+| Full browser agent suite (`playwright.browser.config.ts`) | 10 passed, 6 skipped (Docker and live-agent opt-ins; assigned-Grok draft cases, see below) |
+| Durable empty session: Cursor tab, plan mode chosen before any prompt, environment bridges stopped and started, page reloaded | Same provider session id, mode still plan, zero messages |
+| Cursor/Grok image draft: assigned Cursor tab; pre-session picker with Cursor and with Grok selected; attachment-only; annotation kept; saved revision strictly increases after hydration; two hard reloads; environment switch; 390 px viewport with keyboard removal | PASS. Assigned Grok cases are skipped because the Grok CLI never connected in this profile; the spec verifies the stored draft and never reports PASS for an unobserved UI |
+| Retention after close, Claude and Codex (final code): live turn, close through the UI, intent cleared, conversation still resumable | PASS for both (previously Claude's close deleted the conversation) |
+| Close during startup, Claude and Codex | Teardown intent cleared |
+| Older Claude bridge without the close route (first pass, stale bundle) | Intent kept pending with the restart message; no DELETE fallback |
+
+### Compatibility and downgrade
+
+- The Cursor state file stays `version: 1`, and the new fields are additive:
+  `closing` tombstones, `steerFence` with `overflowBefore` and a legacy
+  boolean. An older Cursor bridge ignores tombstones (the closed session is
+  simply absent) and ignores the steer fence. It cannot deliver an evicted
+  steer twice, because it never re-adopts a restored session's run and a
+  parked steer blocks the eviction that would forget it. The residual case, a
+  legacy oversized journal dropped on restore, is described in step 08
+  "Compatibility and downgrade".
+- New native teardown intents carry a `retain-history-close:` session id, so
+  an older backend cannot replay them as a destructive DELETE (step 09).
+  After a downgrade, new closes on an old backend with old bridges return to
+  the old behaviour.
+
+### Outstanding (not claimed as done)
+
+- The maintainer's confirmation of the step 09 retention decision.
+- Live checks that need credentials this profile does not have:
+  - Cursor close during startup
+  - Pi startup interrupt
+  - Pi, Grok, OpenCode and Cursor retention after close
+  - the assigned-Grok draft UI
+- Browser checks not yet run:
+  - large-transcript recovery
+  - the steer saturation notice and refusal
+  - a pending interaction while inactive
+  - the restart-notice toast
+- Docker, Electron and iOS suites: not run. No native IPC, window or container
+  lifecycle code changed.
+- Flakes recorded during this work:
+  - 0165 and 0166: aggregate-load timeouts in code this branch does not change
+  - 0167: dev-server module fetch; the draft spec retries it once and records
+    the retry
+- The profile was stopped and reset; no owned processes remain.

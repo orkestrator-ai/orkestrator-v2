@@ -2578,7 +2578,7 @@ describe("durable tab teardown commands", () => {
   });
 
   test("keeps a native session whose agent-native tab still exists in the layout", async () => {
-    const deleteRequest = mock(async () => new Response(null, { status: 204 }));
+    const deleteRequest = mock(async () => Response.json({ closed: true, retained: true }));
     await withCommands(
       async (invoke, storage, _dataDir, commands) => {
         commands.set("claude_tmux_reconcile_orphans", async () => ({ reaped: 0 }));
@@ -2601,7 +2601,7 @@ describe("durable tab teardown commands", () => {
   });
 
   test("reaps an unreferenced native session only once the orphan grace elapses", async () => {
-    const deleteRequest = mock(async () => new Response(null, { status: 204 }));
+    const deleteRequest = mock(async () => Response.json({ closed: true, retained: true }));
     await withCommands(
       async (invoke, storage, _dataDir, commands) => {
         commands.set("claude_tmux_reconcile_orphans", async () => ({ reaped: 0 }));
@@ -2684,7 +2684,7 @@ describe("durable tab teardown commands", () => {
   });
 
   test("never lets one tab type protect the other type's orphaned resource", async () => {
-    const deleteRequest = mock(async () => new Response(null, { status: 204 }));
+    const deleteRequest = mock(async () => Response.json({ closed: true, retained: true }));
     await withCommands(
       async (invoke, storage, _dataDir, commands) => {
         commands.set("claude_tmux_reconcile_orphans", async () => ({ reaped: 0 }));
@@ -2822,6 +2822,7 @@ describe("durable tab teardown commands", () => {
   });
 
   test("delegates tmux teardown and retires every native-provider mapping", async () => {
+    const closeProviderSessionIfRunning = mock(async () => "closed" as const);
     await withCommands(
       async (invoke, storage, _dataDir, commands) => {
         const stopTmux = mock(async () => undefined);
@@ -2866,12 +2867,23 @@ describe("durable tab teardown commands", () => {
           expect(await storage.getNativeAgentSession(key)).toBeNull();
         }
         expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+        // OpenCode closes through its provider, not a raw request.
+        expect(closeProviderSessionIfRunning).toHaveBeenCalledWith(
+          "e1",
+          "opencode",
+          "opencode-provider-session",
+        );
       },
       {
         tabTeardown: {
           peekBridge: async () => ({ port: 4000, authToken: "test-token" }),
-          fetch: (async () => new Response(null, { status: 204 })) as unknown as typeof fetch,
+          fetch: (async () =>
+            Response.json({ closed: true, retained: true })) as unknown as typeof fetch,
         },
+        nativeAgents: {
+          closeProviderSessionIfRunning,
+          releaseProviderSession: () => undefined,
+        } as never,
       },
     );
   });
@@ -2990,7 +3002,7 @@ describe("durable tab teardown commands", () => {
     const peekBridge = mock(async () => null as { port: number; authToken: string } | null);
     peekBridge.mockResolvedValueOnce(null);
     peekBridge.mockResolvedValue({ port: 4000, authToken: "test-token" });
-    const deleteRequest = mock(async () => new Response(null, { status: 204 }));
+    const deleteRequest = mock(async () => Response.json({ closed: true, retained: true }));
     await withCommands(
       async (invoke, storage) => {
         const logicalSessionKey = "env-e1:tab-codex";
@@ -3036,7 +3048,7 @@ describe("durable tab teardown commands", () => {
   test("times out a hanging provider delete without blocking other intents", async () => {
     const deleteRequest = mock((input: string | URL | Request, _init?: RequestInit) => {
       if (!String(input).includes("provider-hanging")) {
-        return Promise.resolve(new Response(null, { status: 204 }));
+        return Promise.resolve(Response.json({ closed: true, retained: true }));
       }
       // Deliberately ignore AbortSignal. The command's own deadline must bound
       // reconciliation even if the transport never settles cooperatively.
@@ -3086,6 +3098,7 @@ describe("durable tab teardown commands", () => {
           peekBridge: async () => ({ port: 4000, authToken: "test-token" }),
           fetch: deleteRequest as unknown as typeof fetch,
           deleteTimeoutMs: 20,
+          closeTimeoutMs: 20,
         },
       },
     );
@@ -5743,6 +5756,53 @@ describe("pr monitor commands", () => {
         await expect(
           invoke("pr_monitor_refresh", { environmentId: "e1" }),
         ).resolves.toBeUndefined();
+      } finally {
+        shutdownPrMonitorTracking();
+      }
+    });
+  });
+
+  test("snapshot reads are stamped and answer compact conditional reads", async () => {
+    await withCommands(async (invoke) => {
+      try {
+        await invoke("pr_monitor_watch", { environmentId: "e1", mode: "create-pending" });
+        const stamped = (await invoke("get_pr_monitor_state", {})) as {
+          entries: Array<Record<string, unknown>>;
+          generation: string;
+          revision: number;
+        };
+        expect(isPrMonitorSnapshot(stamped)).toBe(true);
+        expect(typeof stamped.generation).toBe("string");
+        expect(stamped.revision).toBeGreaterThan(0);
+
+        await expect(
+          invoke("get_pr_monitor_state", {
+            knownGeneration: stamped.generation,
+            knownRevision: stamped.revision,
+          }),
+        ).resolves.toEqual({
+          status: "unchanged",
+          generation: stamped.generation,
+          revision: stamped.revision,
+        });
+
+        await invoke("pr_monitor_watch", { environmentId: "e1", mode: "merge-pending" });
+        const changed = (await invoke("get_pr_monitor_state", {
+          knownGeneration: stamped.generation,
+          knownRevision: stamped.revision,
+        })) as { status: string; revision: number; snapshot: { entries: unknown[] } };
+        expect(changed.status).toBe("snapshot");
+        expect(changed.revision).toBeGreaterThan(stamped.revision);
+        expect(changed.snapshot.entries).toEqual([
+          expect.objectContaining({ environmentId: "e1", mode: "merge-pending" }),
+        ]);
+
+        await expect(
+          invoke("get_pr_monitor_state", { knownGeneration: "stale", knownRevision: 1 }),
+        ).resolves.toMatchObject({ status: "reset", reason: "generation" });
+        await expect(
+          invoke("get_pr_monitor_state", { knownGeneration: stamped.generation }),
+        ).resolves.toMatchObject({ status: "reset", reason: "invalid-request" });
       } finally {
         shutdownPrMonitorTracking();
       }

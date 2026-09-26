@@ -1,6 +1,6 @@
 # 04 — Persist session identity before acknowledging lifecycle changes
 
-Status: Planned.  
+Status: Verified (2026-09-26), including the live bridge-restart check; not yet merged. See [step 11 evidence](11-conformance-verification-and-release-handoff.md#evidence-record-2026-09-26).  
 Depends on: [02](02-mandatory-persistence-and-dispatch-barriers.md),
 [03](03-aggregate-persistence-budgeting-and-recovery.md).  
 Finding: INC-04.
@@ -39,38 +39,40 @@ transcript update before serving a status read.
 
 ## Implementation tasks
 
-- [ ] Add mandatory publication before successful create and resume responses.
+- [x] Add mandatory publication before successful create and resume responses.
   Resolve the publication promise before writing response headers/body.
-- [ ] Keep creation lazy. Do not fix persistence by creating an SDK agent or
+- [x] Keep creation lazy. Do not fix persistence by creating an SDK agent or
   sending a dummy prompt merely to cause another path to write state.
-- [ ] Keep the existing same-client-key creation single flight. Concurrent
+- [x] Keep the existing same-client-key creation single flight. Concurrent
   requests must not receive different IDs or bypass publication because one
   request inserted into the map before another started waiting.
-- [ ] Track whether lifecycle state still needs publication, or simply make
+- [x] Track whether lifecycle state still needs publication, or simply make
   every create acknowledgement satisfy a barrier. If optimizing, prove that
   an idempotent fast path cannot acknowledge dirty state after a failed write.
-- [ ] On publication failure, do not return a successful reference. Choose and
+- [x] On publication failure, do not return a successful reference. Choose and
   document a retry-safe in-memory policy: preferably retain the unpublished
   session under its client key and retry publication, rather than create a
   second provider conversation or discard an identity another request holds.
-- [ ] If an operation changes an existing session's policy/read-only mode,
+- [x] If an operation changes an existing session's policy/read-only mode,
   preserve the busy-session guards and publish the accepted boundary. Failure
   must not make an unapplied change look acknowledged.
-- [ ] Attach must publish provider identity changes, including replacement after
+- [x] Attach must publish provider identity changes, including replacement after
   failed resume. A no-change warm attach may avoid a write only when that
   identity is already acknowledged as durable.
-- [ ] Handle publication failures after a live run has been recovered differently
+- [x] Handle publication failures after a live run has been recovered differently
   from failures before any work exists. Keep recovered execution observed and
   owned; do not delete it to make the HTTP request look clean.
-- [ ] Keep per-tab MCP credentials out of persisted records. Identity persistence
+- [x] Keep per-tab MCP credentials out of persisted records. Identity persistence
   must not serialize the bearer or the attached SDK object.
-- [ ] Audit create/resume retry handling in the backend. A failed acknowledgement
+- [x] Audit create/resume retry handling in the backend. A failed acknowledgement
   must not invalidate some other tab's mapping or automatically launch a fresh
   turn. Preserve authoritative `missing` versus unavailable distinction.
 
 ## Required tests
 
 Proposed file: `bridges/cursor-bridge/src/http-session-durability.test.ts`.
+
+Implemented as (2026-09-26): `bridges/cursor-bridge/src/http-session-durability.test.ts` and `process-restart.test.ts`.
 
 1. Create with a client key; after HTTP 201, read the state file in a fresh
    process without draining the old process. Recover the same ID and selections.
@@ -107,10 +109,10 @@ rehydration and credential-free error states where safe.
 
 ## Acceptance and compatibility
 
-- [ ] Success responses establish the snapshot guarantees in the table.
-- [ ] No graceful shutdown is needed to pass the creation recovery test.
-- [ ] Failed publication has a deterministic same-key recovery path.
-- [ ] Warm attach remains efficient without skipping dirty identity changes.
-- [ ] Backend mapping and permission boundaries remain consistent after restart.
-- [ ] Old valid persisted sessions load without a destructive migration.
-- [ ] The change does not claim to reconstruct sessions lost before the fix.
+- [x] Success responses establish the snapshot guarantees in the table.
+- [x] No graceful shutdown is needed to pass the creation recovery test.
+- [x] Failed publication has a deterministic same-key recovery path.
+- [x] Warm attach remains efficient without skipping dirty identity changes.
+- [x] Backend mapping and permission boundaries remain consistent after restart.
+- [x] Old valid persisted sessions load without a destructive migration.
+- [x] The change does not claim to reconstruct sessions lost before the fix.

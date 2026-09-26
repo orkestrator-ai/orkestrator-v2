@@ -594,6 +594,7 @@ describe("native agent progressive remainder", () => {
         complete: !streaming,
         historyEpoch: "epoch-1",
         historyStartIndex: streaming ? 1 : 0,
+        byteOmittedMessages: streaming ? 1 : undefined,
         sourceToken: streaming ? "source-2" : "source-1",
         freshness: "current" as const,
       }),
@@ -623,8 +624,134 @@ describe("native agent progressive remainder", () => {
           truncated: true,
           truncationReason: "bytes",
           canLoadEarlier: false,
+          omittedMessages: 1,
         });
         expect(next.value.historyComplete).toBe(false);
+      },
+    );
+  });
+
+  test.each([true, false])(
+    "adds provider and backend byte omissions (positioned: %s)",
+    async (positioned) => {
+      const stub = createProviderStub("codex", {
+        transcriptSnapshot: async () => ({
+          messages: [
+            progressiveMessage("large", "x".repeat(600 * 1024)),
+            progressiveMessage("tail"),
+          ],
+          complete: false,
+          byteOmittedMessages: 2,
+          ...(positioned ? { historyStartIndex: 2 } : {}),
+          historyEpoch: "epoch-1",
+          sourceToken: "source-1",
+          freshness: "current" as const,
+        }),
+      });
+      await withService(
+        { prefix: "orkestrator-progressive-double-byte-", provider: async () => stub.provider },
+        async ({ service }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent: "codex" as const,
+            logicalSessionKey: `env-env-1:double-byte-${positioned}`,
+          };
+          await service.ensureSession(identity);
+          const update = await service.getTranscriptUpdate({
+            ...identity,
+            viewVersion: 1,
+            liveWindow: { messages: 100, targetBytes: 512 },
+            forceSnapshot: true,
+          });
+          if (update.status !== "snapshot") throw new Error("expected snapshot");
+          expect(update.value.messages.map((message) => (message as { id: string }).id)).toEqual([
+            "tail",
+          ]);
+          expect(update.value.messageWindow).toMatchObject({
+            truncated: true,
+            truncationReason: "bytes",
+            omittedMessages: 3,
+          });
+          expect(update.value.historyComplete).toBe(false);
+        },
+      );
+    },
+  );
+
+  test.each([
+    { trimmedBy: "provider", providerTargetBytes: liveWindow.targetBytes },
+    // A provider whose window is wider than ours hands over the whole
+    // transcript; the backend's own byte bound then drops the same prefix.
+    { trimmedBy: "backend", providerTargetBytes: 16 * 1024 * 1024 },
+  ])("reports history hidden behind one oversized turn ($trimmedBy trim)", async (params) => {
+    // One long subagent turn outgrows the live window on its own; everything
+    // after it (an interruption and a short follow-up) is a tail far too small
+    // to fill the count window.
+    const transcript = [
+      { ...progressiveMessage("prompt"), role: "user" },
+      progressiveMessage("early"),
+      progressiveMessage("huge", "x".repeat(600 * 1024)),
+      { ...progressiveMessage("interrupted", "Interrupted by user"), role: "system" },
+      { ...progressiveMessage("latest", "What's the latest?"), role: "user" },
+      progressiveMessage("answer"),
+    ];
+    const stub = createProviderStub("codex", {
+      // Keep the provider's own view authoritative: no background recovery.
+      messages: async () => {
+        throw new Error("full transcript unavailable");
+      },
+      transcriptSnapshot: async () => {
+        const update = bridgeTranscriptUpdate(transcript, {
+          sessionIdentity: "session-1",
+          generation: 1,
+          contentEpoch: "hydrated",
+          limit: liveWindow.messages,
+          targetBytes: params.providerTargetBytes,
+          complete: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected bridge snapshot");
+        const window = update.value.messageWindow;
+        return {
+          messages: update.value.messages,
+          ...(window.truncationReason === "bytes" && window.omittedMessages
+            ? { byteOmittedMessages: window.omittedMessages }
+            : {}),
+          historyStartIndex: update.value.startIndex,
+          complete: update.value.complete,
+          sourceToken: update.token,
+          historyEpoch: "1:hydrated",
+          freshness: "current" as const,
+        };
+      },
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-oversized-turn-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:oversized-turn",
+        };
+        await service.ensureSession(identity);
+        const update = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected snapshot");
+        expect(update.value.messages.map((message) => (message as { id: string }).id)).toEqual([
+          "interrupted",
+          "latest",
+          "answer",
+        ]);
+        // The renderer bootstraps history paging from exactly this shape.
+        expect(update.value.messageWindow).toMatchObject({
+          truncated: true,
+          truncationReason: "bytes",
+          omittedMessages: 3,
+        });
+        expect(update.value.historyComplete).toBe(false);
       },
     );
   });

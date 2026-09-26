@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
@@ -38,6 +38,8 @@ import * as realClaudeClient from "@/lib/claude-client";
 import * as realOpenCodeClient from "@/lib/opencode-client";
 import * as realCodexClient from "@/lib/codex-client";
 import { createSessionKey } from "@/lib/utils";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 
 const realClaudeClientSnapshot = { ...realClaudeClient };
 const realOpenCodeClientSnapshot = { ...realOpenCodeClient };
@@ -175,7 +177,9 @@ mock.module("@/lib/codex-client", () => ({
   startCodexNativeReview: mockStartCodexNativeReview,
 }));
 
+const { SYSTEM_USAGE_STALE_AFTER_MS } = await import("@/hooks/useSystemUsage");
 const {
+  AGENT_INFO_SYSTEM_USAGE_INTERVAL_MS,
   AgentInfoButton,
   describeRewindTarget,
   formatResetDateTime,
@@ -541,6 +545,9 @@ beforeEach(() => {
  */
 afterEach(() => {
   cleanup();
+  // The host-meter read is shared through the read coordinator; a retained
+  // sample must not leak into the next test.
+  resetReadCoordinatorForTests();
   window.confirm = originalConfirm;
   useClaudeStore.setState({
     clients: new Map(),
@@ -1105,100 +1112,69 @@ describe("AgentInfoButton usage panel", () => {
     );
   });
 
-  test("polls while open, marks an old snapshot unavailable, and recovers", async () => {
-    let clock = Date.parse("2026-09-03T12:00:00.000Z");
+  test("polls while open, marks an aged sample unavailable, and recovers", async () => {
+    const reads = installFakeReadCoordinator();
+    const advance = async (ms: number) => {
+      await act(async () => {
+        await reads.clock.advance(ms);
+      });
+    };
     let cpuPercent = 12;
     let rejectUsage = false;
     let usageCalls = 0;
-    const firstUsage = deferred<Record<string, unknown>>();
-    const timers: Array<() => unknown> = [];
-    const originalSetTimeout = window.setTimeout;
-    const nowSpy = spyOn(Date, "now").mockImplementation(() => clock);
     nativeInvokeMock.mockImplementation(async (command: string) => {
       if (command !== "get_system_usage") return undefined;
       usageCalls += 1;
-      if (usageCalls === 1) return firstUsage.promise;
       if (rejectUsage) throw new Error("backend unavailable");
       return {
         cpuPercent,
         ramPercent: 48,
         gpuPercent: null,
         diskPercent: 63,
-        sampledAt: new Date(clock).toISOString(),
+        sampledAt: new Date().toISOString(),
       };
     });
 
-    try {
-      render(<AgentInfoButton activeTab={claudeTab()} />);
-      open();
-      await waitFor(() => expect(usageCalls).toBe(1));
-      window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
-        if (timeout === 3_000 && typeof handler === "function") {
-          timers.push(() => handler());
-          return 10_000 + timers.length;
-        }
-        return originalSetTimeout(handler, timeout, ...args);
-      }) as typeof window.setTimeout;
-      firstUsage.resolve({
-        cpuPercent,
-        ramPercent: 48,
-        gpuPercent: null,
-        diskPercent: 63,
-        sampledAt: new Date(clock).toISOString(),
-      });
-      await act(async () => {
-        await firstUsage.promise;
-        await Promise.resolve();
-      });
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    expect(usageCalls).toBe(0);
+    open();
+    await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "Central processing unit (CPU) usage: 12%" }),
-      ).toBeTruthy();
-      expect(timers).toHaveLength(1);
+      ).toBeTruthy(),
+    );
+    expect(usageCalls).toBe(1);
 
-      cpuPercent = 27;
-      clock += 3_000;
-      await act(async () => {
-        await timers.shift()!();
-      });
-      expect(
-        screen.getByRole("button", { name: "Central processing unit (CPU) usage: 27%" }),
-      ).toBeTruthy();
+    cpuPercent = 27;
+    await advance(AGENT_INFO_SYSTEM_USAGE_INTERVAL_MS);
+    expect(usageCalls).toBe(2);
+    expect(
+      screen.getByRole("button", { name: "Central processing unit (CPU) usage: 27%" }),
+    ).toBeTruthy();
 
-      rejectUsage = true;
-      for (let index = 0; index < 4; index += 1) {
-        clock += 3_000;
-        await act(async () => {
-          await timers.shift()!();
-        });
-      }
-      expect(screen.getByRole("status").textContent).toBe("Data unavailable");
-      expect(
-        screen.getByRole("button", { name: "Central processing unit (CPU) usage: —" }),
-      ).toBeTruthy();
+    // Failures keep the last sample until it ages past the freshness window.
+    rejectUsage = true;
+    await advance(AGENT_INFO_SYSTEM_USAGE_INTERVAL_MS);
+    expect(screen.queryByRole("status") === null).toBe(true);
+    await advance(SYSTEM_USAGE_STALE_AFTER_MS);
+    expect(screen.getByRole("status").textContent).toBe("Data unavailable");
+    expect(
+      screen.getByRole("button", { name: "Central processing unit (CPU) usage: —" }),
+    ).toBeTruthy();
 
-      rejectUsage = false;
-      cpuPercent = 39;
-      clock += 3_000;
-      await act(async () => {
-        await timers.shift()!();
-      });
-      expect(screen.queryByRole("status") === null).toBe(true);
-      expect(
-        screen.getByRole("button", { name: "Central processing unit (CPU) usage: 39%" }),
-      ).toBeTruthy();
-    } finally {
-      window.setTimeout = originalSetTimeout;
-      nowSpy.mockRestore();
-    }
+    rejectUsage = false;
+    cpuPercent = 39;
+    await advance(30_000);
+    expect(screen.queryByRole("status") === null).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Central processing unit (CPU) usage: 39%" }),
+    ).toBeTruthy();
   });
 
-  test("stops polling when closed and ignores an earlier in-flight response after reopening", async () => {
+  test("closing stops its demand, and a read from before closing never overwrites a newer one", async () => {
+    const reads = installFakeReadCoordinator();
     const firstUsage = deferred<Record<string, unknown>>();
     let usageCalls = 0;
-    const timers: Array<() => unknown> = [];
-    const clearedTimers: number[] = [];
-    const originalSetTimeout = window.setTimeout;
-    const originalClearTimeout = window.clearTimeout;
     nativeInvokeMock.mockImplementation(async (command: string) => {
       if (command !== "get_system_usage") return undefined;
       usageCalls += 1;
@@ -1208,62 +1184,44 @@ describe("AgentInfoButton usage panel", () => {
         ramPercent: 48,
         gpuPercent: null,
         diskPercent: 63,
-        sampledAt: new Date(Date.now()).toISOString(),
+        sampledAt: new Date().toISOString(),
       };
     });
 
-    try {
-      render(<AgentInfoButton activeTab={claudeTab()} />);
-      open();
-      await waitFor(() => expect(usageCalls).toBe(1));
-      window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
-        if (timeout === 3_000 && typeof handler === "function") {
-          timers.push(() => handler());
-          return 20_000 + timers.length;
-        }
-        return originalSetTimeout(handler, timeout, ...args);
-      }) as typeof window.setTimeout;
-      window.clearTimeout = ((timerId: number | undefined) => {
-        if (typeof timerId === "number" && timerId >= 20_000) {
-          clearedTimers.push(timerId);
-          return;
-        }
-        originalClearTimeout(timerId);
-      }) as typeof window.clearTimeout;
-      fireEvent.click(screen.getAllByRole("button", { name: "Close agent information" })[0]!);
-      open();
-      await act(async () => {
-        await Promise.resolve();
-      });
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+    await waitFor(() => expect(usageCalls).toBe(1));
+    fireEvent.click(screen.getAllByRole("button", { name: "Close agent information" })[0]!);
+    // No subscriber is left, so the key schedules nothing.
+    await act(async () => {
+      await reads.clock.advance(AGENT_INFO_SYSTEM_USAGE_INTERVAL_MS * 3);
+    });
+    expect(usageCalls).toBe(1);
+
+    firstUsage.resolve({
+      cpuPercent: 11,
+      ramPercent: 22,
+      gpuPercent: null,
+      diskPercent: 33,
+      sampledAt: new Date().toISOString(),
+    });
+    await act(async () => {
+      await firstUsage.promise;
+    });
+    open();
+    // The retained sample is older than the popover's cadence: one fresh read.
+    await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "Central processing unit (CPU) usage: 44%" }),
-      ).toBeTruthy();
+      ).toBeTruthy(),
+    );
+    expect(usageCalls).toBe(2);
 
-      firstUsage.resolve({
-        cpuPercent: 11,
-        ramPercent: 22,
-        gpuPercent: null,
-        diskPercent: 33,
-        sampledAt: new Date(Date.now()).toISOString(),
-      });
-      await act(async () => {
-        await firstUsage.promise;
-        await Promise.resolve();
-      });
-      expect(
-        screen.getByRole("button", { name: "Central processing unit (CPU) usage: 44%" }),
-      ).toBeTruthy();
-      expect(timers).toHaveLength(1);
-
-      fireEvent.click(screen.getAllByRole("button", { name: "Close agent information" })[0]!);
-      expect(clearedTimers).toEqual([20_001]);
-      const callsBeforeClose = usageCalls;
-      await Promise.resolve();
-      expect(usageCalls).toBe(callsBeforeClose);
-    } finally {
-      window.setTimeout = originalSetTimeout;
-      window.clearTimeout = originalClearTimeout;
-    }
+    fireEvent.click(screen.getAllByRole("button", { name: "Close agent information" })[0]!);
+    await act(async () => {
+      await reads.clock.advance(AGENT_INFO_SYSTEM_USAGE_INTERVAL_MS * 3);
+    });
+    expect(usageCalls).toBe(2);
   });
 
   test.skip("legacy Cursor quota panel was removed after generic usage migration", async () => {

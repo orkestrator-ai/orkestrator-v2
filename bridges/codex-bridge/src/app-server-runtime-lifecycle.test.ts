@@ -4,6 +4,7 @@ import {
   DEFAULT_THREAD_IDLE_MS,
   MAX_RECOVERED_CONTEXT_CHARS,
 } from "./app-server-runtime.js";
+import { CODEX_RESTARTED_MID_TURN_MESSAGE } from "./app-server-runtime-lifecycle.js";
 import type { EngineEvent } from "./engine/types.js";
 import {
   getTranscriptCatalogInvalidationCountForTesting,
@@ -599,6 +600,61 @@ describe("session lifecycle", () => {
         attachments: [],
       }),
     ).toMatchObject({ ok: false, status: 409 });
+  });
+
+  test("bridge-process recovery reports a persisted interrupted turn as a restart failure", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-interrupted",
+        threadId: "thread-interrupted",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+        lastAcceptedRequestId: "req-interrupted",
+      }),
+    );
+    const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+    await journal.load();
+    await journal.markPrepared({
+      requestId: "req-interrupted",
+      bridgeSessionId: "session-interrupted",
+      threadId: "thread-interrupted",
+    });
+    await journal.markAccepted("req-interrupted", {
+      threadId: "thread-interrupted",
+      turnId: "turn-interrupted",
+    });
+
+    const h = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-interrupted") }),
+      "thread/read": () => ({
+        thread: threadPayload("thread-interrupted", {
+          turns: [
+            {
+              id: "turn-interrupted",
+              status: "interrupted",
+              items: [{ type: "userMessage", clientId: "req-interrupted" }],
+            },
+          ],
+        }),
+      }),
+    });
+    await h.drain();
+
+    expect(h.runtime.getStatus("session-interrupted")).toMatchObject({
+      status: "error",
+      phase: "failed",
+      error: CODEX_RESTARTED_MID_TURN_MESSAGE,
+    });
+    expect(h.events).toContainEqual({
+      type: "session.error",
+      sessionId: "session-interrupted",
+      data: { error: CODEX_RESTARTED_MID_TURN_MESSAGE },
+    });
+    expect(h.runtime.getJournal().get("req-interrupted")).toMatchObject({
+      state: "terminal",
+      terminalStatus: "failed",
+    });
   });
 
   test("a restored dispatch announces its assistant row before patching it", async () => {
@@ -3130,6 +3186,154 @@ describe("crash recovery", () => {
     expect(h.runtime.getJournal().get("req-1")).toMatchObject({
       state: "terminal",
       terminalStatus: "failed",
+    });
+  });
+
+  /**
+   * app-server persists a turn its dead predecessor never finished as
+   * `interrupted`. Settling that as an ordinary interruption left the session
+   * idle with no error, so the transcript stopped mid-task and read as done.
+   */
+  test("a turn the restart interrupted is surfaced as failed, not a silent finish", async () => {
+    let clock = Date.now();
+    const h = await harness(
+      {
+        "thread/read": () => ({
+          thread: threadPayload("thread-1", {
+            turns: [
+              {
+                id: "turn-1",
+                status: "interrupted",
+                items: [{ type: "userMessage", clientId: "req-1" }],
+              },
+            ],
+          }),
+        }),
+      },
+      { now: () => clock, sweepIntervalMs: 0 },
+    );
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+
+    h.child().exit(null, "SIGKILL");
+    await h.engine.getSupervisor().ensureReady();
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "error",
+      phase: "failed",
+      error: CODEX_RESTARTED_MID_TURN_MESSAGE,
+    });
+    expect(h.events).toContainEqual({
+      type: "session.error",
+      sessionId,
+      data: { error: CODEX_RESTARTED_MID_TURN_MESSAGE },
+    });
+    expect(h.runtime.getJournal().get("req-1")).toMatchObject({
+      state: "terminal",
+      terminalStatus: "failed",
+    });
+
+    clock += DEFAULT_THREAD_IDLE_MS + 1;
+    expect(await h.runtime.sweepIdle()).toMatchObject({ detached: 1 });
+    expect(h.runtime.getStatus(sessionId, false)).toMatchObject({
+      status: "error",
+      error: CODEX_RESTARTED_MID_TURN_MESSAGE,
+    });
+    await h.runtime.getMessages(sessionId);
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "error",
+      error: CODEX_RESTARTED_MID_TURN_MESSAGE,
+    });
+    const persisted = await new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" }).load();
+    expect(persisted.find((entry) => entry.bridgeSessionId === sessionId)?.restartFailure).toEqual({
+      turnId: "turn-1",
+    });
+
+    // The failure is a notice, not a lock: the user can tell it to continue.
+    const next = await h.runtime.prompt(sessionId, {
+      prompt: "continue",
+      requestId: "req-2",
+      attachments: [],
+    });
+    expect(next.ok).toBe(true);
+    expect(h.runtime.getRegistry().getSession(sessionId)?.restartFailure).toBeUndefined();
+    expect(
+      (await new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" }).load()).find(
+        (entry) => entry.bridgeSessionId === sessionId,
+      )?.restartFailure,
+    ).toBeUndefined();
+  });
+
+  test("a schema-constrained turn interrupted by a restart reports a retryable provider failure", async () => {
+    const h = await harness({
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [
+            {
+              id: "turn-1",
+              status: "interrupted",
+              items: [{ type: "userMessage", clientId: "req-schema" }],
+            },
+          ],
+        }),
+      }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "produce a result",
+      requestId: "req-schema",
+      attachments: [],
+      outputSchema: { type: "object" },
+    });
+    h.child().exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await h.drain();
+
+    expect(h.runtime.getStructuredOutput(sessionId).structuredOutput).toMatchObject({
+      ok: false,
+      error: {
+        code: "provider_error",
+        message: CODEX_RESTARTED_MID_TURN_MESSAGE,
+        retryable: true,
+      },
+    });
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "error", phase: "failed" });
+  });
+
+  test("a turn the user was cancelling stays interrupted across a restart", async () => {
+    const h = await harness({
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [
+            {
+              id: "turn-1",
+              status: "interrupted",
+              items: [{ type: "userMessage", clientId: "req-1" }],
+            },
+          ],
+        }),
+      }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+    await h.runtime.abort(sessionId);
+
+    h.child().exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await h.drain();
+
+    // The user asked for the stop, so the restart must not be blamed for it.
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
+    expect(
+      h.events.some(
+        (event) =>
+          event.type === "session.error" && event.data?.error === CODEX_RESTARTED_MID_TURN_MESSAGE,
+      ),
+    ).toBe(false);
+    expect(h.runtime.getJournal().get("req-1")).toMatchObject({
+      state: "terminal",
+      terminalStatus: "interrupted",
     });
   });
 

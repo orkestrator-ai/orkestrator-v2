@@ -1,6 +1,6 @@
 # 05 — Prevent execution from escaping a permanently closed Cursor session
 
-Status: Planned.  
+Status: Implemented (2026-09-26); automated evidence complete; live Cursor close-during-startup not run (Cursor not signed in in the QA profile). Not merged. See [step 11 evidence](11-conformance-verification-and-release-handoff.md#evidence-record-2026-09-26).  
 Depends on: [02](02-mandatory-persistence-and-dispatch-barriers.md),
 [03](03-aggregate-persistence-budgeting-and-recovery.md).  
 Finding: INC-02.  
@@ -45,45 +45,47 @@ projection can represent uncertain shutdown; reporting idle early is forbidden.
 
 ## Implementation tasks
 
-- [ ] Claim permanent close before the first await. Return one shared close
+- [x] Claim permanent close before the first await. Return one shared close
   promise for concurrent close requests, or a documented conflict that retries
   safely. Do not run cleanup twice against the same resources.
-- [ ] Refuse new prompt, attach, config, steer, and idempotent-create mutations
+- [x] Refuse new prompt, attach, config, steer, and idempotent-create mutations
   that target the closing state. Snapshot reads may show closing progress.
-- [ ] Give attachment completion an ownership check before assigning `state.agent`,
+- [x] Give attachment completion an ownership check before assigning `state.agent`,
   provider ID, MCP resources, and warm-workspace release handles. Dispose any
   result whose ownership expired; ensure cleanup failures are observed.
-- [ ] Audit every yield in prompt preparation: attachment reads, MCP rotation,
+- [x] Audit every yield in prompt preparation: attachment reads, MCP rotation,
   read-only transitions, attach, and persistence. Revalidate before SDK send.
-- [ ] If close wins before `send`, release the claim without sending. If `send`
+- [x] If close wins before `send`, release the claim without sending. If `send`
   is already pending, retain ownership of its promise; cancel and dispose the
   returned run/agent immediately when it arrives. A marker alone cannot cancel
   an operation whose handle does not yet exist.
-- [ ] Make callbacks check both turn identity and lifecycle ownership. Existing
+- [x] Make callbacks check both turn identity and lifecycle ownership. Existing
   `turnStillOwned` checks on sequence/status must not let a removed session keep
   publishing transcript or usage updates.
-- [ ] Release subscriptions, hosted MCP clients, workspace warm-up handles, run
+- [x] Release subscriptions, hosted MCP clients, workspace warm-up handles, run
   diagnostics, timers, and the agent exactly once. Keep errors bounded and
   content-free. Do not swallow evidence that execution may still be alive.
-- [ ] Separate cleanup completion from the HTTP timeout. If cancellation/disposal
+- [x] Separate cleanup completion from the HTTP timeout. If cancellation/disposal
   does not settle within the budget, retain an authoritative closing record or
   owned cleanup operation and report incomplete/uncertain close. The backend's
   durable teardown intent must remain retryable; do not return fake success.
-- [ ] Persist removal or a closing tombstone before acknowledging permanent
+- [x] Persist removal or a closing tombstone before acknowledging permanent
   close. If the final write fails, retain a retryable state so another DELETE
   cannot return 404 while disk still contains a reopenable live mapping.
-- [ ] Restore any new closing marker conservatively across restart. Never
+- [x] Restore any new closing marker conservatively across restart. Never
   auto-resume a state explicitly closed before the old process died.
-- [ ] Ensure same-client-key creation cannot silently reinsert the old state
+- [x] Ensure same-client-key creation cannot silently reinsert the old state
   during close. Define whether a later deliberate create gets a new ID only
   after closure has settled.
-- [ ] Keep `detachAgent` for idle/unload use without setting permanent-close
+- [x] Keep `detachAgent` for idle/unload use without setting permanent-close
   state. Returning to an idle tab must still attach to the same conversation.
 
 ## Regression matrix
 
 Proposed files: `agent-session-close.test.ts` and `http-close-races.test.ts` in
 the Cursor bridge. Use the existing fake agent with deferred attach/send/dispose.
+
+Implemented as (2026-09-26): `bridges/cursor-bridge/src/http-close-races.test.ts` and `http-close-tombstones.test.ts`; the proposed `agent-session-close.test.ts` cases live in `http-close-races.test.ts`.
 
 | Interleaving | Required outcome |
 | --- | --- |
@@ -105,14 +107,14 @@ by itself is not adequate proof of closure.
 
 ## Validation and acceptance
 
-- [ ] Focused lifecycle/HTTP tests and existing cancellation tests pass.
-- [ ] Cursor and backend typechecks pass where affected; teardown integration
+- [x] Focused lifecycle/HTTP tests and existing cancellation tests pass.
+- [x] Cursor and backend typechecks pass where affected; teardown integration
   tests prove the backend does not clear its intent on an incomplete close.
 - [ ] In an isolated browser fixture, close during startup and during a run,
   switch environment, return/reload, and confirm work/resources are accounted for.
-- [ ] The cold-close reproduction from INC-02 produces zero unintended sends.
-- [ ] No unmount or disconnected HTTP request invokes permanent close implicitly.
-- [ ] Provider conversation deletion is unchanged by this step; step 09 owns
+- [x] The cold-close reproduction from INC-02 produces zero unintended sends.
+- [x] No unmount or disconnected HTTP request invokes permanent close implicitly.
+- [x] Provider conversation deletion is unchanged by this step; step 09 owns
   the product decision about retaining history.
 
 If a lifecycle/schema change is needed, record its old-state defaults and

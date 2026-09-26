@@ -309,6 +309,37 @@ export interface SessionState {
    * journal, which records an unfinished turn as ambiguous.
    */
   dispatching: boolean;
+  /**
+   * The admitted prompt that owns the turn, from the prompt route's
+   * synchronous claim until that turn reaches a terminal state.
+   *
+   * `dispatching` cannot answer "is there a prompt to cancel?": configuration
+   * and compaction claim it too. This token can, and every phase — attachment
+   * reads, MCP reconciliation, cold attach, the durability barrier, Pi's own
+   * preflight and the accepted run — refers to the same one. Process-local and
+   * never persisted: a restart answers the same question from the prompt
+   * journal, and a stale token must never attach to a new run.
+   */
+  promptClaim?: number;
+  /**
+   * The claim a cancel was requested for, recorded even when no cancel handle
+   * existed yet. Keyed by claim, never a bare flag, and cleared by identity, so
+   * a cancel for one turn can neither be lost during startup nor stop a later
+   * turn.
+   */
+  cancelRequestedClaim?: number;
+  /**
+   * The abort path for a prompt Pi has been handed but has not yet accepted.
+   *
+   * Pi 0.87's `session.prompt()` runs a preflight (input hooks, auth, a
+   * possible auto-compaction, `before_agent_start`) before it creates the run,
+   * and only the run has a cancel handle. `abort()` during preflight still
+   * cancels an auto-compaction in progress, so a cancel recorded then is
+   * applied through this at once instead of waiting for acceptance. Keyed by
+   * claim, process-local, and cleared when the prompt is accepted, refused or
+   * its abandoned startup finally settles.
+   */
+  promptStartup?: PromptStartupHandle;
   /** Monotonic count of turns dispatched in this process. */
   promptSequence: number;
   /**
@@ -431,6 +462,127 @@ export function piRunId(state: Pick<SessionState, "promptSequence">): string {
   return `pi:${bridgeGeneration}:${state.promptSequence}`;
 }
 
+/** See {@link SessionState.promptStartup}. */
+export interface PromptStartupHandle {
+  claim: number;
+  abort: () => Promise<void>;
+  /** The abort currently in flight, so concurrent cancels share one. */
+  aborting?: Promise<void>;
+}
+
+/** Process-wide so a token can never be reused by another session's turn. */
+let promptClaims = 0;
+
+/** Settles when a claim is released, for a close that must wait the turn out. */
+const claimReleases = new WeakMap<
+  SessionState,
+  { claim: number; resolve: () => void; promise: Promise<void> }
+>();
+
+/**
+ * Reserve the admitted-turn token for a prompt, synchronously, at admission.
+ *
+ * Stale cancellation is cleared here, at the claim, rather than after an await:
+ * a cancel can only be recorded against this token once it exists, so nothing
+ * aimed at this turn is erased and nothing left from an earlier one survives.
+ */
+export function claimPromptTurn(state: SessionState): number {
+  promptClaims += 1;
+  const claim = promptClaims;
+  state.promptClaim = claim;
+  state.cancelRequestedClaim = undefined;
+  let resolve!: () => void;
+  const promise = new Promise<void>((onResolve) => {
+    resolve = onResolve;
+  });
+  claimReleases.set(state, { claim, resolve, promise });
+  return claim;
+}
+
+/**
+ * Reserve a claim at the prompt route's entry, before its body is read.
+ *
+ * Only when nothing else owns the session: a running turn, configuration,
+ * compaction or another prompt's claim mean this request is a follow-up or
+ * will be refused, and a cancel arriving meanwhile belongs to that owner. A
+ * closed session admits nothing. Returns the claim, or `undefined` when the
+ * route must claim (or refuse) later at its ordinary busy check.
+ */
+export function reservePromptAdmission(state: SessionState, closed: boolean): number | undefined {
+  if (
+    closed ||
+    state.status === "running" ||
+    state.dispatching ||
+    state.compacting ||
+    state.promptClaim !== undefined
+  ) {
+    return undefined;
+  }
+  return claimPromptTurn(state);
+}
+
+/** Release a claim once its turn is terminal. A newer claim is left alone. */
+export function releasePromptClaim(state: SessionState, claim: number | undefined): void {
+  if (claim === undefined) return;
+  if (state.promptClaim === claim) state.promptClaim = undefined;
+  if (state.cancelRequestedClaim === claim) state.cancelRequestedClaim = undefined;
+  if (state.promptStartup?.claim === claim) state.promptStartup = undefined;
+  const release = claimReleases.get(state);
+  if (release?.claim === claim) {
+    claimReleases.delete(state);
+    release.resolve();
+  }
+}
+
+/** Settles once the current prompt claim (if any) has been released. */
+export function promptClaimReleased(state: SessionState): Promise<void> {
+  if (state.promptClaim === undefined) return Promise.resolve();
+  return claimReleases.get(state)?.promise ?? Promise.resolve();
+}
+
+/**
+ * The status a reader is told.
+ *
+ * A claimed prompt Pi has not settled yet — still preparing, in preflight, or
+ * abandoned at its startup deadline while Pi could still accept it — is
+ * reported as running. `/status`, `/activity`, `/messages` and `GET /session`
+ * all answer from this, so the backend's stop ladder never reads idle (or a
+ * terminal error) while something can still reach Pi.
+ */
+export function publicTurnStatus(state: SessionState): SessionState["status"] {
+  return state.promptClaim !== undefined ? "running" : state.status;
+}
+
+/** Whether cancellation was requested for exactly this claim. */
+export function cancelRequestedFor(state: SessionState, claim: number | undefined): boolean {
+  return claim !== undefined && state.cancelRequestedClaim === claim;
+}
+
+/** Whether the prompt that currently owns the turn has been asked to stop. */
+export function turnCancellationRequested(state: SessionState): boolean {
+  return cancelRequestedFor(state, state.promptClaim);
+}
+
+/** Sessions whose removal is being published; left out of the state file. */
+const pendingRemoval = new WeakSet<SessionState>();
+
+/**
+ * Mark a closing session as removed for persistence only.
+ *
+ * Close keeps the session registered until its removal is on disk, so a retry
+ * can never be told `missing` for a close that later rolls back; the state
+ * file must meanwhile describe the world *after* the removal, or publishing
+ * it would publish nothing.
+ */
+export function setPendingRemoval(state: SessionState, pending: boolean): void {
+  if (pending) pendingRemoval.add(state);
+  else pendingRemoval.delete(state);
+}
+
+export function isPendingRemoval(state: SessionState): boolean {
+  return pendingRemoval.has(state);
+}
+
 export function setSteerJournal(state: SessionState, entry: SteerJournalEntry): void {
   state.steerJournal.delete(entry.requestId);
   state.steerJournal.set(entry.requestId, entry);
@@ -476,7 +628,10 @@ export function nonBlank(value: unknown): value is string {
  * being rewritten underneath it.
  */
 export function sessionIsWorking(state: SessionState): boolean {
-  return state.status === "running" || state.compacting;
+  // An admitted prompt still preparing (cold attach, preflight) is work in
+  // flight: reporting idle there would let a stop request read as settled
+  // while Pi may still accept the turn.
+  return state.status === "running" || state.compacting || state.promptClaim !== undefined;
 }
 
 /**

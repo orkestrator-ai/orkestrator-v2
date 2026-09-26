@@ -187,7 +187,7 @@ describe("OpenCode provider runtime", () => {
       await expect(provider.abort("owned-session")).rejects.toBeInstanceOf(
         ProviderUnavailableError,
       );
-      fake.setDeleteResponse({ error: { message: "failed" } });
+      // Close is an abort plus local release, so an abort failure is a close failure.
       await expect(provider.closeSession!("owned-session")).rejects.toBeInstanceOf(
         ProviderUnavailableError,
       );
@@ -213,8 +213,13 @@ describe("OpenCode provider runtime", () => {
         { sessionID: "owned-session" },
         { sessionID: "owned-session" },
       ]);
-      expect(fake.abortCalls).toEqual([{ sessionID: "owned-session", directory: "/workspace" }]);
-      expect(fake.deleteCalls).toEqual([{ sessionID: "owned-session" }]);
+      // Close aborts the owned turn and never deletes the OpenCode session,
+      // whose DELETE removes the conversation and all of its data.
+      expect(fake.abortCalls).toEqual([
+        { sessionID: "owned-session", directory: "/workspace" },
+        { sessionID: "owned-session", directory: "/workspace" },
+      ]);
+      expect(fake.deleteCalls).toEqual([]);
     } finally {
       await provider.dispose?.();
     }
@@ -233,6 +238,18 @@ describe("OpenCode provider runtime", () => {
                 time: { created: 2 },
               },
               parts: [{ id: "child-text", type: "text", text: "Child finished" }],
+            },
+            {
+              info: {
+                id: "child-failed",
+                role: "assistant",
+                time: { created: 3, completed: 4 },
+                error: {
+                  name: "APIError",
+                  data: { message: "Child provider failed", statusCode: 503 },
+                },
+              },
+              parts: [],
             },
           ],
         };
@@ -283,6 +300,10 @@ describe("OpenCode provider runtime", () => {
                   type: "text",
                   content: "Child finished",
                 }),
+                expect.objectContaining({
+                  type: "text",
+                  content: "Model request failed (HTTP 503): Child provider failed",
+                }),
               ],
               subagentActionCount: 0,
             }),
@@ -328,6 +349,60 @@ describe("OpenCode provider runtime", () => {
       await expect(provider.interactiveSnapshot?.("owned-session")).resolves.toMatchObject(
         expected,
       );
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("keeps a failed turn's error in the transcript after the conversation moves on", async () => {
+    const fake = openCodeFake();
+    fake.setMessagesResponse({
+      data: [
+        {
+          info: {
+            id: "assistant-failed",
+            role: "assistant",
+            error: {
+              name: "APIError",
+              data: { message: "Bad Request", statusCode: 400, isRetryable: false },
+            },
+            time: { created: 1, completed: 2 },
+          },
+          parts: [],
+        },
+        {
+          info: { id: "user-2", role: "user", time: { created: 3 } },
+          parts: [{ id: "part-user-2", type: "text", text: "Why did you stop?" }],
+        },
+        {
+          info: { id: "assistant-2", role: "assistant", time: { created: 4, completed: 5 } },
+          parts: [{ id: "part-assistant-2", type: "text", text: "Continuing." }],
+        },
+      ],
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const snapshot = await provider.interactiveSnapshot?.("owned-session");
+      expect(snapshot?.messages.map((message) => (message as { id?: unknown }).id)).toEqual([
+        "assistant-failed",
+        "error-opencode-assistant-failed",
+        "user-2",
+        "assistant-2",
+      ]);
+      expect(snapshot?.messages[1]).toMatchObject({
+        role: "assistant",
+        content: "Model request failed (HTTP 400): Bad Request",
+        createdAt: new Date(2).toISOString(),
+      });
+      expect(snapshot?.notices).toBeUndefined();
+      const progressive = await provider.transcriptSnapshot!("owned-session", {
+        limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+        targetBytes: 512 * 1024,
+      });
+      expect(
+        "messages" in progressive &&
+          progressive.messages.map((message) => (message as { id?: unknown }).id),
+      ).toEqual(["assistant-failed", "error-opencode-assistant-failed", "user-2", "assistant-2"]);
     } finally {
       await provider.dispose?.();
     }

@@ -57,10 +57,40 @@ import {
 } from "./build-pipeline-service-helpers.js";
 import type { BuildStepSelection, CommandInvoker } from "./build-pipeline-service-helpers.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
+import {
+  DEFAULT_WORKFLOW_DISCOVERY_MS,
+  KeyedWorkflowSupervisor,
+  keyedSchedulingEnabled,
+  type KeyedWorkflowOwner,
+  type KeyedWorkflowServiceOptions,
+  type WorkflowReconcileReport,
+  type WorkflowSupervisorStatus,
+  type WorkflowWakeReason,
+} from "./workflow-supervisor.js";
+import { ElapsedPollGate, type PollTrigger } from "./workflow-poll-gate.js";
+import {
+  buildPipelineObligation,
+  buildPipelineTarget,
+  discoverBuildPipelines,
+  type BuildPipelineObligation,
+} from "./build-pipeline-scheduling.js";
+
+/** The previous supervisor interval; the keyed driver's per-pipeline fallback cadence. */
+export const BUILD_PIPELINE_PROGRESS_MS = 1_500;
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 
-export abstract class BuildPipelineServiceBase {
+export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
   protected timer: ReturnType<typeof setInterval> | null = null;
+  /** The keyed driver (step 08); `null` on the rollback tick or before init. */
+  protected supervisor: KeyedWorkflowSupervisor<BuildPipelineObligation> | null = null;
+  private unsubscribeStorage: (() => void) | null = null;
+  /**
+   * How the pass now running for each pipeline was triggered, so
+   * attempt-counted deadlines can tell a wakeup burst from a cadence poll.
+   */
+  protected readonly passTriggers = new Map<string, PollTrigger>();
+  /** Elapsed-time gate for reviewer idle/final-usage poll counts. */
+  protected readonly reviewerPollGate = new ElapsedPollGate(BUILD_PIPELINE_PROGRESS_MS);
   protected readonly locks = new Map<string, Promise<void>>();
   protected readonly providers = new Map<string, BuildPipelineProvider>();
   /** In-flight creations by provider key, so concurrent callers share one instance. */
@@ -174,8 +204,13 @@ export abstract class BuildPipelineServiceBase {
       reviewFanoutConcurrency?: Partial<ReviewFanoutConcurrency>;
       /** Content-free fan-out measurements (tests and benchmarks). */
       efficiency?: MultiReviewEfficiencyObserver;
-    } = {},
-  ) {}
+    } & KeyedWorkflowServiceOptions = {},
+  ) {
+    this.keyed = options.keyedScheduling ?? keyedSchedulingEnabled("build-pipeline");
+  }
+
+  /** Selected once at construction: the keyed driver or the whole-store tick, never both. */
+  protected readonly keyed: boolean;
 
   protected get reconnectDeadlineMs(): number {
     return this.options.reconnectDeadlineMs ?? DEFAULT_RECONNECT_DEADLINE_MS;
@@ -363,13 +398,83 @@ export abstract class BuildPipelineServiceBase {
     }
     await this.finishDurablyRecordedInteractionJournalEntries();
     if (this.options.autoAdvance !== false) {
-      this.timer ??= setInterval(() => {
+      if (this.keyed) {
+        // Non-blocking: the first discovery runs on the scheduler and joins the
+        // terminal reconciliations above through the same per-pipeline lock.
+        if (!this.supervisor) {
+          this.supervisor = this.createSupervisor();
+          // Deletions by other paths (environment removal) retire their keys
+          // at once; everything else is noted where it is written.
+          this.unsubscribeStorage = this.storage.addResourceChangeListener((change) => {
+            if (change.resource === "build-pipeline" && change.deleted) {
+              this.supervisor?.forget(change.id);
+            }
+          });
+          this.supervisor.start();
+        }
+      } else {
+        this.timer ??= setInterval(() => {
+          void this.requestTick();
+        }, BUILD_PIPELINE_PROGRESS_MS);
+        this.timer.unref?.();
         void this.requestTick();
-      }, 1_500);
-      this.timer.unref?.();
-      void this.requestTick();
+      }
     }
     await Promise.all(terminalReconciliations);
+  }
+
+  wakeEnvironment(environmentId: string, reason: WorkflowWakeReason): void {
+    this.supervisor?.wakeTarget(environmentId, reason);
+  }
+
+  schedulingStatus(): WorkflowSupervisorStatus | null {
+    return this.supervisor?.status() ?? null;
+  }
+
+  async reconcileScheduling(): Promise<WorkflowReconcileReport | null> {
+    return this.supervisor ? this.supervisor.reconcileNow() : null;
+  }
+
+  /**
+   * The keyed driver: one key per pipeline with an obligation, progressed on
+   * the previous 1.5 s cadence by the same locked advance. Storage is listed
+   * only by the safety discovery.
+   */
+  private createSupervisor(): KeyedWorkflowSupervisor<BuildPipelineObligation> {
+    return new KeyedWorkflowSupervisor<BuildPipelineObligation>({
+      domain: "build-pipeline",
+      kind: "build-supervisor-tick",
+      progressIntervalMs: BUILD_PIPELINE_PROGRESS_MS,
+      discoveryIntervalMs: this.options.discoveryIntervalMs ?? DEFAULT_WORKFLOW_DISCOVERY_MS,
+      discover: () => discoverBuildPipelines(this.storage),
+      advance: async (pass) => {
+        this.passTriggers.set(pass.key, pass.trigger);
+        try {
+          await this.runLocked(pass.key);
+        } finally {
+          this.passTriggers.delete(pass.key);
+        }
+      },
+      admission: this.options.workflowAdmission ?? null,
+      withoutAdmission: (obligation) => obligation === "provision",
+      ...(this.options.schedulerClock
+        ? { now: this.options.schedulerClock.now, timers: this.options.schedulerClock.timers }
+        : {}),
+    });
+  }
+
+  /** Keeps the keyed index current after an authoritative read or durable write. */
+  protected noteRecord(pipelineId: string, snapshot: unknown): void {
+    this.supervisor?.note(
+      pipelineId,
+      buildPipelineObligation(snapshot),
+      buildPipelineTarget(snapshot),
+    );
+  }
+
+  /** Trigger of the pass now running for a pipeline; explicit when not keyed. */
+  protected passTrigger(pipelineId: string): PollTrigger {
+    return this.passTriggers.get(pipelineId) ?? "explicit";
   }
 
   /**
@@ -415,6 +520,10 @@ export abstract class BuildPipelineServiceBase {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.supervisor?.stop();
+    this.supervisor = null;
+    this.unsubscribeStorage?.();
+    this.unsubscribeStorage = null;
     this.tickRequested = false;
     if (this.tickPromise) {
       await this.tickPromise;
@@ -833,6 +942,7 @@ export abstract class BuildPipelineServiceBase {
       }
     });
     if (rejection) throw rejection;
+    this.reviewerPollGate.clearPrefix(`${pipelineId}\0`);
     await this.runLocked(pipelineId);
     return (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
   }
@@ -1255,6 +1365,8 @@ export abstract class BuildPipelineServiceBase {
       await this.cancel(pipelineId);
     }
     await this.storage.deleteBuildPipeline(pipelineId);
+    this.supervisor?.forget(pipelineId);
+    this.reviewerPollGate.clearPrefix(`${pipelineId}\0`);
     this.lastProviderAgent.delete(pipelineId);
     if (!record || !isBuildPipeline(record.snapshot)) return;
     const removed = record.snapshot;

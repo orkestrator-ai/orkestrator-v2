@@ -70,6 +70,7 @@ import {
   ThreadRegistry,
   phaseToExternalStatus,
   type BridgeSession,
+  CODEX_RESTARTED_MID_TURN_MESSAGE,
   type PromptAttachmentInput,
   type SessionPhase,
   type SessionTitleSource,
@@ -129,7 +130,33 @@ import {
 } from "@orkestrator/protocol/structured-output";
 import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 
+/** Fixed, content-free refusal for work arriving while a tab close is retiring the session. */
+export const SESSION_CLOSING_ERROR = "Session is closing";
+
 export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle {
+  /**
+   * Admission fence for `POST /session/:id/close`.
+   *
+   * Set once close has decided to retire the session and cleared only when the
+   * close is confirmed. While set, prompts, steers, compactions and reviews on
+   * the session are refused, so nothing can start a turn between "the last turn
+   * is terminal" and the release that would orphan it.
+   */
+  /**
+   * Session objects whose removal is being (or has been) published. Their
+   * records are never upserted again: a write queued behind the tombstone would
+   * resurrect the session on the next start. Weak, so retired objects are not
+   * retained.
+   */
+  protected readonly retiredSessions = new WeakSet<BridgeSession>();
+
+  /** True once close fenced this session, or it is no longer the registered object. */
+  protected sessionAdmissionClosed(session: BridgeSession): boolean {
+    return (
+      this.closingSessionIds.has(session.id) || this.registry.getSession(session.id) !== session
+    );
+  }
+
   createSession(body: Record<string, unknown>): { sessionId: string; title?: string } {
     const clientSessionKey =
       typeof body.clientSessionKey === "string" &&
@@ -410,11 +437,13 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
    */
   async compactSession(
     sessionId: string,
-  ): Promise<"accepted" | "not-found" | "running" | "unavailable"> {
+  ): Promise<"accepted" | "not-found" | "running" | "unavailable" | "closing"> {
     const session = this.registry.getSession(sessionId);
     if (!session?.threadId) return "not-found";
+    if (this.sessionAdmissionClosed(session)) return "closing";
     const context = await this.ensureAttached(sessionId);
     if (!context) return "not-found";
+    if (this.sessionAdmissionClosed(session)) return "closing";
     try {
       this.registry.assertNoActiveTurn(context);
     } catch {
@@ -518,11 +547,12 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     input: string,
     expectedTurnId: string,
     requestId: string,
-  ): Promise<"accepted" | "not-found" | "idle" | "mismatch" | "unknown"> {
+  ): Promise<"accepted" | "not-found" | "idle" | "mismatch" | "unknown" | "closing"> {
     const session = this.registry.getSession(sessionId);
     const context = this.registry.getThreadForSession(sessionId);
     const turn = context?.activeTurn;
     if (!session?.threadId || !context) return "not-found";
+    if (this.sessionAdmissionClosed(session)) return "closing";
     const inputDigest = createHash("sha256").update(input).digest("hex");
     const previous = this.steerRequests.get(requestId);
     if (previous) {
@@ -804,11 +834,15 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     | { outcome: "not-found" }
     | { outcome: "running" }
     | { outcome: "unavailable" }
+    | { outcome: "closing" }
   > {
     const session = this.registry.getSession(sessionId);
     if (!session?.threadId) return { outcome: "not-found" };
+    if (this.sessionAdmissionClosed(session)) return { outcome: "closing" };
     const context = await this.ensureAttached(sessionId);
     if (!context) return { outcome: "not-found" };
+    // Re-checked after the only await, immediately before the claim below.
+    if (this.sessionAdmissionClosed(session)) return { outcome: "closing" };
 
     /**
      * Close the overlap window *before* the first await, exactly as the prompt
@@ -881,6 +915,16 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       this.beginAssistantTurnRender(liveState, assistantMessage);
       this.emitStatus(context);
       this.drainPendingEvents(context, review.turnId);
+      await Promise.all(
+        this.registry
+          .boundSessionsForThread(context.threadId)
+          .filter((entry) => {
+            if (!entry.restartFailure) return false;
+            entry.restartFailure = undefined;
+            return true;
+          })
+          .map((entry) => this.persistSession(entry)),
+      );
       return { outcome: "accepted", turnId: review.turnId };
     } catch (error) {
       context.dispatchInFlight = false;
@@ -1216,7 +1260,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // advance on a turn whose fate is unknown.
     const awaitingRecovery =
       session.threadId !== null && this.threadsAwaitingDispatchRecovery.has(session.threadId);
-    const phase = context?.phase ?? (awaitingRecovery ? "recovering" : "idle");
+    const phase =
+      context?.phase ??
+      (awaitingRecovery ? "recovering" : session.restartFailure ? "failed" : "idle");
     const latestDispatch = this.journal.latestForSession(sessionId);
 
     return {
@@ -1224,7 +1270,11 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       status: phaseToExternalStatus(phase),
       phase,
       title: session.title,
-      error: context?.error,
+      error:
+        context?.error ??
+        (phase === "failed" && session.restartFailure
+          ? CODEX_RESTARTED_MID_TURN_MESSAGE
+          : undefined),
       threadId: session.threadId,
       turnId: context?.activeTurn?.turnId,
       turnStartedAt: context?.turnStartedAt,
@@ -1342,7 +1392,32 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
 
   async deleteSession(sessionId: string): Promise<boolean> {
     const session = this.registry.getSession(sessionId);
-    if (!session) return false;
+    if (session) this.deleteClaims.add(session);
+    return (await this.releaseBridgeSession(sessionId, "best-effort")) === "released";
+  }
+
+  /** A destructive release wins over a concurrent close's failed-write rollback. */
+  private readonly deleteClaims = new WeakSet<BridgeSession>();
+
+  /**
+   * Shared release for DELETE and the ordinary tab close.
+   *
+   * The removal is published *before* the registry lets go, with persistence
+   * fenced for this session object, so a failed write leaves nothing to
+   * restore: the session is still registered and a retry reaches it.
+   *
+   * - `best-effort` (DELETE): a failed tombstone is logged and the session is
+   *   released anyway, as it always was.
+   * - `strict` (close): a failed tombstone answers `unpublished` and the session
+   *   stays registered, so the caller can report pending instead of claiming a
+   *   removal that the next start would undo.
+   */
+  protected async releaseBridgeSession(
+    sessionId: string,
+    publication: "best-effort" | "strict",
+  ): Promise<"released" | "missing" | "unpublished"> {
+    const session = this.registry.getSession(sessionId);
+    if (!session) return "missing";
 
     const context = this.registry.getThreadForSession(sessionId);
     const turn = context?.activeTurn;
@@ -1354,12 +1429,33 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         .catch(() => undefined);
     }
 
+    this.retiredSessions.add(session);
+    try {
+      await this.store.publishRemoval(sessionId);
+    } catch (error) {
+      if (publication === "strict") {
+        if (!this.deleteClaims.has(session)) {
+          this.retiredSessions.delete(session);
+          // Restore updates only if no concurrent DELETE has claimed removal.
+          if (this.registry.getSession(sessionId) === session) await this.persistSession(session);
+        }
+        return "unpublished";
+      }
+      console.warn(
+        "[codex-bridge] Failed to persist bridge session registry:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+    // A concurrent release may have won the race while the write was in flight.
+    if (this.registry.getSession(sessionId) !== session) return "released";
+
     // Answered before the registry drops the thread, so the router can still map
     // the approval to a session and the pending turn is not left waiting on a
     // prompt whose UI has gone away.
     const { removedThread } = this.registry.releaseSession(sessionId);
     this.lastPersistedAccess.delete(sessionId);
-    await this.store.remove(sessionId).catch(() => undefined);
+    // The id is free again: a client-keyed session may legitimately be recreated.
+    this.closingSessionIds.delete(sessionId);
 
     if (removedThread) {
       // Only the final tab releases the human decision. Another tab attached to
@@ -1371,11 +1467,12 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         .unsubscribeThread(removedThread.engineHandle)
         .catch(() => undefined);
     }
-    return true;
+    return "released";
   }
 
   protected async persistSession(session: BridgeSession): Promise<void> {
     if (!session.threadId) return;
+    if (this.retiredSessions.has(session)) return;
     this.lastPersistedAccess.set(session.id, session.lastAccessed);
     const write = this.store
       .upsert(
@@ -1390,6 +1487,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
           structuredOutputRequestId: session.structuredOutputRequestId,
           structuredOutput: session.structuredOutput,
           structuredOutputTurns: session.structuredOutputTurns,
+          restartFailure: session.restartFailure,
           confirmedModelsByTurn: session.confirmedModelsByTurn,
           asyncQuestionItemIds: session.asyncQuestionItemIds,
         }),

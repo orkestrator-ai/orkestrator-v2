@@ -39,6 +39,10 @@ export function refreshHttpBridgeRuntimeMetadata(options: {
         }
         return;
       }
+      // Steer occupancy comes only from this read, so an authoritative answer
+      // without it retires a cached (possibly saturated) value.
+      const retainedRuntime = { ...retained?.runtime };
+      delete retainedRuntime.steer;
       setBoundedMapEntry(
         options.metadata,
         options.sessionId,
@@ -48,7 +52,7 @@ export function refreshHttpBridgeRuntimeMetadata(options: {
             executionProfiles: retained.executionProfiles,
           }),
           runtime: {
-            ...retained?.runtime,
+            ...retainedRuntime,
             ...runtime,
             // An authoritative empty list retires cached recovered conditions.
             notices: runtime.notices ?? [],

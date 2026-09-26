@@ -375,6 +375,12 @@ export interface ProviderTranscriptSnapshot {
   historyStartIndex?: number;
   /** Parts omitted from the first retained message by the provider's byte bound. */
   omittedParts?: number;
+  /**
+   * Whole messages the provider's byte bound dropped ahead of this window. Set
+   * only for a byte trim: one oversized turn can leave a short tail that is
+   * nonetheless missing real, pageable history.
+   */
+  byteOmittedMessages?: number;
   /** False when the provider supplied only a bounded retained tail. */
   complete?: boolean;
   title?: string;
@@ -438,6 +444,14 @@ export interface AgentSessionProvider {
    * observers must not call this; the backend workflow supplies its request id.
    */
   settleTurn?(sessionId: string, requestId: string): Promise<boolean>;
+  /**
+   * The terminal error recorded for one request's turn, or null when that
+   * turn visibly finished without one. For providers whose lifecycle reads
+   * idle after a failed turn because the failure is kept in the transcript
+   * instead (OpenCode). Throws while no finished answer is visible, so an
+   * early idle read is never taken as success.
+   */
+  turnTerminalError?(sessionId: string, requestId: string): Promise<string | null>;
   status(sessionId: string): Promise<ProviderStatus>;
   /**
    * Read lifecycle and cumulative usage from one authoritative provider
@@ -468,6 +482,14 @@ export interface AgentSessionProvider {
    */
   activityBatch?(sessionIds: readonly string[]): Promise<Map<string, ProviderActivityState>>;
   /**
+   * Whether this provider's backend-held event stream is connected right now,
+   * so a turn started by anyone else will be reported through
+   * `ProviderCommonDependencies.onObservationHint`. Only a provider that
+   * answers `true` here may have its stably idle sessions observed less than
+   * every sweep; absent or `false` keeps the full cadence.
+   */
+  observationStreamLive?(): boolean;
+  /**
    * Derive cumulative session usage from an already-read transcript. The
    * function must never reinterpret current context occupancy as consumption.
    */
@@ -481,8 +503,22 @@ export interface AgentSessionProvider {
   abort(sessionId: string): Promise<void>;
   /** Escalate a turn which did not settle after the bounded grace period. */
   hardAbort?(sessionId: string): Promise<void>;
-  /** Close the provider-side session and release any process attached to it. */
+  /**
+   * Ordinary, non-destructive close: stop this session's owned work, deny what
+   * is parked, and release the runtime resources and mapping held for it. The
+   * vendor conversation is always retained and stays resumable. Resolves only
+   * on affirmative evidence the close happened (or that nothing was held);
+   * rejects when it cannot be confirmed, so a durable caller can retry. It must
+   * never fall back to an operation that deletes history. There is deliberately
+   * no provider-neutral "delete history" operation: permanent deletion is a
+   * separately named, provider-specific action.
+   */
   closeSession?(sessionId: string): Promise<void>;
+  /**
+   * Forget in-memory registration for a session another path has already
+   * closed (tab teardown). Synchronous, local only, and a no-op for unknown ids.
+   */
+  releaseSession?(sessionId: string): void;
   dispose?(): Promise<void> | void;
 }
 
@@ -644,4 +680,11 @@ export interface ProviderCommonDependencies {
   stageImages?: (images: readonly ProviderPromptImage[]) => Promise<PromptAttachment[]>;
   autoAnswerRequests?: boolean;
   onInteractionObservation?: (event: ProviderInteractionObservationEvent) => void | Promise<void>;
+  /**
+   * Content-free hint that an owned session's activity or pending input may
+   * have changed (`sessionId`), or that the event stream lost continuity
+   * (`undefined`). Hints only make the next observation due; they are never
+   * applied as activity themselves. Must not throw or await.
+   */
+  onObservationHint?: (sessionId: string | undefined) => void;
 }

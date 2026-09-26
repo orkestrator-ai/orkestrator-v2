@@ -1,6 +1,6 @@
 # 06 — Retain Pi cancellation through startup and preflight
 
-Status: Planned.  
+Status: Implemented (2026-09-26); automated evidence complete; live Pi startup interrupt not run (no Pi provider credentials in the QA profile). Not merged. See [step 11 evidence](11-conformance-verification-and-release-handoff.md#evidence-record-2026-09-26).  
 Depends on: [01](01-contract-baseline-and-regression-fixtures.md).  
 Finding: INC-05.
 
@@ -46,38 +46,38 @@ cancel flag must not attach to a new run.
 
 ## Implementation tasks
 
-- [ ] Reserve the token synchronously at prompt admission. Include image/file
+- [x] Reserve the token synchronously at prompt admission. Include image/file
   preparation, MCP reconciliation, session attachment, and durability waits in
   the token's ownership window.
-- [ ] Add an optional pending-cancellation field keyed by that token. Clear stale
+- [x] Add an optional pending-cancellation field keyed by that token. Clear stale
   state at the new claim, not after an await that could erase a current cancel.
-- [ ] Change the cancel handler to capture the current prompt owner. If no handle
+- [x] Change the cancel handler to capture the current prompt owner. If no handle
   exists but a prompt is genuinely admitted, record the intent and return a
   pending acknowledgement, matching the established Cursor HTTP 202 shape.
-- [ ] Preserve denial of parked approvals before abort. A remembered cancel
+- [x] Preserve denial of parked approvals before abort. A remembered cancel
   must not allow a newly reached approval hook to wait forever or approve by
   default while cancellation is being applied.
-- [ ] After each preparation boundary, check whether cancellation or permanent
+- [x] After each preparation boundary, check whether cancellation or permanent
   closure won. If the SDK has not been invoked, settle locally without sending
   an artificial empty or cancelled prompt to the provider.
-- [ ] Close the preflight gap inside `dispatchPrompt`. Register an observable
+- [x] Close the preflight gap inside `dispatchPrompt`. Register an observable
   abort path as early as the SDK supports, and consume a pending request when
   that path becomes valid. Validate early `session.abort()` semantics using
   pinned SDK types/source and current docs before assuming it cancels preflight.
-- [ ] Do not wait forever for a preflight callback merely to discover a handle.
+- [x] Do not wait forever for a preflight callback merely to discover a handle.
   If the provider cannot abort that phase, retain cancellation ownership and a
   bounded startup deadline; late acceptance must still be stopped and observed.
-- [ ] Make concurrent cancels idempotent for one token. Await/observe the shared
+- [x] Make concurrent cancels idempotent for one token. Await/observe the shared
   cancellation operation, and prevent its completion from clearing a new token.
-- [ ] Clear pending cancellation on all terminal paths: preflight rejection,
+- [x] Clear pending cancellation on all terminal paths: preflight rejection,
   attachment error, local pre-send cancel, run success/error, timeout, deletion,
   and hard-abort escalation. Clear by identity, not unconditionally.
-- [ ] Keep `running`/working until the provider or local pre-send path proves
+- [x] Keep `running`/working until the provider or local pre-send path proves
   settlement. HTTP 202 means cancellation recorded, not execution stopped.
-- [ ] Preserve Pi's provider-owned follow-up queue semantics. Do not allocate a
+- [x] Preserve Pi's provider-owned follow-up queue semantics. Do not allocate a
   fake new active-turn token for `followUp`; document whether interrupting the
   current run retains or clears queued follow-ups according to existing behavior.
-- [ ] Check the backend's abort ladder still polls authoritative settlement and
+- [x] Check the backend's abort ladder still polls authoritative settlement and
   escalates when necessary. It currently ignores the successful response body;
   do not rely on a renderer reading `pending` to make cancellation effective.
 
@@ -85,6 +85,8 @@ cancel flag must not attach to a new run.
 
 Proposed files: `http-cancel-startup.test.ts` and `prompt-cancel-preflight.test.ts`
 under `bridges/pi-bridge/src/`.
+
+Implemented as (2026-09-26): `bridges/pi-bridge/src/http-cancel-startup.test.ts`, `prompt-cancel-preflight.test.ts`, `session-close.test.ts`, and backend `apps/backend/src/core/native-agent-service-abort-ladder.test.ts`.
 
 | Case | Required assertions |
 | --- | --- |
@@ -116,10 +118,10 @@ for SDK integration; a manually fast click is not a reliable race reproduction.
 
 ## Acceptance
 
-- [ ] Every admitted prompt has stable cancellation ownership before awaiting.
-- [ ] Cancellation before preflight is retained and eventually honored.
-- [ ] No stale cancel affects a later prompt or unrelated operation.
-- [ ] No false idle/completed status appears while stop remains uncertain.
-- [ ] Background/unmounted paths work without a mounted component or live event.
-- [ ] Startup, approval, timeout, and cleanup promises all have rejection handlers.
+- [x] Every admitted prompt has stable cancellation ownership before awaiting.
+- [x] Cancellation before preflight is retained and eventually honored.
+- [x] No stale cancel affects a later prompt or unrelated operation.
+- [x] No false idle/completed status appears while stop remains uncertain.
+- [x] Background/unmounted paths work without a mounted component or live event.
+- [x] Startup, approval, timeout, and cleanup promises all have rejection handlers.
 

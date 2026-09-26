@@ -852,6 +852,19 @@ describe("backend setup wrappers", () => {
     ]);
   });
 
+  test("sends a known revision only for conditional view snapshot reads", async () => {
+    const known = { generation: "gen-1", revision: 7 };
+    await backendWrappers.getPrMonitorState(known);
+    await backendWrappers.getEnvironmentDiffStats(known);
+    await backendWrappers.getEnvironmentDiffStats(undefined);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_pr_monitor_state", { knownGeneration: "gen-1", knownRevision: 7 }],
+      ["get_environment_diff_stats", { knownGeneration: "gen-1", knownRevision: 7 }],
+      ["get_environment_diff_stats"],
+    ]);
+  });
+
   test("forwards backend-owned prompt-queue mutations exactly", async () => {
     const message = { id: "message-1", text: "Ship it" };
 

@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeOpenCodeInteractiveMessage } from "./opencode-messages.js";
+import {
+  normalizeOpenCodeInlineError,
+  normalizeOpenCodeInteractiveMessage,
+} from "./opencode-messages.js";
 
 function message(parts: unknown[]): unknown {
   return {
@@ -90,5 +93,60 @@ describe("normalizeOpenCodeInteractiveMessage edit diffs", () => {
     );
 
     expect(firstTool(normalized)?.toolDiff).toBeUndefined();
+  });
+});
+
+describe("normalizeOpenCodeInlineError", () => {
+  function failed(error: unknown) {
+    return {
+      info: { id: "msg-failed", role: "assistant", time: { created: 10, completed: 20 }, error },
+    };
+  }
+
+  test("renders a provider API failure as a durable error row after the message", () => {
+    expect(
+      normalizeOpenCodeInlineError(
+        failed({
+          name: "APIError",
+          data: { message: 'Bad Request: {"model":"deepseek-v4.1-flash"}', statusCode: 400 },
+        }),
+      ),
+    ).toEqual({
+      id: "error-opencode-msg-failed",
+      role: "assistant",
+      content: 'Model request failed (HTTP 400): Bad Request: {"model":"deepseek-v4.1-flash"}',
+      parts: [
+        {
+          type: "text",
+          content: 'Model request failed (HTTP 400): Bad Request: {"model":"deepseek-v4.1-flash"}',
+        },
+      ],
+      createdAt: new Date(20).toISOString(),
+    });
+  });
+
+  test("keeps other failures verbatim", () => {
+    expect(
+      normalizeOpenCodeInlineError(
+        failed({ name: "ProviderAuthError", data: { message: "Invalid API key" } }),
+      ),
+    ).toMatchObject({ content: "Invalid API key" });
+  });
+
+  test("falls back to the created time when completion is outside Date's range", () => {
+    const message = failed({ name: "APIError", data: { message: "Unavailable" } });
+    message.info.time.completed = 1e20;
+    expect(normalizeOpenCodeInlineError(message)).toMatchObject({
+      createdAt: new Date(10).toISOString(),
+      content: "Model request failed: Unavailable",
+    });
+  });
+
+  test("ignores user stops, successful messages, and messages without an id", () => {
+    expect(normalizeOpenCodeInlineError(failed({ name: "MessageAbortedError" }))).toBeNull();
+    expect(normalizeOpenCodeInlineError(failed(undefined))).toBeNull();
+    expect(
+      normalizeOpenCodeInlineError({ info: { role: "assistant", error: { name: "APIError" } } }),
+    ).toBeNull();
   });
 });

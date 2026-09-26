@@ -11,7 +11,9 @@ export default defineConfig({
   testMatch: [
     "browser-gateway.spec.ts",
     "design-canvas.spec.ts",
+    "native-draft-attachments.spec.ts",
     "web-annotations-gateway.spec.ts",
+    "cli-ui.spec.ts",
   ],
   fullyParallel: false,
   workers: 1,

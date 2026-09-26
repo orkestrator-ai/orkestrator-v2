@@ -10,6 +10,7 @@ import type { WebAnnotationFaultStage } from "./web-annotation-storage.js";
 import { recordDirectoryName } from "./web-annotation-storage.js";
 import {
   ENV_A,
+  ENV_B,
   createAnnotation,
   createHarness,
   type ServiceHarness,
@@ -232,5 +233,29 @@ describe("web annotation storage commit protocol", () => {
     const envDir = join(harness.dir, "web-annotations", ENV_A);
     expect((await stat(join(envDir, "manifest.json"))).mode & 0o777).toBe(0o600);
     expect((await stat(envDir)).mode & 0o777).toBe(0o700);
+  });
+});
+
+describe("web annotation storage startup", () => {
+  test("removes stores whose environment no longer exists instead of loading them", async () => {
+    harness = await createHarness();
+    await createAnnotation(harness.service, ENV_A);
+    await createAnnotation(harness.service, ENV_B);
+    harness.host.environments.delete(ENV_B);
+
+    await harness.restart();
+    expect(await readdir(join(harness.dir, "web-annotations"))).toEqual([ENV_A]);
+    expect(harness.service.storage.loadedEnvironmentIds()).toEqual([ENV_A]);
+  });
+
+  test("keeps every store when the environment lookup fails", async () => {
+    harness = await createHarness();
+    await createAnnotation(harness.service, ENV_B);
+    harness.host.getEnvironment = async () => {
+      throw new Error("environment store unreadable");
+    };
+
+    await harness.restart();
+    expect(await readdir(join(harness.dir, "web-annotations"))).toEqual([ENV_B]);
   });
 });

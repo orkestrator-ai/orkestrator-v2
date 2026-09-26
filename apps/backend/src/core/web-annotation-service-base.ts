@@ -210,15 +210,26 @@ export abstract class WebAnnotationServiceBase {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
-    this.initialization ??= this.storage.init().then(
-      () => {
-        this.initialized = true;
-      },
-      (error: unknown) => {
-        this.initialization = undefined;
-        throw error;
-      },
-    );
+    const hostStorage = this.options.storage;
+    this.initialization ??= this.storage
+      .init({
+        environmentExists: hostStorage
+          ? (environmentId) =>
+              hostStorage.getEnvironment(environmentId).then(
+                (environment) => environment !== null,
+                () => true,
+              )
+          : undefined,
+      })
+      .then(
+        () => {
+          this.initialized = true;
+        },
+        (error: unknown) => {
+          this.initialization = undefined;
+          throw error;
+        },
+      );
     await this.initialization;
   }
 

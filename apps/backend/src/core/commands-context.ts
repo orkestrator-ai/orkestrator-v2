@@ -54,6 +54,8 @@ export type CommandContext = {
   multiReviews?: MultiReviewService;
   featurePlanning?: FeaturePlanningService;
   workflowResults?: import("./workflow-result-service.js").WorkflowResultService;
+  /** Environment deletion: drops the environment's workflow result slots. */
+  deleteWorkflowResultsByEnvironment?: (environmentId: string) => Promise<unknown>;
   workflowResultRollout?: import("./workflow-result-rollout.js").WorkflowResultRollout;
   coordinators?: CoordinatorService;
   projectGit?: ProjectGitService;

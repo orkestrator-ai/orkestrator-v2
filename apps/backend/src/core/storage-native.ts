@@ -817,7 +817,9 @@ export abstract class StorageNative extends StorageReviews {
       }
       // Only a real deletion is worth waking every client for.
       if (removed) this.announce("native-agent-session", environmentId);
-      if (removed) await this.deleteNativeAgentDisplayTailsByEnvironment(environmentId);
+      // Unconditional: a retry after a partial failure finds the sessions
+      // already gone, and must still clear the tails that failure left.
+      await this.deleteNativeAgentDisplayTailsByEnvironment(environmentId);
 
       // Rotating the primary file leaves the deleted environment's logical keys,
       // provider session ids and dispatch journal readable in its backups. Scrub

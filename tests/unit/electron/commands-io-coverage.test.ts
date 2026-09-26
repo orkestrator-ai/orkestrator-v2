@@ -57,6 +57,8 @@ const spawnPty = mock((command: string, args: string[], options: Record<string, 
     write: process.write,
     resize: process.resize,
     kill: process.kill,
+    // The real tree wait resolves once every descendant has exited.
+    terminate: async () => true,
     clear: () => undefined,
     pause: () => undefined,
     resume: () => undefined,

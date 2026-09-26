@@ -8,6 +8,8 @@ import {
   spawnCommand,
   terminateProcessTree,
 } from "./commands-dependencies.js";
+import { gitDockerScanPool } from "./git-docker-scan-pool.js";
+import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./container-git-fetch.js";
 import type {
   ChildProcessWithoutNullStreams,
   ClientEnvironment,
@@ -526,11 +528,65 @@ export const gitFetchScheduler = new GitFetchScheduler({
 });
 
 /**
- * How stale a cached file list may be before the Files panel reads for itself.
+ * Remote freshness for container clones (`container-git-fetch.ts`): status
+ * scans read local refs, and fetches follow this policy instead of the scan
+ * cadence. Fetches share the `git-docker-scan` pool under each container's
+ * scan target key, so a fetch and a scan of one container never overlap.
+ */
+export const containerGitFetchPolicy = new ContainerGitFetchPolicy({
+  admission: gitDockerScanPool,
+  runFetch: async (containerId, ref, timeoutMs) => {
+    // Lazily, like the status scanners below: `commands-files` imports this module.
+    const [{ buildContainerFetchScript }, { dockerExec }] = await Promise.all([
+      import("./commands-files.js"),
+      import("./commands-container-exec.js"),
+    ]);
+    return dockerExec(
+      containerId,
+      buildContainerFetchScript(ref, timeoutMs),
+      timeoutMs + CONTAINER_FETCH_EXEC_MARGIN_MS,
+    );
+  },
+  onChange: ({ containerId, baselineMoved }) => {
+    // A moved `origin/<ref>` is outside anything a container scan watches:
+    // rescan once (step 03's baseline hook). Otherwise only the announced
+    // remote freshness may have changed.
+    if (baselineMoved) diffStatsService.invalidateBaseline({ containerId });
+    diffStatsService.remoteFreshnessChanged({ containerId });
+  },
+});
+
+/**
+ * Known remote mutations (a merge through the backend) and lifecycle changes
+ * route here so the next reader does not wait out a fetch cooldown.
+ */
+export function invalidateEnvironmentRemoteFreshness(
+  environment: Pick<Environment, "environmentType" | "containerId" | "worktreePath">,
+): void {
+  if (environment.environmentType === "local") {
+    if (environment.worktreePath) gitFetchScheduler.invalidate(environment.worktreePath);
+    return;
+  }
+  if (environment.containerId) {
+    containerGitFetchPolicy.invalidate({ containerId: environment.containerId }, "mutation");
+  }
+}
+
+/**
+ * How long an *unwatched* target's file list or tree (a container, or a local
+ * worktree whose watcher failed) is served to a Files-panel reader.
  *
- * Comfortably under the panel's own refresh cadence, so the common case - the
- * panel and the sidebar looking at the same environment - shares one scan
- * without the panel ever showing something older than it would have fetched.
+ * Comfortably under the panel's own refresh cadence, so the panel and the
+ * sidebar looking at the same environment share one scan without the panel
+ * ever showing something older than it would have fetched. Watched worktrees
+ * are not age-bounded: their results stay valid until a watcher hint, a
+ * mutation or an explicit refresh.
+ *
+ * Reconsidered when container fetches left the status scan (step 04): each
+ * container read now costs one local-only exec rather than a fetch, but the
+ * count is unchanged by design. With a 5 s panel poll, any bound of 5 s or
+ * more would serve every other read from the previous poll and let a change
+ * take up to ~10 s to show, over the 6 s Files-panel budget.
  */
 export const DIFF_CACHE_MAX_AGE_MS = 3_000;
 
@@ -546,6 +602,12 @@ export let diffStatsSyncQueue: Promise<void> = Promise.resolve();
 
 export const diffStatsService = new DiffStatsService({
   emit: (event, payload) => diffStatsEmit?.(event, payload),
+  admission: gitDockerScanPool,
+  fileListMaxAgeMs: DIFF_CACHE_MAX_AGE_MS,
+  remoteFreshness: (target) =>
+    target.kind === "container" && target.containerId
+      ? containerGitFetchPolicy.freshness(target.containerId, target.comparisonRef)
+      : undefined,
   scan: async (target) => {
     // Load the scanners only when a scan runs. `commands-files` consumes shared
     // runtime constants from this module, so a static import here creates an
@@ -565,6 +627,40 @@ export const diffStatsService = new DiffStatsService({
       },
       changes: detailed.changes,
     };
+  },
+  readFiles: async (request) => {
+    const { getContainerGitStatusDetailed, getLocalGitStatusDetailed } =
+      await import("./commands-files.js");
+    return request.kind === "local"
+      ? getLocalGitStatusDetailed(
+          request.worktreePath!,
+          request.comparisonRef,
+          request.includeUncommitted,
+        )
+      : getContainerGitStatusDetailed(
+          request.containerId!,
+          request.comparisonRef,
+          request.includeUncommitted,
+        );
+  },
+  walkTree: async (request) => {
+    const {
+      buildFileTree,
+      parseContainerFileTree,
+      CONTAINER_FILE_TREE_LISTER,
+      MAX_FILE_TREE_NODES,
+    } = await import("./commands-files.js");
+    if (request.kind === "local") return buildFileTree(request.worktreePath!);
+    const [{ dockerExec }, { quoteShell }] = await Promise.all([
+      import("./commands-container-exec.js"),
+      import("./commands-agent-support.js"),
+    ]);
+    return parseContainerFileTree(
+      await dockerExec(
+        request.containerId!,
+        `node -e ${quoteShell(CONTAINER_FILE_TREE_LISTER)} -- /workspace ${MAX_FILE_TREE_NODES}`,
+      ),
+    );
   },
   onWarning: (message, error) => {
     console.warn(`[diff-stats] ${message}:`, error instanceof Error ? error.message : error);
@@ -636,6 +732,19 @@ export async function syncDiffStatsTracking(context: CommandContext): Promise<vo
       for (const environmentId of diffStatsService.trackedIds()) {
         if (!live.has(environmentId)) diffStatsService.untrack(environmentId);
       }
+
+      // Fetch state belongs to a running container generation: a stopped,
+      // recreated or deleted container starts over (the lifecycle
+      // invalidation of the container fetch policy).
+      containerGitFetchPolicy.retainContainers(
+        environments.flatMap((environment) =>
+          environment.environmentType !== "local" &&
+          environment.status === "running" &&
+          environment.containerId
+            ? [environment.containerId]
+            : [],
+        ),
+      );
     });
   diffStatsSyncQueue = operation;
   await operation;

@@ -7,7 +7,10 @@
  * the revision so a conditional read can never answer `unchanged` wrongly.
  */
 import { describe, expect, test } from "bun:test";
-import { isEnvironmentDiffStatsEvent } from "@orkestrator/protocol/diff-stats";
+import {
+  DIFF_STATS_CHANGED_EVENT,
+  isEnvironmentDiffStatsEvent,
+} from "@orkestrator/protocol/diff-stats";
 import { isPrMonitorEvent, isPrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
 import {
   parseViewSnapshotRequest,
@@ -206,7 +209,11 @@ function diffHarness(generation = "diff-gen-1") {
   const service = new DiffStatsService({
     generation,
     scan: (target) => scan(target),
-    emit: (_event, payload) => emitted.push(payload),
+    // Worktree-snapshot events have their own revision stream (covered in
+    // the backend's worktree snapshot tests); this harness orders diff stats.
+    emit: (event, payload) => {
+      if (event === DIFF_STATS_CHANGED_EVENT) emitted.push(payload);
+    },
     now: () => "2026-09-24T00:00:00.000Z",
     monotonicNow: () => 0,
     schedule: () => 1,

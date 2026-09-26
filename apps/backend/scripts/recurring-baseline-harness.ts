@@ -6,12 +6,13 @@ import {
   type RecurringWorkSnapshot,
   type RecurringWorkUnit,
 } from "@orkestrator/protocol/recurring-work";
-import {
-  DiffStatsService,
-  readSharedFileList,
-  type DiffStatsTarget,
-} from "../src/core/diff-stats-service.js";
+import { DiffStatsService, type DiffStatsTarget } from "../src/core/diff-stats-service.js";
 import { GitFetchScheduler } from "../src/core/git-fetch-scheduler.js";
+import {
+  ContainerGitFetchPolicy,
+  containerRepoId,
+  formatContainerFetchResponse,
+} from "../src/core/container-git-fetch.js";
 import { PrMonitorService, type PrMonitorTarget } from "../src/core/pr-monitor.js";
 import { CLAUDE_STATE_POLL_INTERVAL_MS, ClaudeStatePollManager } from "../src/core/tmux-poll.js";
 import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics.js";
@@ -20,13 +21,15 @@ import {
   runNativeObservationBaseline,
   type NativeObservationResult,
 } from "./recurring-baseline-native.js";
+import { WorkAdmissionPool } from "../src/core/work-admission.js";
 
 /**
  * Deterministic recurring-work baseline.
  *
  * Drives the *real* backend owners whose scheduling logic decides how much
- * physical work happens — diff statistics, the shared Files-panel cache, the
- * local Git fetch scheduler, PR monitoring and Claude terminal-state polling —
+ * physical work happens — the worktree snapshot owner (diff statistics, the
+ * Files-panel file list and tree), the local Git fetch scheduler, PR
+ * monitoring and Claude terminal-state polling —
  * against a manual clock and fake Git/gh/Docker seams. Each seam charges the
  * physical work units the production scanner performs per call at this commit
  * (see {@link PHYSICAL_COST}), so the artifact counts scheduled attempts,
@@ -57,8 +60,15 @@ export const PHYSICAL_COST = {
    */
   localScanGitSpawns: 5,
   localScanFileReads: 1,
-  /** One `docker exec` running the framed status script (which also fetches). */
+  /**
+   * One `docker exec` running the framed status script. Until step 04 that
+   * script also attempted `git fetch` on every scan; it now reads local refs
+   * only and the fetch is a separate exec decided by the container fetch
+   * policy (`containerFetchDockerExecs`).
+   */
   containerScanDockerExecs: 1,
+  /** One `docker exec` running the framed fetch script (step 04). */
+  containerFetchDockerExecs: 1,
   /** `buildFileTree`: one readdir per directory. */
   localTreeDirectoryReads: 40,
   /** Branch resolution before discovery: one `git`/`docker exec`. */
@@ -91,6 +101,10 @@ export const DEFAULT_SCENARIOS: readonly BaselineScenario[] = [
   scenario("env50-mixed-c0-pr-wf200", 50, 0.5, 0, "mixed", 200),
   scenario("env50-mixed-c2-pr-wf200", 50, 0.5, 2, "mixed", 200),
   scenario("env50-container-c1-pr", 50, 0, 1, "mixed", 0),
+  // Added at step 03 (not in the step 01 artifact): two clients on one target,
+  // where joined reads matter most.
+  scenario("env1-local-c2", 1, 1, 2, "none", 0),
+  scenario("env1-container-c2", 1, 0, 2, "none", 0),
 ];
 
 function scenario(
@@ -211,11 +225,11 @@ const RECORD_SCANNING_TICKS: ReadonlySet<RecurringJobKind> = new Set([
 export const BASELINE_LIMITATIONS = [
   "Call-count model on a manual clock: no process, container, repository, GitHub or provider is touched, and durations are not measured.",
   "Physical units per seam call come from PHYSICAL_COST, read from the production scanners at this commit; the real scanners are not executed.",
-  "Driven owners: diff statistics (watched local / polled container), the shared Files-panel cache, local git fetch scheduling, PR monitoring with check rollups, and Claude terminal-state polls (one per running container).",
+  "Driven owners: the worktree snapshot owner (diff statistics, Files-panel file-list and tree reads; watched local / polled container) behind the git-docker-scan admission pool, local git fetch scheduling, the container fetch policy (step 04; fetches share the admission pool), PR monitoring with check rollups, and Claude terminal-state polls (one per running container).",
   "Native activity sweep, launch/queue scans, mail, coordinator repair, retention, tab cleanup and workflow ticks are modelled from nominal cadence only in the per-scenario blocks; their provider reads and storage costs need a live isolated profile.",
   "The nativeObservation block (step 07) drives the real native activity sweep and native queue scan with fake providers counted at the provider boundary, over one 10-environment fixture, in rollback and shared modes; bridge-side cost per read and mail, coordinator and workflow consumers are not driven.",
   "Multi review uses an adaptive due scheduler by default (reconcile every 15 s plus per-workflow due passes); it is not modelled because idle cost depends on active workflows.",
-  "Local environments use a branch baseline, so every scan consults the fetch scheduler; environments created from an immutable commit skip that path.",
+  "Local and container environments use a branch baseline (`main`), so every scan consults its fetch owner; environments created from an immutable commit skip that path. The modelled remote is idle: container fetches succeed and never move `origin/main`, so no fetch-triggered rescan occurs.",
   "No watcher change events occur in the idle window; burst edits, long reads, outages and approval/completion freshness need the live isolated profile described in the README.",
   "Clients model the Files panel open on environment 0 with both the file list and file tree refreshing every 5 s; other renderer polling (native session views, meters) is not driven.",
 ];
@@ -277,6 +291,14 @@ export async function runScenario(
   const fixtures = buildFixtures(input);
   const byEnvironment = new Map(fixtures.map((fixture) => [fixture.target.environmentId, fixture]));
 
+  // The shared `git-docker-scan` pool: scans, walks and container fetches.
+  const admission = new WorkAdmissionPool({
+    name: "git-docker-scan",
+    now: time.now,
+    metrics,
+    diagnostics: null,
+  });
+
   const fetches = new GitFetchScheduler({
     metrics,
     now: time.now,
@@ -296,14 +318,53 @@ export async function runScenario(
     await fetches.ensureFetched(worktreePath, "main");
     return [];
   };
-  const scanContainer = async () => {
-    metrics.requested("git-fetch-container");
+  // Declared before the owner that consults it; `diffStats` is assigned below.
+  let diffStats: DiffStatsService;
+  const containerFetches = new ContainerGitFetchPolicy({
+    metrics,
+    now: time.now,
+    wallNow: () => new Date(0).toISOString(),
+    admission,
+    runFetch: async (containerId) => {
+      metrics.work("docker-exec", PHYSICAL_COST.containerFetchDockerExecs);
+      // An idle remote: the fetch succeeds and `origin/main` does not move.
+      return formatContainerFetchResponse({ repo: `/workspace\t${containerId}` });
+    },
+    onChange: ({ containerId, baselineMoved }) => {
+      if (baselineMoved) diffStats.invalidateBaseline({ containerId });
+      diffStats.remoteFreshnessChanged({ containerId });
+    },
+  });
+  const scanContainer = async (containerId: string) => {
+    // The production wrapper: one local-only status exec, then the policy
+    // decides whether a (background) fetch is due for a branch baseline.
     metrics.work("docker-exec", PHYSICAL_COST.containerScanDockerExecs);
+    containerFetches.observe(
+      { containerId, repoId: containerRepoId(`/workspace\t${containerId}`), ref: "main" },
+      "tracking-ref",
+    );
     return [];
   };
 
-  const diffStats = new DiffStatsService({
+  const walkTree = async (request: { kind: "local" | "container" }) => {
+    if (request.kind === "local") {
+      metrics.work("directory-read", PHYSICAL_COST.localTreeDirectoryReads);
+    } else {
+      metrics.work("docker-exec");
+    }
+    return [];
+  };
+
+  diffStats = new DiffStatsService({
     metrics,
+    admission,
+    remoteFreshness: (target) =>
+      target.containerId
+        ? containerFetches.freshness(target.containerId, target.comparisonRef)
+        : undefined,
+    walkTree,
+    delay: (callback, delayMs) => time.setTimeout(callback, delayMs),
+    cancelDelay: (timer) => time.clear(timer),
     emit: () => undefined,
     monotonicNow: time.now,
     now: () => new Date(0).toISOString(),
@@ -314,7 +375,9 @@ export async function runScenario(
     scan: async (target) => ({
       stats: { additions: 0, deletions: 0, filesChanged: 0, truncated: false },
       changes:
-        target.kind === "local" ? await scanLocal(target.worktreePath!) : await scanContainer(),
+        target.kind === "local"
+          ? await scanLocal(target.worktreePath!)
+          : await scanContainer(target.containerId!),
     }),
   });
 
@@ -417,25 +480,12 @@ export async function runScenario(
         ? { worktreePath: target.worktreePath }
         : { containerId: target.containerId };
     for (let client = 0; client < input.clients; client += 1) {
-      void readSharedFileList({
-        service: diffStats,
-        metrics,
-        lookup,
-        comparisonRef: target.comparisonRef,
-        maxAgeMs: 3_000,
-        scan: () => (target.kind === "local" ? scanLocal(target.worktreePath!) : scanContainer()),
-      });
-      // The file tree walks before its digest is compared.
-      metrics.requested("file-tree-read");
-      void metrics.observe("file-tree-read", async (span) => {
-        span.work("directory-walk");
-        if (target.kind === "local") {
-          span.work("directory-read", PHYSICAL_COST.localTreeDirectoryReads);
-        } else {
-          span.work("docker-exec");
-        }
-        span.unchanged();
-      });
+      // Both panel reads go through the owner production uses: the file list
+      // joins the diff scan identity, the tree its own bounded snapshot.
+      void diffStats
+        .readFileList({ lookup, comparisonRef: target.comparisonRef, includeUncommitted: true })
+        .catch(() => undefined);
+      void diffStats.readTree({ lookup }).catch(() => undefined);
     }
   };
   if (input.clients > 0) {

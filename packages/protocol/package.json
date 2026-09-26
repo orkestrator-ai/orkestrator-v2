@@ -83,6 +83,7 @@
     "./transcript-part-ids": "./src/transcript-part-ids.ts",
     "./transcript-window": "./src/transcript-window.ts",
     "./view-sync": "./src/view-sync.ts",
+    "./worktree-snapshots": "./src/worktree-snapshots.ts",
     "./web-client": "./src/web-client.ts",
     "./design-canvas": "./src/design-canvas.ts",
     "./design-runtime": "./src/design-runtime.ts"

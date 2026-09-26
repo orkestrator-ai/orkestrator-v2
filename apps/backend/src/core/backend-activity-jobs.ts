@@ -114,9 +114,9 @@ export class BackendActivityJobs {
     this.scheduler = scheduler;
   }
 
-  /** Pulls a job forward (a wakeup hint). Dropped while the job runs. */
+  /** Pulls a job forward, including a trailing pass if it is running. */
   wake(name: string): void {
-    this.scheduler?.requestSooner(name);
+    this.scheduler?.invalidate(name);
   }
 
   stop(): void {

@@ -20,6 +20,8 @@ export interface UseCoordinatedReadOptions<T> {
   demand?: ReadDemand;
   /** See `ReadSubscriptionOptions.readOnSubscribe`. Defaults to `true`. */
   readOnSubscribe?: boolean;
+  /** Evict an instance-scoped entry when its last subscriber unmounts. */
+  retainOnDispose?: boolean;
   classifyError?: (error: unknown) => ReadErrorKind;
   /** Called on every state change of this subscription. */
   onState?: (state: ReadState<T>) => void;
@@ -67,6 +69,7 @@ export function useCoordinatedRead<T>({
   enabled = true,
   demand,
   readOnSubscribe = true,
+  retainOnDispose = true,
   classifyError,
   onState,
   trackState = false,
@@ -97,6 +100,7 @@ export function useCoordinatedRead<T>({
       read: (context) => readRef.current(context),
       demand: demandRef.current,
       readOnSubscribe,
+      retainOnDispose,
       ...(classifyRef.current ? { classifyError: (error) => classifyRef.current!(error) } : {}),
       onState: (next) => {
         onStateRef.current?.(next);
@@ -108,7 +112,7 @@ export function useCoordinatedRead<T>({
       if (handleRef.current === handle) handleRef.current = null;
       handle.dispose();
     };
-  }, [coordinator, enabled, keyId, readOnSubscribe, trackState]);
+  }, [coordinator, enabled, keyId, readOnSubscribe, retainOnDispose, trackState]);
 
   const active = demand?.active;
   const intervalMs = demand?.intervalMs;

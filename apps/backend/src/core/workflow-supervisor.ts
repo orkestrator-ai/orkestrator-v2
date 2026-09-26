@@ -170,6 +170,8 @@ export interface KeyedWorkflowSupervisorOptions<O extends string> {
   /** Stable per-key initial spread for keys restored together. */
   initialSpreadMs?(key: string): number;
   admission?: WorkAdmissionPool | null;
+  /** Obligations that do not hold a provider slot during their pass. */
+  withoutAdmission?(obligation: O | "probe"): boolean;
   maxConcurrent?: number;
   maxKeys?: number;
   now?: () => number;
@@ -538,7 +540,7 @@ export class KeyedWorkflowSupervisor<O extends string> {
       });
     try {
       const admission = this.options.admission;
-      if (admission) {
+      if (admission && !this.options.withoutAdmission?.(obligation)) {
         await admission.run(
           {
             kind: this.options.kind,

@@ -89,6 +89,12 @@ export function InitializationLogs({
         setIsLoading(false);
         return;
       }
+      if (lastSnapshotRef.current === null) {
+        const snapshot = state.value ?? "";
+        lastSnapshotRef.current = snapshot;
+        setLogs(snapshot ? snapshot.split("\n").filter(Boolean).slice(-MAX_LOG_LINES) : []);
+        setIsLoading(false);
+      }
       // A later failure keeps the last good tail — it is still the best view
       // of the container — but says so rather than presenting stale output
       // under a spinner that implies it is live.

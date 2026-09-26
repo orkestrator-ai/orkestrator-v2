@@ -663,6 +663,33 @@ describe("failure, fallback and retry", () => {
     expect(owner.service.isWatching("env-local")).toBe(true);
   });
 
+  test("nonconsecutive watcher failures each get a fresh retry budget", async () => {
+    const owner = createOwner();
+    owner.autoScan(() => result([]));
+    track(owner, local());
+    await flushMicrotasks();
+    for (let failure = 0; failure < 6; failure += 1) {
+      const before = owner.watchers.length;
+      owner.failWatcher();
+      await owner.time.advance(30_000);
+      expect(owner.watchers.length).toBe(before + 1);
+      expect(owner.service.isWatching("env-local")).toBe(true);
+    }
+  });
+
+  test("the watched tree recovers from a missed hint on the safety tick", async () => {
+    const owner = createOwner();
+    let tree: unknown[] = [{ name: "old" }];
+    owner.autoScan(() => result([]));
+    owner.autoWalk(() => tree);
+    track(owner, local());
+    await flushMicrotasks();
+    expect((await owner.service.readTree({ lookup: localLookup })).tree).toEqual(tree);
+    tree = [{ name: "new" }];
+    await owner.time.advance(120_000);
+    expect((await owner.service.readTree({ lookup: localLookup })).tree).toEqual(tree);
+  });
+
   test("an unqualified watcher (metadata not yet covered) keeps reads age-bounded", async () => {
     const owner = createOwner({ qualified: false });
     owner.autoScan(() => result([change("a.ts")]));
@@ -814,6 +841,18 @@ describe("admission", () => {
 });
 
 describe("tree bounds", () => {
+  test("multibyte names use UTF-8 bytes for the retention limit", async () => {
+    const tree = [{ name: "é".repeat(10) }];
+    const serialized = JSON.stringify(tree);
+    expect(Buffer.byteLength(serialized, "utf8")).toBeGreaterThan(serialized.length);
+    const owner = createOwner({ overrides: { treeLimits: { maxEntryBytes: serialized.length } } });
+    owner.autoScan(() => result([]));
+    owner.autoWalk(() => tree);
+    track(owner, local());
+    await flushMicrotasks();
+    await owner.service.readTree({ lookup: localLookup });
+    expect(owner.service.status().tree).toMatchObject({ bodies: 0, bytes: 0 });
+  });
   test("large trees are not retained, but revisions stay monotonic", async () => {
     const owner = createOwner({ overrides: { treeLimits: { maxEntryBytes: 64 } } });
     owner.autoScan(() => result([]));

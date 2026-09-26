@@ -4386,6 +4386,36 @@ describe("NativeAgentService shared observations", () => {
     );
   });
 
+  test("dispatch during completion persistence keeps the new turn working", async () => {
+    let activityState: ProviderActivityState = "working";
+    const { provider, send } = createProviderStub("codex", {
+      activity: async () => activityState,
+    });
+    await withService(
+      { prefix: "orkestrator-native-completion-write-fence-", provider: async () => provider },
+      async ({ storage, service }) => {
+        const key = await adopt(storage, "tab-1", "provider-1");
+        await service.reconcileAgentActivity();
+        const entered = deferred<void>();
+        const release = deferred<void>();
+        const originalCompletion = storage.recordEnvironmentSessionCompletion.bind(storage);
+        storage.recordEnvironmentSessionCompletion = async (environmentId, occurredAt) => {
+          entered.resolve();
+          await release.promise;
+          return originalCompletion(environmentId, occurredAt);
+        };
+        activityState = "idle";
+        const sweep = service.reconcileAgentActivity();
+        await entered.promise;
+        await service.dispatchPrompt({ ...TAB, prompt: "Next turn", requestId: "request-2" });
+        expect(send).toHaveBeenCalledTimes(1);
+        release.resolve();
+        await sweep;
+        expect(internals(service).observedSessionActivity.get(key)?.state).toBe("working");
+      },
+    );
+  });
+
   test("failed reads stay recovering or unknown, never idle", async () => {
     let fail = false;
     const { provider } = createProviderStub("codex", {

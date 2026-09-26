@@ -47,6 +47,23 @@ function prUrlFor(id: string): string {
 }
 
 describe("PR monitor admission and policy", () => {
+  test("pausing a queued detection clears its announced progress", async () => {
+    const harness = createLifecycleHarness();
+    const ids = ["busy-1", "busy-2", "queued"];
+    const held = holdDetections(harness, ids);
+    harness.service.sync(
+      ids.map((id) => harness.addEnvironment(id, { prUrl: prUrlFor(id), prState: "open" })),
+    );
+    await harness.advance(20_000);
+    expect(harness.admission.status().waiting).toBe(1);
+    harness.service.sync(harness.targets(ids, { ready: false }));
+    await harness.flush();
+    expect(
+      harness.service.revisionedSnapshot().entries.find((entry) => entry.environmentId === "queued")
+        ?.checkInProgress,
+    ).toBe(false);
+    await held.releaseAll();
+  });
   test("aggregate concurrency bound: at most two detections run at once, all eventually run", async () => {
     const harness = createLifecycleHarness();
     const ids = ["a", "b", "c", "d", "e", "f"];

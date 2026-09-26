@@ -411,13 +411,13 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           { directory: this.connection.directory },
           {
             signal: AbortSignal.any([this.monitorController.signal, streamController.signal]),
+            sseMaxRetryAttempts: 1,
           },
         );
         if (!response || !("stream" in response)) {
           throw new Error("OpenCode returned no event stream");
         }
-        this.monitorBackoff.connected();
-        this.observation.connected();
+        let receivedFrame = false;
         let startupError: unknown;
         const startup = Promise.all([
           this.reconcileStreamState(),
@@ -428,6 +428,11 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         });
         for await (const raw of response.stream as AsyncIterable<unknown>) {
           if (this.disposed) return;
+          if (!receivedFrame) {
+            receivedFrame = true;
+            this.monitorBackoff.connected();
+            this.observation.connected();
+          }
           this.dispatchRequest(raw);
         }
         await startup;

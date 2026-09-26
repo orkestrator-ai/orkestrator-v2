@@ -176,6 +176,19 @@ async function readsExactlyAfter(
 }
 
 describe("useNativeAgentSession observation invalidations", () => {
+  test("instance-scoped coordinated reads retain no transcript projection", async () => {
+    const { clock, coordinator } = installFakeReadCoordinator();
+    for (let index = 0; index < 3; index += 1) {
+      const view = await settledSession();
+      await act(() => clock.advance(1_500));
+      view.unmount();
+    }
+    expect(
+      coordinator
+        .getDiagnostics()
+        .entries.filter((entry) => entry.id.includes("native-agent-session")),
+    ).toEqual([]);
+  });
   test("a qualified idle view backs off quietly and an announced transition reads at once", async () => {
     const { clock } = installFakeReadCoordinator();
     await settledSession();

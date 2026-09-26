@@ -630,6 +630,35 @@ describe("read coordinator: errors", () => {
 });
 
 describe("read coordinator: identity and disposal", () => {
+  test("an instance-scoped subscriber evicts its entry on dispose", async () => {
+    const { coordinator } = setup();
+    const sub = coordinator.subscribe({
+      key: key({ view: "unique-instance" }),
+      read: async () => ({ messages: ["large transcript"] }),
+      retainOnDispose: false,
+    });
+    await flush();
+    expect(sub.getState().hasValue).toBe(true);
+    sub.dispose();
+    expect(coordinator.getDiagnostics().entries).toEqual([]);
+  });
+  test("disconnect then reconnect fences a retained value", async () => {
+    const { coordinator } = setup({ connectionId: "local" });
+    const transport = deferredTransport<string>();
+    const sub = coordinator.subscribe({ key: key(), read: transport.read });
+    await transport.resolveLast("old server");
+    expect(sub.getState().value).toBe("old server");
+    coordinator.setConnection(null);
+    expect(sub.getState().hasValue).toBe(false);
+    coordinator.setConnection("remote");
+    expect(sub.getState().connectionGeneration).toBe(2);
+    expect(sub.getState().hasValue).toBe(false);
+    const refreshed = sub.refresh();
+    expect(transport.calls).toHaveLength(2);
+    await transport.resolveLast("new server");
+    await refreshed;
+    expect(sub.getState().value).toBe("new server");
+  });
   test("a server switch fences in-flight results and re-reads under the new identity", async () => {
     const { clock, coordinator } = setup({ connectionId: "local" });
     const transport = deferredTransport<string>();
@@ -741,6 +770,30 @@ describe("read coordinator: identity and disposal", () => {
     });
     expect(transport.calls).toHaveLength(1);
     expect(fresh.getState().value).toBe("joined");
+  });
+
+  test("a new subscriber receives a kept value during error backoff", async () => {
+    const { clock, coordinator } = setup();
+    const transport = deferredTransport<string>();
+    const first = coordinator.subscribe({
+      key: key(),
+      read: transport.read,
+      demand: { intervalMs: 1_000 },
+    });
+    await transport.resolveLast("kept");
+    await clock.advance(1_000);
+    await transport.rejectLast(new Error("offline"));
+    first.dispose();
+    const states = collect<string>();
+    const second = coordinator.subscribe({
+      key: key(),
+      read: transport.read,
+      demand: { intervalMs: 1_000 },
+      onState: states.onState,
+    });
+    await flush();
+    expect(states.states.at(-1)).toMatchObject({ status: "error", value: "kept", hasValue: true });
+    second.dispose();
   });
 
   test("a late result after unmount never rearms timers", async () => {

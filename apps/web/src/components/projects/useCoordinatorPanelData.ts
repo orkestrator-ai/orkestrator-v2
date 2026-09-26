@@ -104,7 +104,6 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [readyProject, setReadyProject] = useState<string | null>(null);
-  const [legacy, setLegacy] = useState(false);
   const ready = readyProject === projectId;
   const legacyRef = useRef(false);
   const stampRef = useRef<ViewRevisionStamp | null>(null);
@@ -157,7 +156,7 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
     readOnSubscribe: false,
     demand: {
       active: ready,
-      intervalMs: legacy ? LEGACY_COORDINATOR_POLL_INTERVAL_MS : null,
+      intervalMs: LEGACY_COORDINATOR_POLL_INTERVAL_MS,
       priority: "standard",
     },
     read: async () => {
@@ -196,7 +195,6 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
         } catch (cause) {
           if (!isUnknownViewCommandError(cause, backend.COORDINATOR_VIEW_COMMAND)) throw cause;
           legacyRef.current = true;
-          setLegacy(true);
         }
       }
       const full = await backend.getProjectCoordinator(pid);

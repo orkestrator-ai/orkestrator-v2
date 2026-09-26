@@ -456,6 +456,7 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
         }
       },
       admission: this.options.workflowAdmission ?? null,
+      withoutAdmission: (obligation) => obligation === "provision",
       ...(this.options.schedulerClock
         ? { now: this.options.schedulerClock.now, timers: this.options.schedulerClock.timers }
         : {}),
@@ -941,6 +942,7 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       }
     });
     if (rejection) throw rejection;
+    this.reviewerPollGate.clearPrefix(`${pipelineId}\0`);
     await this.runLocked(pipelineId);
     return (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
   }

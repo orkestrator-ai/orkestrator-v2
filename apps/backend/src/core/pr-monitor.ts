@@ -872,12 +872,14 @@ export class PrMonitorService {
     if (!lease) {
       entry.checkInProgress = false;
       entry.phase = "idle";
-      if (this.entries.get(entry.target.environmentId) === entry && entry.active) {
+      if (this.entries.get(entry.target.environmentId) === entry) {
         if (entry.lastEmitted?.checkInProgress) this.emitState(entry);
         // A refused admission is back-pressure, not a failed detection: keep
         // the obligation and the wake, retry on the ordinary schedule.
-        entry.wake = strongerWake(entry.wake, wake);
-        if (!entry.timer) this.scheduleNext(entry);
+        if (entry.active) {
+          entry.wake = strongerWake(entry.wake, wake);
+          if (!entry.timer) this.scheduleNext(entry);
+        }
       }
       return;
     }

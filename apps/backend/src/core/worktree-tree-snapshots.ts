@@ -340,7 +340,7 @@ export class WorktreeTreeSnapshots {
     state.failure = undefined;
     const serialized = JSON.stringify(tree);
     const digest = responseDigest(tree);
-    const bytes = serialized.length;
+    const bytes = Buffer.byteLength(serialized, "utf8");
     const changed = digest !== state.digest;
     if (changed) {
       state.revision += 1;

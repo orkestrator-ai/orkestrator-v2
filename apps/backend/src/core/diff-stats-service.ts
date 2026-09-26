@@ -807,6 +807,7 @@ export class DiffStatsService {
       this.attachWatcher(entry);
       const reattached = entry.watcher as WorktreeWatcher | undefined;
       if (!reattached?.watching) return;
+      entry.watcherFailures = 0;
       this.restartTimer(entry);
       this.tree.hint(entry.target.environmentId);
       this.request(entry, "hint");
@@ -839,6 +840,8 @@ export class DiffStatsService {
    */
   private periodic(entry: DiffStatsEntry, intervalMs: number): void {
     if (!entry.active) return;
+    // A watcher can miss a burst; the safety tick must reconcile both views.
+    this.tree.hint(entry.target.environmentId);
     const now = this.options.monotonicNow();
     const recentlyScanned =
       entry.lastScanStartedAt !== undefined && now - entry.lastScanStartedAt < intervalMs / 2;

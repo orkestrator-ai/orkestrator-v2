@@ -167,6 +167,8 @@ export interface ReadSubscriptionOptions<T> {
    * Defaults to `true`.
    */
   readOnSubscribe?: boolean;
+  /** Evict the entry after its final subscriber leaves (for instance-scoped keys). */
+  retainOnDispose?: boolean;
   classifyError?: (error: unknown) => ReadErrorKind;
   /** Called after state changes while this subscription is live. */
   onState?: (state: ReadState<T>) => void;
@@ -335,6 +337,7 @@ interface Subscriber<T> {
   classifyError: ((error: unknown) => ReadErrorKind) | undefined;
   onState: ((state: ReadState<T>) => void) | undefined;
   disposed: boolean;
+  retainOnDispose: boolean;
 }
 
 interface InFlight<T> {
@@ -867,11 +870,18 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
       classifyError: options.classifyError,
       onState: options.onState,
       disposed: disposed,
+      retainOnDispose: options.retainOnDispose ?? true,
     };
     owner.subscribers.add(subscriber);
     refreshCadence(owner, now);
 
     if (!disposed) {
+      if (owner.hasValue && owner.status !== "current") {
+        const retained = snapshot(owner);
+        queueMicrotask(() => {
+          if (!subscriber.disposed) subscriber.onState?.(retained);
+        });
+      }
       if (options.readOnSubscribe === false) {
         // The consumer performs its own mount read.
         if (!owner.inFlight) owner.lastStartedAt = now;
@@ -903,6 +913,10 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
       if (owner.subscribers.size > 0) {
         refreshCadence(owner, clock.now());
         schedule(owner);
+        return;
+      }
+      if (!subscriber.retainOnDispose) {
+        evict(owner);
         return;
       }
       clearTimer(owner);
@@ -960,8 +974,8 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
     if (next === connectionId) return;
     const previous = connectionId;
     connectionId = next;
-    // Learning the identity for the first time is not a switch.
-    if (previous === null || next === null || disposed) return;
+    // A disconnect fences retained values. Only the initial identity is learning.
+    if ((previous === null && connectionGeneration === 0) || disposed) return;
     connectionGeneration += 1;
     for (const entry of Array.from(entries.values())) {
       if (entry.subscribers.size === 0) {

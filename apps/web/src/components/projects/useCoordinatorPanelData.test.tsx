@@ -219,9 +219,21 @@ describe("useCoordinatorPanelData", () => {
     await settle();
     expect(fake.count("get_project_coordinator_view")).toBe(1);
     expect(latest.snapshot?.workspace.conversations[0]?.title).toBe("missed");
-    // No coordinator polling of its own on a revisioned backend.
-    await settle(10 * 60_000);
+    // The periodic conditional read also covers live fields without events.
+    await settle(60_000);
+    expect(fake.count("get_project_coordinator_view")).toBe(2);
+  });
+
+  test("a live control MCP change is observed on the one-minute read", async () => {
+    render(<Harness projectId="p1" />);
+    await settle();
+    await waitFor(() => expect(latest.snapshot).not.toBeNull());
+    const changed = coordinator("p1", "p1 first");
+    changed.controlMcp = { enabled: true, running: false, error: "stopped" };
+    fake.bodies.set("p1", changed);
+    await settle(60_000);
     expect(fake.count("get_project_coordinator_view")).toBe(1);
+    expect(latest.snapshot?.controlMcp.error).toBe("stopped");
   });
 
   test("switching projects while the old project's reads are in flight never applies them", async () => {

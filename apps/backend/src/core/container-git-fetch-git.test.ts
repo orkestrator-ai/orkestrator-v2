@@ -13,6 +13,7 @@ import {
   ContainerGitFetchPolicy,
   type ContainerFetchChange,
 } from "./container-git-fetch.js";
+import { dockerExec } from "./commands-container-exec.js";
 import { ManualTime } from "./recurring-test-support.js";
 import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
 
@@ -274,4 +275,61 @@ describe("container status and fetch scripts against a local remote", () => {
     expect(script).not.toContain("git fetch");
     expect(buildContainerFetchScript("main", 30_000)).toContain('git fetch origin "$ref"');
   });
+});
+
+const dockerTest = process.env.ORKESTRATOR_TEST_DOCKER_IMAGE ? test : test.skip;
+dockerTest("a real container recovers a missing tracking ref and rescans status", async () => {
+  const image = process.env.ORKESTRATOR_TEST_DOCKER_IMAGE!;
+  await fs.writeFile(path.join(root, "docker-gitconfig"), "[safe]\n\tdirectory = *\n");
+  const started = Bun.spawnSync([
+    "docker",
+    "run",
+    "--rm",
+    "--detach",
+    "--network",
+    "none",
+    "--user",
+    `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
+    "--mount",
+    `type=bind,source=${root},target=/fixture`,
+    "--mount",
+    `type=bind,source=${workspace},target=/workspace`,
+    "--env",
+    "GIT_CONFIG_GLOBAL=/fixture/docker-gitconfig",
+    "--env",
+    "GIT_TERMINAL_PROMPT=0",
+    "--env",
+    "GIT_ASKPASS=/bin/false",
+    "--entrypoint",
+    "/bin/sleep",
+    image,
+    "infinity",
+  ]);
+  if (started.exitCode !== 0) throw new Error(started.stderr.toString());
+  const containerId = started.stdout.toString().trim();
+  try {
+    await dockerExec(containerId, "git remote set-url origin /fixture/remote.git");
+    expect((await dockerExec(containerId, "printf '%s' \"$GIT_CONFIG_GLOBAL\"")).trim()).toBe(
+      "/fixture/docker-gitconfig",
+    );
+    await pushToRemote("remote-only.txt", "remote\n", "live-recovery-branch");
+    const policy = new ContainerGitFetchPolicy({
+      metrics: new RecurringWorkMetrics(),
+      runFetch: (id, ref, timeoutMs) => dockerExec(id, buildContainerFetchScript(ref, timeoutMs)),
+    });
+    const result = await getContainerGitStatusDetailed(containerId, "live-recovery-branch", true, {
+      exec: (id, script) => dockerExec(id, script),
+      fetches: policy,
+    });
+    expect(result.changes.map(({ path: file, status }) => ({ path: file, status }))).toContainEqual(
+      {
+        path: "remote-only.txt",
+        status: "D",
+      },
+    );
+    expect(result.remote?.state).toBe("current");
+    await policy.idle();
+  } finally {
+    Bun.spawnSync(["docker", "rm", "--force", containerId]);
+  }
 });

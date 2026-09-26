@@ -9,7 +9,7 @@ import { FakeIntervals } from "./fake-intervals.js";
 class FakeSignals implements LifecycleSignalTarget {
   readonly listeners = new Map<string, Set<() => void>>();
 
-  once(signal: "SIGTERM" | "SIGINT", listener: () => void): unknown {
+  on(signal: "SIGTERM" | "SIGINT", listener: () => void): unknown {
     const set = this.listeners.get(signal) ?? new Set();
     set.add(listener);
     this.listeners.set(signal, set);
@@ -29,8 +29,6 @@ class FakeSignals implements LifecycleSignalTarget {
     const set = this.listeners.get(signal);
     if (!set) return;
     const listeners = [...set];
-    // `once` semantics: a listener is removed as it fires.
-    set.clear();
     for (const listener of listeners) listener();
   }
 }
@@ -125,6 +123,26 @@ describe("BridgeLifecycle", () => {
 
     closing.resolve();
     await shutdown;
+  });
+
+  test("repeated termination signals join the pending shutdown", async () => {
+    const closing = deferred();
+    let closes = 0;
+    const { lifecycle, signals, calls } = harness({
+      close: () => {
+        closes += 1;
+        return closing.promise;
+      },
+    });
+    await lifecycle.start();
+    signals.emit("SIGTERM");
+    signals.emit("SIGTERM");
+    expect(signals.count()).toBe(2);
+    expect(calls.exits).toEqual([]);
+    closing.resolve();
+    await lifecycle.requestExit();
+    expect(closes).toBe(1);
+    expect(calls.exits).toEqual([0]);
   });
 
   test("a repeated start rejects without arming a second set of timers", async () => {

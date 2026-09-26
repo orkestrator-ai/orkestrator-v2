@@ -113,6 +113,35 @@ describe("BackendActivityJobs", () => {
     jobs.stop();
   });
 
+  test("a rename wake during a running safety pass survives its idle delay", async () => {
+    const time = new ManualTime(0);
+    const runs: number[] = [];
+    const gate = deferred<void>();
+    let pending = false;
+    const jobs = new BackendActivityJobs(
+      [
+        job(time, runs, {
+          name: "pending-renames",
+          kind: "pending-rename-reconcile",
+          run: async () => {
+            runs.push(time.now());
+            if (runs.length === 1) await gate.promise;
+            return pending ? undefined : 30_000;
+          },
+        }),
+      ],
+      { now: time.now, timers: time.timerFactory, diagnostics: null },
+    );
+    jobs.start();
+    await time.advance(2_000);
+    pending = true;
+    jobs.wake("pending-renames");
+    gate.resolve();
+    await time.advance(2_000);
+    expect(runs.length).toBeGreaterThanOrEqual(2);
+    jobs.stop();
+  });
+
   test("a failing job reports its error and keeps its cadence", async () => {
     const time = new ManualTime(0);
     const errors: unknown[] = [];

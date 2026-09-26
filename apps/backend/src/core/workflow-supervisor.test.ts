@@ -11,7 +11,7 @@ import {
 } from "./workflow-supervisor.js";
 import { ElapsedPollGate } from "./workflow-poll-gate.js";
 
-type Obligation = "advance" | "cancelling" | "settle";
+type Obligation = "advance" | "cancelling" | "settle" | "provision";
 
 /**
  * A fake authoritative store and domain. `advance` reads the record, notes
@@ -72,6 +72,7 @@ function setup(
     discoveryIntervalMs?: number;
     maxConcurrent?: number;
     admission?: WorkAdmissionPool;
+    withoutAdmission?: (obligation: Obligation | "probe") => boolean;
     nextDelayMs?: (key: string, obligation: Obligation) => number | null | undefined;
   } = {},
 ) {
@@ -88,6 +89,7 @@ function setup(
     ...(options.nextDelayMs ? { nextDelayMs: options.nextDelayMs } : {}),
     ...(options.maxConcurrent ? { maxConcurrent: options.maxConcurrent } : {}),
     ...(options.admission ? { admission: options.admission } : {}),
+    ...(options.withoutAdmission ? { withoutAdmission: options.withoutAdmission } : {}),
     now: time.now,
     timers: time.timerFactory,
     random: () => 0,
@@ -347,6 +349,33 @@ describe("KeyedWorkflowSupervisor", () => {
     supervisor.stop();
     pool.close();
     void time;
+  });
+
+  test("provisioning passes leave provider admission available", async () => {
+    const pool = new WorkAdmissionPool({
+      name: "workflow-provider",
+      limits: { maxConcurrent: 1 },
+      diagnostics: null,
+    });
+    const { time, domain, supervisor } = setup({
+      admission: pool,
+      withoutAdmission: (obligation) => obligation === "provision",
+    });
+    for (const key of ["p1", "p2"]) {
+      domain.records.set(key, { obligation: "provision" });
+      domain.gates.set(key, deferred());
+    }
+    domain.records.set("review", { obligation: "advance" });
+    supervisor.start();
+    await time.advance(0);
+    expect(domain.passesOf("review")).toHaveLength(1);
+    expect(pool.status().active).toBe(0);
+    for (const key of ["p1", "p2"]) {
+      domain.gates.get(key)!.resolve();
+      domain.gates.delete(key);
+    }
+    supervisor.stop();
+    pool.close();
   });
 
   test("critical jobs run on time while every best-effort slot is blocked", async () => {

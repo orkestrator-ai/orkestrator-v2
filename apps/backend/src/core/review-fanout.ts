@@ -634,6 +634,7 @@ export async function resolveUnattendedReviewerInteractions(
 export interface ReviewerPollGate {
   count(scope: string): boolean;
   exhausted(scope: string, count: number, limit: number): boolean;
+  clear(scope: string): void;
 }
 
 export interface ReviewFanoutHost {
@@ -1073,6 +1074,7 @@ export class ReviewFanoutRunner {
       reviewer.startedAt = nowIso();
       delete reviewer.tokenCount;
       delete reviewer.usageFinalizationPolls;
+      host.pollGate?.clear(`${host.workflowId}\0${reviewer.id}\0usage`);
       delete reviewer.progressAt;
       delete reviewer.progressDigest;
       delete reviewer.stalledSince;
@@ -1601,6 +1603,8 @@ export class ReviewFanoutRunner {
         : "structured-output-v1";
     reviewer.resultSubmission = reviewer.resultTransport === "tool-v1" ? "preparing" : undefined;
     delete reviewer.idleResultPolls;
+    this.host.pollGate?.clear(`${this.host.workflowId}\0${reviewer.id}\0idle`);
+    this.host.pollGate?.clear(`${this.host.workflowId}\0${reviewer.id}\0usage`);
     await this.commit();
     return "stop";
   }
@@ -1631,10 +1635,14 @@ export class ReviewFanoutRunner {
     return "continue";
   }
 
-  /** Observed progress retires the stall count so it cannot accumulate. */
+  /** Observed progress restarts the idle and final-usage windows. */
   private async clearStall(reviewer: ReviewerRecord): Promise<"continue"> {
-    if (reviewer.idleResultPolls === undefined) return "continue";
+    if (reviewer.idleResultPolls === undefined && reviewer.usageFinalizationPolls === undefined)
+      return "continue";
     delete reviewer.idleResultPolls;
+    delete reviewer.usageFinalizationPolls;
+    this.host.pollGate?.clear(`${this.host.workflowId}\0${reviewer.id}\0idle`);
+    this.host.pollGate?.clear(`${this.host.workflowId}\0${reviewer.id}\0usage`);
     await this.commit();
     return "continue";
   }

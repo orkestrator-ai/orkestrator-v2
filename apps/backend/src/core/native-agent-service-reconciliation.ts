@@ -339,9 +339,17 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
               Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
               sessionOwner,
               details.readyForInput,
+              () => this.observations.accepts(ticket, session.key),
             )
           )
             completionCandidates.add(session.environmentId);
+          if (!this.observations.accepts(ticket, session.key)) {
+            settledIdle = false;
+            if (!this.contributeRetained(activityByEnvironment, session, sessionOwner)) {
+              failedEnvironments.add(session.environmentId);
+            }
+            return;
+          }
           // Published after the edge is durable, so a storage failure above
           // leaves no fresh record contradicting the retained edge state.
           this.observations.record(ticket, {
@@ -681,6 +689,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
      */
     owner: "environment" | "coordinator" = "environment",
     readyForInput?: boolean,
+    stillApplicable?: () => boolean,
   ): Promise<boolean> {
     const observed = this.observedSessionActivity.get(session.key);
     const currentObservation =
@@ -734,6 +743,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         new Date(this.now()).toISOString(),
       );
     }
+    if (stillApplicable && !stillApplicable()) return false;
     this.observedSessionActivity.set(session.key, {
       providerSessionId: session.providerSessionId,
       state,

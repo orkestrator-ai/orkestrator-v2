@@ -104,6 +104,17 @@ describe("InitializationLogs", () => {
     await waitFor(() => expect(screen.getByText("recovered")).toBeTruthy());
   });
 
+  test("a remount shows the kept tail while refreshes are failing", async () => {
+    getContainerLogsMock.mockResolvedValueOnce("kept tail").mockRejectedValue(new Error("offline"));
+    const first = render(<InitializationLogs containerId="container-1" />);
+    await waitFor(() => expect(screen.getByText("kept tail")).toBeTruthy());
+    await advance(1_000);
+    first.unmount();
+    render(<InitializationLogs containerId="container-1" />);
+    await waitFor(() => expect(screen.getByText("kept tail")).toBeTruthy());
+    expect(screen.queryByText("Loading container logs...")).toBeNull();
+  });
+
   test("polls once a second by default and not while the document is hidden", async () => {
     getContainerLogsMock.mockResolvedValue("tail");
     render(<InitializationLogs containerId="container-1" />);

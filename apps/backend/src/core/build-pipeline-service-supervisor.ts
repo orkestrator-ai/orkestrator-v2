@@ -142,6 +142,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         pollGate: (pipeline) => ({
           count: (scope) => this.reviewerPollGate.count(scope, this.passTrigger(pipeline.id)),
           exhausted: (scope, count, limit) => this.reviewerPollGate.exhausted(scope, count, limit),
+          clear: (scope) => this.reviewerPollGate.clear(scope),
         }),
       });
     }

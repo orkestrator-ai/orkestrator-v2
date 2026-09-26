@@ -2433,16 +2433,18 @@ export function useNativeAgentSession<TMessage = unknown>({
     },
     enabled,
     readOnSubscribe: false,
+    retainOnDispose: false,
     demand: nativeSessionReadDemand(platform, runtimeProjection?.turn.phase, {
       active: enabled && isActive,
       observationEvents: nativeObservationEventsSupported(),
     }),
-    read: (context) =>
-      refreshRef.current?.(
+    read: async (context) => {
+      await (refreshRef.current?.(
         context.reason === "interval"
           ? { manual: false }
           : { manual: false, reconcileAfterInFlight: true },
-      ) ?? Promise.resolve(null),
+      ) ?? Promise.resolve(null));
+    },
   });
   coordinatedInvalidateRef.current = coordinatedInvalidate;
 

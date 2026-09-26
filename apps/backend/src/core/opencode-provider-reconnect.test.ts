@@ -119,6 +119,8 @@ describe("OpenCode monitor reconnect backoff", () => {
       await monitor.dropAndRetry();
 
       // This connection stays healthy long enough to count as recovered.
+      fake.subscriptions.at(-1)!.push({ type: "server.connected", properties: {} });
+      await waitUntil(() => monitor.provider.observationStreamLive?.() === true);
       monitor.advance(30_000);
       await monitor.dropAndRetry();
       await monitor.dropAndRetry();
@@ -166,6 +168,26 @@ describe("OpenCode monitor reconnect backoff", () => {
 });
 
 describe("OpenCode observation wakeups (step 07)", () => {
+  test("a mid-stream failure marks a gap and reconciles after reconnect", async () => {
+    const fake = openCodeFake();
+    const monitor = monitoredProvider(fake);
+    try {
+      await monitor.provider.createSession("build", "Build task");
+      await waitUntil(() => fake.subscriptions.length === 1);
+      fake.subscriptions[0]!.push({ type: "server.connected", properties: {} });
+      await waitUntil(() => monitor.provider.observationStreamLive?.() === true);
+      const reads = fake.statusCallCount;
+      fake.subscriptions[0]!.fail(new Error("stream dropped"));
+      await waitUntil(() => monitor.waits.length === 1);
+      expect(monitor.provider.observationStreamLive?.()).toBe(false);
+      monitor.releaseRetry();
+      await waitUntil(() => fake.subscriptions.length === 2);
+      await waitUntil(() => fake.statusCallCount > reads);
+      expect(monitor.provider.observationStreamLive?.()).toBe(false);
+    } finally {
+      await monitor.provider.dispose?.();
+    }
+  });
   test("reports its stream live only while connected and hints every owned-session change", async () => {
     const fake = openCodeFake();
     const hints: Array<string | undefined> = [];
@@ -194,6 +216,9 @@ describe("OpenCode observation wakeups (step 07)", () => {
     try {
       const owned = await provider.createSession("build", "Build task");
       await waitUntil(() => fake.subscriptions.length === 1);
+      expect(provider.observationStreamLive?.()).toBe(false);
+      expect(fake.subscriptionOptions[0]?.sseMaxRetryAttempts).toBe(1);
+      fake.subscriptions[0]!.push({ type: "server.connected", properties: {} });
       await waitUntil(() => provider.observationStreamLive?.() === true);
       // A (re)connect may follow missed events: wake every owned session.
       expect(hints).toContain(undefined);
@@ -226,6 +251,8 @@ describe("OpenCode observation wakeups (step 07)", () => {
       expect(hints).toEqual([undefined]);
       release!();
       await waitUntil(() => fake.subscriptions.length === 2);
+      expect(provider.observationStreamLive?.()).toBe(false);
+      fake.subscriptions[1]!.push({ type: "server.connected", properties: {} });
       await waitUntil(() => provider.observationStreamLive?.() === true);
     } finally {
       await provider.dispose?.();

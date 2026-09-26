@@ -1071,6 +1071,7 @@ export class LoopedReviewService implements KeyedWorkflowOwner {
           : { dispatchId: dispatch.id, startedAt: nowIso(), idlePolls: 0 };
       if (backgroundWorkLive) {
         wait.idlePolls = 0;
+        this.missingResultGate.clear(`${workflow.id}\0${dispatch.id}`);
         const lastProbe = wait.lastProbeAt ? Date.parse(wait.lastProbeAt) : Number.NaN;
         if (
           !Number.isFinite(lastProbe) ||

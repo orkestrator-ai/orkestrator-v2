@@ -31,6 +31,34 @@ describe("mergeValidationOutput", () => {
     expect(merged.output!.stdout).toMatchObject({ totalBytes: 8, startOffset: 2 });
   });
 
+  test("merges a stderr append alongside an authoritative stdout tail", () => {
+    const held = {
+      ...output({ contentBase64: btoa("old"), totalBytes: 3 }),
+      stderr: {
+        contentBase64: btoa("err"),
+        totalBytes: 3,
+        startOffset: 0,
+        anchor: anchor("e"),
+        mode: "tail" as const,
+      },
+    };
+    const next = {
+      ...output({ contentBase64: btoa("new"), totalBytes: 3, anchor: anchor("b") }),
+      stderr: {
+        contentBase64: btoa("!"),
+        totalBytes: 4,
+        startOffset: 3,
+        anchor: anchor("f"),
+        mode: "append" as const,
+      },
+    };
+    const merged = mergeValidationOutput(held, next);
+    expect(merged.resync).toBe(false);
+    expect(atob(merged.output!.stdout!.contentBase64)).toBe("new");
+    expect(atob(merged.output!.stderr!.contentBase64)).toBe("err!");
+    expect(merged.output!.stderr).toMatchObject({ totalBytes: 4, startOffset: 0 });
+  });
+
   test("an append this client cannot place is a resync, never a guess", () => {
     const held = output({ contentBase64: btoa("abcd"), totalBytes: 4 });
     const merged = mergeValidationOutput(

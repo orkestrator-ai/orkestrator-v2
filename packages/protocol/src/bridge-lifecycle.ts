@@ -25,7 +25,7 @@ export type BridgeLifecyclePhase = "idle" | "starting" | "started" | "stopping" 
 
 /** The slice of `process` used for termination signals. */
 export interface LifecycleSignalTarget {
-  once(signal: "SIGTERM" | "SIGINT", listener: () => void): unknown;
+  on(signal: "SIGTERM" | "SIGINT", listener: () => void): unknown;
   off(signal: "SIGTERM" | "SIGINT", listener: () => void): unknown;
 }
 
@@ -186,7 +186,7 @@ export class BridgeLifecycle {
     if (signals) {
       for (const signal of TERMINATION_SIGNALS) {
         const listener = () => void this.requestExit();
-        signals.once(signal, listener);
+        signals.on(signal, listener);
         this.#signalDisarmers.push(() => signals.off(signal, listener));
       }
     }

@@ -22,9 +22,10 @@ function harness(trigger: () => PollTrigger, time: ManualTime) {
     dispatchState: "sent",
     resultTransport: "structured-output-v1",
   };
+  let status: "idle" | "running" = "idle";
   const provider = {
     async status() {
-      return "idle" as const;
+      return status;
     },
     async messages() {
       return [];
@@ -53,9 +54,16 @@ function harness(trigger: () => PollTrigger, time: ManualTime) {
     pollGate: {
       count: (scope) => gate.count(scope, trigger()),
       exhausted: (scope, count, limit) => gate.exhausted(scope, count, limit),
+      clear: (scope) => gate.clear(scope),
     },
   };
-  return { reviewer, runner: new ReviewFanoutRunner(host) };
+  return {
+    reviewer,
+    runner: new ReviewFanoutRunner(host),
+    setStatus: (next: typeof status) => {
+      status = next;
+    },
+  };
 }
 
 describe("reviewer idle-result grace under wakeups", () => {
@@ -84,5 +92,21 @@ describe("reviewer idle-result grace under wakeups", () => {
     await runner.advanceReviewers([reviewer]);
     // Two polls ten seconds apart: the five-poll (≈5 s) grace has elapsed.
     expect(reviewer.status).toBe("failed");
+  });
+
+  test("running progress restarts the elapsed idle grace", async () => {
+    const time = new ManualTime(0);
+    const { reviewer, runner, setStatus } = harness(() => "periodic", time);
+    await runner.advanceReviewers([reviewer]);
+    expect(reviewer.idleResultPolls).toBe(1);
+    setStatus("running");
+    await runner.advanceReviewers([reviewer]);
+    expect(reviewer.idleResultPolls).toBeUndefined();
+    time.jump(10_000);
+    setStatus("idle");
+    await runner.advanceReviewers([reviewer]);
+    await runner.advanceReviewers([reviewer]);
+    expect(reviewer.status).toBe("running");
+    expect(reviewer.idleResultPolls).toBe(2);
   });
 });

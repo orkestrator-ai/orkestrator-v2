@@ -932,6 +932,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         }
         const recovered = await this.options.recoverAddressSession!(workflow, replacement);
         await this.assertFence(workflow.id, token);
+        this.pollGate.clearPrefix(`${workflow.id}\0fix\0`);
         workflow.fixSession = recovered.fixSession;
         workflow.fixSession.status = "running";
         workflow.fixSession.startedAt = nowIso();
@@ -964,6 +965,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
       const { workflow, token } = controlled;
       if (workflow.phase !== "failed") return workflow;
+      this.pollGate.clearPrefix(`${workflow.id}\0`);
       // A stale immutable package is unusable and requires a full preparation
       // reset. Live-worktree drift on a legacy/no-package review is advisory:
       // completed reports remain useful (with the drift limitation attached),
@@ -2349,6 +2351,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    */
   private async advanceInteractiveFix(workflow: MultiReviewWorkflow, token: string): Promise<void> {
     const session = workflow.fixSession!;
+    const fixIdleScope = `fix\0idle\0${session.providerSessionId}`;
+    const fixUsageScope = `fix\0usage\0${session.providerSessionId}`;
     try {
       if (!workflow.stepRuntimes?.fix) beginStepRuntime(workflow, "fix", session);
       const provider = await this.provider(workflow, session);
@@ -2386,6 +2390,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         const activityChanged = session.observedRunning !== true || session.status !== "running";
         delete session.idleResultPolls;
         delete session.usageFinalizationPolls;
+        this.pollGate.clear(`${workflow.id}\0${fixIdleScope}`);
+        this.pollGate.clear(`${workflow.id}\0${fixUsageScope}`);
         session.observedRunning = true;
         session.status = "running";
         delete session.completedAt;
@@ -2413,7 +2419,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       ) {
         if (session.observedRunning !== true) {
           // A wakeup burst does not count as the settling observation.
-          if (!this.countPoll(workflow.id, "fix\0idle")) {
+          if (!this.countPoll(workflow.id, fixIdleScope)) {
             await this.unclaim(workflow, token);
             return;
           }
@@ -2431,6 +2437,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         if (observation.status === "running" || observation.status === "blocked") {
           delete session.idleResultPolls;
           delete session.usageFinalizationPolls;
+          this.pollGate.clear(`${workflow.id}\0${fixIdleScope}`);
+          this.pollGate.clear(`${workflow.id}\0${fixUsageScope}`);
           session.observedRunning = true;
           session.status = "running";
           await this.refreshFixSessionUsage(
@@ -2469,6 +2477,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       if (observation.status === "running" || observation.status === "blocked") {
         delete session.idleResultPolls;
         delete session.usageFinalizationPolls;
+        this.pollGate.clear(`${workflow.id}\0${fixIdleScope}`);
+        this.pollGate.clear(`${workflow.id}\0${fixUsageScope}`);
         session.observedRunning = true;
         session.status = "running";
         await this.save(workflow, token);
@@ -2481,12 +2491,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         (session.usageFinalizationPolls ?? 0) < REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS &&
         !this.pollsExhausted(
           workflow.id,
-          "fix\0usage",
+          fixUsageScope,
           session.usageFinalizationPolls ?? 0,
           REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS,
         )
       ) {
-        if (!this.countPoll(workflow.id, "fix\0usage")) {
+        if (!this.countPoll(workflow.id, fixUsageScope)) {
           await this.unclaim(workflow, token);
           return;
         }
@@ -2787,6 +2797,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         count: (scope) =>
           this.pollGate.count(scope, this.passTriggers.get(workflow.id) ?? "explicit"),
         exhausted: (scope, count, limit) => this.pollGate.exhausted(scope, count, limit),
+        clear: (scope) => this.pollGate.clear(scope),
       },
       targetBranch: workflow.targetBranch,
       reviewInstruction: workflow.reviewInstruction,
@@ -3351,6 +3362,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       if (request.idleResultPolls !== undefined || request.usageFinalizationPolls !== undefined) {
         delete request.idleResultPolls;
         delete request.usageFinalizationPolls;
+        this.pollGate.clear(`${workflow.id}\0${request.requestId}\0idle`);
+        this.pollGate.clear(`${workflow.id}\0${request.requestId}\0usage`);
         await this.save(workflow, token);
       }
       await this.observeFixSessionProgress(
@@ -3412,8 +3425,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       if (observation.backgroundWorkLive) {
         // Waiting on background agents it launched is progress, not idleness;
         // the transcript stall clock still bounds it.
-        if (request.idleResultPolls !== undefined) {
+        if (request.idleResultPolls !== undefined || request.usageFinalizationPolls !== undefined) {
           delete request.idleResultPolls;
+          delete request.usageFinalizationPolls;
+          this.pollGate.clear(`${workflow.id}\0${request.requestId}\0idle`);
+          this.pollGate.clear(`${workflow.id}\0${request.requestId}\0usage`);
           await this.save(workflow, token);
         }
         await this.observeFixSessionProgress(

@@ -83,6 +83,7 @@ export interface DesignLayerTreeProps {
   selection: DesignSelection | null;
   focusedFrameId: string | null;
   onFocusFrame: (frameId: string) => void;
+  onFocusRow?: (frameId: string) => void;
   onSelectElement: (frameId: string, selector: string) => void;
   onFrameAction: (frameId: string, action: DesignFrameAction) => void;
   /** Frames with an unsettled optimistic edit; labelled "(saving)". */
@@ -524,6 +525,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
         else rowElements.current.delete(row.key);
       },
       onFocus: () => {
+        props.onFocusRow?.(row.frameId);
         if (row.key !== activeRowKey) {
           setActiveKey(row.key);
           activeFrame.current = row.frameId;

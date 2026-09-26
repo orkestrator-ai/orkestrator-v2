@@ -278,6 +278,7 @@ export const DesignFrameView = memo(function DesignFrameView({
     selected?.frameId === frame.id && ready && !invalid ? selected.element.rect : null;
   const hitTest = (clientX: number, clientY: number, bounds: DOMRect) => {
     if (!bridge || !ready || invalid) return;
+    const generation = actions.beginSelection();
     const revision = committed.revision;
     const key = contentKey;
     void bridge
@@ -298,6 +299,7 @@ export const DesignFrameView = memo(function DesignFrameView({
                 ...(meta ? { structureId: meta.structureId, contentId: meta.contentId } : {}),
               }
             : null,
+          generation,
         );
       })
       .catch((error: unknown) => actions.reportError(error, frame.id));
@@ -336,6 +338,7 @@ export const DesignFrameView = memo(function DesignFrameView({
           onKeyDown={onFrameKey}
           onFocus={() => actions.focusFrame(frame.id)}
           aria-label={`Move frame ${frame.name}`}
+          data-frame-title-id={frame.id}
           aria-pressed={frameSelected}
           aria-description="Arrow keys move, Alt+Arrow keys resize, Shift for larger steps, Delete removes a selected frame"
         >

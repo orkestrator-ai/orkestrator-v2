@@ -21,7 +21,10 @@ export interface DesignCanvasActions {
   controller: DesignCanvasController;
   environmentId: string;
   canvasId: string;
-  select(selection: DesignSelection | null): void;
+  /** Starts an asynchronous selection; its result applies only while this generation is current. */
+  beginSelection(): number;
+  /** Returns false when an older asynchronous result was discarded. */
+  select(selection: DesignSelection | null, generation?: number): boolean;
   /** Absolute final values for one gesture; `base` is the committed frame the gesture started from. */
   submitGeometry(base: DesignFrame, patch: GeometryPatch, gestureId: string, label: string): void;
   submitElementResize(

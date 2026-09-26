@@ -77,6 +77,7 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 
 | Document | Status | Notes |
 | --- | --- | --- |
+| [CLI commands plan](improvements/cli-commands/plan/00-cli-commands-index.md) | Active | Fifteen planned steps for project/environment control, durable prompt runs, and targeted CLI testing; implementation has not started. Source: [CLI review](improvements/cli-commands.md). |
 | [Inconsistency remediation plan](improvements/inconsistencies/plan/00-index.md) | Active | Planned work in eleven numbered steps, based on the 2026-09-21 inconsistency review; implementation has not started. |
 | [Inconsistency review](improvements/incocnsistencies.md) | Historical | Nine findings against revision `88c2f9c`; the implementation plan tracks resolution. Original requested filename retained. |
 

@@ -2,8 +2,9 @@
 
 Status: In progress — coordinator and first migration (native session hook,
 Files panel) landed with baseline foreground cadence and hidden-document pause;
-quiet backoff (task 8), data-saving preference (task 9), step 09 consumers and
-real-stack qualification remain. See [Completion notes](#completion-notes).
+step 09 consumers migrated since; quiet backoff (task 8), data-saving
+preference (task 9) and real-stack qualification remain. See
+[Completion notes](#completion-notes).
 Dependencies: 01; relevant step 11 recovery contract before slower polling.
 Finding: F05. Related proposal: client data-saving mode.
 
@@ -161,8 +162,16 @@ read per active key happens after a confirmed transport reconnect.
   client-local preference layer to extend trivially, and the proposal requires
   a user-facing control. It should set per-client demand through this
   coordinator.
-- **Step 09 consumers** (system meters, coordinator panel, reviewer transcript,
-  init logs, Cursor login, design canvas) are not migrated.
+- **Step 09 consumers** — migrated by step 09 (see its
+  [completion notes](09-secondary-client-processes.md#completion-notes)):
+  system and process meters (one shared key per backend sample), coordinator
+  view and repository status probe, reviewer transcript backstop, validation
+  output, initialization logs, Cursor login and the design canvas cursor check
+  all schedule through this coordinator. Step 09 added one additive member,
+  `ReadCoordinator.clock`, so consumers can age a retained value on the same
+  timeline as `ReadState.observedAt`. The browser-annotation fallback poll and
+  the connection-switcher probe keep their own guarded timers (they are
+  operation/probe state machines rather than presentation reads).
 - **Real-stack qualification** not run: isolated-stack browser QA (inactive
   environment switch, two clients with different settings, parked approvals,
   completion while hidden, queued prompts, reload, missed final invalidation),

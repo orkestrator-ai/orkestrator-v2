@@ -6,7 +6,7 @@ client hydration. Introduced by recurring-processes
 
 An event-led view is a live event stream folded over an authoritative snapshot:
 the PR monitor mirror, environment diff statistics, the worktree snapshot
-revisions behind the Files panel (step 03), and (planned) the coordinator
+revisions behind the Files panel (step 03), and the coordinator
 view. This note defines which ordering each consumer may rely on, the
 additive wire contract for revisioned snapshots, and
 the client helper every such view uses to stay bounded while it converges.
@@ -244,6 +244,21 @@ are invalidations only; the file list and tree are re-read with
   that changes only remote freshness republishes the state without advancing
   either revision. `stale` means the list is exact against the clone's refs,
   which may be behind the remote — never that the list is unusable.
+
+## Coordinator view (step 09)
+
+The coordinator panel is invalidation-led, not event-folded: it subscribes to
+scoped `coordinator` (and `config`) `resource-changed` events before
+hydrating and re-reads through `get_project_coordinator_view`
+(`apps/backend/src/core/coordinator-view-revisions.ts`), which answers the
+`ViewSnapshotOutcome` contract above. `generation` is one backend lifetime;
+`revision` changes whenever the digest of the captured snapshot changes and
+comes from one process-wide counter, so it is never reused for another body.
+It is an equality/ordering token, not an event sequence — clients do not
+gap-detect it. Recovery rides `onViewSafetyCheck`, reconnect reconciliation
+and a guarded focus probe; an older backend keeps a 60 s full poll. The
+project's Git status is a separate probe and is not part of this view's
+freshness (see step 09's completion notes).
 
 ## Adopting the contract
 

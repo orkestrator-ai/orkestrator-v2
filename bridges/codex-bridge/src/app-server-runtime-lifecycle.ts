@@ -72,6 +72,7 @@ import {
   ThreadRegistry,
   phaseToExternalStatus,
   type BridgeSession,
+  CODEX_RESTARTED_MID_TURN_MESSAGE,
   type PromptAttachmentInput,
   type SessionPhase,
   type SessionTitleSource,
@@ -135,8 +136,7 @@ import {
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
 
-export const CODEX_RESTARTED_MID_TURN_MESSAGE =
-  "Codex restarted before this turn finished, so its work stopped partway. Send a message to continue.";
+export { CODEX_RESTARTED_MID_TURN_MESSAGE } from "./sessions/thread-registry.js";
 
 export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   async start(): Promise<void> {
@@ -184,6 +184,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         structuredOutputRequestId: persisted.structuredOutputRequestId,
         structuredOutput: persisted.structuredOutput,
         structuredOutputTurns: persisted.structuredOutputTurns,
+        restartFailure: persisted.restartFailure,
         confirmedModelsByTurn: persisted.confirmedModelsByTurn,
         asyncQuestionItemIds: persisted.asyncQuestionItemIds ?? [],
         lastAccessed: Date.parse(persisted.lastAccessed),
@@ -1381,7 +1382,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * session to idle with no error: the transcript simply ends mid-task and reads
    * as done. Surface it as a failure so the user knows to continue.
    */
-  private completeRecoveredTurn(turn: TurnAccumulator, status: EngineTurnStatus): void {
+  protected completeRecoveredTurn(turn: TurnAccumulator, status: EngineTurnStatus): void {
     if (status === "interrupted" && !turn.cancelRequested) {
       turn.complete("failed", {
         message: CODEX_RESTARTED_MID_TURN_MESSAGE,
@@ -1419,6 +1420,13 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
           structuredResult?.ok === true && turn.phase === "completed",
         )
       : [];
+    const restartNoticeSessions = this.registry
+      .boundSessionsForThread(context.threadId)
+      .filter((session) => {
+        if (turn.error?.code !== "app-server-restarted") return false;
+        session.restartFailure = { turnId: turn.turnId };
+        return true;
+      });
 
     // Journal the terminal state *before* rendering. The durable "this request
     // finished" record must not wait on diff computation: a duplicate arriving in
@@ -1443,9 +1451,13 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         session.structuredOutput = structuredResult;
       }
       await Promise.all(
-        [...new Set([...structuredSessions, ...structuredLedgerSessions])].map((session) =>
-          this.persistSession(session),
-        ),
+        [
+          ...new Set([
+            ...structuredSessions,
+            ...structuredLedgerSessions,
+            ...restartNoticeSessions,
+          ]),
+        ].map((session) => this.persistSession(session)),
       );
       for (const session of structuredSessions) {
         this.options.emit({
@@ -1454,6 +1466,9 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
           data: { structuredOutput: structuredResult },
         });
       }
+    }
+    if (!structuredResult) {
+      await Promise.all(restartNoticeSessions.map((session) => this.persistSession(session)));
     }
 
     context.activeTurn = null;

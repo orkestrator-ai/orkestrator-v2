@@ -147,5 +147,7 @@ describe("driven workflow supervision baseline (step 08)", () => {
         Math.abs(keyed[domain].providerReads - rollback[domain].providerReads),
       ).toBeLessThanOrEqual(fixture.activePerStore * 2);
     }
-  });
+    // Two complete runs over a real on-disk store: seconds of I/O even when
+    // idle, so the default five-second budget fails under aggregate load.
+  }, 60_000);
 });

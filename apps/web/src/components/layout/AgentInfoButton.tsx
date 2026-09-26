@@ -83,6 +83,7 @@ import {
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
   describeNativeAgentExecutionPolicy,
+  nativeAgentSteerRejectionMessage,
   type NativeAgentControlUpdate,
 } from "@orkestrator/protocol/native-agent";
 import {
@@ -1695,6 +1696,9 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                             }
                             if (outcome.outcome === "idle") {
                               throw new Error("There is no active turn to steer.");
+                            }
+                            if (outcome.outcome === "rejected") {
+                              throw new Error(nativeAgentSteerRejectionMessage(outcome));
                             }
                             if (isCurrent()) {
                               setSteerState({

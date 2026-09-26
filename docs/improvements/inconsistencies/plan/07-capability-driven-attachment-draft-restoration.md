@@ -1,6 +1,6 @@
 # 07 — Restore drafts using the shared attachment capabilities
 
-Status: Planned.  
+Status: Implemented (2026-09-26); verified live for Cursor and the pre-session picker; the assigned Grok tab UI is not yet observed live (the Grok CLI did not connect). Not merged. See [step 11 evidence](11-conformance-verification-and-release-handoff.md#evidence-record-2026-09-26).  
 Depends on: [01](01-contract-baseline-and-regression-fixtures.md).  
 Finding: INC-06.
 
@@ -24,34 +24,34 @@ because a live model catalog is temporarily unavailable.
 
 ## Implementation tasks
 
-- [ ] Split structural validation from platform eligibility. Validate `id`,
+- [x] Split structural validation from platform eligibility. Validate `id`,
   `name`, `path`, attachment type, and existing optional fields before consulting
   capabilities. Do not loosen malformed-record handling to preserve images.
-- [ ] Resolve an assigned namespace through the shared `isAgentPlatform` guard
+- [x] Resolve an assigned namespace through the shared `isAgentPlatform` guard
   and `nativeAgentCapabilities(platform).attachments` rather than another copied
   list of native platforms.
-- [ ] For `agent-native`, read the saved platform metadata using the same guard.
+- [x] For `agent-native`, read the saved platform metadata using the same guard.
   A known saved platform must have the same eligibility as an assigned tab.
-- [ ] Preserve explicit legacy `claude-tmux` handling outside the native table.
+- [x] Preserve explicit legacy `claude-tmux` handling outside the native table.
   Do not pretend terminal delivery accepts the same payload as a native bridge.
-- [ ] Define the unassigned/unknown-metadata fallback deliberately. Preserve
+- [x] Define the unassigned/unknown-metadata fallback deliberately. Preserve
   structurally valid undecided draft content until a valid platform is chosen,
   then apply the existing selection reconciliation; do not erase an undecided
   draft simply because no provider capability is yet available.
-- [ ] Reuse `retainSupportedAttachments` if its imports are suitable for the
+- [x] Reuse `retainSupportedAttachments` if its imports are suitable for the
   persistence layer. If importing it pulls UI components into a pure validator,
   extract only the small pure type-eligibility helper to an appropriate shared
   frontend module; do not introduce a cyclic dependency.
-- [ ] Keep model vision support in send/selection validation. Restoring a draft
+- [x] Keep model vision support in send/selection validation. Restoring a draft
   should not destroy an image while the catalog is loading or a model change is
   pending. Existing user-visible incompatibility handling remains in the composer.
-- [ ] Preserve attachment IDs, paths, preview metadata, annotation references,
+- [x] Preserve attachment IDs, paths, preview metadata, annotation references,
   and order. Do not rewrite files, copy image bytes, or persist browser object
   URLs as a new storage format in this fix.
-- [ ] Verify hydration's autosave preserves the recovered images rather than
+- [x] Verify hydration's autosave preserves the recovered images rather than
   immediately publishing a filtered empty list. Assert the backend write payload,
   not only in-memory hook state.
-- [ ] Keep revision-conflict behavior and the “do not overwrite typing while
+- [x] Keep revision-conflict behavior and the “do not overwrite typing while
   loading” guard unchanged. Test attachment-only drafts and fallback-namespace
   migration under those races.
 
@@ -79,6 +79,8 @@ table would reproduce the drift this change is meant to eliminate.
 
 Proposed file: `apps/web/src/lib/native-draft-attachments.test.tsx`, or a focused
 split of existing draft tests if that better matches the harness.
+
+Implemented as (2026-09-26): `apps/web/src/lib/native-draft-attachments.test.tsx` and the browser spec `e2e/agent-testing/native-draft-attachments.spec.ts`.
 
 1. Restore one valid image for assigned Cursor and Grok tabs; verify the next
    persisted revision contains the same image and preserves its metadata.
@@ -116,10 +118,10 @@ imports or behavior change.
 
 ## Acceptance
 
-- [ ] Cursor and Grok images survive both hydration and subsequent publication.
-- [ ] Native attachment policy has one shared capability source.
-- [ ] Structural validation, draft conflicts, and local-typing protection remain.
-- [ ] Model uncertainty does not become destructive draft filtering.
+- [x] Cursor and Grok images survive both hydration and subsequent publication.
+- [x] Native attachment policy has one shared capability source.
+- [x] Structural validation, draft conflicts, and local-typing protection remain.
+- [x] Model uncertainty does not become destructive draft filtering.
 - [ ] Focused web tests, web typecheck, and isolated reload/inactive QA pass.
-- [ ] No storage migration or attachment file rewrite is introduced unnecessarily.
+- [x] No storage migration or attachment file rewrite is introduced unnecessarily.
 

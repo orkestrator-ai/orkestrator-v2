@@ -28,6 +28,7 @@ import {
   RPC_TIMEOUT_MS,
   TRANSCRIPT_CHECK_INTERVAL_BYTES,
   HttpError,
+  SESSION_CLOSING_ERROR,
   activeSessionReservations,
   adjustAnonymousSessionCreations,
   clientSessionKeys,
@@ -214,6 +215,9 @@ export async function resumeExistingSession(
   policy?: AcpSpawnOptions["policy"],
   agentMcp?: AcpSpawnOptions["agentMcp"],
 ): Promise<SessionState> {
+  // A closing session is about to leave the registry; resuming it here would
+  // hand the caller an id that answers `missing` a moment later.
+  if (state.closing) throw new HttpError(409, SESSION_CLOSING_ERROR);
   if (state.status === "running" || state.dispatching) {
     throw new HttpError(409, "Session is already running");
   }
@@ -343,6 +347,7 @@ export async function createSession(
     if (existingId) {
       const existing = sessions.get(existingId);
       if (existing) {
+        if (existing.closing) throw new HttpError(409, SESSION_CLOSING_ERROR);
         // Creation is idempotent by client key, so a retry under a different
         // review boundary must move the session rather than silently keep the
         // looser one. A boundary that did not change closes nothing, and one
@@ -502,7 +507,8 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
     applyVendorUpdate(state, method, params);
   };
   child.onPermission = (requestId, params) => {
-    if (state.child !== child || sessions.get(state.id) !== state) {
+    // A closing session answers nothing it parked, so it parks nothing new.
+    if (state.child !== child || sessions.get(state.id) !== state || state.closing) {
       child.respond(requestId, { outcome: { outcome: "cancelled" } });
       return;
     }
@@ -522,7 +528,7 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
     ) {
       return false;
     }
-    if (state.child !== child || sessions.get(state.id) !== state) {
+    if (state.child !== child || sessions.get(state.id) !== state || state.closing) {
       child.respond(requestId, { outcome: "cancelled" });
       return true;
     }
@@ -579,6 +585,10 @@ export async function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Pr
  */
 export function attachSessionProcess(state: SessionState): Promise<AcpProcess> {
   if (state.attaching) return state.attaching;
+  // Checked here as well as in `ensureSessionProcess`: that function can
+  // reach this point after an await, by which time a close may have started.
+  // A child spawned now would outlive the close that already collected them.
+  if (state.closing) return Promise.reject(new HttpError(409, SESSION_CLOSING_ERROR));
   const attach = spawnAndLoadSession(state);
   state.attaching = attach;
   const clear = (): void => {
@@ -595,6 +605,7 @@ export async function ensureSessionProcess(
   state: SessionState,
   signal?: AbortSignal,
 ): Promise<AcpProcess> {
+  if (state.closing) throw new HttpError(409, SESSION_CLOSING_ERROR);
   if (state.attaching) {
     return signal ? raceAbort(state.attaching, signal) : state.attaching;
   }

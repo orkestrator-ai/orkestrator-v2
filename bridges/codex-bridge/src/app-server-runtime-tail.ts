@@ -194,6 +194,78 @@ export class AppServerRuntimeTail extends AppServerRuntimePrompt {
     return { status: "cancelling", phase: "cancelling" };
   }
 
+  /** Upper bound on how long a close waits for a last-reference turn to stop. */
+  closeStopBudgetMs = 4_000;
+  private readonly closeAttempts = new Map<string, Promise<"closed" | "missing" | "pending">>();
+
+  /**
+   * Ordinary tab close: retire this bridge session without touching the rollout.
+   *
+   * Never calls `thread/delete`. What close adds over DELETE is proof:
+   *
+   * 1. Admission is fenced first (`closingSessionIds`): a prompt, steer,
+   *    compaction or review arriving from here on is refused with
+   *    `SESSION_CLOSING_ERROR`, so no turn can start between "the last turn is
+   *    terminal" and the release below, which would orphan it.
+   * 2. On the last reference, a dispatch already in flight (`turn/start` sent,
+   *    no turn id yet) is waited for, and a running turn is interrupted through
+   *    the same escalating path as an explicit stop; close continues only once
+   *    the turn is terminal. A shared thread's other tabs are untouched.
+   * 3. The removal is published strictly: a failed tombstone write keeps the
+   *    session registered.
+   *
+   * `pending` (budget exhausted, or the tombstone did not land) leaves the
+   * session registered — any interrupt escalation keeps running in the
+   * background — and deliberately leaves the admission fence up. The tab that
+   * owned this session is gone and the backend's durable close intent retries
+   * until it is confirmed, so reopening admission would only let a late prompt
+   * start a turn that the retry must then stop. A retry of the same close
+   * resumes from the fence; concurrent calls share one attempt.
+   */
+  closeSessionRetaining(sessionId: string): Promise<"closed" | "missing" | "pending"> {
+    const running = this.closeAttempts.get(sessionId);
+    if (running) return running;
+    const attempt = this.closeSessionOnce(sessionId).finally(() => {
+      this.closeAttempts.delete(sessionId);
+    });
+    this.closeAttempts.set(sessionId, attempt);
+    return attempt;
+  }
+
+  private async closeSessionOnce(sessionId: string): Promise<"closed" | "missing" | "pending"> {
+    if (!this.registry.getSession(sessionId)) {
+      this.closingSessionIds.delete(sessionId);
+      return "missing";
+    }
+    this.closingSessionIds.add(sessionId);
+
+    const deadline = Date.now() + Math.max(0, this.closeStopBudgetMs);
+    let interrupted: TurnAccumulator | undefined;
+    for (;;) {
+      const context = this.registry.getThreadForSession(sessionId);
+      // Only the last reference owns the thread's work.
+      if (!context || context.bridgeSessionIds.size !== 1) break;
+      const turn = context.activeTurn;
+      if (!context.dispatchInFlight) {
+        if (!turn || turn.isTerminal()) break;
+        if (interrupted !== turn) {
+          interrupted = turn;
+          await this.abort(sessionId);
+          continue;
+        }
+      }
+      // A dispatch in flight has no turn id to interrupt yet: the fence stops
+      // any new one, so wait for this one to register its turn (or fail).
+      if (Date.now() >= deadline) return "pending";
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    const released = await this.releaseBridgeSession(sessionId, "strict");
+    if (released === "unpublished") return "pending";
+    this.closingSessionIds.delete(sessionId);
+    return released === "released" ? "closed" : "missing";
+  }
+
   // ------------------------------------------------------------------ models
 
   /**

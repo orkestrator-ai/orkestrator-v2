@@ -16,12 +16,14 @@ import {
   MAX_PROMPT_JOURNAL,
   MAX_RUN_TOOL_NAMES,
   MAX_STRUCTURED_RESULT_BYTES,
-  MAX_STRUCTURED_RESULTS,
   PROMPT_TIMEOUT_MS,
   PROVIDER,
 } from "./config.js";
 import { modelSelection } from "./models.js";
 import { schedulePersist } from "./persistence.js";
+import { setStructuredResult } from "./structured-results.js";
+
+export { setStructuredResult } from "./structured-results.js";
 import { createRunDiagnostics, type CursorRunDiagnostics } from "./run-diagnostics.js";
 import {
   applyInteractionUpdate,
@@ -145,14 +147,20 @@ export async function dispatchPrompt(
     state.revision += 1;
   });
 
-  state.cancelTurn = async () => {
-    await (diagnostics ? diagnostics.cancel(run, "user") : run.cancel().catch(() => undefined));
-  };
+  // One cancellation per run, however many callers ask: a user's cancel, a
+  // parked one and a permanent close can all reach this handle.
+  let cancelling: Promise<void> | undefined;
+  state.cancelTurn = () =>
+    (cancelling ??= (async () => {
+      await (diagnostics ? diagnostics.cancel(run, "user") : run.cancel().catch(() => undefined));
+    })());
 
   // The user cancelled while `send` was still open, so this turn was stopped
   // before it had anything to stop. Honour it now rather than letting a turn
-  // the user already abandoned run to completion.
-  if (state.pendingCancelPromptSequence === promptSequence) {
+  // the user already abandoned run to completion. A session closed in that
+  // window is the same case: the run exists only because `send` could not be
+  // recalled, so it is stopped at once and followed to its end below.
+  if (state.pendingCancelPromptSequence === promptSequence || state.closed) {
     state.pendingCancelPromptSequence = undefined;
     await state.cancelTurn();
   }
@@ -277,7 +285,19 @@ export async function followRun(
     // forever.
     if (error instanceof TurnTimeoutError) {
       void (diagnostics ? diagnostics.cancel(run, "timeout") : run.cancel().catch(() => undefined));
-      if (!turnStillOwned(state, promptSequence)) return;
+      // A permanent close waits on this completion to know the run has
+      // stopped, so for a closed session it must not settle before the SDK's
+      // terminal result does: returning early would let the close report
+      // success while the run may still be writing. The close answers
+      // `pending` meanwhile. (INC-02; see session-close.ts)
+      const closedTurnStopped = () =>
+        state.closed
+          ? terminal.then(
+              () => undefined,
+              () => undefined,
+            )
+          : undefined;
+      if (!turnStillOwned(state, promptSequence)) return await closedTurnStopped();
       state.error = error.message;
       state.revision += 1;
       schedulePersist();
@@ -288,7 +308,7 @@ export async function followRun(
         if (!turnStillOwned(state, promptSequence)) return;
         finishTurn(state, result, input, streamed);
       } catch (terminalError) {
-        if (!turnStillOwned(state, promptSequence)) return;
+        if (!turnStillOwned(state, promptSequence)) return await closedTurnStopped();
         // The cancellation was requested but the SDK never produced a terminal
         // result. Holding the session "running" forever would wedge the
         // environment, so fail explicitly — and say why — rather than pretend
@@ -834,17 +854,6 @@ function recordStructuredOutput(
   );
 }
 
-export function setStructuredResult(state: SessionState, requestId: string, value: unknown): void {
-  state.structured.set(requestId, value);
-  // Bounded: a long-lived session running structured turns would otherwise
-  // retain every result it has ever produced for the life of the bridge.
-  while (state.structured.size > MAX_STRUCTURED_RESULTS) {
-    const oldest = state.structured.keys().next();
-    if (oldest.done) break;
-    state.structured.delete(oldest.value);
-  }
-}
-
 export function journal(
   state: SessionState,
   requestId: string | undefined,
@@ -858,13 +867,48 @@ export function journal(
   });
 }
 
+/**
+ * Whether a journal record is evidence the bridge must keep.
+ *
+ * `prepared`, `accepted` and `ambiguous` records are what stop a retried id
+ * from running twice. Settled records (`completed`, `failed`, and local
+ * replies) only answer duplicates of work that has already finished, so they
+ * are the ones retention may drop.
+ */
+function protectedJournalEntry(entry: PromptJournalEntry): boolean {
+  return !entry.local && entry.state !== "completed" && entry.state !== "failed";
+}
+
+/**
+ * Whether `requestId` can be journaled without evicting a protected record.
+ *
+ * Checked before a prompt claims anything. When the journal is full of
+ * protected records the prompt is refused instead: forgetting one would let
+ * an earlier request whose outcome is unknown run twice.
+ */
+export function promptJournalHasRoom(state: SessionState, requestId: string): boolean {
+  if (state.promptJournal.has(requestId) || state.promptJournal.size < MAX_PROMPT_JOURNAL) {
+    return true;
+  }
+  for (const entry of state.promptJournal.values()) {
+    if (!protectedJournalEntry(entry)) return true;
+  }
+  return false;
+}
+
 export function setPromptJournal(state: SessionState, entry: PromptJournalEntry): void {
   state.promptJournal.delete(entry.requestId);
   state.promptJournal.set(entry.requestId, entry);
-  while (state.promptJournal.size > MAX_PROMPT_JOURNAL) {
-    const oldest = state.promptJournal.keys().next();
-    if (oldest.done) break;
-    state.promptJournal.delete(oldest.value);
+  if (state.promptJournal.size > MAX_PROMPT_JOURNAL) {
+    // Oldest settled records go first. A protected record is never evicted
+    // here: admission checks capacity first, and an update to an existing id
+    // cannot grow the journal, so the bound can only be exceeded transiently
+    // by a transition that settles a record.
+    for (const [requestId, retained] of state.promptJournal) {
+      if (state.promptJournal.size <= MAX_PROMPT_JOURNAL) break;
+      if (requestId === entry.requestId || protectedJournalEntry(retained)) continue;
+      state.promptJournal.delete(requestId);
+    }
   }
   schedulePersist();
 }
@@ -877,7 +921,9 @@ export function setPromptJournal(state: SessionState, entry: PromptJournalEntry)
  * transcript would interleave a dead turn's output with the live one's.
  */
 function turnStillOwned(state: SessionState, promptSequence: number): boolean {
-  return state.promptSequence === promptSequence && state.status === "running";
+  // A closed session's late frames are not published anywhere: its close owns
+  // the run from here and settles the session itself.
+  return state.promptSequence === promptSequence && state.status === "running" && !state.closed;
 }
 
 export function errorText(error: unknown): string {

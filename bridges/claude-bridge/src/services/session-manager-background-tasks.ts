@@ -462,6 +462,18 @@ export async function closeQueryControl(
 }
 
 export async function releaseQueryControls(session: SessionState): Promise<void> {
+  await Promise.all(Array.from(takeQueryControls(session), closeQueryControl));
+}
+
+/**
+ * Detach every query control the session owns and hand them to the caller.
+ *
+ * Deletion closes them best-effort through `releaseQueryControls`; tab close
+ * closes them itself because it must report a close it could not confirm.
+ */
+export function takeQueryControls(
+  session: SessionState,
+): Set<NonNullable<SessionState["queryControl"]>> {
   const controls = new Set<NonNullable<SessionState["queryControl"]>>();
   if (session.queryControl) controls.add(session.queryControl);
   for (const control of session.backgroundTaskControls?.values() ?? []) {
@@ -481,7 +493,7 @@ export async function releaseQueryControls(session: SessionState): Promise<void>
   session.backgroundTaskCandidates = undefined;
   session.retainedQueryControls = undefined;
   session.settlingBackgroundTasks = undefined;
-  await Promise.all(Array.from(controls, closeQueryControl));
+  return controls;
 }
 
 /**

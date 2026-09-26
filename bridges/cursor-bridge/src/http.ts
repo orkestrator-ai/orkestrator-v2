@@ -10,7 +10,13 @@ import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
-import { authenticate, MAX_BODY_BYTES, PROVIDER, workingDirectory } from "./config.js";
+import {
+  authenticate,
+  MAX_BODY_BYTES,
+  MAX_STEER_ID_BYTES,
+  PROVIDER,
+  workingDirectory,
+} from "./config.js";
 import {
   authStatus,
   beginLogin,
@@ -19,12 +25,28 @@ import {
 } from "./credentials.js";
 import { listModels, refreshModels } from "./models.js";
 import { parseAgentMcpConnection, publicCursorMcpServers } from "./mcp.js";
-import { persistBarrier, schedulePersist } from "./persistence.js";
+import {
+  identityPublished,
+  PersistenceError,
+  persistBarrier,
+  schedulePersist,
+} from "./persistence.js";
+import { closeRestoredTombstone, closeSessionPermanently } from "./session-close.js";
+import {
+  admitSteer,
+  noteSteerRefusal,
+  removeSteer,
+  setSteerEntry,
+  steerHistoryFenced,
+  steerJournalSummary,
+  type SteerRejectionReason,
+} from "./steer-journal.js";
 import { refreshPlanAccountWindows } from "./plan-usage.js";
 import {
   dispatchPrompt,
   errorText,
   journal,
+  promptJournalHasRoom,
   refreshAgentUsage,
   setPromptJournal,
 } from "./prompt.js";
@@ -70,13 +92,16 @@ import {
   resumeSession,
 } from "./agent-session.js";
 import {
-  clientSessionKeys,
+  assertSessionOpen,
+  closingTombstones,
   isObject,
   nonBlank,
+  SessionClosedError,
   sessions,
   type BridgeFilePart,
   type JsonObject,
   type SessionState,
+  type SteerJournalEntry,
 } from "./state.js";
 
 class HttpError extends Error {
@@ -133,6 +158,21 @@ export async function route(
     }
     if (error instanceof SessionConflictError) {
       return json(response, 409, { error: error.message });
+    }
+    // Nothing was started: the session's permanent close had already begun.
+    if (error instanceof SessionClosedError) {
+      return json(response, 409, { error: error.message, kind: "session-closing" });
+    }
+    // A mandatory publication failed before the operation that depended on it
+    // reached the provider. A route whose side effect happens before its
+    // publication (rewind) answers that case itself rather than landing here.
+    // Retryable; the message is fixed text and never a filesystem path.
+    if (error instanceof PersistenceError) {
+      return json(response, 503, {
+        error: error.message,
+        kind: "persistence-unavailable",
+        code: error.code,
+      });
     }
     if (error instanceof PromptAttachmentError) {
       return json(response, 400, { error: error.message });
@@ -218,13 +258,24 @@ async function routeGlobal(
     // has just asked not to have. A busy session cannot be moved underneath
     // its own turn, and says so.
     if (typeof readOnly === "boolean" && (state.readOnly === true) !== readOnly) {
-      if (state.status === "running" || state.dispatching) {
+      if (state.status === "running" || state.dispatching || state.rewinding) {
         throw new HttpError(409, "Session is already running");
       }
       await detachAgent(state);
+      assertSessionOpen(state);
       state.readOnly = readOnly;
-      schedulePersist();
     }
+    // The backend stores the returned id the moment it sees 201, so the
+    // session, its client key and its selections must already be something a
+    // restarted bridge can reload. Every acknowledgement — a retry that found
+    // the session included — waits for that: a retry is exactly the case
+    // where an earlier publication may have failed. On failure the session
+    // stays registered under its key, so the next attempt republishes the
+    // same identity rather than creating a second one.
+    await persistBarrier();
+    // A close that won the race while the write was in flight: the late
+    // acknowledgement must not hand back an id that is already closing.
+    assertSessionOpen(state);
     json(response, 201, publicSession(state));
     return true;
   }
@@ -237,6 +288,13 @@ async function routeGlobal(
     }
     const agentMcp = parseAgentMcpConnection(body.agentMcp);
     const state = await resumeSession(agentId, parseComposerPatch(body), body.policy, agentMcp);
+    // As for create: the adopted identity is published before it is
+    // acknowledged. A recovered run stays owned and observed if this fails —
+    // the retry finds the same session rather than adopting the agent twice.
+    await persistBarrier();
+    // As for create: a close that won the race while the write was in flight
+    // must not be answered with an adoption of the session it is closing.
+    assertSessionOpen(state);
     json(response, 201, publicSessionReference(state));
     return true;
   }
@@ -271,7 +329,7 @@ async function startLogin(response: ServerResponse): Promise<void> {
 
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
 const SESSION_ROUTE =
-  /^\/session\/([^/]+)(?:\/(messages|transcript|status|usage|activity|prompt|attach|dispatch|cancel|abort|hard-abort|steer|structured-output|interactions|config|approvals|runtime-health|commands|mcp|rewind-messages))?(?:\/([^/]+))?$/;
+  /^\/session\/([^/]+)(?:\/(messages|transcript|status|usage|activity|prompt|attach|dispatch|cancel|abort|hard-abort|steer|structured-output|interactions|config|approvals|runtime-health|commands|mcp|rewind-messages|close))?(?:\/([^/]+))?$/;
 
 async function routeSession(
   request: IncomingMessage,
@@ -302,6 +360,25 @@ async function routeSession(
     // There is nothing to refresh for any session, held or not.
     if (action === "commands" && subject === "refresh" && request.method === "POST") {
       return json(response, 200, unsupportedCommandRefresh());
+    }
+    // A close recorded by a previous process and not yet published. Answered
+    // as closing until a close request finishes it, never as a live session.
+    const tombstoned = closingTombstones.has(match[1]!);
+    if (
+      tombstoned &&
+      ((!action && request.method === "DELETE") || isCloseRequest(action, request))
+    ) {
+      return await answerCloseOperation(
+        response,
+        closeRestoredTombstone(match[1]!),
+        action === "close" ? "close" : "delete",
+      );
+    }
+    // Answered in band: this route exists on this bridge, so a 404 from it
+    // can only mean an older bridge — which is how the backend tells the two
+    // apart without ever falling back to a destructive delete.
+    if (isCloseRequest(action, request) && !subject) {
+      return json(response, 200, { closed: true, missing: true });
     }
     return json(response, 404, { error: "Session not found" });
   }
@@ -379,7 +456,8 @@ async function routeSession(
     // only), so the backend reports a change as applied on evidence.
     const mcpConfig = publicCursorMcpConfig(state);
     return json(response, 200, {
-      summary: publicRuntime(state),
+      // Steer-journal occupancy is counts and limits only.
+      summary: { ...publicRuntime(state), steer: steerJournalSummary(state) },
       ...state.health.snapshot(),
       ...(mcpConfig ? { mcpConfig } : {}),
     });
@@ -426,16 +504,21 @@ async function routeSession(
     //
     // A rotated token detaches the live agent. Refuse that while a turn is
     // in flight so a warm-up cannot destroy the work that is already running.
-    if (state.status === "running" || state.dispatching) {
+    if (state.status === "running" || state.dispatching || state.rewinding) {
       throw new HttpError(409, "Session is already running");
     }
     const body = await readJson(request).catch(() => ({}) as Record<string, unknown>);
     storeAgentMcp(state, isObject(body) ? body.agentMcp : undefined);
     await ensureAgent(state);
-    // A failed resume can replace the underlying SDK agent and rebase its
-    // agent-scoped usage counters. Persist that lifecycle change even when
-    // attach was an explicit warm-up with no prompt following it.
-    schedulePersist();
+    // A failed resume can replace the underlying SDK agent. That new identity
+    // is published before attach is acknowledged; an unchanged warm attach
+    // whose identity is already on disk writes nothing at all, but one whose
+    // earlier publication failed does not skip it.
+    if (!identityPublished(state)) await persistBarrier();
+    // A close that won while the attach or its write was in flight owns the
+    // agent now and is disposing it: answering `attached` would describe a
+    // session that is going away.
+    assertSessionOpen(state);
     return json(response, 200, { attached: true });
   }
   if ((action === "cancel" || action === "abort") && request.method === "POST") {
@@ -451,8 +534,26 @@ async function routeSession(
     const body = await readJson(request);
     const messageId = readBoundedString(body.messageId, 512, "messageId");
     if (!messageId) throw new HttpError(400, "messageId is required");
+    assertSessionOpen(state);
     await rewindSessionHistory(state, messageId);
-    await persistBarrier();
+    // The rewind has already changed the SDK's own store, so a publication
+    // failure here cannot be answered as a refusal: the conversation is
+    // rewound whatever this file says. Report that truthfully, and say what a
+    // restart before the next successful save would show.
+    try {
+      await persistBarrier();
+    } catch (error) {
+      if (!(error instanceof PersistenceError)) throw error;
+      state.health.recordNotice({
+        message:
+          "The rewind was applied, but the bridge could not save it yet. If the bridge restarts before its next successful save, the removed messages may reappear here although Cursor no longer has them.",
+        method: "persistence",
+        severity: "warning",
+        detail: `rewind-unpublished; ${error.code}`,
+      });
+      state.revision += 1;
+      return json(response, 200, { rewound: true, persisted: false });
+    }
     return json(response, 200, { rewound: true });
   }
   if (action === "structured-output" && request.method === "GET") {
@@ -474,7 +575,10 @@ async function routeSession(
     return await handlePrompt(request, response, state, clientSignal);
   }
   if (!action && request.method === "DELETE") {
-    return await handleDelete(response, state);
+    return await answerCloseOperation(response, closeSessionPermanently(state), "delete");
+  }
+  if (isCloseRequest(action, request) && !subject) {
+    return await answerCloseOperation(response, closeSessionPermanently(state), "close");
   }
   // The path named a session this bridge has; only the method was wrong. A 404
   // here would read as "session gone" and let a real gap — a route the backend
@@ -489,101 +593,192 @@ async function handleSteer(
 ): Promise<void> {
   const body = await readJson(request);
   const text = readBoundedString(body.input, 64 * 1024, "input");
-  const requestId = readBoundedString(body.requestId, 512, "requestId");
-  const expectedRunId = readBoundedString(body.expectedRunId, 512, "expectedRunId");
-  const run = state.activeRun;
+  const requestId = readBoundedString(body.requestId, MAX_STEER_ID_BYTES, "requestId");
+  const expectedRunId = readBoundedString(body.expectedRunId, MAX_STEER_ID_BYTES, "expectedRunId");
   if (!text) throw new HttpError(400, "input is required");
+  const inputDigest = createHash("sha256").update(text).digest("hex");
+  // A retry is answered from the journal before the run's current state is
+  // consulted at all: an idle, mismatch or rejected answer to a request that
+  // was in fact delivered would let the caller send the same instruction
+  // again. So an exact retry gets its recorded answer — at saturation, after
+  // the run moved on, whatever the journal's state — and a request with no
+  // record against a run whose history was evicted is `unknown`, because a
+  // forgotten retry and a new instruction are indistinguishable there.
+  if (requestId && expectedRunId) {
+    const previous = state.steerJournal.get(requestId);
+    if (previous) {
+      if (previous.inputDigest !== inputDigest || previous.expectedRunId !== expectedRunId) {
+        return json(response, 409, { outcome: "unknown", requestId });
+      }
+      return json(response, previous.state === "delivered" ? 202 : 503, {
+        outcome: previous.state === "delivered" ? "applied" : "unknown",
+        requestId,
+        duplicate: true,
+      });
+    }
+    if (steerHistoryFenced(state, expectedRunId)) {
+      noteSteerRefusal(state, "fenced", expectedRunId);
+      return json(response, 503, { outcome: "unknown", requestId });
+    }
+  }
+  const run = state.activeRun;
   if (!run || state.status !== "running" || !run.supports("stream") || !run.steer) {
     return json(response, 200, { outcome: "idle" });
   }
   if (!requestId || !expectedRunId) {
     throw new HttpError(400, "requestId and expectedRunId are required");
   }
-  const inputDigest = createHash("sha256").update(text).digest("hex");
-  const previous = state.steerJournal.get(requestId);
-  if (previous) {
-    if (previous.inputDigest !== inputDigest || previous.expectedRunId !== expectedRunId) {
-      return json(response, 409, { outcome: "unknown", requestId });
-    }
-    return json(response, previous.state === "delivered" ? 202 : 503, {
-      outcome: previous.state === "delivered" ? "applied" : "unknown",
-      requestId,
-      duplicate: true,
-    });
-  }
   if (run.id !== expectedRunId) return json(response, 409, { outcome: "mismatch" });
-  state.steerJournal.set(requestId, {
+  assertSessionOpen(state);
+  const createdAt = Date.now();
+  const record = (entryState: SteerJournalEntry["state"]): SteerJournalEntry => ({
     requestId,
     inputDigest,
     expectedRunId,
-    state: "prepared",
-    createdAt: Date.now(),
+    state: entryState,
+    createdAt,
   });
-  await persistBarrier();
-  if (state.activeRun !== run || state.status !== "running") {
-    state.steerJournal.set(requestId, {
-      requestId,
-      inputDigest,
+  // Reserved synchronously, before the barrier yields, so two requests
+  // cannot both take the last slot.
+  const admission = admitSteer(state, record("prepared"));
+  if (!admission.admitted) {
+    // Definitively not sent: nothing was journaled and the SDK was not
+    // called. The running turn is untouched.
+    noteSteerRefusal(
+      state,
+      admission.reason === "steer-capacity-exceeded" ? "saturated" : "fenced",
       expectedRunId,
-      state: "absent",
-      createdAt: Date.now(),
-    });
-    await persistBarrier();
-    return json(response, 200, { outcome: "idle" });
+    );
+    return rejectSteer(response, requestId, admission.reason);
   }
   try {
-    const outcome = await run.steer(text);
-    state.steerJournal.set(requestId, {
-      requestId,
-      inputDigest,
-      expectedRunId,
-      state: outcome === "complete_delivered" ? "delivered" : "absent",
-      createdAt: Date.now(),
-    });
     await persistBarrier();
-    return json(
-      response,
-      outcome === "complete_delivered" ? 202 : 409,
-      outcome === "complete_delivered"
-        ? { outcome: "applied", requestId }
-        : { outcome: "idle", requestId },
-    );
   } catch {
-    state.steerJournal.set(requestId, {
-      requestId,
-      inputDigest,
-      expectedRunId,
-      state: "ambiguous",
-      createdAt: Date.now(),
-    });
-    await persistBarrier();
+    // The prepared record could not be published, so nothing may be
+    // delivered — and it provably was not, which is what makes forgetting it
+    // safe and the refusal definitive. The failure itself is already a
+    // persistence notice on the session.
+    removeSteer(state, requestId);
+    return rejectSteer(response, requestId, "steer-not-recorded");
+  }
+  if (state.activeRun !== run || state.status !== "running" || state.closed) {
+    setSteerEntry(state, record("absent"));
+    // The negative is exact in memory; if this write fails the file still
+    // reads the request as ambiguous, which is the conservative answer.
+    await persistBarrier().catch(() => undefined);
+    return json(response, 200, { outcome: "idle" });
+  }
+  let outcome: Awaited<ReturnType<NonNullable<typeof run.steer>>>;
+  try {
+    outcome = await run.steer(text);
+  } catch {
+    setSteerEntry(state, record("ambiguous"));
+    await persistBarrier().catch(() => undefined);
     return json(response, 503, { outcome: "unknown", requestId });
   }
+  setSteerEntry(state, record(outcome === "complete_delivered" ? "delivered" : "absent"));
+  // Delivery already happened (or provably did not); a failed write of that
+  // outcome must not turn it into an error the caller would resend on. The
+  // file keeps the request as ambiguous, and this process answers retries
+  // from memory.
+  await persistBarrier().catch(() => undefined);
+  return json(
+    response,
+    outcome === "complete_delivered" ? 202 : 409,
+    outcome === "complete_delivered"
+      ? { outcome: "applied", requestId }
+      : { outcome: "idle", requestId },
+  );
+}
+
+const STEER_REJECTION_MESSAGES: Record<SteerRejectionReason, string> = {
+  "steer-capacity-exceeded":
+    "This turn has reached its steering limit. Wait for it to finish, then send the instruction as a new prompt.",
+  "steer-history-unavailable":
+    "This turn cannot be steered safely after the bridge restarted. Wait for it to finish, then send the instruction as a new prompt.",
+  "steer-not-recorded":
+    "The bridge could not save this steering instruction, so it was not sent. Try again, or send it as a new prompt once the turn finishes.",
+};
+
+/** The definitive refusal: this exact request was provably not sent. */
+function rejectSteer(
+  response: ServerResponse,
+  requestId: string,
+  reason: SteerRejectionReason,
+): void {
+  return json(response, 429, {
+    outcome: "rejected",
+    reason,
+    requestId,
+    message: STEER_REJECTION_MESSAGES[reason],
+  });
+}
+
+function isCloseRequest(action: string | undefined, request: IncomingMessage): boolean {
+  return action === "close" && request.method === "POST";
 }
 
 /**
- * Close a session and release everything it holds.
+ * Answer a permanent close.
  *
- * The backend's tab teardown is the only caller, and it treats a 404 as "the
- * transcript is already gone" — so a bridge that simply did not answer DELETE
- * would leak a session, its transcript and its attached SDK agent on every
- * closed tab, silently. `sessions` and the persisted state file are both
- * unbounded in the number of sessions they hold, and once that file outgrows
- * `MAX_STATE_FILE_BYTES` every later write is skipped, taking live sessions
- * down with the dead ones.
+ * `DELETE /session/:id` and `POST /session/:id/close` are the same operation
+ * here — Cursor's close never deletes the user's Cursor-side conversation, so
+ * there is no destructive variant to keep apart. Both exist because the
+ * backend's tab teardown speaks the explicit close route to every bridge,
+ * and treats its 404 as "this bridge predates the route" rather than falling
+ * back to a DELETE that other bridges use for permanent deletion.
  *
- * Deleting is deliberately local. The SDK agent is disposed, not deleted: the
- * user's Cursor-side conversation is theirs, and closing a tab is not a request
- * to destroy it.
+ * A close whose work has not stopped yet answers 503 `pending`, never success:
+ * the backend keeps its durable teardown intent and retries, and the retry
+ * joins the same operation.
  */
-async function handleDelete(response: ServerResponse, state: SessionState): Promise<void> {
-  await detachAgent(state);
-  sessions.delete(state.id);
-  if (state.clientSessionKey && clientSessionKeys.get(state.clientSessionKey) === state.id) {
-    clientSessionKeys.delete(state.clientSessionKey);
+/**
+ * Answer a close operation, including one whose removal failed to publish.
+ *
+ * A failed publication leaves the session registered and fenced, and the next
+ * request republishes it — which is exactly `pending`. The close route shares
+ * its contract with every managed bridge (`{ closed: false, pending: true }`,
+ * see `tests/conformance/bridge-contract`), so it says so in that shape while
+ * keeping the persistence kind and code the DELETE route has always carried.
+ */
+async function answerCloseOperation(
+  response: ServerResponse,
+  operation: Promise<"closed" | "pending">,
+  route: "delete" | "close",
+): Promise<void> {
+  let outcome: "closed" | "pending";
+  try {
+    outcome = await operation;
+  } catch (error) {
+    if (route !== "close" || !(error instanceof PersistenceError)) throw error;
+    return json(response, 503, {
+      closed: false,
+      pending: true,
+      error: error.message,
+      kind: "persistence-unavailable",
+      code: error.code,
+    });
   }
-  schedulePersist();
-  return json(response, 200, { deleted: true });
+  return answerClose(response, outcome, route);
+}
+
+function answerClose(
+  response: ServerResponse,
+  outcome: "closed" | "pending",
+  route: "delete" | "close",
+): void {
+  if (outcome === "pending") {
+    return json(response, 503, {
+      closed: false,
+      pending: true,
+      error: "Cursor session close is still in progress",
+    });
+  }
+  return json(
+    response,
+    200,
+    route === "delete" ? { deleted: true } : { closed: true, retained: true },
+  );
 }
 
 async function handleConfig(
@@ -595,9 +790,10 @@ async function handleConfig(
   // Claimed before the first await, exactly as the prompt route does: a prompt
   // admitted in this window would plan against a composer that is about to
   // change under it.
-  if (state.status === "running" || state.dispatching) {
+  if (state.status === "running" || state.dispatching || state.rewinding) {
     throw new HttpError(409, "Session is already running");
   }
+  assertSessionOpen(state);
   const patch = parseComposerPatch(body);
   if (!patch) return json(response, 200, state.composer);
   state.dispatching = true;
@@ -605,10 +801,26 @@ async function handleConfig(
     // Recorded on the composer only. Every turn sends its model and mode
     // explicitly, so the selection takes effect on the next prompt without
     // throwing away a warm agent — or the conversation it holds.
-    if (applyComposerPatch(state, patch)) schedulePersist();
+    const previous = state.composer;
+    if (applyComposerPatch(state, patch)) {
+      // A selection made before the first prompt must survive a bridge
+      // restart, so it is published before it is acknowledged. A failed
+      // publication puts the previous selection back rather than answering
+      // with a change a restart would silently undo.
+      try {
+        await persistBarrier();
+      } catch (error) {
+        state.composer = previous;
+        state.revision += 1;
+        throw error;
+      }
+    }
   } finally {
     state.dispatching = false;
   }
+  // A close that won while the selection was being published: the session is
+  // going away, so the change is not acknowledged as if it will apply.
+  assertSessionOpen(state);
   return json(response, 200, state.composer);
 }
 
@@ -690,8 +902,13 @@ async function handlePrompt(
   if (!prompt && attachments.length === 0) {
     throw new HttpError(400, "prompt or image attachment is required");
   }
-  if (requestId && state.promptJournal.has(requestId)) {
-    const journaled = state.promptJournal.get(requestId)!;
+  const journaled = requestId ? state.promptJournal.get(requestId) : undefined;
+  // This process's own `send` rejected for this id, so whether the SDK started
+  // the run is unknown. The backend parks it and offers a retry under the same
+  // id; that retry may dispatch again because the SDK receives the same
+  // idempotency key. A restarted bridge never sees this flag.
+  const retryAfterFailedSend = journaled?.state === "ambiguous" && journaled.sendFailed === true;
+  if (requestId && journaled && !retryAfterFailedSend) {
     if (journaled.local) {
       return json(response, 200, { accepted: true, local: true, duplicate: true });
     }
@@ -709,6 +926,15 @@ async function handlePrompt(
       throw new HttpError(409, "Prompt dispatch is still preparing");
     return json(response, 202, { accepted: true, duplicate: true });
   }
+  // Refused before anything is journaled: making room would mean forgetting
+  // a record that stops some earlier request from running twice.
+  if (requestId && !promptJournalHasRoom(state, requestId)) {
+    return json(response, 409, {
+      error:
+        "This Cursor session has too many prompts with an unresolved outcome; resolve or discard them before sending another",
+      kind: "prompt-journal-saturated",
+    });
+  }
   // `/steer` answered locally is this bridge's own resolver, which literal
   // intent (`allowProviderCommands: false`) skips: the text goes to the agent
   // unchanged. The SDK has no command grammar of its own to suppress.
@@ -716,6 +942,9 @@ async function handlePrompt(
     ? idleSteerPromptReply(prompt, "Cursor")
     : null;
   if (idleSteer) {
+    // A local reply is still a write to the transcript and the journal: a
+    // closing session takes none.
+    assertSessionOpen(state);
     if (state.status === "running" || state.dispatching) {
       throw new HttpError(409, "Use POST /session/:id/steer to steer the active turn");
     }
@@ -733,9 +962,12 @@ async function handlePrompt(
     schedulePersist();
     return json(response, 200, { accepted: true, local: true });
   }
-  if (state.status === "running" || state.dispatching) {
+  // A rewind rewrites the provider's store and transcript; a turn started in
+  // the middle of it would resume a half-rewritten conversation.
+  if (state.status === "running" || state.dispatching || state.rewinding) {
     throw new HttpError(409, "Session is already running");
   }
+  assertSessionOpen(state);
 
   // Claim the turn synchronously. `ensureAgent` yields even on its attached
   // fast path, so a second request would otherwise pass both the duplicate and
@@ -745,29 +977,119 @@ async function handlePrompt(
   // flag is set — so nothing that arrives for *this* turn is lost, and nothing
   // left over from a previous one can cancel it.
   state.pendingCancelPromptSequence = undefined;
-  if (requestId) {
-    setPromptJournal(state, { requestId, state: "prepared", acceptedAt: Date.now() });
+  // What a permanent close waits on: it settles once this claim has either
+  // handed a run to `turnCompletion` or been released.
+  let releaseClaim!: () => void;
+  const claim = new Promise<void>((resolve) => (releaseClaim = resolve));
+  state.dispatchClaim = claim;
+  try {
+    return await dispatchClaimedPrompt(response, state, {
+      prompt,
+      requestId,
+      schema,
+      readOnly,
+      attachments,
+      body,
+      clientSignal,
+    });
+  } finally {
+    if (state.dispatchClaim === claim) state.dispatchClaim = undefined;
+    releaseClaim();
   }
+}
+
+async function dispatchClaimedPrompt(
+  response: ServerResponse,
+  state: SessionState,
+  input: {
+    prompt: string;
+    requestId: string | undefined;
+    schema: JsonObject | undefined;
+    readOnly: unknown;
+    attachments: ReturnType<typeof parsePromptAttachments>;
+    body: JsonObject;
+    clientSignal: AbortSignal;
+  },
+): Promise<void> {
+  const { prompt, requestId, schema, readOnly, attachments, body, clientSignal } = input;
+  // What this id's record was before this attempt: absent, or the ambiguous
+  // record of a send that failed in this process. A pre-dispatch failure puts
+  // exactly that back — never deletes evidence an earlier attempt left.
+  const priorEntry = requestId ? state.promptJournal.get(requestId) : undefined;
+  let prepared = false;
 
   let images: CursorPromptImage[];
   let agent: Awaited<ReturnType<typeof ensureAgent>>;
   try {
     // Read attachments first: an unreadable image must fail before an agent is
-    // attached, and it is far cheaper than a cold start.
+    // attached, and it is far cheaper than a cold start. It also fails before
+    // the prepared record exists, so it can never leave one behind.
     images = await readPromptImages(attachments, workingDirectory);
+    assertSessionOpen(state);
+    if (requestId) {
+      setPromptJournal(state, {
+        requestId,
+        state: "prepared",
+        acceptedAt: priorEntry?.acceptedAt ?? Date.now(),
+      });
+      prepared = true;
+    }
     storeAgentMcp(state, body.agentMcp);
     applyComposerPatch(state, parseComposerPatch(body));
     if (typeof readOnly === "boolean" && (state.readOnly === true) !== readOnly) {
       await detachAgent(state);
+      assertSessionOpen(state);
       state.readOnly = readOnly;
     }
     agent = await ensureAgent(state, { atTurnStart: true });
+    assertSessionOpen(state);
+    // The crash boundary. The prepared record and the identity of the agent
+    // it is about to go to — which the attach above may just have created or
+    // replaced — are on disk before the SDK can act on either. A restart
+    // after this point reads the request as ambiguous and never re-sends it.
+    await persistBarrier();
+    // A close that arrived while the write was in flight wins: nothing has
+    // been sent, and nothing will be.
+    assertSessionOpen(state);
   } catch (error) {
-    // The turn provably did not run, so release the claim and let the caller
-    // retry under the same request id.
+    // This attempt provably did not reach the SDK, so release the claim and
+    // let the caller retry under the same request id. If the prepared record
+    // did reach disk, a restart reads it as ambiguous — the conservative
+    // answer.
     state.dispatching = false;
-    if (requestId) state.promptJournal.delete(requestId);
+    if (requestId && prepared) {
+      if (priorEntry) setPromptJournal(state, priorEntry);
+      else state.promptJournal.delete(requestId);
+      schedulePersist();
+    }
     throw error;
+  }
+
+  // A cancel parked while the barrier (or the attach before it) was in
+  // flight. Nothing has been sent, so there is nothing for the SDK to stop:
+  // settle the turn here instead of starting one the user already abandoned.
+  // The user's message is kept, the id is journaled as a settled local turn
+  // (a duplicate answers it as handled and the dispatch probe as
+  // `dispatched`, so it is never re-run), and the session is idle.
+  if (state.pendingCancelPromptSequence === state.promptSequence + 1) {
+    state.pendingCancelPromptSequence = undefined;
+    appendUserMessage(state, prompt, images);
+    state.promptSequence += 1;
+    state.status = "idle";
+    state.error = undefined;
+    state.dispatching = false;
+    if (requestId) {
+      setPromptJournal(state, {
+        requestId,
+        state: "completed",
+        acceptedAt: state.promptJournal.get(requestId)?.acceptedAt ?? Date.now(),
+        local: true,
+      });
+    }
+    state.revision += 1;
+    boundTranscript(state);
+    schedulePersist();
+    return json(response, 202, { accepted: true, cancelled: true });
   }
 
   const messagesBeforeTurn = state.messages.slice();
@@ -800,11 +1122,17 @@ async function handlePrompt(
       userMessageId,
     });
   } catch (error) {
-    // `send` rejected before the run started, so nothing ran. Roll the turn
-    // back rather than leaving the session wedged as running. The SDK agent
-    // has to go too: a failed send can leave that object unable to start
-    // another run, and `ensureAgent` would otherwise hand the same instance
-    // back on retry — which is why this 500 survives a second prompt.
+    // `send` was called and rejected. That does not prove the run never
+    // started: the SDK may have accepted it before its transport failed. So
+    // the record stays as ambiguous evidence — the dispatch probe answers
+    // `unknown` — and the answer is a distinct 502 the backend parks with its
+    // retry-under-the-same-id and discard controls, rather than a generic
+    // failure it would read as safe to resubmit under a new id.
+    //
+    // The session itself is rolled back rather than left wedged as running.
+    // The SDK agent has to go too: a failed send can leave that object unable
+    // to start another run, and `ensureAgent` would otherwise hand the same
+    // instance back on retry.
     state.status = "error";
     state.error = errorText(error);
     state.dispatching = false;
@@ -817,15 +1145,27 @@ async function handlePrompt(
     state.currentTurnUsage = undefined;
     state.messages = messagesBeforeTurn;
     state.uncheckedTranscriptBytes = uncheckedTranscriptBytesBeforeTurn;
-    if (requestId) state.promptJournal.delete(requestId);
+    if (requestId) {
+      setPromptJournal(state, {
+        requestId,
+        state: "ambiguous",
+        acceptedAt: state.promptJournal.get(requestId)?.acceptedAt ?? Date.now(),
+        sendFailed: true,
+      });
+    }
     state.revision += 1;
     schedulePersist();
     // `detachAgent` nulls `state.agent` synchronously. Do not await the rest:
     // dispose, warm-workspace release and hosted-MCP close have no timeout, and
-    // a hung teardown would hold this 500 until the backend times out a request
-    // that never dispatched. The idle sweeper fire-and-forgets the same way.
+    // a hung teardown would hold this answer until the backend times out.
+    // The idle sweeper fire-and-forgets the same way.
     void detachAgent(state).catch(() => undefined);
-    throw error;
+    // Fixed text: the SDK's own error can carry prompt or path content.
+    return json(response, 502, {
+      error:
+        "Cursor could not confirm whether the prompt started; retry it with the same request id or discard it",
+      kind: "dispatch-outcome-unknown",
+    });
   }
 
   // The run has started, so the journal can now answer an acknowledgement
@@ -834,7 +1174,11 @@ async function handlePrompt(
   state.dispatching = false;
   // The turn outlives this request. `clientSignal` deliberately does not
   // cancel it: a renderer that navigated away has not asked the agent to stop.
-  void handle.completion;
+  // A permanent close follows it through `turnCompletion`, which never rejects.
+  const completion: Promise<void> = handle.completion.finally(() => {
+    if (state.turnCompletion === completion) state.turnCompletion = undefined;
+  });
+  state.turnCompletion = completion;
   void clientSignal;
   return json(response, 202, { accepted: true });
 }

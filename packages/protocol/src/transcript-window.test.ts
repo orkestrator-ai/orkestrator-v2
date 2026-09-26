@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { boundTranscriptResponse, retainUtf8Tail } from "./transcript-window.js";
+import {
+  boundTranscriptResponse,
+  parseTranscriptFromIndex,
+  retainUtf8Tail,
+} from "./transcript-window.js";
 
 function message(id: string, parts: unknown[], content = id) {
   return { id, content, parts };
@@ -154,5 +158,68 @@ describe("retainUtf8Tail", () => {
 
   test("keeps the end of the string, not the beginning", () => {
     expect(retainUtf8Tail("abcdefghij", 3)).toBe("hij");
+  });
+});
+
+describe("parseTranscriptFromIndex", () => {
+  const accepted: Array<[string, number]> = [
+    ["0", 0],
+    ["1", 1],
+    ["123", 123],
+    ["9007199254740991", Number.MAX_SAFE_INTEGER],
+  ];
+  test.each(accepted)("accepts canonical %p", (input, expected) => {
+    expect(parseTranscriptFromIndex(input)).toBe(expected);
+  });
+
+  const rejected: Array<[string, string | null]> = [
+    ["missing", null],
+    ["empty", ""],
+    ["first unsafe integer", "9007199254740992"],
+    ["rounded unsafe integer", "9007199254740993"],
+    ["numeric prefix with suffix", "12junk"],
+    ["fraction", "1.5"],
+    ["integral fraction", "1.0"],
+    ["trailing dot", "1."],
+    ["negative", "-1"],
+    ["negative zero", "-0"],
+    ["explicit plus", "+1"],
+    ["exponent", "1e3"],
+    ["hex", "0x10"],
+    ["binary", "0b1"],
+    ["octal prefix", "0o7"],
+    ["numeric separator", "1_000"],
+    ["Infinity", "Infinity"],
+    ["NaN", "NaN"],
+    ["leading space", " 1"],
+    ["trailing space", "1 "],
+    ["trailing line break", "1\n"],
+    ["leading tab", "\t1"],
+    ["double zero", "00"],
+    ["leading zero", "01"],
+    ["seventeen digits", "12345678901234567"],
+    ["very long digits", "9".repeat(100_000)],
+    ["Arabic-Indic numerals", "\u0661\u0662"],
+    ["full-width numerals", "\uff11\uff12"],
+    ["superscript digit", "\u00b9"],
+  ];
+  test.each(rejected)("rejects %s", (_label, input) => {
+    expect(parseTranscriptFromIndex(input)).toBeNull();
+  });
+
+  test("never partially consumes a malformed value", () => {
+    // `parseInt` would return 12 and 1 for these; a cursor that is not wholly
+    // valid must fall back to the retained window instead of a guessed index.
+    for (const input of ["12junk", "1.5", "7 8", "3,4"]) {
+      expect(parseTranscriptFromIndex(input)).toBeNull();
+    }
+  });
+
+  test("round-trips every value the renderer can emit", () => {
+    // The only emitter (`getAcpMessageWindow`) interpolates
+    // `Math.max(0, Math.trunc(n))`, which is canonical decimal for every safe n.
+    for (const value of [0, 1, 9, 10, 99, 1_000_000, Number.MAX_SAFE_INTEGER]) {
+      expect(parseTranscriptFromIndex(String(Math.max(0, Math.trunc(value))))).toBe(value);
+    }
   });
 });

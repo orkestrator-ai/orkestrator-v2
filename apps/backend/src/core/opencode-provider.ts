@@ -1453,7 +1453,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async abort(sessionId: string): Promise<void> {
-    return this.workflowResults.abort(
+    await this.workflowResults.abort(
       sessionId,
       () => this.streamState.endTurn(sessionId),
       () => this.reviewPermissions.restoreIfNeeded(sessionId),
@@ -1461,18 +1461,21 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async closeSession(sessionId: string): Promise<void> {
-    try {
-      const response = await this.client.session.delete(
-        { sessionID: sessionId },
-        this.requestOptions(),
-      );
-      assertSdkResponse(response, "OpenCode session delete");
-      this.streamState.endTurn(sessionId);
-    } catch (error) {
-      throw new ProviderUnavailableError("OpenCode session delete is unavailable", {
-        cause: error,
-      });
-    }
+    await this.workflowResults.closeRetaining(
+      sessionId,
+      () => this.streamState.endTurn(sessionId),
+      () => this.reviewPermissions.restoreIfNeeded(sessionId),
+    );
+    this.releaseSession(sessionId);
+  }
+
+  releaseSession(sessionId: string): void {
+    this.lifecycle.release(sessionId);
+    this.streamState.forget(sessionId);
+    this.interactiveMetadata.delete(sessionId);
+    this.sessionPolicies.delete(sessionId);
+    this.blockedSessions.delete(sessionId);
+    this.failedQuestionSessions.delete(sessionId);
   }
 
   async dispose(): Promise<void> {

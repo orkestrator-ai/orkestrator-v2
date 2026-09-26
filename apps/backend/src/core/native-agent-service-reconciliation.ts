@@ -1123,8 +1123,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
           this.clearQueueBackoff(queueKey);
         }
-        // idle/mismatch means the turn ended during qualification. Keep the
-        // reservation for the next idle pass, which sends it as a normal turn.
+        // idle/mismatch means the turn ended during qualification, and
+        // rejected means the bridge refused more steering for this turn. Keep
+        // the reservation for the next idle pass, which sends it as a normal turn.
         // unknown is protected by pendingSteer and the recoverable-dispatch UI.
       } catch {
         // A bridge without reliable steering can still deliver this response as

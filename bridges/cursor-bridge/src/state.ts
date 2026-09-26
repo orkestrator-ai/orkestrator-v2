@@ -162,6 +162,14 @@ export interface PromptJournalEntry {
   acceptedAt: number;
   /** Set when this id answered an idle `/steer` locally. */
   local?: boolean;
+  /**
+   * Runtime-only, on an `ambiguous` record: this process's own `agent.send`
+   * call rejected, so whether the SDK started the run is unknown. A retry of
+   * the same id in this process may dispatch again — the SDK receives the same
+   * idempotency key. Never persisted: after a restart the record is plain
+   * ambiguous and the id is refused.
+   */
+  sendFailed?: true;
 }
 
 export interface SteerJournalEntry {
@@ -257,6 +265,19 @@ export interface SessionState {
   structured: Map<string, unknown>;
   promptJournal: Map<string, PromptJournalEntry>;
   steerJournal: Map<string, SteerJournalEntry>;
+  /** Encoded bytes `steerJournal` holds. Maintained only by `steer-journal.ts`. */
+  steerJournalBytes: number;
+  /** Runs whose steer history was evicted; see `steer-journal.ts`. */
+  steerFence?: SteerFence;
+  /**
+   * Runtime-only notice latches, so a saturated or fenced journal produces one
+   * health notice on the transition rather than one per refused request.
+   */
+  steerNoticed?: { saturated?: boolean; fencedRunId?: string };
+  /** The active run was re-adopted rather than started by this process. */
+  activeRunRecovered?: boolean;
+  /** Provider creation time of a re-adopted run, when the SDK reported one. */
+  activeRunCreatedAt?: number;
   /** Live background children, maintained incrementally for `/activity`. */
   activeSubagentDescriptors: Map<string, ActiveSubagentDescriptor>;
   /** Fatal latch: once the bound trips, later frames cannot reopen work. */
@@ -404,6 +425,55 @@ export interface SessionState {
    * from a turn that produced nothing. Runtime-only — a restart re-observes.
    */
   health: RuntimeHealthRecorder;
+  /**
+   * Permanent close was requested. Set synchronously, before the close awaits
+   * anything, and never cleared: from here no prompt, attach, config, steer or
+   * same-key create may start work on this session, and a late attach or send
+   * result is disposed rather than installed. Idle detach never sets it.
+   */
+  closed?: boolean;
+  /** The one close operation every concurrent close request shares. */
+  closing?: Promise<void>;
+  /**
+   * Every operation this session owned has settled and its resources are
+   * released. What remains is publishing the removal; until then the record
+   * stays registered so a retried close cannot mistake it for already gone.
+   */
+  closeFenced?: boolean;
+  /** Settles when the admitted prompt's pre-dispatch phase ends, either way. */
+  dispatchClaim?: Promise<void>;
+  /** Settles when the dispatched turn reaches its terminal state. Never rejects. */
+  turnCompletion?: Promise<void>;
+  /** An in-flight destructive rewind of the provider history. Never rejects. */
+  rewinding?: Promise<void>;
+}
+
+/**
+ * Runs whose steer history this journal no longer holds.
+ *
+ * `runs` names them, bounded. When a name has to be dropped to keep that
+ * bound, `overflowBefore` records when: a dropped run was necessarily created
+ * at or before that moment, so a run created later is provably not one of
+ * them. A timestamp rather than a boolean, so one overflow does not fence
+ * every future run forever.
+ */
+export interface SteerFence {
+  runs: string[];
+  overflowBefore?: number;
+}
+
+/**
+ * A session whose permanent close was requested but whose removal was not yet
+ * published when this record was written.
+ *
+ * Kept apart from `sessions` on disk so a restarted bridge — or an older one
+ * that does not know this field — can never reopen it: the older bridge simply
+ * does not see it, and this one answers it as closing until a close finishes.
+ */
+export interface ClosingTombstone {
+  id: string;
+  agentId?: string;
+  since: number;
 }
 
 export interface PersistedSession {
@@ -423,6 +493,12 @@ export interface PersistedSession {
   structured: Array<[string, unknown]>;
   promptJournal: PromptJournalEntry[];
   steerJournal?: SteerJournalEntry[];
+  /**
+   * `overflow` is the legacy boolean form, still written beside
+   * `overflowBefore` so an older bridge that reads only the boolean stays
+   * conservative.
+   */
+  steerFence?: { runs: string[]; overflowBefore?: number; overflow?: boolean };
   composer?: NativeAgentComposerState;
   usage?: PersistedUsage;
   subagentLimitExceeded?: boolean;
@@ -431,10 +507,14 @@ export interface PersistedSession {
 export interface PersistedState {
   version: 1;
   provider: "cursor";
+  /** Closes that had not published their removal. Absent when there are none. */
+  closing?: ClosingTombstone[];
   sessions: PersistedSession[];
 }
 
 export const sessions = new Map<string, SessionState>();
+/** Closing records restored from disk, answered as closing until closed. */
+export const closingTombstones = new Map<string, ClosingTombstone>();
 export const clientSessionKeys = new Map<string, string>();
 export const sessionCreations = new Map<string, Promise<SessionState>>();
 
@@ -470,6 +550,23 @@ export interface ToolSourceState {
 
 export const toolSourceStates = new WeakMap<BridgeToolPart, ToolSourceState>();
 
+/**
+ * Work refused because the session's permanent close has begun. Answered as a
+ * conflict: nothing was started, and the session will not accept it again.
+ */
+export class SessionClosedError extends Error {
+  override readonly name = "SessionClosedError";
+
+  constructor(message = "This Cursor session is closing") {
+    super(message);
+  }
+}
+
+/** Refuse new work on a session whose permanent close has begun. */
+export function assertSessionOpen(state: SessionState): void {
+  if (state.closed) throw new SessionClosedError();
+}
+
 export function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -487,6 +584,24 @@ export function nonBlank(value: unknown): value is string {
  */
 export function sessionIsWorking(state: SessionState): boolean {
   return state.status === "running" || state.activeSubagentDescriptors.size > 0;
+}
+
+/**
+ * Every in-flight operation this session owns and a permanent close must see
+ * settle: an attach, a prompt's pre-dispatch claim, a dispatched turn, a
+ * recovered run and a destructive rewind. Rejections are the owner's to
+ * report; here they only mean "settled".
+ */
+export function ownedWork(state: SessionState): Promise<unknown>[] {
+  return (
+    [
+      state.attaching,
+      state.dispatchClaim,
+      state.turnCompletion,
+      state.recoveringRun,
+      state.rewinding,
+    ] as Array<Promise<unknown> | undefined>
+  ).filter((work): work is Promise<unknown> => work !== undefined);
 }
 
 /**

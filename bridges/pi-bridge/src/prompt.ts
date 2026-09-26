@@ -1,4 +1,7 @@
-import { createBridgeDiagnostics } from "@orkestrator/protocol/bridge-diagnostics";
+import {
+  createBridgeDiagnostics,
+  type CancellationReason,
+} from "@orkestrator/protocol/bridge-diagnostics";
 /**
  * Running one turn.
  *
@@ -15,8 +18,9 @@ import {
   MAX_STRUCTURED_RESULTS,
   PROMPT_TIMEOUT_MS,
   PROVIDER,
+  STARTUP_TIMEOUT_MS,
 } from "./config.js";
-import { runDeferredCommandReload } from "./agent-session.js";
+import { isSessionClosed, runDeferredCommandReload } from "./agent-session.js";
 import { beginCommandRun, settleCommandRun } from "./commands.js";
 import { denyAllApprovals } from "./interactions.js";
 import { getLastAssistantUsage } from "./pi-sdk.js";
@@ -24,6 +28,8 @@ import { schedulePersist } from "./persistence.js";
 import { boundTranscript } from "./transcript.js";
 import { TimeoutError, withTimeout } from "./timeout.js";
 import {
+  cancelRequestedFor,
+  releasePromptClaim,
   setSteerJournal,
   type JsonObject,
   type PiCommandRun,
@@ -65,6 +71,90 @@ export interface DispatchHandle {
 }
 
 /**
+ * Pi neither accepted nor refused the prompt within the startup deadline.
+ *
+ * The turn has been failed explicitly, but its claim is deliberately kept:
+ * `session.prompt()` is still in preflight and may yet accept, so the claim
+ * stays until Pi settles it — a late acceptance is aborted at once and
+ * observed to its end, a late refusal simply ends it. Until then every status
+ * route reports running, because something can still reach Pi.
+ */
+export class PromptStartupTimeoutError extends Error {
+  override readonly name = "PromptStartupTimeoutError";
+  constructor(readonly timeoutMs: number) {
+    super(
+      `Pi did not start the turn within ${describeDuration(timeoutMs)}, so the prompt was cancelled. Send it again once the session is idle.`,
+    );
+  }
+}
+
+function describeDuration(ms: number): string {
+  if (ms >= 60_000 && ms % 60_000 === 0) {
+    const minutes = ms / 60_000;
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  return `${seconds} second${seconds === 1 ? "" : "s"}`;
+}
+
+let startupTimeoutMs = STARTUP_TIMEOUT_MS;
+
+/** Shorten the startup deadline in deterministic tests. Pass nothing to restore it. */
+export function setStartupTimeoutForTests(timeoutMs?: number): void {
+  startupTimeoutMs = timeoutMs ?? STARTUP_TIMEOUT_MS;
+}
+
+/**
+ * Apply a cancel to a prompt Pi has not accepted yet.
+ *
+ * Pinned SDK 0.87.0 (`dist/core/agent-session.js`): `abort()` calls
+ * `abortCompaction()`, which aborts the auto-compaction `prompt()` may be
+ * running in preflight (`_checkCompaction`), and waits for idle. It cannot
+ * pre-empt the run itself — `_runAgentPrompt` resets `_agentRunAbortRequested`
+ * when the run starts — so the dispatcher still aborts on acceptance. Concurrent
+ * cancels share one abort in flight. Never rejects.
+ */
+export function abortPromptStartup(state: SessionState, claim: number | undefined): void {
+  const startup = state.promptStartup;
+  if (claim === undefined || startup?.claim !== claim || startup.aborting) return;
+  const aborting = startup
+    .abort()
+    .catch(() => undefined)
+    .finally(() => {
+      if (startup.aborting === aborting) startup.aborting = undefined;
+    });
+  startup.aborting = aborting;
+}
+
+/**
+ * Record a stop request against the prompt that owns the turn, and start
+ * applying it, whatever phase that prompt has reached.
+ *
+ * Synchronous up to the returned promise, so the record lands before any
+ * await: parked approvals are denied (and a hook reached meanwhile is refused,
+ * see `requestToolApproval`), a prompt still preparing settles at its next
+ * boundary, one in Pi's preflight has its auto-compaction aborted and its run
+ * aborted on acceptance, and an accepted run is aborted through its handle.
+ * `cancel` is that handle's operation — it may reject (the abort failed) or
+ * hang — and is absent when there is no accepted run to wait on.
+ */
+export function requestTurnCancellation(
+  state: SessionState,
+  approvalReason: string,
+): { claim?: number; cancel?: Promise<void> } {
+  const claim = state.promptClaim;
+  if (claim !== undefined) state.cancelRequestedClaim = claim;
+  // A parked tool hook is part of the run being aborted. Answer it first so
+  // the SDK never observes a disappearing run as implicit permission, and so
+  // abort cannot leave the hook awaiting a promise nobody will settle.
+  denyAllApprovals(state, approvalReason);
+  const cancelTurn = state.cancelTurn;
+  if (cancelTurn) return { ...(claim === undefined ? {} : { claim }), cancel: cancelTurn() };
+  abortPromptStartup(state, claim);
+  return claim === undefined ? {} : { claim };
+}
+
+/**
  * Hand the turn to Pi and follow it to completion.
  *
  * Resolves as soon as the prompt has been *accepted*, handing back the rest of
@@ -82,11 +172,15 @@ export async function dispatchPrompt(
   session: AgentSession,
   input: DispatchInput,
   promptTimeoutMs = PROMPT_TIMEOUT_MS,
+  startupDeadlineMs = startupTimeoutMs,
 ): Promise<DispatchHandle> {
   const text = input.schema
     ? `${input.prompt}\n\n${structuredPromptInstruction(input.schema)}`
     : input.prompt;
   const promptSequence = state.promptSequence;
+  // Captured before the first await: every later check refers to this token,
+  // never to whatever claim happens to be current when it runs.
+  const claim = state.promptClaim;
   const diagnostics = createBridgeDiagnostics("pi", state, () => ({
     pendingApprovals: state.approvals.size,
   }));
@@ -123,6 +217,10 @@ export async function dispatchPrompt(
     throw error;
   }
 
+  // From here until Pi accepts or refuses, a cancel has no run to abort but
+  // can still stop an auto-compaction in preflight; see `abortPromptStartup`.
+  if (claim !== undefined) state.promptStartup = { claim, abort: () => session.abort() };
+
   // Pi calls an extension command's handler synchronously inside `prompt()`,
   // before its first await, and reports preflight only once the handler has
   // *returned* — which for a long-running command is the end of its work, not
@@ -144,7 +242,14 @@ export async function dispatchPrompt(
     },
   );
 
-  if (!(await accepted)) {
+  const acceptance = await withinStartupDeadline(accepted, startupDeadlineMs);
+  if (acceptance === "timeout") {
+    const error = new PromptStartupTimeoutError(startupDeadlineMs);
+    abandonStartup(state, session, claim, accepted, settled, input, diagnostics, error);
+    throw error;
+  }
+  if (claim !== undefined && state.promptStartup?.claim === claim) state.promptStartup = undefined;
+  if (!acceptance) {
     // Pi refused the prompt outright. Surface whatever it refused with, rather
     // than a generic rejection: it is the only thing that says why.
     await settled;
@@ -165,15 +270,56 @@ export async function dispatchPrompt(
   const commandCancelled = new Promise<void>((resolve) => {
     cancelCommand = resolve;
   });
-  state.cancelTurn = async (reason = "user") => {
-    if (commandRun) {
-      commandRun.cancelled = true;
-      cancelCommand();
-    }
-    await (diagnostics
-      ? diagnostics.cancel({ cancel: () => session.abort() }, reason)
-      : session.abort().catch(() => undefined));
+  // One logical cancellation per turn. Concurrent cancels — a user stop, the
+  // backend's hard-stop escalation, a timeout — all observe the same
+  // operation instead of stacking aborts, and none of them can outlive this
+  // turn: the closure belongs to this dispatch, not to the session.
+  //
+  // A rejected provider abort rejects here too — it is not a cancellation, and
+  // the cancel route must not report it as one — and is forgotten, so the next
+  // request (the backend's hard-stop escalation) tries again.
+  let cancelling: Promise<void> | undefined;
+  const cancelTurn = (reason: CancellationReason = "user"): Promise<void> => {
+    if (cancelling) return cancelling;
+    const operation = (async () => {
+      if (commandRun) {
+        commandRun.cancelled = true;
+        cancelCommand();
+      }
+      let failure: { error: unknown } | undefined;
+      const abort = async (): Promise<void> => {
+        try {
+          await session.abort();
+        } catch (error) {
+          failure = { error };
+          throw error;
+        }
+      };
+      // `diagnostics.cancel` records a rejected abort and swallows it.
+      await (diagnostics
+        ? diagnostics.cancel({ cancel: abort }, reason)
+        : abort().catch(() => undefined));
+      if (failure) throw failure.error;
+    })();
+    cancelling = operation;
+    operation.catch(() => {
+      if (cancelling === operation) cancelling = undefined;
+    });
+    return operation;
   };
+  state.cancelTurn = cancelTurn;
+
+  // A cancel that arrived while Pi was still in preflight had no run to abort,
+  // so it was recorded against this claim (and `abortPromptStartup` already
+  // stopped any auto-compaction). `_runAgentPrompt` resets the abort request
+  // when the run starts, but `preflightResult(true)` is called synchronously
+  // just before the run is created, so by the time this continuation runs the
+  // run exists and `abort()` stops it. Not awaited: the route's acknowledgement
+  // must not wait on the abort, and `followRun` observes the settlement.
+  // A permanent close that landed during preflight is treated the same way.
+  if (cancelRequestedFor(state, claim) || (claim !== undefined && isSessionClosed(state))) {
+    void cancelTurn("user").catch(() => undefined);
+  }
 
   // Never rejects: every terminal path is recorded on the session, and an
   // unobserved rejection here would take the whole bridge down.
@@ -189,8 +335,104 @@ export async function dispatchPrompt(
     ).finally(() => {
       diagnostics?.close();
       if (state.diagnostics === diagnostics) state.diagnostics = undefined;
+      // Cleared by identity on every terminal path of an accepted run, so a
+      // late settlement can never release, or cancel, a newer turn's claim.
+      releasePromptClaim(state, claim);
     }),
   };
+}
+
+/** Race Pi's acceptance against the startup deadline. The timer never holds the process open. */
+async function withinStartupDeadline(
+  accepted: Promise<boolean>,
+  deadlineMs: number,
+): Promise<boolean | "timeout"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      accepted,
+      new Promise<"timeout">((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), deadlineMs);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Fail a prompt whose startup outlived its deadline, and own what is left.
+ *
+ * The turn is failed now, visibly, but the claim is kept: Pi's preflight is
+ * still running and may accept. What happens next is observed here rather than
+ * guessed — a late acceptance is aborted at once (the run exists by then) and
+ * followed to its end; a late refusal ends it. Only then is the claim released,
+ * which is the moment status stops reporting running: before it, something can
+ * still reach Pi. A preflight that never settles keeps the session busy, which
+ * is the truth; `/cancel` and `/hard-abort` keep re-applying the startup abort.
+ *
+ * The journal keeps `prepared` meanwhile (a duplicate is refused as still
+ * preparing), then records `failed` if Pi did run the prompt or drops the entry
+ * if it provably never did. Never rejects.
+ */
+function abandonStartup(
+  state: SessionState,
+  session: AgentSession,
+  claim: number | undefined,
+  accepted: Promise<boolean>,
+  settled: Promise<void>,
+  input: DispatchInput,
+  diagnostics: ReturnType<typeof createBridgeDiagnostics>,
+  error: PromptStartupTimeoutError,
+): void {
+  state.status = "error";
+  state.error = error.message;
+  // `dispatching` stays set until Pi settles the prompt: it is exactly "a turn
+  // handed to Pi but not yet running", and every busy check in the bridge —
+  // config, compaction, command reloads, MCP rebuilds, history navigation —
+  // already refuses to disturb that state.
+  state.revision += 1;
+  schedulePersist();
+  if (claim !== undefined) {
+    // An approval hook a late run reaches is refused, never parked.
+    state.cancelRequestedClaim = claim;
+    abortPromptStartup(state, claim);
+  }
+  void (async () => {
+    let ran = false;
+    try {
+      ran = await accepted;
+      if (ran) {
+        denyAllApprovals(state, "The turn was cancelled before this tool call was approved.");
+        await session.abort().catch(() => undefined);
+      }
+      await settled;
+    } finally {
+      diagnostics?.terminalSettled("rejected");
+      diagnostics?.streamSettled("rejected");
+      diagnostics?.close("send-failed");
+      if (state.diagnostics === diagnostics) state.diagnostics = undefined;
+      if (claim === undefined || state.promptClaim === claim) {
+        state.dispatching = false;
+        denyAllApprovals(state, "The turn ended before this tool call was approved.");
+        state.currentAssistantMessageId = undefined;
+        state.openTextParts.clear();
+        state.toolInputs.clear();
+        state.currentTurnUsage = undefined;
+        state.turnStartedAt = undefined;
+      }
+      if (input.requestId) {
+        if (ran) journal(state, input.requestId, "failed");
+        else state.promptJournal.delete(input.requestId);
+      }
+      releasePromptClaim(state, claim);
+      state.revision += 1;
+      boundTranscript(state);
+      schedulePersist();
+      afterTurnSettled(state);
+    }
+  })().catch(() => undefined);
 }
 
 async function followRun(
@@ -282,6 +524,46 @@ function finishTurn(state: SessionState, session: AgentSession, input: DispatchI
   recordUsage(state, input);
   recordStructuredOutput(state, session, input, true);
   journal(state, input.requestId, "completed");
+  state.revision += 1;
+  boundTranscript(state);
+  schedulePersist();
+  afterTurnSettled(state);
+}
+
+/**
+ * Settle an admitted prompt whose cancellation won before Pi was invoked.
+ *
+ * Nothing reached the provider, so there is no run to abort and nothing to
+ * wait for: the local path is itself the proof of settlement. It ends like a
+ * cancelled run does — idle, not an error, with the prompt journaled as
+ * completed so an acknowledgement probe never reads it as work to re-send —
+ * and releases exactly this claim. The caller has already recorded the user's
+ * message; no empty or artificial prompt is ever sent to Pi.
+ */
+export function settleCancelledBeforeSend(
+  state: SessionState,
+  claim: number,
+  input: Pick<DispatchInput, "requestId" | "schema">,
+): void {
+  denyAllApprovals(state, "The turn was cancelled before this tool call was approved.");
+  state.status = "idle";
+  state.error = undefined;
+  state.dispatching = false;
+  if (input.schema && input.requestId) {
+    setStructuredResult(state, input.requestId, {
+      ok: false,
+      provider: PROVIDER,
+      requestId: input.requestId,
+      error: {
+        code: "interrupted",
+        message: "The turn was cancelled before it was sent to Pi",
+        provider: PROVIDER,
+        retryable: true,
+      },
+    });
+  }
+  journal(state, input.requestId, "completed");
+  releasePromptClaim(state, claim);
   state.revision += 1;
   boundTranscript(state);
   schedulePersist();

@@ -65,6 +65,7 @@ import {
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { effectiveExecutionPolicy } from "../services/read-only-policy.js";
+import { registerSessionCloseRoute } from "./session-close.js";
 
 const session = new Hono();
 const TRANSCRIPT_GENERATION = randomUUID();
@@ -950,7 +951,8 @@ session.post("/:id/hard-abort", (c) => {
   return c.json({ status: abortSession(id) ? "aborted" : "not_running" });
 });
 
-// Delete a session
+// Permanently delete a session, including its Claude rollout. Tab close must
+// use POST /:id/close instead.
 session.delete("/:id", async (c) => {
   const id = c.req.param("id");
   try {
@@ -967,6 +969,10 @@ session.delete("/:id", async (c) => {
     );
   }
 });
+
+// Ordinary tab close: stop owned work and release the mapping, keep history.
+// DELETE above stays the explicit, destructive operation.
+registerSessionCloseRoute(session);
 
 session.post("/:id/rename", async (c) => {
   const id = c.req.param("id");

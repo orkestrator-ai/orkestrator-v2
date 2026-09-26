@@ -6,6 +6,7 @@ import { applyWorkingDirectory, hostname, port } from "./config.js";
 import { detachAgent } from "./agent-session.js";
 import { json, route } from "./http.js";
 import { drainPersistence, loadPersistedState } from "./persistence.js";
+import { finishRestoredTombstones } from "./session-close.js";
 import { sessionIsWorking, sessions } from "./state.js";
 
 /** How long a session may sit untouched before its SDK agent is released. */
@@ -58,6 +59,14 @@ function sweepIdleSessions(): void {
 export async function start(): Promise<void> {
   applyWorkingDirectory();
   await loadPersistedState();
+  // Closes a previous process recorded but never published are finished now
+  // rather than whenever a close request happens to arrive — until then a run
+  // that survived the restart could keep writing to the workspace. Not
+  // awaited: every step is bounded, a request that needs one joins it, and
+  // startup must not wait on the provider's run store.
+  void finishRestoredTombstones().catch(() => {
+    console.warn("[cursor-bridge] restored closes could not be finished at startup");
+  });
   await new Promise<void>((resolve) => server.listen(port, hostname, resolve));
 
   const idleSweep = setInterval(sweepIdleSessions, IDLE_SWEEP_MS);

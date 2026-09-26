@@ -481,8 +481,22 @@ export interface AgentSessionProvider {
   abort(sessionId: string): Promise<void>;
   /** Escalate a turn which did not settle after the bounded grace period. */
   hardAbort?(sessionId: string): Promise<void>;
-  /** Close the provider-side session and release any process attached to it. */
+  /**
+   * Ordinary, non-destructive close: stop this session's owned work, deny what
+   * is parked, and release the runtime resources and mapping held for it. The
+   * vendor conversation is always retained and stays resumable. Resolves only
+   * on affirmative evidence the close happened (or that nothing was held);
+   * rejects when it cannot be confirmed, so a durable caller can retry. It must
+   * never fall back to an operation that deletes history. There is deliberately
+   * no provider-neutral "delete history" operation: permanent deletion is a
+   * separately named, provider-specific action.
+   */
   closeSession?(sessionId: string): Promise<void>;
+  /**
+   * Forget in-memory registration for a session another path has already
+   * closed (tab teardown). Synchronous, local only, and a no-op for unknown ids.
+   */
+  releaseSession?(sessionId: string): void;
   dispose?(): Promise<void> | void;
 }
 

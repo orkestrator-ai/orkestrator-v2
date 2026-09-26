@@ -187,7 +187,7 @@ describe("OpenCode provider runtime", () => {
       await expect(provider.abort("owned-session")).rejects.toBeInstanceOf(
         ProviderUnavailableError,
       );
-      fake.setDeleteResponse({ error: { message: "failed" } });
+      // Close is an abort plus local release, so an abort failure is a close failure.
       await expect(provider.closeSession!("owned-session")).rejects.toBeInstanceOf(
         ProviderUnavailableError,
       );
@@ -213,8 +213,13 @@ describe("OpenCode provider runtime", () => {
         { sessionID: "owned-session" },
         { sessionID: "owned-session" },
       ]);
-      expect(fake.abortCalls).toEqual([{ sessionID: "owned-session", directory: "/workspace" }]);
-      expect(fake.deleteCalls).toEqual([{ sessionID: "owned-session" }]);
+      // Close aborts the owned turn and never deletes the OpenCode session,
+      // whose DELETE removes the conversation and all of its data.
+      expect(fake.abortCalls).toEqual([
+        { sessionID: "owned-session", directory: "/workspace" },
+        { sessionID: "owned-session", directory: "/workspace" },
+      ]);
+      expect(fake.deleteCalls).toEqual([]);
     } finally {
       await provider.dispose?.();
     }

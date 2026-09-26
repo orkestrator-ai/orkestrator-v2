@@ -234,6 +234,11 @@ export class OpenCodeStreamState {
     if (state?.turnStartedAt === startedAt) this.endTurn(sessionId);
   }
 
+  /** Drop everything tracked for a session whose ownership was closed. */
+  forget(sessionId: string): void {
+    this.sessions.delete(sessionId);
+  }
+
   endTurn(sessionId: string): void {
     const state = this.sessions.get(sessionId);
     if (!state) return;

@@ -367,6 +367,16 @@ export class BridgeSessionStore {
    * `load()` once it passes retention.
    */
   async remove(bridgeSessionId: string): Promise<void> {
+    await this.publishRemoval(bridgeSessionId).catch((error) => this.warnPersistenceFailure(error));
+  }
+
+  /**
+   * `remove`, but a failed tombstone write rejects instead of warning.
+   *
+   * The ordinary tab close must not confirm a removal it did not publish: a
+   * record left on disk is restored as a live session on the next start.
+   */
+  async publishRemoval(bridgeSessionId: string): Promise<void> {
     const attempt = this.writeChain.then(async () => {
       await this.ensurePrivateStorage();
       const tombstone: PersistedSessionTombstone = {
@@ -380,7 +390,7 @@ export class BridgeSessionStore {
       );
     });
     this.writeChain = attempt.catch(() => undefined);
-    await attempt.catch((error) => this.warnPersistenceFailure(error));
+    await attempt;
   }
 
   private async loadLegacy(cutoff: number): Promise<PersistedBridgeSession[]> {

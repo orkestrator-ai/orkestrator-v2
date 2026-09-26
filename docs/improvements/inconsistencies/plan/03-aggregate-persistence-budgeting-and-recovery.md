@@ -1,6 +1,6 @@
 # 03 — Bound aggregate state without losing recovery metadata
 
-Status: Planned.  
+Status: Implemented (2026-09-26); automated evidence complete; browser large-transcript recovery not yet run. Not merged. See [step 11 evidence](11-conformance-verification-and-release-handoff.md#evidence-record-2026-09-26).  
 Depends on: [02](02-mandatory-persistence-and-dispatch-barriers.md).  
 Finding: INC-03.  
 Next: [04](04-durable-session-lifecycle-acknowledgements.md).
@@ -43,36 +43,36 @@ shedding alone cannot promise that every possible essential-state payload fits.
 
 ## Implementation tasks
 
-- [ ] Introduce a pure budget/projection helper, preferably in a focused Cursor
+- [x] Introduce a pure budget/projection helper, preferably in a focused Cursor
   module, that constructs the persisted snapshot without mutating live sessions.
-- [ ] Measure serialized UTF-8 bytes, including JSON escaping and envelope
+- [x] Measure serialized UTF-8 bytes, including JSON escaping and envelope
   overhead. Character counts and unescaped source-text sizes are insufficient.
-- [ ] Give serialization an explicit scratch-memory bound. Avoid first building
+- [x] Give serialization an explicit scratch-memory bound. Avoid first building
   an arbitrarily large all-session string merely to discover it exceeds the file
   limit. Bound individual record encoding and stop accumulating at the aggregate
   budget, or use a bounded writer with a bounded metadata pass.
-- [ ] Compute a stable shedding order: oldest `lastAccessed` first, with a
+- [x] Compute a stable shedding order: oldest `lastAccessed` first, with a
   deterministic tie-breaker. Work on copied persisted records, not the live
   message arrays currently feeding a tab.
-- [ ] Drop or tail-trim display transcripts until the complete serialized
+- [x] Drop or tail-trim display transcripts until the complete serialized
   snapshot fits. Prefer a simple whole-transcript first version if partial
   retention would complicate byte accounting or cursor correctness.
-- [ ] Update persisted `droppedMessages`, truncation flags, and omitted counts
+- [x] Update persisted `droppedMessages`, truncation flags, and omitted counts
   coherently. Do not silently reset the absolute message index to zero. Ensure
   old renderer cursors recover from the authoritative truncated snapshot.
-- [ ] Preserve provider identity so an empty rendered copy can still attach to
+- [x] Preserve provider identity so an empty rendered copy can still attach to
   the same conversation. Do not promise full history reconstruction unless the
   actual history loader supplies it; otherwise show an explicit truncated view.
-- [ ] If minimal essential state cannot fit, throw a typed budget error before
+- [x] If minimal essential state cannot fit, throw a typed budget error before
   provider admission. Leave the last complete state file intact and expose a
   bounded health/notice signal with a practical recovery action.
-- [ ] Keep close/cleanup capable of reducing state while new dispatch is refused.
+- [x] Keep close/cleanup capable of reducing state while new dispatch is refused.
   Do not create a failure mode where users cannot close anything because a
   preliminary growth-producing write is required first.
-- [ ] Bound session admission or define refusal when retained recovery metadata
+- [x] Bound session admission or define refusal when retained recovery metadata
   reaches capacity. Do not evict uncertain journals or silently forget sessions
   solely to admit another one.
-- [ ] Make repeated streaming persistence at the limit coalesce. Emit a notice
+- [x] Make repeated streaming persistence at the limit coalesce. Emit a notice
   on state transitions or a bounded rate, not one raw error per token.
 
 ## Serialization approach and performance checks
@@ -104,6 +104,8 @@ tests. Reject any mismatch rather than publish above the cap.
 
 Proposed file: `bridges/cursor-bridge/src/persistence-budget.test.ts`.
 
+Implemented as (2026-09-26): `bridges/cursor-bridge/src/persistence-budget.test.ts` and `persistence-bounds.test.ts`.
+
 | Case | Required result |
 | --- | --- |
 | Three 12 MiB transcripts plus small session | File fits; every essential session identity survives |
@@ -123,12 +125,12 @@ make tests easy. Validate any test seam cannot raise a reviewed production cap.
 
 ## Acceptance
 
-- [ ] Aggregate size never produces a successful no-op write.
-- [ ] Current identity, selection, and journal state survive publication/restart.
-- [ ] Display shedding is explicit and does not mutate the live transcript.
-- [ ] Essential overflow blocks new side effects while allowing recovery actions.
-- [ ] Byte/count limits also bound intermediate work and diagnostics.
-- [ ] Budget tests, existing persistence/transcript tests, and Cursor typecheck pass.
+- [x] Aggregate size never produces a successful no-op write.
+- [x] Current identity, selection, and journal state survive publication/restart.
+- [x] Display shedding is explicit and does not mutate the live transcript.
+- [x] Essential overflow blocks new side effects while allowing recovery actions.
+- [x] Byte/count limits also bound intermediate work and diagnostics.
+- [x] Budget tests, existing persistence/transcript tests, and Cursor typecheck pass.
 - [ ] Backend projection tests cover truncated authoritative rehydration if its
   payload shape changes; required browser QA is included in step 11.
 

@@ -42,8 +42,8 @@ import type {
 import {
   EMPTY_NATIVE_AGENT_COMPOSER_STATE,
   isNativeAgentExecutionPolicy,
+  parseNativeAgentSteerRejection,
 } from "@orkestrator/protocol/native-agent";
-import type { PromptAttachment } from "./prompt-attachments.js";
 import { bridgeRuntimeSummary, snapshotNotices } from "./http-bridge-runtime-health.js";
 import { readBridgeMcpConfigEvidence } from "./http-bridge-mcp-evidence.js";
 import {
@@ -87,28 +87,9 @@ import {
   resolvePromptAttachments,
   sessionSnapshotBudget,
   type HttpBridgeProviderDependencies,
+  bridgePromptAttachments,
 } from "./http-bridge-transport.js";
-
-/**
- * Drop the staged `dataUrl` before an attachment reaches a bridge that reads
- * the workspace itself.
- *
- * Workspace-reading bridges ignore `dataUrl` but cap request bodies at 2MiB.
- * Forwarding it could make a valid screenshot fail with HTTP 413. Claude and Codex consume it.
- */
-function bridgePromptAttachments(
-  agent: HttpBridgeProvider["agent"],
-  attachments: PromptAttachment[] | undefined,
-): PromptAttachment[] | undefined {
-  if (!attachments || (agent !== "cursor" && agent !== "grok" && agent !== "pi")) {
-    return attachments;
-  }
-  return attachments.map((attachment) => ({
-    type: attachment.type,
-    path: attachment.path,
-    ...(attachment.filename ? { filename: attachment.filename } : {}),
-  }));
-}
+import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly agent: HttpBridgeAgent;
@@ -341,6 +322,19 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         });
       }
       throw error;
+    }
+    // A 500 or 502 is not evidence that the turn never started: a handler can
+    // fail after its provider call (a crash, a failed send, a proxy error), and
+    // Cursor's explicit `dispatch-outcome-unknown` says exactly that. Retrying
+    // it as a fresh dispatch — or letting the user resend under a new id — can
+    // run the same turn twice, so both park as ambiguous with the existing
+    // retry-under-the-same-id and discard controls. Statuses that mean "not
+    // processed" (503 unavailable, including a failed mandatory publication,
+    // 408/425/429, 404/409) keep the retryable mapping below.
+    if (response.status === 500 || response.status === 502) {
+      throw new AmbiguousPromptDispatchError(
+        `${this.agent} prompt dispatch outcome is unknown (HTTP ${response.status})`,
+      );
     }
     // A session can briefly disappear while a bridge reconciles a restarted
     // provider, and an idle status read can race with another client starting a
@@ -1382,7 +1376,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       const payload = asRecord(
         await boundedJson(response, `${this.agent} steer`).catch(() => ({})),
       );
-      if (payload?.outcome === "unknown") {
+      // Only the exact 429 refusal contract for this request id proves "not
+      // sent". A generic 429/5xx or a malformed refusal stays ambiguous.
+      const rejection = parseNativeAgentSteerRejection(response.status, payload, action.requestId);
+      if (rejection) return rejection;
+      if (payload?.outcome === "unknown" || payload?.outcome === "rejected") {
         return { outcome: "unknown", requestId: action.requestId };
       }
       if (payload?.outcome === "idle") return { outcome: "idle" };
@@ -1484,14 +1482,15 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     assertOk(response, `${this.agent} hard abort`);
   }
 
+  // Non-destructive POST close; never Claude's destructive DELETE (bridge-session-close.ts).
   async closeSession(sessionId: string): Promise<void> {
-    const response = await bridgeFetch(
-      this.connection,
-      `/session/${encodeURIComponent(sessionId)}`,
-      { method: "DELETE" },
-      this.fetchImpl,
+    await closeBridgeSessionRetaining(this.agent, sessionId, (method, path) =>
+      bridgeFetch(this.connection, path, { method }, this.fetchImpl),
     );
-    if (response.status !== 404) await assertOkWithErrorDetail(response, `${this.agent} close`);
+    this.releaseSession(sessionId);
+  }
+
+  releaseSession(sessionId: string): void {
     this.codexModes.delete(sessionId);
   }
 }

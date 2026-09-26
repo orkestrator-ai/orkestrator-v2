@@ -4,6 +4,12 @@ import {
   type AgentInteractionRequest,
 } from "./agent-interactions.js";
 import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
+import type {
+  NativeAgentRuntimeSteerJournal,
+  NativeAgentSteerRejectedOutcome,
+} from "./native-agent-steer-rejection.js";
+
+export * from "./native-agent-steer-rejection.js";
 
 /** Provider-neutral identity for one native-agent tab. */
 export interface NativeAgentTabData {
@@ -832,12 +838,18 @@ export type NativeAgentSessionAction =
   | { kind: "rewind-messages"; messageId: string }
   | { kind: "switch-branch"; entryId: string };
 
-export interface NativeAgentSessionActionOutcome {
-  outcome: "applied" | "idle" | "mismatch" | "unknown";
-  shareUrl?: string;
-  preview?: unknown;
-  requestId?: string;
-}
+/**
+ * `rejected` is only ever a verified, definitive steer refusal for the same
+ * request id (see `native-agent-steer-rejection.ts`); ambiguity stays `unknown`.
+ */
+export type NativeAgentSessionActionOutcome =
+  | {
+      outcome: "applied" | "idle" | "mismatch" | "unknown";
+      shareUrl?: string;
+      preview?: unknown;
+      requestId?: string;
+    }
+  | NativeAgentSteerRejectedOutcome;
 
 /** Durable queue state projected with an interactive native session. */
 export interface NativeAgentQueueSnapshot<TItem = unknown> {
@@ -1144,6 +1156,8 @@ export interface NativeAgentRuntimeSummary {
   drift?: NativeAgentRuntimeDrift;
   /** Live normalized MCP inventory; the numeric field remains the badge count. */
   mcp?: NativeAgentMcpServer[];
+  /** Steer-history occupancy, counts and limits only (Cursor today). */
+  steer?: NativeAgentRuntimeSteerJournal;
 }
 
 export type NativeAgentMcpServerAction = "reconnect" | "enable" | "disable" | "sign-in";

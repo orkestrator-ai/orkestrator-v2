@@ -10,6 +10,15 @@ import { describe, expect, test } from "bun:test";
 import { httpProvider, waitUntil } from "./agent-provider-test-support.js";
 import { bridgeRuntimeSummary, snapshotNotices } from "./http-bridge-runtime-health.js";
 
+const STEER = {
+  entries: 256,
+  limitEntries: 256,
+  bytes: 40_000,
+  limitBytes: 524_288,
+  fencedRuns: 1,
+  saturated: true,
+};
+
 describe("bridgeRuntimeSummary", () => {
   test("reads the shared shape every non-Codex bridge answers", () => {
     expect(
@@ -358,5 +367,72 @@ describe("HttpBridgeProvider.runtimeHealth", () => {
     expect(health.notices).toEqual([
       { message: "deprecated", severity: "warning", source: "provider" },
     ]);
+  });
+
+  test("carries Cursor's steer-history saturation as counts and limits only", async () => {
+    const { provider } = httpProvider((url) =>
+      url.endsWith("/runtime-health")
+        ? Response.json({
+            summary: {
+              steer: {
+                ...STEER,
+                // Anything beyond counts and limits must not cross this hop.
+                requestIds: ["steer-secret-id"],
+                digests: ["sha256:secret"],
+              },
+            },
+            notices: [
+              {
+                id: "steer-journal",
+                method: "steer-journal",
+                message: "Steer history is full (256/256); new steering waits for this turn.",
+                severity: "warning",
+                source: "bridge",
+              },
+            ],
+          })
+        : Response.json({}),
+    );
+
+    const health = await provider.runtimeHealth!("s-1");
+    expect(health.summary.steer).toEqual(STEER);
+    expect(JSON.stringify(health)).not.toContain("secret");
+    expect(health.notices).toEqual([
+      expect.objectContaining({ method: "steer-journal", severity: "warning" }),
+    ]);
+    // A warning stays in the health panel rather than the tab.
+    expect(snapshotNotices({ transcriptTruncated: false, runtime: health.summary })).toEqual([]);
+  });
+
+  test("drops a malformed steer summary whole", () => {
+    expect(
+      bridgeRuntimeSummary({ summary: { state: "attached", steer: { ...STEER, bytes: -1 } } }),
+    ).toEqual({ state: "attached" });
+  });
+
+  test("an authoritative refresh without steer retires a cached saturated value", async () => {
+    let saturated = true;
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      if (url.endsWith("/runtime-health")) {
+        return Response.json({ summary: saturated ? { steer: STEER } : {}, notices: [] });
+      }
+      return Response.json({ status: "running" });
+    });
+
+    const first = await provider.interactiveSnapshot!("s-1");
+    expect(first.runtime?.steer).toEqual(STEER);
+    saturated = false;
+    const metadata = (
+      provider as unknown as {
+        interactiveMetadata: Map<string, { expiresAt: number; runtime?: { steer?: unknown } }>;
+      }
+    ).interactiveMetadata;
+    metadata.get("s-1")!.expiresAt = 0;
+    await provider.interactiveSnapshot!("s-1");
+    await waitUntil(() => metadata.get("s-1")?.runtime?.steer === undefined);
+
+    const settled = await provider.interactiveSnapshot!("s-1");
+    expect(settled.runtime?.steer).toBeUndefined();
   });
 });

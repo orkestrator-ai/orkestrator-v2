@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   composeDraftKey,
@@ -24,6 +24,10 @@ import {
   reconcileComposeDraftValue,
   savedMigrationReferences,
 } from "@/lib/web-annotations/compose-migration";
+import {
+  restorableDraftAttachments,
+  type NativeDraftNamespace,
+} from "@/lib/native-draft-attachments";
 
 interface NativeComposeDraftState<TMention, TAttachment> {
   draftText: Map<string, string>;
@@ -57,16 +61,6 @@ interface PersistedNativeComposeDraft {
   metadata?: unknown;
 }
 
-type NativeDraftNamespace =
-  | "claude"
-  | "claude-tmux"
-  | "codex"
-  | "opencode"
-  | "cursor"
-  | "grok"
-  | "pi"
-  | "agent-native";
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -78,46 +72,6 @@ function isPersistedFileMention(value: unknown): boolean {
     typeof value.filename === "string" &&
     typeof value.relativePath === "string"
   );
-}
-
-function isPersistedAttachment(namespace: NativeDraftNamespace, value: unknown): boolean {
-  if (
-    !isRecord(value) ||
-    typeof value.id !== "string" ||
-    typeof value.name !== "string" ||
-    typeof value.path !== "string" ||
-    (value.previewUrl !== undefined && typeof value.previewUrl !== "string") ||
-    (value.annotationId !== undefined && typeof value.annotationId !== "string")
-  ) {
-    return false;
-  }
-  if (namespace === "cursor" || namespace === "grok") return false;
-  if (namespace === "codex") return value.type === "image";
-  return value.type === "file" || value.type === "image";
-}
-
-/**
- * Resolve which provider's attachment rules a stored draft must satisfy.
- *
- * The shared `agent-native` record belongs to a tab that has not been assigned
- * yet, so its own namespace says nothing about what the selected agent accepts.
- * The persisted platform does, and restoring an attachment the agent refuses
- * would fail the next send rather than being dropped by the bridge.
- */
-function effectiveAttachmentNamespace(
-  namespace: NativeDraftNamespace,
-  metadata: unknown,
-): NativeDraftNamespace {
-  if (namespace !== "agent-native") return namespace;
-  const platform = isRecord(metadata) ? metadata.platform : undefined;
-  return platform === "claude" ||
-    platform === "codex" ||
-    platform === "opencode" ||
-    platform === "cursor" ||
-    platform === "grok" ||
-    platform === "pi"
-    ? platform
-    : namespace;
 }
 
 function readDraft<TMention, TAttachment>(
@@ -147,11 +101,20 @@ function isEmptyDraft(draft: PersistedNativeComposeDraft): boolean {
   );
 }
 
+/** Quiet period after the last draft change before it is written to the backend. */
+export const NATIVE_COMPOSE_DRAFT_SAVE_DEBOUNCE_MS = 400;
+
 /**
  * Mirrors one native chat composer to backend draft storage.
  *
  * Hydration never overwrites input typed while the snapshot request was in
  * flight. Writes are debounced and serialized by the shared persistence helper.
+ *
+ * Returns a counter that advances each time a persisted draft is applied to
+ * the store. Restoration only enforces what the draft's *own* namespace knows;
+ * a composer whose effective platform is resolved elsewhere (the unassigned
+ * composer's default provider) keys its capability reconciliation on this so
+ * a restored draft is reconciled exactly once, without polling the store.
  */
 export function useNativeComposeDraftPersistence<TMention, TAttachment>(
   namespace: NativeDraftNamespace,
@@ -159,10 +122,12 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
   sessionKey: string,
   store: NativeComposeDraftStore<TMention, TAttachment>,
   fallbackNamespace?: NativeDraftNamespace,
-): void {
+): number {
+  const [restoreGeneration, setRestoreGeneration] = useState(0);
   useEffect(() => {
     let disposed = false;
     let hydrated = false;
+    let restored = false;
     let readSucceeded = false;
     let locallyChanged = false;
     let applyingHydration = false;
@@ -315,7 +280,7 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
         void persist(state).catch((error) => {
           reportPersistenceError(error);
         });
-      }, 400);
+      }, NATIVE_COMPOSE_DRAFT_SAVE_DEBOUNCE_MS);
     };
 
     const unsubscribe = store.subscribe((state, previous) => {
@@ -364,9 +329,12 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
           return;
         }
         const mentions = value.mentions.filter(isPersistedFileMention);
-        const attachmentNamespace = effectiveAttachmentNamespace(namespace, value.metadata);
-        const attachments = value.attachments.filter((attachment) =>
-          isPersistedAttachment(attachmentNamespace, attachment),
+        // Structure first, then the shared capability table for the resolved
+        // platform. Model vision support is left to the composer's send path.
+        const attachments = restorableDraftAttachments(
+          namespace,
+          value.metadata,
+          value.attachments,
         );
         const annotations = Array.isArray(value.annotations)
           ? value.annotations
@@ -389,6 +357,7 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
           if (value.metadata !== undefined) {
             state.setDraftMetadata?.(sessionKey, value.metadata);
           }
+          restored = true;
         } finally {
           applyingHydration = false;
         }
@@ -404,6 +373,10 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
           // browser notes typed before migration: reconcile them in memory.
           if (!disposed) void reconcile().catch(() => undefined);
         }
+        // Announced after the save above is scheduled, so a reconciliation the
+        // host runs in response re-arms that same debounce instead of adding
+        // a second write.
+        if (restored && !disposed) setRestoreGeneration((generation) => generation + 1);
       });
 
     return () => {
@@ -420,4 +393,5 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
       }
     };
   }, [environmentId, fallbackNamespace, namespace, sessionKey, store]);
+  return restoreGeneration;
 }

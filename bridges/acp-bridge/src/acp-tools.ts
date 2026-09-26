@@ -639,7 +639,9 @@ export function scheduleCursorToolMetadataReconcile(
   state: SessionState,
   options: { final?: boolean } = {},
 ): void {
-  if (provider !== "cursor" || shuttingDown || sessions.get(state.id) !== state) return;
+  if (provider !== "cursor" || shuttingDown || sessions.get(state.id) !== state || state.closing) {
+    return;
+  }
   // Only live passes are rate-limited. The final pass is the completeness
   // guarantee, so a turn that spent its budget still ends fully enriched.
   if (!options.final && liveCursorReplayBudgetExhausted(state)) return;
@@ -658,7 +660,7 @@ export function scheduleCursorToolMetadataReconcile(
 
   const run = () => {
     state.cursorToolReplayTimer = undefined;
-    if (shuttingDown || sessions.get(state.id) !== state) return;
+    if (shuttingDown || sessions.get(state.id) !== state || state.closing) return;
     const mode = state.cursorToolReplayPending;
     state.cursorToolReplayPending = undefined;
     if (!mode) return;

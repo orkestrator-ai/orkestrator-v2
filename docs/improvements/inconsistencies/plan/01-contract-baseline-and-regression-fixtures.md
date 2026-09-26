@@ -1,6 +1,6 @@
 # 01 — Establish contracts and deterministic regression fixtures
 
-Status: Planned.  
+Status: Verified (2026-09-26); not yet merged. See [step 11 evidence](11-conformance-verification-and-release-handoff.md#evidence-record-2026-09-26).  
 Depends on: None.  
 Findings: INC-01 through INC-09.  
 Next: [02 — Mandatory persistence](02-mandatory-persistence-and-dispatch-barriers.md).
@@ -33,26 +33,26 @@ case with its regression evidence instead of reapplying the same fix.
 
 ## Tasks
 
-- [ ] Inventory the authoritative owners of session identity, dispatch intent,
+- [x] Inventory the authoritative owners of session identity, dispatch intent,
   active run, cancel request, attach promise, close state, transcript cursor,
   and persisted draft. Note which records survive bridge versus backend restart.
-- [ ] Write the expected/observed contract matrix below into test names or a
+- [x] Write the expected/observed contract matrix below into test names or a
   small fixture registry. Keep native provider differences explicit.
-- [ ] Reuse the existing real-router harness and fake-agent seams. Add only the
+- [x] Reuse the existing real-router harness and fake-agent seams. Add only the
   controls needed to pause attach, SDK send, preflight, file publication, and
   disposal. Expose observable call counts and completion events.
-- [ ] Use a temporary, private state directory per test. Snapshot and restore
+- [x] Use a temporary, private state directory per test. Snapshot and restore
   each environment key exactly, including absence. Point credential and vendor
   state paths at fixtures, and disable account/model refresh network calls.
-- [ ] For publication races, wrap a narrow writer operation or use a controlled
+- [x] For publication races, wrap a narrow writer operation or use a controlled
   fixture process. Keep serialization, journal mutation, and route logic real.
   Avoid mocking the whole persistence or HTTP module being tested.
-- [ ] For restart tests, provide two paths: read the published file in a fresh
+- [x] For restart tests, provide two paths: read the published file in a fresh
   module/process without flushing, and kill an exact-owned fixture process
   after an explicit checkpoint. A normal shutdown test is separate.
-- [ ] Extract stateless helpers only when several tests need them. Avoid a new
+- [x] Extract stateless helpers only when several tests need them. Avoid a new
   universal bridge harness whose abstraction hides which provider accepted work.
-- [ ] Give each new regression a focused sibling file when its existing owner
+- [x] Give each new regression a focused sibling file when its existing owner
   is already large. Candidate names in later steps are proposed files, not claims
   that those files already exist.
 
@@ -113,14 +113,41 @@ backend package as documented in the testing guide.
 
 ## Acceptance and handoff
 
-- [ ] Each scheduled fix has a deterministic reproduction and an observable target.
-- [ ] Fixture state cannot read or modify production sessions or credentials.
-- [ ] Restart tests do not accidentally save the state they are supposed to prove.
-- [ ] No unbounded logs, orphan fixture processes, or unstable module mocks are added.
-- [ ] Failing reproductions are paired with fixes before their PR is considered green.
-- [ ] The exact owner and test-file names are carried into the relevant step.
+- [x] Each scheduled fix has a deterministic reproduction and an observable target.
+- [x] Fixture state cannot read or modify production sessions or credentials.
+- [x] Restart tests do not accidentally save the state they are supposed to prove.
+- [x] No unbounded logs, orphan fixture processes, or unstable module mocks are added.
+- [x] Failing reproductions are paired with fixes before their PR is considered green.
+- [x] The exact owner and test-file names are carried into the relevant step.
 
 Do not expand this step into broad code cleanup, a vendor upgrade, or wholesale
 deduplication of bridge implementations. Its deliverable is trustworthy evidence
 and the minimum reusable fixture support to obtain it.
 
+
+## Owner inventory (2026-09-26)
+
+The first task of this step. "Bridge restart" means the bridge process dies
+and a successor starts on the same state directory; "backend restart" means
+the backend process restarts while bridges may keep running. Records marked
+*memory* do not survive the restart in that column.
+
+| Record | Authoritative owner | Survives bridge restart | Survives backend restart |
+| --- | --- | --- | --- |
+| Logical tab → provider session mapping | Backend `native-agent-sessions.json` (`storage-base.ts`) | Yes (backend file) | Yes |
+| Tab teardown intent (close requested, not confirmed) | Backend `environments.json` → `tabTeardownIntents`; new native intents carry a `retain-history-close:` session id | Yes | Yes; replayed by `reconcile_tab_teardowns` |
+| Parked prompt / steer dispatch (unknown outcome) | Backend native storage (`storage-native.ts`), with retry/discard controls | Yes | Yes |
+| Persisted compose draft (text, attachments, metadata) | Backend `compose-drafts.json`; renderer store is a cache that rehydrates | Yes | Yes |
+| Cursor bridge session identity (id, client key, agent id, policy, composer) | `CURSOR_BRIDGE_STATE_DIR/state.json`, published by the mandatory barrier before create/resume/attach acknowledgements | Yes | Yes (bridge unaffected) |
+| Cursor prompt journal | Same file; `prepared`/`accepted` are written as `ambiguous` | Yes, as ambiguous for unfinished entries | Yes |
+| Cursor steer journal and run fence | Same file (`steerJournal`, `steerFence`), bounded | Yes, within bounds; dropped runs fenced | Yes |
+| Cursor closing state | `state.closed` in memory; `closing` tombstones in `state.json` until the removal is published | Tombstone only; finished on start | Yes |
+| Cursor attach promise, send-in-flight, dispatch claim, cancel handle, parked cancel | Bridge memory (`state.attaching`, `dispatchClaim`, `turnCompletion`, `cancelTurn`, `pendingCancelPromptSequence`) | No | Yes (bridge unaffected) |
+| Cursor rendered transcript | `state.json`, bounded; the oldest-touched copies may be shed with an explicit truncation base | Yes, possibly truncated | Yes |
+| Pi session pointer, prompt and steer journals, rendered transcript | `PI_BRIDGE_STATE_DIR/state.json`; the conversation itself is Pi's own JSONL session file | Yes | Yes |
+| Pi prompt claim and pending cancel | Bridge memory (`promptClaim`, `cancelRequestedClaim`) | No — an unfinished prompt reconciles through its ambiguous journal | Yes |
+| Codex thread registry and dispatch journal | Codex bridge `sessions/persistence.ts`, `dispatch-journal.ts`; rollout owned by app-server | Yes (`prepared` is reported as unknown after restart) | Yes |
+| Claude session identity and dispatch journal | Claude bridge preferences file (`session-manager-persistence.ts`); conversation in the SDK's `{sessionId}.jsonl` | Yes | Yes |
+| Grok (ACP) session state and journal | `ACP_STATE_DIR`; the journal reports `ambiguous` after restart | Yes | Yes |
+| OpenCode session and history | The OpenCode server; the backend holds registration and subscriptions in memory | n/a (no bridge) | Registration no; the session persists on the server |
+| Transcript cursor (`fromIndex`) | Renderer / backend request state; bridges answer from `droppedMessages` + retained window | Stateless: a restart changes the window generation, and invalid cursors fall back to the retained window | Yes |

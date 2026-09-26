@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { ChevronDown, Loader2, LogIn, X } from "lucide-react";
 import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
 import {
+  nativeAgentSteerRejectionMessage,
   nativeAsyncQuestionRequestId,
   withResolvedNativeComposerModel,
   resolveReasoningId,
@@ -1238,11 +1239,15 @@ export function SharedNativeAgentController({
           // An unconfirmed steer is a parked dispatch like any other: the
           // recovery card owns that message, so a transient red error here
           // would duplicate it and flash before the card settles.
+          // A definitive refusal was not sent; its message says to resend after
+          // the turn, and the draft is restored below for exactly that.
           if (outcome.outcome !== "unknown") {
             setSendError(
-              outcome.outcome === "mismatch"
-                ? "The turn moved on before the steering text was delivered."
-                : `${label} is no longer running a turn to steer.`,
+              outcome.outcome === "rejected"
+                ? nativeAgentSteerRejectionMessage(outcome)
+                : outcome.outcome === "mismatch"
+                  ? "The turn moved on before the steering text was delivered."
+                  : `${label} is no longer running a turn to steer.`,
             );
           }
         } catch (error) {

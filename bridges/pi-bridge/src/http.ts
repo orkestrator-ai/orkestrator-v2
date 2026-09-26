@@ -20,17 +20,20 @@ import {
   workingDirectory,
 } from "./config.js";
 import { authStatus, CredentialError } from "./credentials.js";
-import {
-  denyAllApprovals,
-  publicApprovals,
-  publicInteractions,
-  resolveApproval,
-} from "./interactions.js";
+import { publicApprovals, publicInteractions, resolveApproval } from "./interactions.js";
 import { listModels, refreshModels } from "./models.js";
 import { parseAgentMcpConnection } from "./mcp-config.js";
 import { mcpConnectionNeedsRefresh, publicPiMcpConfig, publicPiMcpServers } from "./mcp.js";
 import { persistBarrier, schedulePersist } from "./persistence.js";
-import { dispatchPrompt, errorText, journal, setPromptJournal } from "./prompt.js";
+import {
+  dispatchPrompt,
+  errorText,
+  journal,
+  PromptStartupTimeoutError,
+  requestTurnCancellation,
+  setPromptJournal,
+  settleCancelledBeforeSend,
+} from "./prompt.js";
 import {
   parsePromptAttachments,
   PromptAttachmentError,
@@ -70,6 +73,7 @@ import {
 } from "./commands.js";
 import { refreshRuntimeCatalog } from "./runtime.js";
 import { withTimeout } from "./timeout.js";
+import { closeSessionRetaining } from "./session-close.js";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
   applyComposerPatch,
@@ -79,7 +83,10 @@ import {
   ensureSession,
   forkSession,
   hydrateSessionComposer,
+  isSessionClosed,
+  SessionClosingError,
   listResumableSessions,
+  markSessionClosed,
   navigateSessionHistory,
   parseComposerPatch,
   reconcileAgentMcp,
@@ -90,10 +97,14 @@ import {
   setSessionTitle,
 } from "./agent-session.js";
 import {
+  cancelRequestedFor,
+  claimPromptTurn,
   clientSessionKeys,
   isObject,
   nonBlank,
   piRunId,
+  releasePromptClaim,
+  reservePromptAdmission,
   setSteerJournal,
   sessions,
   type BridgeFilePart,
@@ -119,16 +130,53 @@ class CommandUnavailableError extends Error {
   }
 }
 
+/** A prompt whose cancellation won before Pi was invoked. Never leaves the route. */
+class CancelledBeforeSendError extends Error {
+  constructor() {
+    super("The prompt was cancelled before it was sent to Pi");
+    this.name = "CancelledBeforeSendError";
+  }
+}
+
+/**
+ * Refuse new work on a session whose close (or DELETE) has begun.
+ *
+ * A closing session stays registered until its removal is published, so a
+ * retried close can reach it. Admitting a prompt meanwhile would either run a
+ * turn nobody owns or be settled as a cancel the caller never asked for, so it
+ * is refused plainly: 409, which the backend reads as a retryable race.
+ */
+function assertSessionOpen(state: SessionState): void {
+  if (isSessionClosed(state)) throw new HttpError(409, "Session is closed");
+}
+
+/**
+ * The prompt route's claim reserved at its entry, and whether the turn took it.
+ * An untaken reservation is released when the route returns, whatever path.
+ */
+interface PromptAdmission {
+  claim: number | undefined;
+  transferred: boolean;
+}
+
 /** Sessions a global refresh reloads at once. */
 const GLOBAL_REFRESH_CONCURRENCY = 4;
 
 const DEFAULT_DELETE_CANCEL_TIMEOUT_MS = 5_000;
+/** How long `/cancel` waits for an abort to land before answering "pending". */
+const DEFAULT_CANCEL_ACK_TIMEOUT_MS = 5_000;
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
 let deleteCancelTimeoutMs = DEFAULT_DELETE_CANCEL_TIMEOUT_MS;
+let cancelAckTimeoutMs = DEFAULT_CANCEL_ACK_TIMEOUT_MS;
 
 /** Shorten the best-effort DELETE cancellation budget in deterministic tests. */
 export function setDeleteCancelTimeoutForTests(timeoutMs?: number): void {
   deleteCancelTimeoutMs = timeoutMs ?? DEFAULT_DELETE_CANCEL_TIMEOUT_MS;
+}
+
+/** Shorten how long `/cancel` waits for a hanging abort in deterministic tests. */
+export function setCancelAckTimeoutForTests(timeoutMs?: number): void {
+  cancelAckTimeoutMs = timeoutMs ?? DEFAULT_CANCEL_ACK_TIMEOUT_MS;
 }
 
 /**
@@ -171,6 +219,9 @@ export async function route(
   } catch (error) {
     if (error instanceof HttpError) return json(response, error.status, { error: error.message });
     if (error instanceof CredentialError) return json(response, 401, { error: error.message });
+    if (error instanceof SessionClosingError) {
+      return json(response, 409, { error: error.message, kind: "session-closing" });
+    }
     if (error instanceof PromptAttachmentError) {
       return json(response, 400, { error: error.message });
     }
@@ -324,7 +375,7 @@ async function routeGlobal(
 }
 
 const SESSION_ROUTE =
-  /^\/session\/([^/]+)(?:\/(messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|structured-output|interactions|config|approvals|compact|fork|steer|queue|runtime-health|commands|mcp|rewind-messages|branches|title))?(?:\/([^/]+))?$/;
+  /^\/session\/([^/]+)(?:\/(close|messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|structured-output|interactions|config|approvals|compact|fork|steer|queue|runtime-health|commands|mcp|rewind-messages|branches|title))?(?:\/([^/]+))?$/;
 
 async function routeSession(
   request: IncomingMessage,
@@ -357,6 +408,11 @@ async function routeSession(
     // route" and fail the environment. Health is optional metadata, so an
     // unknown session answers empty rather than failing.
     if (action === "runtime-health") return json(response, 200, emptyRuntimeHealth());
+    // Close is idempotent and answered in band for the same reason: 404/405
+    // from this route must only ever mean "this bridge predates it".
+    if (action === "close" && !subject && request.method === "POST") {
+      return json(response, 200, { closed: true, missing: true });
+    }
     return json(response, 404, { error: "Session not found" });
   }
 
@@ -405,6 +461,18 @@ async function routeSession(
   }
   if (!action && request.method === "DELETE") {
     return await handleDelete(response, state);
+  }
+  if (action === "close" && !subject && request.method === "POST") {
+    // Ordinary tab close. Pi's JSONL conversation is kept, exactly as DELETE
+    // keeps it; close additionally refuses to confirm an unproven stop.
+    const outcome = await closeSessionRetaining(state, deleteCancelTimeoutMs);
+    return outcome === "closed"
+      ? json(response, 200, { closed: true, retained: true })
+      : json(response, 503, {
+          closed: false,
+          pending: true,
+          error: "Session close did not complete",
+        });
   }
   if (action === "messages" && request.method === "GET") {
     boundTranscriptForRead(state);
@@ -488,7 +556,9 @@ async function routeSession(
     // bridge has no persisted one, so without this the warm-up would connect
     // the process-env identity and the prompt would have to rebuild the session
     // to correct it.
+    assertSessionOpen(state);
     const body = await readJson(request);
+    assertSessionOpen(state);
     const previousAgentMcp = state.agentMcp;
     storeAgentMcp(state, body.agentMcp);
     if (
@@ -584,15 +654,22 @@ async function routeSession(
  * copy.
  */
 async function handleDelete(response: ServerResponse, state: SessionState): Promise<void> {
-  denyAllApprovals(state, "The session was closed before this request was answered.");
+  // Closed before the first await, exactly as `/close` does: no prompt is
+  // admitted from here on, and one still preparing settles as cancelled at
+  // its next boundary instead of reaching Pi for a session that is going away.
+  markSessionClosed(state);
   // Cancelling first means a turn in flight stops writing into a transcript
   // nothing will read, rather than running to completion against a detached
-  // session.
+  // session. A prompt in Pi's preflight has its auto-compaction aborted now
+  // and its run aborted on acceptance.
+  const { cancel } = requestTurnCancellation(
+    state,
+    "The session was closed before this request was answered.",
+  );
   try {
-    const cancel = state.cancelTurn;
     if (cancel) {
       await withTimeout(
-        cancel(),
+        cancel,
         deleteCancelTimeoutMs,
         "Pi cancellation timed out while deleting the session",
       );
@@ -614,10 +691,17 @@ async function handleConfig(
   state: SessionState,
 ): Promise<void> {
   const body = await readJson(request);
+  assertSessionOpen(state);
   // Claimed before the first await, exactly as the prompt route does: applying
   // a patch reaches the live session, and a prompt admitted in that window
-  // would plan against a composer that is about to change under it.
-  if (state.status === "running" || state.dispatching || state.commandReload) {
+  // would plan against a composer that is about to change under it. A prompt
+  // claim — even one still reading its body — owns the turn already.
+  if (
+    state.status === "running" ||
+    state.dispatching ||
+    state.commandReload ||
+    state.promptClaim !== undefined
+  ) {
     throw new HttpError(409, "Session is already running");
   }
   const patch = parseComposerPatch(body);
@@ -637,17 +721,55 @@ async function handleConfig(
   return json(response, 200, { ...state.composer, commands: state.slashCommands });
 }
 
+/**
+ * Cancel the admitted prompt, whatever phase it has reached.
+ *
+ * `/cancel`, `/abort` and `/hard-abort` all land here with identical ownership
+ * and acknowledgement. The owner is captured synchronously: the prompt claim
+ * names the turn this request means to stop, so a cancel is recorded against
+ * that turn even while attachment reads, MCP reconciliation, a cold attach,
+ * the durability barrier or Pi's own preflight mean no cancel handle exists
+ * yet. That case answers 202 `{ cancelled: false, pending: true }`, the shape
+ * the Cursor bridge established: recorded, not yet stopped. The prompt path
+ * consumes it at its next boundary, or aborts the run the moment Pi accepts.
+ *
+ * Configuration and compaction also hold `dispatching`, but they have no
+ * prompt claim, so nothing is parked against a future prompt here.
+ */
 async function handleCancel(response: ServerResponse, state: SessionState): Promise<void> {
-  const cancel = state.cancelTurn;
-  // A parked tool hook is part of the run being aborted. Answer it first so
-  // the SDK never observes a disappearing run as implicit permission, and so
-  // abort cannot leave the hook awaiting a promise nobody will settle.
-  denyAllApprovals(state, "The turn was cancelled before this tool call was approved.");
-  if (cancel) await cancel();
-  // The run's own terminal path settles the transcript. Reporting idle here
-  // would race it and let a caller start a second turn into a run that has not
-  // actually stopped yet.
-  return json(response, 200, { cancelled: Boolean(cancel) });
+  // Recorded synchronously, before anything else, so an approval hook reached
+  // while the cancellation is being applied is refused rather than parked. In
+  // Pi's preflight this also aborts an auto-compaction at once.
+  const { claim, cancel } = requestTurnCancellation(
+    state,
+    "The turn was cancelled before this tool call was approved.",
+  );
+  if (cancel) {
+    // Bounded: a provider abort that hangs must not hang this route, or the
+    // caller's own escalation (a hard stop after a grace period) could never
+    // be reached. Past the bound the cancellation is still in flight and is
+    // reported as recorded rather than done. A rejected abort is not a
+    // cancellation either: it is reported pending, the claim keeps status
+    // running, and the next request (the hard-stop escalation) retries it.
+    const landed = await withTimeout(
+      cancel.then(
+        () => true,
+        () => false,
+      ),
+      cancelAckTimeoutMs,
+      "Pi cancellation is still in flight",
+    ).catch(() => false);
+    // The run's own terminal path settles the transcript. Reporting idle here
+    // would race it and let a caller start a second turn into a run that has
+    // not actually stopped yet.
+    return landed
+      ? json(response, 200, { cancelled: true })
+      : json(response, 202, { cancelled: false, pending: true });
+  }
+  if (claim !== undefined) {
+    return json(response, 202, { cancelled: false, pending: true });
+  }
+  return json(response, 200, { cancelled: false });
 }
 
 /**
@@ -658,7 +780,14 @@ async function handleCancel(response: ServerResponse, state: SessionState): Prom
  * user is watching in order to shrink its context.
  */
 async function handleCompact(response: ServerResponse, state: SessionState): Promise<void> {
-  if (state.status === "running" || state.dispatching || state.compacting || state.commandReload) {
+  assertSessionOpen(state);
+  if (
+    state.status === "running" ||
+    state.dispatching ||
+    state.compacting ||
+    state.commandReload ||
+    state.promptClaim !== undefined
+  ) {
     throw new HttpError(409, "Session is already running");
   }
   // Claimed synchronously, before the first await, exactly as the prompt route
@@ -895,11 +1024,45 @@ async function handleApprovalDecision(
   return json(response, 200, { resolved: true });
 }
 
+/**
+ * `POST /session/:id/prompt`.
+ *
+ * Admission starts at route entry, not after the body is read. When nothing
+ * else owns the session the claim is reserved here, synchronously, so a cancel
+ * that arrives while the body is read, validated, or waits out a command
+ * reload is recorded against this prompt (202 pending) instead of answering
+ * `{ cancelled: false }` + idle and then letting the prompt run anyway. The
+ * reservation is released on every path that does not become a turn — a
+ * validation error, a duplicate, a local answer, a busy refusal — and it
+ * clears only its own cancel record, so a stale cancel cannot reach a later
+ * prompt. Configuration and compaction take no claim, so a cancel during them
+ * reserves nothing; a busy session reserves nothing either, because a cancel
+ * then belongs to the work that owns it.
+ */
 async function handlePrompt(
   request: IncomingMessage,
   response: ServerResponse,
   state: SessionState,
   clientSignal: AbortSignal,
+): Promise<void> {
+  assertSessionOpen(state);
+  const admission: PromptAdmission = {
+    claim: reservePromptAdmission(state, isSessionClosed(state)),
+    transferred: false,
+  };
+  try {
+    return await handleAdmittedPrompt(request, response, state, clientSignal, admission);
+  } finally {
+    if (!admission.transferred) releasePromptClaim(state, admission.claim);
+  }
+}
+
+async function handleAdmittedPrompt(
+  request: IncomingMessage,
+  response: ServerResponse,
+  state: SessionState,
+  clientSignal: AbortSignal,
+  admission: PromptAdmission,
 ): Promise<void> {
   const body = await readJson(request);
   const commandFields = readBridgePromptCommandFields(body);
@@ -929,6 +1092,8 @@ async function handlePrompt(
       "Pi is still reloading its commands",
     ).catch(() => undefined);
   }
+  // Closed while the body was read or the reload was waited out.
+  assertSessionOpen(state);
   if (requestId && state.promptJournal.has(requestId)) {
     const journaled = state.promptJournal.get(requestId)!;
     if (journaled.local) {
@@ -1073,8 +1238,14 @@ async function handlePrompt(
   // `compacting` counts as busy: Pi's compaction aborts whatever is running,
   // so a prompt admitted alongside one is a turn that gets cancelled out from
   // under the user. A reload still in flight after the bounded wait above is
-  // busy too.
-  if (state.status === "running" || state.dispatching || state.compacting) {
+  // busy too, and so is another prompt's claim — one still reading its body,
+  // or one whose startup deadline passed while Pi may still accept it.
+  if (
+    state.status === "running" ||
+    state.dispatching ||
+    state.compacting ||
+    (state.promptClaim !== undefined && state.promptClaim !== admission.claim)
+  ) {
     throw new HttpError(409, "Session is already running");
   }
   if (state.commandReload) {
@@ -1089,18 +1260,34 @@ async function handlePrompt(
   // fast path, so a second request would otherwise pass both the duplicate and
   // the busy check and dispatch the same prompt twice.
   state.dispatching = true;
+  // The admitted-turn token: the one reserved at route entry when there was
+  // one, otherwise reserved now in the same synchronous step as the claim.
+  // From here to the turn's terminal state, a cancel belongs to this prompt
+  // even before any cancel handle exists.
+  const claim = admission.claim ?? claimPromptTurn(state);
+  admission.transferred = true;
   if (requestId) {
     setPromptJournal(state, { requestId, state: "prepared", acceptedAt: Date.now() });
   }
 
-  let images: PiPromptImage[];
-  let files: PiPromptFile[];
+  let images: PiPromptImage[] = [];
+  let files: PiPromptFile[] = [];
   let session: Awaited<ReturnType<typeof ensureSession>>;
+  // Checked after every preparation boundary. Pi has not been invoked yet, so
+  // a cancel (or the session's deletion) that won is settled locally below.
+  const stopIfCancelled = (): void => {
+    if (cancelRequestedFor(state, claim) || isSessionClosed(state)) {
+      throw new CancelledBeforeSendError();
+    }
+  };
   try {
+    // A cancel recorded while the body was read or validated.
+    stopIfCancelled();
     // Read attachments first: an unreadable image must fail before a session is
     // attached, and it is far cheaper than a cold start.
     images = await readPromptImages(attachments, workingDirectory);
     files = await resolvePromptFiles(attachments, workingDirectory);
+    stopIfCancelled();
     if (typeof body.readOnly === "boolean") await setSessionReadOnly(state, body.readOnly);
     applyComposerPatch(state, parseComposerPatch(body));
     // A rotated tab credential has to rebuild the SDK session before the turn
@@ -1108,8 +1295,10 @@ async function handlePrompt(
     // identity while `/mcp` already reports the new one. A saved MCP
     // configuration change is adopted at this same boundary.
     await reconcileAgentMcp(state, { atTurnStart: true });
+    stopIfCancelled();
     session = await ensureSession(state);
     await applyComposerToSession(state);
+    stopIfCancelled();
     if (command) {
       // A cold attach re-read the list from a fresh runtime. Hold the
       // selection to that list *and* to Pi's own dispatch order, so it runs
@@ -1127,10 +1316,29 @@ async function handlePrompt(
     // prompt. After this point a crash is ambiguous, so restart must refuse to
     // dispatch the same request id rather than infer that it never ran.
     if (requestId) await persistBarrier();
+    // The last boundary before Pi is invoked. Everything from here to
+    // `session.prompt` is synchronous, so a cancel cannot slip in between.
+    stopIfCancelled();
   } catch (error) {
+    // A close or DELETE that landed during preparation settles the prompt the
+    // same way whichever boundary noticed it — including a cold attach that
+    // refused to publish into the closed session — so both routes give the
+    // prompt one answer: cancelled before send, never a 500.
+    if (error instanceof CancelledBeforeSendError || isSessionClosed(state)) {
+      // Cancellation won before Pi saw anything. The user's message is kept
+      // as the honest record of what they sent, and the turn ends as a
+      // cancelled one does, without an artificial prompt reaching Pi.
+      appendUserMessage(state, displayPrompt, images, files);
+      settleCancelledBeforeSend(state, claim, {
+        ...(requestId ? { requestId } : {}),
+        ...(schema ? { schema } : {}),
+      });
+      return json(response, 202, { accepted: true, cancelled: true });
+    }
     // The turn provably did not run, so release the claim and let the caller
     // retry under the same request id.
     state.dispatching = false;
+    releasePromptClaim(state, claim);
     if (requestId) state.promptJournal.delete(requestId);
     schedulePersist();
     if (error instanceof CommandUnavailableError) {
@@ -1166,6 +1374,20 @@ async function handlePrompt(
       ...(extensionCommand ? { extensionCommand } : {}),
     });
   } catch (error) {
+    if (error instanceof PromptStartupTimeoutError) {
+      // Failed explicitly and boundedly. `dispatchPrompt` has already marked
+      // the turn failed and kept the claim, the journal entry and the user's
+      // message: Pi may still accept, and that late run is aborted and
+      // observed before the claim is released (see `abandonStartup`). 424
+      // rather than a 5xx so the backend surfaces this message instead of
+      // reading a transient outage it would retry.
+      return json(response, 424, {
+        accepted: false,
+        outcome: "startup-timeout",
+        error: error.message,
+        ...(requestId ? { requestId } : {}),
+      });
+    }
     // Pi refused the prompt before the run started, so nothing ran. Roll the
     // turn back rather than leaving the session wedged as running or showing
     // a user message for work the agent never accepted.
@@ -1175,6 +1397,8 @@ async function handlePrompt(
     state.error = errorText(error);
     state.dispatching = false;
     state.cancelTurn = undefined;
+    // A cancel recorded during preflight goes with the claim it targeted.
+    releasePromptClaim(state, claim);
     state.currentAssistantMessageId = undefined;
     state.openTextParts.clear();
     state.toolInputs.clear();

@@ -1399,8 +1399,9 @@ export function holdSdkPromptOpen(
       // One uuid names one message: only the first prompt message takes it.
       let promptUuidAvailable = Boolean(promptUuid);
       const withPromptUuid = (message: SDKUserMessage): SDKUserMessage => {
-        if (!promptUuidAvailable || message.uuid) return message;
+        if (!promptUuidAvailable) return message;
         promptUuidAvailable = false;
+        if (message.uuid) return message;
         return { ...message, uuid: promptUuid as SDKUserMessage["uuid"] };
       };
       if (typeof sdkPrompt === "string") {

@@ -22,6 +22,7 @@ import {
   normalizePersistedSessionMessages,
   parseTaskNotification,
   refreshSettledToolRows,
+  resultAnswersOtherInput,
   subagentInterruptedNoticeText,
 } from "./session-manager-messages.js";
 import { THINKING_TOKENS_EMIT_INTERVAL_MS, memoryRecallPart } from "./session-manager-prompt.js";
@@ -812,6 +813,77 @@ describe("interruptions", () => {
     ]);
     expect(subagentInterruptedNoticeText("Perf pass")).toBe("Subagent stopped: Perf pass");
   });
+
+  test("distinct subagent stops retain rows when their descriptions match", async () => {
+    const marker = (parentToolUseId: string) => ({
+      type: "user",
+      parent_tool_use_id: parentToolUseId,
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "[Request interrupted by user for tool use]" }],
+      },
+    });
+    const session = await runTurn("same-name-subagent-stops", (call) => {
+      call.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "agent-a",
+        tool_use_id: "call-a",
+        description: "Review",
+      });
+      call.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "agent-b",
+        tool_use_id: "call-b",
+        description: "Review",
+      });
+      call.push(marker("call-a"));
+      call.push(marker("call-b"));
+      call.push(marker("call-b"));
+      call.push(marker("missing-a"));
+      call.push(marker("missing-b"));
+      call.push(marker("missing-b"));
+    });
+    expect(statusRows(session.messages).map((part) => part!.content)).toEqual([
+      "Subagent stopped: Review",
+      "Subagent stopped: Review",
+      "A subagent was stopped",
+      "A subagent was stopped",
+    ]);
+  });
+});
+
+describe("result input matching", () => {
+  test("filters only numbered successful results for another input", () => {
+    const promptUuid = "prompt-id";
+    expect(resultAnswersOtherInput({ subtype: "success", result_index: 0 }, promptUuid)).toBe(true);
+    expect(
+      resultAnswersOtherInput(
+        { subtype: "success", result_index: 1, user_message_uuid: "other" },
+        promptUuid,
+      ),
+    ).toBe(true);
+    expect(
+      resultAnswersOtherInput(
+        { subtype: "success", result_index: 1, user_message_uuids: ["other", promptUuid] },
+        promptUuid,
+      ),
+    ).toBe(false);
+    expect(
+      resultAnswersOtherInput(
+        { subtype: "success", result_index: 1, user_message_uuid: promptUuid },
+        promptUuid,
+      ),
+    ).toBe(false);
+    expect(resultAnswersOtherInput({ subtype: "success" }, promptUuid)).toBe(false);
+    expect(
+      resultAnswersOtherInput({ subtype: "error_during_execution", result_index: 0 }, promptUuid),
+    ).toBe(false);
+    expect(
+      resultAnswersOtherInput({ subtype: "success", is_error: true, result_index: 0 }, promptUuid),
+    ).toBe(false);
+  });
 });
 
 describe("replayed transcripts match the live tab", () => {
@@ -823,6 +895,47 @@ describe("replayed transcripts match the live tab", () => {
       timestamp: `2026-09-24T10:00:0${index}.000Z`,
       ...record,
     })) as Parameters<typeof normalizePersistedSessionMessages>[0];
+
+  test("rebuilds named and unnamed subagent stops with stable notice ids", () => {
+    const marker = (parentToolUseId: string) => ({
+      type: "user",
+      parent_tool_use_id: parentToolUseId,
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "[Request interrupted by user for tool use]" }],
+      },
+    });
+    const records = persisted([
+      {
+        type: "system",
+        subtype: "task_started",
+        task_id: "a",
+        tool_use_id: "call-a",
+        description: "Review",
+      },
+      {
+        type: "system",
+        subtype: "task_started",
+        task_id: "b",
+        tool_use_id: "call-b",
+        description: "Review",
+      },
+      marker("call-a"),
+      marker("call-b"),
+      marker("call-b"),
+      marker("unknown-a"),
+      marker("unknown-b"),
+      marker("unknown-b"),
+    ]);
+    const messages = normalizePersistedSessionMessages(records).messages;
+    expect(messages.map((message) => [message.id, message.content])).toEqual([
+      ["record-2:notice:0", "Subagent stopped: Review"],
+      ["record-3:notice:0", "Subagent stopped: Review"],
+      ["record-5:notice:0", "A subagent was stopped"],
+      ["record-6:notice:0", "A subagent was stopped"],
+    ]);
+    expect(messages.every((message) => message.sdkUuid === undefined)).toBe(true);
+  });
 
   test("a task report lands on its agent row and the interruption marker is a row", () => {
     const { messages } = normalizePersistedSessionMessages(

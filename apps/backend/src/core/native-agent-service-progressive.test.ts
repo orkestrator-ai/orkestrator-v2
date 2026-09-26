@@ -594,6 +594,7 @@ describe("native agent progressive remainder", () => {
         complete: !streaming,
         historyEpoch: "epoch-1",
         historyStartIndex: streaming ? 1 : 0,
+        byteOmittedMessages: streaming ? 1 : undefined,
         sourceToken: streaming ? "source-2" : "source-1",
         freshness: "current" as const,
       }),
@@ -623,11 +624,59 @@ describe("native agent progressive remainder", () => {
           truncated: true,
           truncationReason: "bytes",
           canLoadEarlier: false,
+          omittedMessages: 1,
         });
         expect(next.value.historyComplete).toBe(false);
       },
     );
   });
+
+  test.each([true, false])(
+    "adds provider and backend byte omissions (positioned: %s)",
+    async (positioned) => {
+      const stub = createProviderStub("codex", {
+        transcriptSnapshot: async () => ({
+          messages: [
+            progressiveMessage("large", "x".repeat(600 * 1024)),
+            progressiveMessage("tail"),
+          ],
+          complete: false,
+          byteOmittedMessages: 2,
+          ...(positioned ? { historyStartIndex: 2 } : {}),
+          historyEpoch: "epoch-1",
+          sourceToken: "source-1",
+          freshness: "current" as const,
+        }),
+      });
+      await withService(
+        { prefix: "orkestrator-progressive-double-byte-", provider: async () => stub.provider },
+        async ({ service }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent: "codex" as const,
+            logicalSessionKey: `env-env-1:double-byte-${positioned}`,
+          };
+          await service.ensureSession(identity);
+          const update = await service.getTranscriptUpdate({
+            ...identity,
+            viewVersion: 1,
+            liveWindow: { messages: 100, targetBytes: 512 },
+            forceSnapshot: true,
+          });
+          if (update.status !== "snapshot") throw new Error("expected snapshot");
+          expect(update.value.messages.map((message) => (message as { id: string }).id)).toEqual([
+            "tail",
+          ]);
+          expect(update.value.messageWindow).toMatchObject({
+            truncated: true,
+            truncationReason: "bytes",
+            omittedMessages: 3,
+          });
+          expect(update.value.historyComplete).toBe(false);
+        },
+      );
+    },
+  );
 
   test.each([
     { trimmedBy: "provider", providerTargetBytes: liveWindow.targetBytes },

@@ -2596,7 +2596,12 @@ export async function sendPrompt(
                 (task) => task.toolUseId === parentToolUseId,
               )
             : undefined;
-          appendSubagentInterruptedNotice(session, sessionId, stoppedTask?.description);
+          appendSubagentInterruptedNotice(
+            session,
+            sessionId,
+            stoppedTask?.description,
+            parentToolUseId ?? undefined,
+          );
         }
         // Skip adding user message replay as we already added it
       } else if (message.type === "auth_status") {

@@ -11,6 +11,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeStartupFailureMessage } from "./session-manager-prompt.js";
+import { holdSdkPromptOpen } from "./session-manager-persistence.js";
 
 import {
   MAX_IMAGE_ATTACHMENT_BYTES,
@@ -55,6 +56,51 @@ describe("Claude startup failure diagnostics", () => {
     );
     expect(claudeStartupFailureMessage("bypass_root")).toContain("non-root user");
   });
+
+  test("surfaces a numbered startup failure without a prompt uuid", async () => {
+    const session = createSession("numbered-startup-failure");
+    track(session.id);
+    const prompt = sendPrompt(session.id, "Start Claude");
+    const call = await nextQueryCall();
+    call.push({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      result_index: 0,
+      startup_failure_reason: "cli_version_too_old",
+      errors: ["CLI version unsupported"],
+    });
+    call.finish();
+    const guidance = claudeStartupFailureMessage("cli_version_too_old");
+    await expect(prompt).rejects.toThrow(guidance);
+    expect(session.messages.some((message) => message.content === guidance)).toBe(true);
+  });
+});
+
+test("a held iterable consumes the prompt uuid slot on its first message", async () => {
+  const controller = new AbortController();
+  async function* input(): AsyncIterable<SDKUserMessage> {
+    yield {
+      type: "user",
+      uuid: "already-stamped",
+      parent_tool_use_id: null,
+      message: { role: "user", content: [{ type: "text", text: "first" }] },
+    };
+    yield {
+      type: "user",
+      parent_tool_use_id: null,
+      message: { role: "user", content: [{ type: "text", text: "second" }] },
+    };
+  }
+  const held = holdSdkPromptOpen(input(), controller.signal, "generated-prompt-id");
+  const iterator = held.prompt[Symbol.asyncIterator]();
+  try {
+    expect((await iterator.next()).value.uuid).toBe("already-stamped");
+    expect((await iterator.next()).value.uuid).toBeUndefined();
+  } finally {
+    held.close();
+    await iterator.return?.();
+  }
 });
 
 describe("sendPrompt", () => {
@@ -2779,8 +2825,10 @@ describe("sendPrompt", () => {
     );
 
     const sdkMessages = (await readSdkPrompt(call)) as Array<{
+      uuid?: string;
       message: { content: Array<Record<string, unknown>> };
     }>;
+    expect(sdkMessages[0].uuid).toBeString();
     expect(sdkMessages[0].message.content).toEqual([expect.objectContaining({ type: "image" })]);
   });
 

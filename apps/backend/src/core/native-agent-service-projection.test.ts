@@ -19,6 +19,7 @@ import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
   createCoordinatorDelegatedPrompt,
+  wrapSystemInstructions,
 } from "@orkestrator/protocol/review-evidence-frames";
 
 import { UNAPPLIED_NETWORK_RESTRICTION_NOTE } from "./native-agent-execution-policy.js";
@@ -768,6 +769,42 @@ describe("NativeAgentService", () => {
           "provider-session",
           "Implement durable session titles",
         );
+      },
+    );
+  });
+
+  test("titles a session from the user's words, not framed system instructions", async () => {
+    const prompt = `${wrapSystemInstructions("Use the orkestrator-design MCP server.")}\n\nMock up the sidebar`;
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        title: "Session a1b2c3",
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: prompt,
+            parts: [{ type: "text", content: prompt }],
+            createdAt: "2026-09-07T10:00:00.000Z",
+          },
+        ],
+      }),
+      setSessionTitle: async () => undefined,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-claude-framed-title-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:tab-framed-title",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.title).toBe("Mock up the sidebar");
       },
     );
   });

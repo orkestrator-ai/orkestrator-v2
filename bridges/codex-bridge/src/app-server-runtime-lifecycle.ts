@@ -63,6 +63,7 @@ import type {
   EngineRateLimitWindowUpdate,
   EngineThread,
   EngineTurnConfig,
+  EngineTurnStatus,
   EngineUsageSnapshot,
   EngineUserInput,
 } from "./engine/types.js";
@@ -133,6 +134,9 @@ import {
   isNativeAgentExecutionPolicy,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
+
+export const CODEX_RESTARTED_MID_TURN_MESSAGE =
+  "Codex restarted before this turn finished, so its work stopped partway. Send a message to continue.";
 
 export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   async start(): Promise<void> {
@@ -1290,7 +1294,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
             turn.turnId,
           );
           if (reviewOutcome.result === "terminal") {
-            turn.complete(reviewOutcome.status);
+            this.completeRecoveredTurn(turn, reviewOutcome.status);
             await this.runFinalization(context, turn);
             continue;
           }
@@ -1317,7 +1321,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         );
 
         if (outcome.result === "terminal") {
-          turn.complete(outcome.status ?? "completed");
+          this.completeRecoveredTurn(turn, outcome.status ?? "completed");
           await this.runFinalization(context, turn);
           continue;
         }
@@ -1366,6 +1370,26 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         }
       }
     }
+  }
+
+  /**
+   * Settles a turn the replacement child reports as already terminal.
+   *
+   * app-server persists a turn its dead predecessor never finished as
+   * `interrupted`. Unless the user asked for that, it was the restart that
+   * stopped the work, and finalizing it as an ordinary interruption settles the
+   * session to idle with no error: the transcript simply ends mid-task and reads
+   * as done. Surface it as a failure so the user knows to continue.
+   */
+  private completeRecoveredTurn(turn: TurnAccumulator, status: EngineTurnStatus): void {
+    if (status === "interrupted" && !turn.cancelRequested) {
+      turn.complete("failed", {
+        message: CODEX_RESTARTED_MID_TURN_MESSAGE,
+        code: "app-server-restarted",
+      });
+      return;
+    }
+    turn.complete(status);
   }
 
   protected async finalizeTurn(context: ThreadContext, turn: TurnAccumulator): Promise<void> {

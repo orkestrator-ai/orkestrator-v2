@@ -4,6 +4,7 @@ import {
   DEFAULT_THREAD_IDLE_MS,
   MAX_RECOVERED_CONTEXT_CHARS,
 } from "./app-server-runtime.js";
+import { CODEX_RESTARTED_MID_TURN_MESSAGE } from "./app-server-runtime-lifecycle.js";
 import type { EngineEvent } from "./engine/types.js";
 import {
   getTranscriptCatalogInvalidationCountForTesting,
@@ -3130,6 +3131,92 @@ describe("crash recovery", () => {
     expect(h.runtime.getJournal().get("req-1")).toMatchObject({
       state: "terminal",
       terminalStatus: "failed",
+    });
+  });
+
+  /**
+   * app-server persists a turn its dead predecessor never finished as
+   * `interrupted`. Settling that as an ordinary interruption left the session
+   * idle with no error, so the transcript stopped mid-task and read as done.
+   */
+  test("a turn the restart interrupted is surfaced as failed, not a silent finish", async () => {
+    const h = await harness({
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [
+            {
+              id: "turn-1",
+              status: "interrupted",
+              items: [{ type: "userMessage", clientId: "req-1" }],
+            },
+          ],
+        }),
+      }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+
+    h.child().exit(null, "SIGKILL");
+    await h.engine.getSupervisor().ensureReady();
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "error",
+      phase: "failed",
+      error: CODEX_RESTARTED_MID_TURN_MESSAGE,
+    });
+    expect(h.events).toContainEqual({
+      type: "session.error",
+      sessionId,
+      data: { error: CODEX_RESTARTED_MID_TURN_MESSAGE },
+    });
+    expect(h.runtime.getJournal().get("req-1")).toMatchObject({
+      state: "terminal",
+      terminalStatus: "failed",
+    });
+
+    // The failure is a notice, not a lock: the user can tell it to continue.
+    const next = await h.runtime.prompt(sessionId, {
+      prompt: "continue",
+      requestId: "req-2",
+      attachments: [],
+    });
+    expect(next.ok).toBe(true);
+  });
+
+  test("a turn the user was cancelling stays interrupted across a restart", async () => {
+    const h = await harness({
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [
+            {
+              id: "turn-1",
+              status: "interrupted",
+              items: [{ type: "userMessage", clientId: "req-1" }],
+            },
+          ],
+        }),
+      }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+    await h.runtime.abort(sessionId);
+
+    h.child().exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await h.drain();
+
+    // The user asked for the stop, so the restart must not be blamed for it.
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
+    expect(
+      h.events.some(
+        (event) =>
+          event.type === "session.error" && event.data?.error === CODEX_RESTARTED_MID_TURN_MESSAGE,
+      ),
+    ).toBe(false);
+    expect(h.runtime.getJournal().get("req-1")).toMatchObject({
+      state: "terminal",
+      terminalStatus: "interrupted",
     });
   });
 

@@ -694,7 +694,13 @@ export class AppServerSupervisor {
     signal: string | null,
   ): void {
     if (this.current?.id !== generationId) return;
+    const exited = this.current;
     this.current = null;
+    // The only durable record of *how* the child died. Without it a SIGKILL from
+    // outside, an OOM kill and a Codex exit(1) all read as "stdout ended".
+    console.error(
+      `[codex-bridge][app-server:${generationId}] exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"}, pid=${exited.child.pid ?? "unknown"}, uptimeMs=${Math.max(0, this.now() - exited.startedAt)})`,
+    );
     this.options.onGenerationExit?.(generationId);
     if (this.stopping) {
       this.setState("stopped");

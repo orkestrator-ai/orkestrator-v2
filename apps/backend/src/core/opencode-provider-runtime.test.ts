@@ -333,6 +333,52 @@ describe("OpenCode provider runtime", () => {
     }
   });
 
+  test("keeps a failed turn's error in the transcript after the conversation moves on", async () => {
+    const fake = openCodeFake();
+    fake.setMessagesResponse({
+      data: [
+        {
+          info: {
+            id: "assistant-failed",
+            role: "assistant",
+            error: {
+              name: "APIError",
+              data: { message: "Bad Request", statusCode: 400, isRetryable: false },
+            },
+            time: { created: 1, completed: 2 },
+          },
+          parts: [],
+        },
+        {
+          info: { id: "user-2", role: "user", time: { created: 3 } },
+          parts: [{ id: "part-user-2", type: "text", text: "Why did you stop?" }],
+        },
+        {
+          info: { id: "assistant-2", role: "assistant", time: { created: 4, completed: 5 } },
+          parts: [{ id: "part-assistant-2", type: "text", text: "Continuing." }],
+        },
+      ],
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const snapshot = await provider.interactiveSnapshot?.("owned-session");
+      expect(snapshot?.messages.map((message) => (message as { id?: unknown }).id)).toEqual([
+        "assistant-failed",
+        "error-opencode-assistant-failed",
+        "user-2",
+        "assistant-2",
+      ]);
+      expect(snapshot?.messages[1]).toMatchObject({
+        role: "assistant",
+        content: "Model request failed (HTTP 400): Bad Request",
+        createdAt: new Date(2).toISOString(),
+      });
+      expect(snapshot?.notices).toBeUndefined();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("derives cumulative usage from one already-read OpenCode transcript", async () => {
     const fake = openCodeFake();
     fake.setMessagesResponse({

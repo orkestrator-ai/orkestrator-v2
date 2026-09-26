@@ -68,6 +68,7 @@ import {
   collectNormalizedOpenCodeSubagentIds,
   collectRawOpenCodeSubagentIds,
   hydrateNormalizedOpenCodeSubagents,
+  normalizeOpenCodeInlineError,
   normalizeOpenCodeInteractiveMessage,
   normalizeOpenCodeTerminalState,
   openCodeStructuredPrompt,
@@ -1105,7 +1106,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       const normalized = normalizeOpenCodeInteractiveMessage(message, index, (type) =>
         this.health.recordUnknown(`part:${type}`),
       );
-      return normalized ? [normalized] : [];
+      if (!normalized) return [];
+      const inlineError = normalizeOpenCodeInlineError(message);
+      return inlineError ? [normalized, inlineError] : [normalized];
     });
     const messages = await this.hydrateSubagentTranscripts(
       normalizedMessages,

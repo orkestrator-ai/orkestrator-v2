@@ -84,6 +84,7 @@ import {
   type ProgressiveCacheTier,
   type ProgressiveReadOutcome,
 } from "./native-agent-progressive-metrics.js";
+import { OPEN_CODE_INLINE_ERROR_ID_PREFIX } from "./opencode-messages.js";
 import { readReadableHostFile } from "./path-safety.js";
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
 import {
@@ -3695,7 +3696,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       const messageIds = new Set(
         transcript.messages.map((message) => (message as { id?: unknown })?.id),
       );
+      // A provider that already renders its failure inline (OpenCode) ends the
+      // transcript with that row; a second terminal row would repeat it.
+      const lastMessageId = (transcript.messages.at(-1) as { id?: unknown } | undefined)?.id;
+      const endsWithInlineError =
+        typeof lastMessageId === "string" &&
+        lastMessageId.startsWith(OPEN_CODE_INLINE_ERROR_ID_PREFIX);
       const terminalMessages = terminalNotices
+        .filter((notice) => !(endsWithInlineError && notice.kind === "error"))
         .map((notice) => ({
           id: `native-terminal:${notice.kind}:${createHash("sha256")
             .update(notice.message)

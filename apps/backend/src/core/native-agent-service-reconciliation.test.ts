@@ -48,6 +48,8 @@ import {
 
 import {
   OPENCODE_INCOMPLETE_TURN_CONTINUATION,
+  OPENCODE_PROVIDER_ERROR_CONTINUATION,
+  OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS,
   openCodeIncompleteTurnRequestId,
 } from "./opencode-turn-recovery.js";
 
@@ -1631,6 +1633,75 @@ describe("NativeAgentService", () => {
           ).toMatchObject({
             kind: "exhausted",
             assistantMessageId: "assistant-2",
+          });
+        },
+      );
+    });
+
+    test("retries a provider-error turn only after its backoff elapses", async () => {
+      const failedAt = 1_790_422_344_987;
+      let clock = failedAt + 1_000;
+      let activityState: ProviderActivityState = "working";
+      const failedAssistant = {
+        info: {
+          id: "assistant-failed",
+          role: "assistant",
+          providerID: "opencode-go",
+          modelID: "deepseek-v4-flash",
+          agent: "build",
+          time: { created: failedAt - 2_000, completed: failedAt },
+          error: {
+            name: "APIError",
+            data: { message: "Bad Request", statusCode: 400, isRetryable: false },
+          },
+        },
+        parts: [],
+      };
+      const { provider, send } = createProviderStub("opencode", {
+        activity: async () => activityState,
+        messages: async () => [stalledUser, failedAssistant],
+      });
+
+      await withService(
+        {
+          prefix: "orkestrator-native-opencode-provider-error-",
+          provider: async () => provider,
+          now: () => clock,
+        },
+        async ({ storage, service }) => {
+          const key = nativeAgentSessionStorageKey("env-1", "opencode", "tab-1");
+          await storage.adoptNativeAgentSession({
+            key,
+            environmentId: "env-1",
+            agent: "opencode",
+            logicalSessionKey: "tab-1",
+            providerSessionId: "provider-1",
+          });
+
+          await service.reconcileAgentActivity();
+          activityState = "idle";
+          await service.reconcileAgentActivity();
+          await waitForCondition(() => recoveryTasks(service).size === 0);
+          // Still inside the first backoff window: nothing is sent yet.
+          expect(send).not.toHaveBeenCalled();
+
+          clock = failedAt + OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS[0];
+          await captureWarnings(async () => {
+            await service.reconcileAgentActivity();
+            await waitForCondition(() => send.mock.calls.length === 1);
+            await waitForCondition(() => recoveryTasks(service).size === 0);
+          });
+          const [sessionId, prompt, options] = send.mock.calls[0]! as [
+            string,
+            string,
+            ProviderSendOptions,
+          ];
+          expect(sessionId).toBe("provider-1");
+          expect(prompt).toBe(OPENCODE_PROVIDER_ERROR_CONTINUATION);
+          expect(options).toMatchObject({
+            requestId: openCodeIncompleteTurnRequestId("assistant-failed"),
+            model: "opencode-go/deepseek-v4-flash",
+            executionAgent: "reviewer",
           });
         },
       );

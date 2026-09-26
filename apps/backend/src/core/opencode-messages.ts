@@ -449,3 +449,45 @@ export function normalizeOpenCodeTerminalState(value: unknown): {
     message: boundedText(detail, "OpenCode session failed"),
   };
 }
+
+/**
+ * Id prefix the renderer styles as an error alert rather than an assistant
+ * reply. Matches the renderer's own `ERROR_MESSAGE_PREFIX`.
+ */
+export const OPEN_CODE_INLINE_ERROR_ID_PREFIX = "error-opencode-";
+
+/**
+ * A durable transcript row for an assistant message that failed.
+ *
+ * OpenCode persists the failure on the message itself, which often has no
+ * parts of its own. Without this row the failure is only visible while the
+ * failed message is the latest one; once the conversation moves on, the
+ * transcript reads as if the agent simply stopped. User stops are excluded —
+ * they already render as a stop marker and are not failures.
+ */
+export function normalizeOpenCodeInlineError(value: unknown): Record<string, unknown> | null {
+  const terminal = normalizeOpenCodeTerminalState(value);
+  if (terminal?.kind !== "error") return null;
+  const info = asRecord(asRecord(value)?.info)!;
+  const messageId = nonEmptyString(info.id);
+  if (!messageId) return null;
+  const error = asRecord(info.error);
+  const statusCode = asRecord(error?.data)?.statusCode;
+  const content =
+    nonEmptyString(error?.name) === "APIError"
+      ? `Model request failed${typeof statusCode === "number" ? ` (HTTP ${statusCode})` : ""}: ${terminal.message}`
+      : terminal.message;
+  const time = asRecord(info.time);
+  const rawTime = typeof time?.completed === "number" ? time.completed : time?.created;
+  const createdAt =
+    typeof rawTime === "number" && Number.isFinite(rawTime)
+      ? new Date(rawTime).toISOString()
+      : "1970-01-01T00:00:00.000Z";
+  return {
+    id: `${OPEN_CODE_INLINE_ERROR_ID_PREFIX}${messageId}`,
+    role: "assistant",
+    content,
+    parts: [{ type: "text", content }],
+    createdAt,
+  };
+}

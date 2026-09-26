@@ -199,9 +199,18 @@ const runRetry: MutationActionHandler<{ operationId: string }> = {
             ? {
                 ...current,
                 dispatch,
+                ...(dispatch.state === "accepted" && record.action === "session.steer"
+                  ? { result: { sessionId: session.sessionId } }
+                  : {}),
+                ...(dispatch.state === "rejected" ||
+                (dispatch.state === "accepted" && record.action === "session.steer")
+                  ? { stage: "completed", completedAt: new Date(context.now()).toISOString() }
+                  : {}),
                 state:
                   dispatch.state === "accepted"
-                    ? "running"
+                    ? record.action === "session.steer"
+                      ? "succeeded"
+                      : "running"
                     : dispatch.state === "unknown"
                       ? "unknown"
                       : "failed",

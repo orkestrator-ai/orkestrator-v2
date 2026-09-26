@@ -61,22 +61,23 @@ export async function control(
   context: CommandContext,
   payload: Record<string, unknown>,
 ): Promise<unknown> {
-  const encoded = Buffer.from(JSON.stringify(payload)).toString("base64");
-  const args = ["-e", EXEC_CONTROL, encoded, EXEC_WORKER];
-  // Arguments, environment values and stdin travel only in the payload,
-  // which is redacted from any error; routine logs never see them.
-  const redactValues = [encoded, EXEC_CONTROL, EXEC_WORKER];
+  const input = JSON.stringify(payload);
+  const args = ["-e", EXEC_CONTROL, EXEC_WORKER];
+  // The payload travels on stdin; argv and /proc cmdline contain no secrets.
+  const redactValues = [input, EXEC_CONTROL, EXEC_WORKER];
   const { stdout } =
     environment.environmentType === "local"
       ? await runCommand(resolveBunBinary(context), args, {
           cwd: "/",
           timeoutMs: 30_000,
+          stdin: input,
           redactValues,
         })
       : await runCommand(
           "docker",
           [
             "exec",
+            "-i",
             "--workdir",
             "/",
             environment.containerId!,
@@ -84,7 +85,7 @@ export async function control(
             "-lc",
             withContainerRuntimeCredential(["bun", ...args].map(quoteShell).join(" ")),
           ],
-          { timeoutMs: 30_000, redactValues },
+          { timeoutMs: 30_000, redactValues, stdin: input },
         );
   return JSON.parse(stdout);
 }

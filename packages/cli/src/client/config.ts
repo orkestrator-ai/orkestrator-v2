@@ -29,6 +29,8 @@ export type SavedConnection =
       url: string;
       /** Absolute path of a private file holding the gateway token. */
       credentialFile: string;
+      /** True only when the CLI created this credential file. */
+      managedCredential?: boolean;
       installationId?: string;
       addedAt: string;
     };
@@ -111,6 +113,7 @@ function parseSaved(value: unknown): SavedConnection | null {
       kind: "endpoint",
       url: record.url,
       credentialFile: record.credentialFile,
+      ...(record.managedCredential === true ? { managedCredential: true } : {}),
       ...(installationId ? { installationId } : {}),
       addedAt,
     };
@@ -208,6 +211,11 @@ export class CliConfigStore {
     const file = path.join(this.credentialsDirectory, `${name}.json`);
     await writePrivateFile(file, `${JSON.stringify({ token })}\n`);
     return file;
+  }
+
+  async removeOwnedCredential(file: string): Promise<void> {
+    if (path.dirname(file) !== this.credentialsDirectory) return;
+    await fs.rm(file, { force: true });
   }
 }
 

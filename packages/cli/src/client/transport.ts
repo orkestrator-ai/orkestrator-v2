@@ -69,11 +69,15 @@ export class GatewayTransport {
   private async send(body: string, token: string, options: InvokeOptions): Promise<Response> {
     const controller = new AbortController();
     const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs;
+    let sent = false;
     const timer = setTimeout(() => controller.abort(new Error("timeout")), timeoutMs);
     const onAbort = () => controller.abort(new Error("interrupted"));
     options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
     try {
-      return await this.fetchImpl(`${this.target.baseUrl}${INVOKE_PATH}`, {
+      if (controller.signal.aborted) throw controller.signal.reason;
+      sent = true;
+      const response = await this.fetchImpl(`${this.target.baseUrl}${INVOKE_PATH}`, {
         method: "POST",
         headers: {
           authorization: `Bearer ${token}`,
@@ -84,8 +88,30 @@ export class GatewayTransport {
         redirect: "manual",
         signal: controller.signal,
       });
+      if (!response.body) return response;
+      const abort = new Promise<never>((_, reject) => {
+        if (controller.signal.aborted) reject(controller.signal.reason);
+        else
+          controller.signal.addEventListener("abort", () => reject(controller.signal.reason), {
+            once: true,
+          });
+      });
+      const bytes = await Promise.race([
+        readStreamBounded(
+          response.body,
+          PUBLIC_API_LIMITS.responseMaxBytes,
+          () => new CliError("response-invalid", "The backend response exceeded the client limit"),
+          controller.signal,
+        ),
+        abort,
+      ]);
+      return new Response(Buffer.from(bytes), {
+        status: response.status,
+        statusText: response.statusText,
+      });
     } catch (error) {
-      if (!options.mutation || connectionRefused(error)) {
+      if (error instanceof CliError) throw error;
+      if (!sent || !options.mutation || connectionRefused(error)) {
         throw new CliError(
           "connection-failed",
           controller.signal.aborted

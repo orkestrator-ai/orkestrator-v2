@@ -68,9 +68,6 @@ async function finishRun(
   base: CommandOutcome,
 ): Promise<CommandOutcome> {
   if (parsed.options.wait !== true || !base.receipt) {
-    if (parsed.options.timeout !== undefined && parsed.options.wait !== true) {
-      throw new CliError("invalid-input", "--timeout needs --wait");
-    }
     return base;
   }
   const session = await context.session();
@@ -88,6 +85,15 @@ async function finishRun(
     human: receiptLines(final),
     ...(failure ? { failure } : {}),
   };
+}
+
+function validateWaitOptions(options: Record<string, unknown>): void {
+  if (options.timeout !== undefined && options.wait !== true) {
+    throw new CliError("invalid-input", "--timeout needs --wait");
+  }
+  if (typeof options.timeout === "number" && options.timeout > PUBLIC_API_LIMITS.waitMaxMs) {
+    throw new CliError("invalid-input", "--timeout may be at most 24h");
+  }
 }
 
 function controlsInput(options: Record<string, unknown>): Record<string, unknown> {
@@ -264,6 +270,7 @@ export const sessionCommands: CommandSpec[] = [
     idOutput: "session ID",
     async run(context, parsed) {
       const options = parsed.options;
+      validateWaitOptions(options);
       const environmentId = stringOption(options, "environment");
       const agent = stringOption(options, "agent");
       if (!environmentId || !agent) {
@@ -322,6 +329,7 @@ export const sessionCommands: CommandSpec[] = [
     idOutput: "operation (run) ID",
     async run(context, parsed) {
       const options = parsed.options;
+      validateWaitOptions(options);
       const prompt = await readPrompt(context.io, options);
       const { session, result, receipt, warnings } = await submit<{ runId: string }>(
         context,

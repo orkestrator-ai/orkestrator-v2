@@ -547,7 +547,8 @@ export const PUBLIC_API_LIMITS = Object.freeze({
   execArgvMaxItems: 256,
   execArgvMaxBytes: 256 * 1024,
   execEnvMaxEntries: 64,
-  execStdinMaxBytes: 1024 * 1024,
+  // Base64 must still fit inside the 1 MiB gateway request with JSON overhead.
+  execStdinMaxBytes: 700 * 1024,
   execOutputMaxBytes: 16 * 1024 * 1024,
   execOutputPageMaxBytes: 256 * 1024,
   execTimeoutDefaultMs: 30 * 60 * 1000,

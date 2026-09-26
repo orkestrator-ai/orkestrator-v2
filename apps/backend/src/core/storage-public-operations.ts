@@ -1,7 +1,11 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
+  isPublicActionName,
+  isPublicNamespace,
+  isPublicRequestId,
   PUBLIC_OPERATION_RETENTION,
+  PUBLIC_API_LIMITS,
   type PublicActionName,
 } from "@orkestrator/protocol/public-api";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
@@ -21,6 +25,7 @@ import {
   newOperationId,
   PUBLIC_OPERATION_RECORD_VERSION,
   recordBytes,
+  requestKey,
   type PublicAuthority,
   type PublicOperationIndex,
   type PublicOperationRecord,
@@ -164,8 +169,25 @@ export class StoragePublicOperations extends StoragePreviewServices {
         "A public operation namespace file is malformed",
       );
     }
-    // Invalid entries stay on disk untouched (they are rewritten verbatim);
-    // they are never served or matched.
+    if (
+      value.operations.some(
+        (record) =>
+          !isPublicOperationRecord(record) ||
+          !isPublicActionName(record.action) ||
+          !isPublicNamespace(record.namespace) ||
+          !isPublicRequestId(record.requestId) ||
+          record.namespace !== namespace ||
+          namespaceOfOperationId(record.operationId) !== namespace ||
+          record.requestKey !==
+            requestKey(record.authority, record.action, record.scope, record.requestId) ||
+          !/^[a-f0-9]{64}$/.test(record.fingerprint),
+      )
+    ) {
+      throw new PublicActionError(
+        "internal-error",
+        "A public operation namespace is malformed; admissions are refused until it is repaired",
+      );
+    }
     return value.operations as PublicOperationRecord[];
   }
 
@@ -244,6 +266,25 @@ export class StoragePublicOperations extends StoragePreviewServices {
           );
         }
         return { record: existing, replayed: true };
+      }
+      if (input.action === "environment.exec" && input.resources?.environmentId) {
+        let active = 0;
+        for (const entry of index.namespaces) {
+          const records = await this.loadNamespaceRecords(entry.id);
+          active += records.filter(
+            (record) =>
+              record.action === "environment.exec" &&
+              record.resources.environmentId === input.resources?.environmentId &&
+              isActiveRecord(record),
+          ).length;
+        }
+        if (active >= PUBLIC_API_LIMITS.execConcurrencyPerEnvironment) {
+          throw new PublicActionError(
+            "busy",
+            `At most ${PUBLIC_API_LIMITS.execConcurrencyPerEnvironment} commands may run per environment`,
+            { retryable: true },
+          );
+        }
       }
       const targetEntry =
         input.namespace === undefined

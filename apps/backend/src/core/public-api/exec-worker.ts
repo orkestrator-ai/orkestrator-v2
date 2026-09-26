@@ -18,7 +18,9 @@ export const EXEC_WORKER = String.raw`
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const input = JSON.parse(Buffer.from(process.argv[1], "base64").toString());
+const inputPath = process.argv[1];
+const input = JSON.parse(fs.readFileSync(inputPath, "utf8"));
+fs.unlinkSync(inputPath);
 const directory = input.directory;
 const statePath = path.join(directory, "state.json");
 const cancelPath = path.join(directory, "cancel");
@@ -82,23 +84,31 @@ async function main() {
   let outputLimited = false;
   let timedOut = false;
   let cancelled = false;
+  let killTimer = null;
+  const terminate = () => {
+    if (!pgid) return;
+    signalGroup(pgid, "SIGTERM");
+    if (!killTimer) {
+      killTimer = setTimeout(() => signalGroup(pgid, "SIGKILL"), 5000);
+    }
+  };
   const pump = (stream, fd, name) => stream.on("data", (chunk) => {
     if (outputLimited) return;
     const room = input.maxOutputBytes - counts[name];
     const slice = chunk.length > room ? chunk.subarray(0, Math.max(0, room)) : chunk;
     if (slice.length > 0) { fs.writeSync(fd, slice); counts[name] += slice.length; }
-    if (chunk.length > room) { outputLimited = true; if (pgid) signalGroup(pgid, "SIGTERM"); }
+    if (chunk.length > room) { outputLimited = true; terminate(); }
   });
   pump(child.stdout, stdout, "stdout");
   pump(child.stderr, stderr, "stderr");
   child.stdin.on("error", () => {});
   if (input.stdinBase64) child.stdin.end(Buffer.from(input.stdinBase64, "base64")); else child.stdin.end();
-  const timer = setTimeout(() => { timedOut = true; if (pgid) signalGroup(pgid, "SIGTERM"); }, input.timeoutMs);
+  const timer = setTimeout(() => { timedOut = true; terminate(); }, input.timeoutMs);
   const heartbeat = setInterval(() => {
-    if (!cancelled && fs.existsSync(cancelPath)) { cancelled = true; if (pgid) signalGroup(pgid, "SIGTERM"); }
+    if (!cancelled && fs.existsSync(cancelPath)) { cancelled = true; terminate(); }
     persist({ stdoutBytes: counts.stdout, stderrBytes: counts.stderr });
   }, 1000);
-  const stop = () => { cancelled = true; if (pgid) signalGroup(pgid, "SIGTERM"); };
+  const stop = () => { cancelled = true; terminate(); };
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
   const [code, signal] = await new Promise((resolve) => {
@@ -107,6 +117,7 @@ async function main() {
     child.on("error", () => setTimeout(() => resolve([null, null]), 200));
   });
   clearTimeout(timer);
+  if (killTimer) clearTimeout(killTimer);
   let descendantsKilled = false;
   if (pgid) descendantsKilled = await drainGroup(pgid);
   clearInterval(heartbeat);
@@ -136,7 +147,7 @@ export const EXEC_CONTROL = String.raw`
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const input = JSON.parse(Buffer.from(process.argv[1], "base64").toString());
+const input = JSON.parse(fs.readFileSync(0, "utf8"));
 const directory = input.directory;
 const statePath = path.join(directory, "state.json");
 function ensureDirectory() {
@@ -178,14 +189,13 @@ async function main() {
       claimed = true;
     } catch (error) { if (error.code !== "EEXIST") throw error; }
     if (claimed) {
-      const payload = Buffer.from(JSON.stringify({ directory, root: input.root, argv: input.argv, cwd: input.cwd, env: input.env || {}, stdinBase64: input.stdinBase64, timeoutMs: input.timeoutMs, maxOutputBytes: input.maxOutputBytes })).toString("base64");
-      const child = spawn(process.execPath, ["-e", process.argv[2], payload], { cwd: "/", detached: true, stdio: "ignore", env: process.env });
+      const inputPath = path.join(directory, "input.json");
+      fs.writeFileSync(inputPath, JSON.stringify({ directory, root: input.root, argv: input.argv, cwd: input.cwd, env: input.env || {}, stdinBase64: input.stdinBase64, timeoutMs: input.timeoutMs, maxOutputBytes: input.maxOutputBytes }), { flag: "wx", mode: 0o600 });
+      const child = spawn(process.execPath, ["-e", process.argv[1], inputPath], { cwd: "/", detached: true, stdio: "ignore", env: process.env });
       child.on("error", () => {});
       child.unref();
-      const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
-      const temp = statePath + ".claim-" + process.pid;
-      fs.writeFileSync(temp, JSON.stringify({ ...state, workerPid: child.pid || null }), { flag: "wx", mode: 0o600 });
-      fs.renameSync(temp, statePath);
+      // Worker alone owns state.json after admission. A controller write here
+      // could replace an already published exited state.
     }
     process.stdout.write(JSON.stringify(readState()));
     return;

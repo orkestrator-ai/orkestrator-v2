@@ -1,4 +1,6 @@
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
 import { BACKEND_INSTANCE_DESCRIPTOR_FILE } from "@orkestrator/protocol/backend-instance";
 import type { PublicCapabilities } from "@orkestrator/protocol/public-api";
 import { assertConnectionName, CliConfigStore, type SavedConnection } from "../config.js";
@@ -20,6 +22,17 @@ import { stringOption } from "./common.js";
 
 function store(context: CommandContext): CliConfigStore {
   return context.configStore;
+}
+
+async function removeManagedCredential(
+  configStore: CliConfigStore,
+  name: string,
+  saved: SavedConnection | undefined,
+): Promise<void> {
+  if (saved?.kind !== "endpoint") return;
+  const legacyFile = path.join(configStore.credentialsDirectory, `${name}.json`);
+  if (saved.managedCredential !== true && saved.credentialFile !== legacyFile) return;
+  await configStore.removeOwnedCredential(saved.credentialFile).catch(() => undefined);
 }
 
 function describeSaved(name: string, saved: SavedConnection, isDefault: boolean) {
@@ -193,6 +206,7 @@ export const connectionCommands: CommandSpec[] = [
       }
       const now = new Date().toISOString();
       let saved: SavedConnection;
+      let newCredential: string | undefined;
       if (url) {
         if ((credentialFile ? 1 : 0) + (tokenStdin ? 1 : 0) !== 1) {
           throw new CliError(
@@ -200,6 +214,7 @@ export const connectionCommands: CommandSpec[] = [
             "A --url connection needs exactly one of --credential-file or --token-stdin",
           );
         }
+        const normalizedUrl = normalizeBaseUrl(url);
         let file: string;
         if (credentialFile) {
           file = path.resolve(context.io.cwd, credentialFile);
@@ -213,12 +228,14 @@ export const connectionCommands: CommandSpec[] = [
               "The token read from stdin is not a valid gateway token",
             );
           }
-          file = await configStore.storeCredential(name, token);
+          file = await configStore.storeCredential(`${name}.${randomUUID()}`, token);
+          newCredential = file;
         }
         saved = {
           kind: "endpoint",
-          url: normalizeBaseUrl(url),
+          url: normalizedUrl,
           credentialFile: file,
+          ...(newCredential ? { managedCredential: true } : {}),
           addedAt: now,
         };
       } else {
@@ -229,14 +246,21 @@ export const connectionCommands: CommandSpec[] = [
         saved = { kind: "descriptor", descriptorPath, addedAt: now };
       }
       let checked: Awaited<ReturnType<typeof checkTarget>> | null = null;
-      if (options.check !== false) {
-        if (saved.kind === "descriptor") await readDescriptor(saved.descriptorPath);
-        checked = await checkTarget(context, await resolveSavedConnection(name, saved));
-        saved = { ...saved, installationId: checked.capabilities.backend.installationId };
+      const previous = config.connections[name];
+      try {
+        if (options.check !== false) {
+          if (saved.kind === "descriptor") await readDescriptor(saved.descriptorPath);
+          checked = await checkTarget(context, await resolveSavedConnection(name, saved));
+          saved = { ...saved, installationId: checked.capabilities.backend.installationId };
+        }
+        config.connections[name] = saved;
+        if (options.default === true) config.defaultConnection = name;
+        await configStore.write(config);
+      } catch (error) {
+        if (newCredential) await fs.rm(newCredential, { force: true }).catch(() => undefined);
+        throw error;
       }
-      config.connections[name] = saved;
-      if (options.default === true) config.defaultConnection = name;
-      await configStore.write(config);
+      await removeManagedCredential(configStore, name, previous);
       const described = describeSaved(name, saved, config.defaultConnection === name);
       return {
         action: "connection.add",
@@ -328,9 +352,11 @@ export const connectionCommands: CommandSpec[] = [
       const config = await configStore.read();
       if (!config.connections[name])
         throw new CliError("not-found", `No saved connection named '${name}'`);
+      const previous = config.connections[name];
       delete config.connections[name];
       if (config.defaultConnection === name) delete config.defaultConnection;
       await configStore.write(config);
+      await removeManagedCredential(configStore, name, previous);
       return {
         action: "connection.remove",
         result: { removed: name },

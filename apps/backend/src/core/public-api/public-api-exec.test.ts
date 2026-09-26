@@ -4,6 +4,7 @@ import path from "node:path";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import type { PublicExecOutputWindow } from "@orkestrator/protocol/public-api-resources";
 import { createProject } from "../storage.js";
+import { runCommand } from "../shell.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js";
 
 /**
@@ -83,6 +84,61 @@ async function output(
 }
 
 describe("environment.exec", () => {
+  test("container exec passes large stdin through docker exec", async () => {
+    const image = process.env.ORKESTRATOR_TEST_DOCKER_EXEC_IMAGE;
+    if (!image) return;
+    const { harness } = await setup();
+    const local = await harness.storage.getEnvironment("env-exec");
+    if (!local) throw new Error("fixture environment missing");
+    const { stdout } = await runCommand("docker", [
+      "run",
+      "--rm",
+      "-d",
+      "--entrypoint",
+      "sleep",
+      image,
+      "120",
+    ]);
+    const containerId = stdout.trim();
+    try {
+      await harness.storage.addEnvironment({
+        ...local,
+        id: "env-container",
+        name: "container-exec",
+        environmentType: "containerized",
+        containerId,
+        worktreePath: undefined,
+      });
+      const bytes = Buffer.alloc(200_000, 0x61);
+      const started = await harness.call(
+        "environment.exec",
+        {
+          environmentId: "env-container",
+          argv: ["wc", "-c"],
+          stdinBase64: bytes.toString("base64"),
+        },
+        { requestId: "container-stdin" },
+      );
+      expect(started.ok).toBe(true);
+      const final = await waitTerminal(harness, started.receipt!.operationId);
+      expect(final.state).toBe("succeeded");
+      const response = await harness.call<PublicExecOutputWindow>("run.output", {
+        operationId: final.operationId,
+      });
+      expect(response.ok && response.result.text.trim()).toBe("200000");
+    } finally {
+      await runCommand("docker", ["rm", "-f", containerId]).catch(() => undefined);
+    }
+  });
+  test("an immediate exit remains authoritative after controller startup", async () => {
+    const { harness } = await setup();
+    const started = await exec(harness, "instant-exit", { argv: ["true"] });
+    const final = await waitTerminal(harness, started.receipt!.operationId);
+    expect(final.state).toBe("succeeded");
+    const statePath = path.join(harness.dataDir, "exec-runs", final.operationId, "state.json");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(JSON.parse(await fs.readFile(statePath, "utf8")).status).toBe("exited");
+  });
   test("reports the process's own exit status and keeps streams separate", async () => {
     const { harness } = await setup();
     const started = await exec(harness, "x1", {
@@ -126,6 +182,19 @@ describe("environment.exec", () => {
     expect(text).toBe(`${await fs.realpath(path.join(worktree, "sub"))}\nhi from stdin`);
   });
 
+  test("accepts stdin larger than a single Linux argv entry", async () => {
+    const { harness } = await setup();
+    const bytes = Buffer.alloc(200_000, 0x61);
+    const started = await exec(harness, "large-stdin", {
+      argv: ["wc", "-c"],
+      stdinBase64: bytes.toString("base64"),
+    });
+    expect(started.ok).toBe(true);
+    const final = await waitTerminal(harness, started.receipt!.operationId);
+    expect(final.state).toBe("succeeded");
+    expect((await output(harness, final.operationId, "stdout")).text.trim()).toBe("200000");
+  });
+
   test("refuses a cwd that escapes the workspace, including through a symlink", async () => {
     const { harness, worktree } = await setup();
     const escaped = await exec(harness, "x4", { argv: ["true"], cwd: "../outside" });
@@ -143,6 +212,17 @@ describe("environment.exec", () => {
     const final = await waitTerminal(harness, started.receipt!.operationId);
     expect(final.state).toBe("failed");
     expect(final.execution).toMatchObject({ timedOut: true });
+  });
+
+  test("a command ignoring TERM is killed after the timeout grace period", async () => {
+    const { harness } = await setup();
+    const started = await exec(harness, "ignore-term", {
+      argv: ["sh", "-c", "trap '' TERM; sleep 1000"],
+      timeoutMs: 1_000,
+    });
+    const final = await waitTerminal(harness, started.receipt!.operationId, 12_000);
+    expect(final.state).toBe("failed");
+    expect(final.execution?.timedOut).toBe(true);
   });
 
   test("cancellation targets the exact worker and drains its descendants", async () => {
@@ -163,6 +243,25 @@ describe("environment.exec", () => {
       await fs.readFile(path.join(harness.dataDir, "exec-runs", operationId, "state.json"), "utf8"),
     ) as { pgid: number };
     expect(() => process.kill(-state.pgid, 0)).toThrow();
+  });
+
+  test("cancel kills a command that ignores TERM", async () => {
+    const { harness } = await setup();
+    const started = await exec(harness, "cancel-ignore", {
+      argv: ["sh", "-c", "trap '' TERM; sleep 1000"],
+    });
+    const operationId = started.receipt!.operationId;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      if ((await harness.call("run.get", { operationId })).receipt?.execution?.startedAt) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const cancelled = await harness.call(
+      "run.cancel",
+      { operationId },
+      { requestId: "cancel-ignore-request" },
+    );
+    expect(cancelled.ok).toBe(true);
+    expect((await waitTerminal(harness, operationId, 12_000)).state).toBe("cancelled");
   });
 
   test("output beyond the limit stops the command and is flagged", async () => {
@@ -212,6 +311,26 @@ describe("environment.exec", () => {
     expect(final.state).toBe("cancelled");
   });
 
+  test("environment stop drains a command that ignores TERM", async () => {
+    const { harness } = await setup();
+    const started = await exec(harness, "stop-ignore", {
+      argv: ["sh", "-c", "trap '' TERM; sleep 1000"],
+    });
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      if (
+        (await harness.call("run.get", { operationId: started.receipt!.operationId })).receipt
+          ?.execution?.startedAt
+      )
+        break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const { stopEnvironmentExecWorkers } = await import("./exec-control.js");
+    await stopEnvironmentExecWorkers("env-exec", harness.context);
+    expect((await waitTerminal(harness, started.receipt!.operationId, 12_000)).state).toBe(
+      "cancelled",
+    );
+  });
+
   test("bounds per-environment concurrency", async () => {
     const { harness } = await setup();
     const ids: string[] = [];
@@ -223,5 +342,24 @@ describe("environment.exec", () => {
     expect(!refused.ok && refused.error.code).toBe("busy");
     for (const operationId of ids)
       await harness.call("run.cancel", { operationId }, { requestId: `cc-${operationId}` });
+  });
+
+  test("bounds concurrent admission under a race", async () => {
+    const { harness } = await setup();
+    const results = await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        exec(harness, `parallel-${index}`, { argv: ["sleep", "30"] }),
+      ),
+    );
+    const admitted = results.filter((result) => result.ok);
+    expect(admitted.length).toBeLessThanOrEqual(4);
+    expect(results.filter((result) => !result.ok)).toHaveLength(8 - admitted.length);
+    for (const result of admitted) {
+      await harness.call(
+        "run.cancel",
+        { operationId: result.receipt!.operationId },
+        { requestId: `cancel-${result.receipt!.operationId}` },
+      );
+    }
   });
 });

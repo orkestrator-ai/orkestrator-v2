@@ -67,13 +67,13 @@ async function assertExpectedRun(
   session: ResolvedSession,
   expectedOperationId: string | undefined,
 ): Promise<PublicOperationRecord | null> {
-  const latest = session.record?.dispatchedRequestIds?.at(-1) ?? null;
   if (!expectedOperationId) return null;
   const run = await loadOperation(context, expectedOperationId);
   if (run.resources.sessionId !== session.sessionId || !run.resources.dispatchRequestId) {
     throw new PublicActionError("target-mismatch", "That run does not belong to this session");
   }
-  if (run.resources.dispatchRequestId !== latest) {
+  const active = await activeRunFor(context, session);
+  if (active?.operationId !== run.operationId) {
     throw new PublicActionError(
       "target-mismatch",
       "A newer turn has started since that run; refusing to act on it",
@@ -89,15 +89,22 @@ async function activeRunFor(
   context: PublicActionContext,
   session: ResolvedSession,
 ): Promise<PublicOperationRecord | null> {
-  const latest = session.record?.dispatchedRequestIds?.at(-1);
-  if (!latest) return null;
+  const dispatched = session.record?.dispatchedRequestIds ?? [];
   const active = await context.command.storage.listActivePublicOperations();
   return (
-    active.find(
-      (record) =>
-        record.resources.sessionId === session.sessionId &&
-        record.resources.dispatchRequestId === latest,
-    ) ?? null
+    active
+      .filter(
+        (record) =>
+          (record.action === "session.start" || record.action === "session.prompt") &&
+          record.resources.sessionId === session.sessionId &&
+          !!record.resources.dispatchRequestId &&
+          dispatched.includes(record.resources.dispatchRequestId),
+      )
+      .sort(
+        (a, b) =>
+          dispatched.indexOf(b.resources.dispatchRequestId!) -
+          dispatched.indexOf(a.resources.dispatchRequestId!),
+      )[0] ?? null
   );
 }
 

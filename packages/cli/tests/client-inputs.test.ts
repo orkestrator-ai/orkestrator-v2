@@ -2,9 +2,16 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
-import { readPatch, readPrompt } from "../src/client/inputs.js";
-import { captureIo } from "./support/client-harness.js";
+import { PUBLIC_API_LIMITS, publicSuccessEnvelope } from "@orkestrator/protocol/public-api";
+import { PUBLIC_API_FIXTURES } from "@orkestrator/protocol/public-api-fixtures";
+import { readBinaryFile, readPatch, readPrompt } from "../src/client/inputs.js";
+import {
+  captureIo,
+  createSandbox,
+  defaultResponder,
+  envelope,
+  startFakeGateway,
+} from "./support/client-harness.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -29,6 +36,69 @@ async function failure(promise: Promise<unknown>): Promise<{ code: string; messa
 }
 
 describe("prompt input", () => {
+  test("binary command stdin preserves invalid UTF-8 bytes", async () => {
+    const root = await directory();
+    const bytes = Buffer.from([0xff, 0xfe, 0x00, 0x61]);
+    await writeFile(path.join(root, "stdin.bin"), bytes);
+    const read = await readBinaryFile(
+      captureIo({}, root),
+      "stdin.bin",
+      "Command stdin",
+      PUBLIC_API_LIMITS.execStdinMaxBytes,
+    );
+    expect(Buffer.from(read).toString("base64")).toBe(bytes.toString("base64"));
+  });
+
+  test("environment.exec sends stdin-file bytes unchanged", async () => {
+    const box = await createSandbox();
+    const bytes = Buffer.from([0xff, 0xfe, 0x00, 0x61]);
+    await writeFile(path.join(box.root, "stdin.bin"), bytes);
+    const gateway = await startFakeGateway((request) => {
+      const action = String(request.body.args.action);
+      if (action === "environment.exec") {
+        return envelope(
+          publicSuccessEnvelope(
+            action,
+            { runId: "run-1" },
+            PUBLIC_API_FIXTURES.runCompleted.receipt,
+          ),
+        );
+      }
+      return defaultResponder()(request);
+    });
+    try {
+      const dataDir = await box.publishDescriptor(gateway);
+      await box.run([
+        "connection",
+        "add",
+        "local",
+        "--data-dir",
+        dataDir,
+        "--default",
+        "--no-check",
+      ]);
+      const result = await box.run([
+        "--json",
+        "environment",
+        "exec",
+        "env-1",
+        "--stdin-file",
+        "stdin.bin",
+        "--",
+        "cat",
+      ]);
+      expect(result.code).toBe(0);
+      const sent = gateway.requests.find(
+        (request) => request.body.args.action === "environment.exec",
+      )!;
+      expect((sent.body.args.input as { stdinBase64: string }).stdinBase64).toBe(
+        bytes.toString("base64"),
+      );
+    } finally {
+      await gateway.stop();
+      await box.cleanup();
+    }
+  });
   test("preserves file content exactly, including multibyte text and trailing newlines", async () => {
     const root = await directory();
     const text = "line one\n  indented — ünïcödé 🙂\n\n";

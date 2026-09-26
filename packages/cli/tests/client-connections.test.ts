@@ -136,6 +136,48 @@ describe("backend selection", () => {
 });
 
 describe("saved connections", () => {
+  test("failed token replacement keeps the old credential and connection", async () => {
+    const box = await sandbox();
+    const backend = await gateway();
+    const firstIo = captureIo(box.env, box.root);
+    firstIo.stdinBytes = new TextEncoder().encode(TOKEN);
+    expect(
+      (await box.run(["connection", "add", "prod", "--url", backend.url, "--token-stdin"], firstIo))
+        .code,
+    ).toBe(0);
+    const configPath = path.join(box.configDir, "connections.json");
+    const before = JSON.parse(await readFile(configPath, "utf8")) as {
+      connections: Record<string, { credentialFile: string; url: string }>;
+    };
+    const oldFile = before.connections.prod!.credentialFile;
+    const oldToken = await readFile(oldFile, "utf8");
+    const secondIo = captureIo(box.env, box.root);
+    secondIo.stdinBytes = new TextEncoder().encode("replacement-token-0123456789");
+    const failed = await box.run(
+      [
+        "connection",
+        "add",
+        "prod",
+        "--url",
+        "http://127.evil.example",
+        "--token-stdin",
+        "--replace",
+      ],
+      secondIo,
+    );
+    expect(failed.code).toBe(2);
+    const thirdIo = captureIo(box.env, box.root);
+    thirdIo.stdinBytes = new TextEncoder().encode("replacement-token-0123456789");
+    const unreachable = await box.run(
+      ["connection", "add", "prod", "--url", "http://127.0.0.1:1", "--token-stdin", "--replace"],
+      thirdIo,
+    );
+    expect(unreachable.code).toBe(4);
+    expect(await readFile(oldFile, "utf8")).toBe(oldToken);
+    expect(await readFile(configPath, "utf8")).toContain(backend.url);
+    expect((await box.run(["connection", "remove", "prod"])).code).toBe(0);
+    expect(await Bun.file(oldFile).exists()).toBe(false);
+  });
   test("remote connections take tokens from private files or stdin, never arguments", async () => {
     const box = await sandbox();
     const backend = await gateway();
@@ -165,6 +207,8 @@ describe("saved connections", () => {
     ]);
     expect(saved.code).toBe(0);
     expect(backend.requests[0]!.authorization).toBe(`Bearer ${TOKEN}`);
+    expect((await box.run(["connection", "remove", "remote"])).code).toBe(0);
+    expect(await readFile(tokenFile, "utf8")).toBe(`${TOKEN}\n`);
 
     const io = captureIo(box.env, box.root);
     io.stdinBytes = new TextEncoder().encode(`${TOKEN}\n`);
@@ -173,7 +217,11 @@ describe("saved connections", () => {
       io,
     );
     expect(fromStdin.code).toBe(0);
-    const stored = path.join(box.configDir, "credentials", "piped.json");
+    const stored = (
+      JSON.parse(await readFile(path.join(box.configDir, "connections.json"), "utf8")) as {
+        connections: Record<string, { credentialFile: string }>;
+      }
+    ).connections.piped!.credentialFile;
     expect((await stat(stored)).mode & 0o077).toBe(0);
 
     for (const argv of [
@@ -212,6 +260,34 @@ describe("saved connections", () => {
       "--token-stdin",
     ]);
     expect(plain.code).toBe(2);
+    const disguised = await box.run([
+      "--json",
+      "connection",
+      "add",
+      "z",
+      "--url",
+      "http://127.evil.example",
+      "--token-stdin",
+    ]);
+    expect(disguised.code).toBe(2);
+    const io = captureIo(box.env, box.root);
+    io.stdinBytes = new TextEncoder().encode(TOKEN);
+    expect(
+      (
+        await box.run(
+          [
+            "connection",
+            "add",
+            "loopback",
+            "--url",
+            "http://127.0.0.2",
+            "--token-stdin",
+            "--no-check",
+          ],
+          io,
+        )
+      ).code,
+    ).toBe(0);
   });
 
   test("a group- or world-writable config file is refused", async () => {

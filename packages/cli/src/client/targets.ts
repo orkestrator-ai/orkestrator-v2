@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { isIPv4 } from "node:net";
 import {
   BACKEND_INSTANCE_DESCRIPTOR_FILE,
   BACKEND_INSTANCE_DESCRIPTOR_MAX_BYTES,
@@ -83,7 +84,7 @@ function isLoopbackHost(hostname: string): boolean {
     hostname === "localhost" ||
     hostname === "::1" ||
     hostname === "[::1]" ||
-    hostname.startsWith("127.")
+    (isIPv4(hostname) && hostname.startsWith("127."))
   );
 }
 

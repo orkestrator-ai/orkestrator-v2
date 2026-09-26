@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { publicSuccessEnvelope } from "@orkestrator/protocol/public-api";
+import { GatewayTransport } from "../src/client/transport.js";
+import { ClientSession } from "../src/client/session.js";
+import { LocalReceiptStore } from "../src/client/receipts.js";
+import { publicErrorEnvelope, publicSuccessEnvelope } from "@orkestrator/protocol/public-api";
+import { PUBLIC_API_FIXTURES } from "@orkestrator/protocol/public-api-fixtures";
 import {
   capabilities,
   createSandbox,
@@ -45,6 +49,91 @@ async function fixture(
 }
 
 describe("authenticated transport", () => {
+  test("rejects an already aborted request without fetching", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let calls = 0;
+    const transport = new GatewayTransport(
+      {
+        baseUrl: "http://127.0.0.1:1",
+        identity: { name: "test", kind: "connection", endpoint: "test" },
+        readToken: async () => TOKEN,
+      },
+      async () => {
+        calls += 1;
+        throw new Error("unexpected fetch");
+      },
+      20,
+    );
+    await expect(
+      transport.invoke("x", {}, { mutation: true, signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "connection-failed" });
+    expect(calls).toBe(0);
+  });
+
+  test("request deadline includes a body stalled after headers", async () => {
+    const transport = new GatewayTransport(
+      {
+        baseUrl: "http://127.0.0.1:1",
+        identity: { name: "test", kind: "connection", endpoint: "test" },
+        readToken: async () => TOKEN,
+      },
+      async () => new Response(new ReadableStream({ start() {} })),
+      20,
+    );
+    await expect(transport.invoke("x", {}, { mutation: true })).rejects.toMatchObject({
+      code: "transport-uncertain",
+    });
+  });
+
+  test("caller abort interrupts a body stalled after headers", async () => {
+    const controller = new AbortController();
+    const transport = new GatewayTransport(
+      {
+        baseUrl: "http://127.0.0.1:1",
+        identity: { name: "test", kind: "connection", endpoint: "test" },
+        readToken: async () => TOKEN,
+      },
+      async () => new Response(new ReadableStream({ start() {} })),
+      60_000,
+    );
+    const pending = transport.invoke("x", {}, { mutation: true, signal: controller.signal });
+    setTimeout(() => controller.abort(), 10);
+    await expect(pending).rejects.toMatchObject({ code: "transport-uncertain" });
+  });
+
+  test("abort during receipt persistence prevents mutation send", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    class AbortingReceipts extends LocalReceiptStore {
+      override async save() {
+        controller.abort();
+      }
+    }
+    const session = new ClientSession(
+      {
+        baseUrl: "http://127.0.0.1:1",
+        identity: { name: "test", kind: "connection", endpoint: "test" },
+        readToken: async () => TOKEN,
+      },
+      new AbortingReceipts("/unused"),
+      {
+        signal: controller.signal,
+        fetchImpl: async () => {
+          calls += 1;
+          return envelope(publicSuccessEnvelope("capabilities", capabilities()));
+        },
+      },
+    );
+    await expect(
+      session.mutate(
+        "project.add",
+        { remote: "https://example.invalid/a.git" },
+        "abort-after-save",
+      ),
+    ).rejects.toMatchObject({ code: "connection-failed" });
+    expect(calls).toBe(1);
+  });
   test("sends the bearer token in a header only, and never prints it", async () => {
     const { box, gateway } = await fixture();
     const result = await box.run(["--json", "project", "list"]);
@@ -138,6 +227,29 @@ describe("authenticated transport", () => {
     );
     const result = await box.run(["--json", "session", "prompt", "ses_eA", "--prompt", "hello"]);
     expect(result.code).toBe(7);
+  });
+
+  test("an in-progress mutation receipt does not dereference an empty result", async () => {
+    const { box } = await fixture(
+      defaultResponder({
+        "project.add": publicErrorEnvelope(
+          "project.add",
+          { code: "busy", message: "The operation is still in progress", retryable: true },
+          PUBLIC_API_FIXTURES.runCompleted.receipt,
+        ),
+      }),
+    );
+    const result = await box.run([
+      "--json",
+      "project",
+      "add",
+      "--remote",
+      "https://example.invalid/a.git",
+    ]);
+    expect(result.code).toBe(8);
+    const output = JSON.parse(result.out);
+    expect(output.error.code).toBe("busy");
+    expect(output.receipt).toBeDefined();
   });
 });
 

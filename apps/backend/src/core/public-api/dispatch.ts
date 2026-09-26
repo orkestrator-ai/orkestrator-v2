@@ -227,6 +227,17 @@ function replayResponse(record: PublicOperationRecord): PublicActionResponse {
       receipt,
     );
   }
+  if (record.state !== "succeeded" && record.result === undefined) {
+    return publicErrorEnvelope(
+      record.action,
+      {
+        code: "busy",
+        message: "The operation is still in progress",
+        retryable: true,
+      },
+      receipt,
+    );
+  }
   return publicSuccessEnvelope(record.action, record.result ?? {}, receipt);
 }
 
@@ -307,14 +318,20 @@ async function runMutation(
         { details: { operationId: existing.operationId, namespace: existing.namespace } },
       );
     }
-    const claimed =
-      existing.state === "admitted" && existing.generation !== context.generation
-        ? await storage.claimStalePublicOperation(existing.operationId, context.generation)
-        : null;
-    if (!claimed) return replayResponse(existing);
-    // A previous backend admitted this key and stopped before any side
-    // effect; this generation owns it now and runs it exactly once.
+    if (existing.state !== "admitted" || existing.generation === context.generation) {
+      return replayResponse(existing);
+    }
+    // Prepare before changing ownership. A failed prepare leaves the old
+    // generation visible to reconciliation and later same-key retries.
     const prepared = await handler.prepare(parsed.value, context);
+    const claimed = await storage.claimStalePublicOperation(
+      existing.operationId,
+      context.generation,
+    );
+    if (!claimed) {
+      const latest = await storage.getPublicOperation(existing.operationId);
+      return replayResponse(latest.status === "found" ? latest.record : existing);
+    }
     return execute(handler, prepared, claimed, context, false);
   }
 

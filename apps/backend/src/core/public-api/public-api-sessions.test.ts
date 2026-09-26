@@ -4,6 +4,7 @@ import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import { decodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import { AmbiguousPromptDispatchError } from "../agent-provider-contract.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
+import { requestKey } from "./operation-ledger.js";
 import type { PublicApiHarness } from "./test-support.js";
 
 /**
@@ -32,6 +33,71 @@ async function startSession(harness: PublicApiHarness, requestId: string, prompt
 }
 
 describe("session.start and request-specific completion", () => {
+  test("restart during dispatch recovers a journaled turn", async () => {
+    const { harness } = await setup();
+    const started = await startSession(harness, "journaled-restart");
+    await harness.storage.updatePublicOperation(started.result.runId, (record) => ({
+      ...record,
+      generation: "previous-generation",
+      state: "running",
+      stage: "dispatching",
+      dispatch: undefined,
+    }));
+    const restarted = await harness.restart();
+    const run = await receipt(restarted, started.result.runId);
+    expect(run.dispatch?.state).toBe("accepted");
+    expect(run.state).toBe("running");
+  });
+
+  test("restart during dispatch without a session settles interrupted", async () => {
+    const { harness } = await setup();
+    const admitted = await harness.storage.admitPublicOperation({
+      authority: "operator",
+      action: "session.start",
+      scope: "environment:env-1",
+      requestId: "orphan-start",
+      requestKey: requestKey("operator", "session.start", "environment:env-1", "orphan-start"),
+      fingerprint: "f".repeat(64),
+      resources: { environmentId: "env-1", dispatchRequestId: "orphan-dispatch" },
+      generation: "previous-generation",
+    });
+    await harness.storage.updatePublicOperation(admitted.record.operationId, (record) => ({
+      ...record,
+      state: "running",
+      stage: "dispatching",
+      generation: "previous-generation",
+    }));
+    const restarted = await harness.restart();
+    expect((await receipt(restarted, admitted.record.operationId)).state).toBe("interrupted");
+  });
+
+  test("restart during a parked prompt dispatch stays recoverable", async () => {
+    const { harness, service, stub } = await setup();
+    const started = await startSession(harness, "parked-restart-start");
+    stub.setStatus(async () => "idle");
+    setActivity(service, "claude", started.result.tabId, stub.sends[0]!.sessionId, "idle");
+    await receipt(harness, started.result.runId);
+    stub.setSend(async () => {
+      throw new AmbiguousPromptDispatchError("lost response");
+    });
+    const prompt = await harness.call(
+      "session.prompt",
+      { sessionId: started.result.sessionId, prompt: "continue" },
+      { requestId: "parked-restart-prompt" },
+    );
+    const operationId = prompt.receipt!.operationId;
+    await harness.storage.updatePublicOperation(operationId, (record) => ({
+      ...record,
+      generation: "previous-generation",
+      state: "running",
+      stage: "dispatching",
+      dispatch: undefined,
+    }));
+    const restarted = await harness.restart();
+    const recovered = await receipt(restarted, operationId);
+    expect(recovered.state).toBe("unknown");
+    expect(recovered.dispatch?.recoverable).toBe(true);
+  });
   test("a run completes only on evidence about its own request", async () => {
     const { harness, service, stub } = await setup();
     const started = await startSession(harness, "job-1");
@@ -214,6 +280,64 @@ describe("session.prompt", () => {
 });
 
 describe("controls and interactions", () => {
+  test("an applied steer keeps the prompt run targetable by stop", async () => {
+    const { harness, service, stub } = await setup();
+    Object.assign(stub.provider, {
+      activeSteerRun: async () => ({ state: "running", runId: "provider-turn" }),
+      steerSupported: async () => true,
+      steerStatus: async () => "dispatched",
+      performSessionAction: async () => ({ outcome: "applied" }),
+    });
+    const started = await startSession(harness, "steer-stop");
+    const steer = await harness.call(
+      "session.steer",
+      { sessionId: started.result.sessionId, text: "focus" },
+      { requestId: "steer-stop-action" },
+    );
+    expect(steer.ok).toBe(true);
+    const stopped = await harness.call(
+      "session.stop",
+      { sessionId: started.result.sessionId, expectedOperationId: started.result.runId },
+      { requestId: "steer-stop-end" },
+    );
+    expect(stopped.ok).toBe(true);
+    const run = await harness.storage.getPublicOperation(started.result.runId);
+    expect(run.status === "found" && run.record.stopRequestedAt).toBeDefined();
+    setActivity(service, "claude", started.result.tabId, stub.sends[0]!.sessionId, "idle");
+    expect((await receipt(harness, started.result.runId)).state).toBe("cancelled");
+  });
+
+  test("a parked steer survives restart and retry settles its own record", async () => {
+    const { harness, stub } = await setup();
+    let applied = false;
+    Object.assign(stub.provider, {
+      activeSteerRun: async () => ({ state: "running", runId: "provider-turn" }),
+      steerSupported: async () => true,
+      steerStatus: async () => "unknown",
+      performSessionAction: async (_sessionId: string, action: { requestId: string }) =>
+        applied ? { outcome: "applied" } : { outcome: "unknown", requestId: action.requestId },
+    });
+    const started = await startSession(harness, "steer-park-start");
+    const steer = await harness.call(
+      "session.steer",
+      { sessionId: started.result.sessionId, text: "focus" },
+      { requestId: "steer-park" },
+    );
+    expect(steer.ok).toBe(false);
+    const steerId = steer.receipt!.operationId;
+    const restarted = await harness.restart();
+    const parked = await receipt(restarted, steerId);
+    expect(parked.state).toBe("unknown");
+    expect(parked.dispatch?.recoverable).toBe(true);
+    applied = true;
+    const retry = await restarted.call(
+      "run.retry",
+      { operationId: steerId },
+      { requestId: "retry-parked-steer" },
+    );
+    expect(retry.ok).toBe(true);
+    expect((await receipt(restarted, steerId)).state).toBe("succeeded");
+  });
   test("stop refuses an idle session and a mismatched expected run", async () => {
     const { harness, service, stub } = await setup();
     const started = await startSession(harness, "stop-1");

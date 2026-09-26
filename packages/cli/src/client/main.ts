@@ -184,6 +184,7 @@ export async function runClientProcess(argv: readonly string[], version: string)
   process.on("SIGTERM", onSignal);
   const io: ClientIo = {
     stdout: (text) => process.stdout.write(text),
+    stdoutBytes: (bytes) => process.stdout.write(Buffer.from(bytes)),
     stderr: (text) => process.stderr.write(text),
     readStdin: async (maxBytes) => {
       const { readStreamBounded } = await import("./io.js");

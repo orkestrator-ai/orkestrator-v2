@@ -239,7 +239,7 @@ export const runCommands: CommandSpec[] = [
         ...(options["max-bytes"] !== undefined ? { maxBytes: options["max-bytes"] } : {}),
       });
       if (context.global.output === "human" && options.raw === true) {
-        context.io.stdout(window.text);
+        context.io.stdoutBytes(Buffer.from(window.base64, "base64"));
         return { action: "run.output", result: window, connection: session.identity, human: [] };
       }
       return {

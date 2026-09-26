@@ -3,6 +3,7 @@ import path from "node:path";
 import { CommandFailedError } from "../shell.js";
 import { StorageService } from "../storage.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js";
+import { requestKey } from "./operation-ledger.js";
 
 /**
  * Durability and recovery: admission shared by two writers, capacity
@@ -35,7 +36,7 @@ describe("admission", () => {
         action: "project.add",
         scope: "installation",
         requestId: "shared",
-        requestKey: "k".repeat(64),
+        requestKey: requestKey("operator", "project.add", "installation", "shared"),
         fingerprint: "f".repeat(64),
         generation: "g",
       });
@@ -110,7 +111,12 @@ describe("restart reconciliation", () => {
       action: "environment.start",
       scope: `environment:${created.result.environment.id}`,
       requestId: "r-start",
-      requestKey: "s".repeat(64),
+      requestKey: requestKey(
+        "operator",
+        "environment.start",
+        `environment:${created.result.environment.id}`,
+        "r-start",
+      ),
       fingerprint: "f".repeat(64),
       resources: { environmentId: created.result.environment.id },
       generation: "previous-generation",
@@ -122,6 +128,43 @@ describe("restart reconciliation", () => {
     const read = await restarted.call("run.get", { operationId });
     expect(read.receipt?.state).toBe("interrupted");
     expect(read.receipt?.error?.code).toBe("run-interrupted");
+  });
+
+  test("releases a project removal fence after a crash before registration deletion", async () => {
+    const h = await harness();
+    const repository = await h.createRepository("fenced");
+    const project = await h.call<{ project: { id: string } }>(
+      "project.add",
+      { path: repository.projectPath },
+      { requestId: "fence-project" },
+    );
+    if (!project.ok) throw new Error(project.error.message);
+    const projectId = project.result.project.id;
+    const admitted = await h.storage.admitPublicOperation({
+      authority: "operator",
+      action: "project.remove",
+      scope: `project:${projectId}`,
+      requestId: "fence-remove",
+      requestKey: requestKey("operator", "project.remove", `project:${projectId}`, "fence-remove"),
+      fingerprint: "f".repeat(64),
+      resources: { projectId },
+      generation: "previous-generation",
+    });
+    await h.storage.fenceEmptyProjectForRemoval(projectId);
+    await forceRunning(h, admitted.record.operationId, { stage: "cleanup" });
+    const restarted = await h.restart();
+    harnesses.push(restarted);
+    expect(
+      (await restarted.call("run.get", { operationId: admitted.record.operationId })).receipt
+        ?.state,
+    ).toBe("interrupted");
+    const environment = await restarted.call(
+      "environment.create",
+      { projectId, type: "local" },
+      { requestId: "after-fence" },
+    );
+    if (!environment.ok) throw new Error(`${environment.error.code}: ${environment.error.message}`);
+    expect(environment.ok).toBe(true);
   });
 
   test("a create interrupted after its record was written is settled from the environment", async () => {
@@ -182,6 +225,57 @@ describe("restart reconciliation", () => {
     );
     expect(again.receipt?.replayed).toBe(true);
     expect((await h.storage.loadProjects()).length).toBe(1);
+  });
+
+  test("a failed prepare does not claim a stale admission or replay empty success", async () => {
+    const h = await harness();
+    const { intentFingerprint } = await import("./operation-ledger.js");
+    const admitted = await h.storage.admitPublicOperation({
+      authority: "operator",
+      action: "project.remove",
+      scope: "project:missing",
+      requestId: "stale-missing",
+      requestKey: requestKey("operator", "project.remove", "project:missing", "stale-missing"),
+      fingerprint: intentFingerprint("project.remove", {}),
+      generation: "previous-generation",
+    });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await h.call(
+        "project.remove",
+        { projectId: "missing" },
+        { requestId: "stale-missing" },
+      );
+      expect(response.ok).toBe(false);
+      const lookup = await h.storage.getPublicOperation(admitted.record.operationId);
+      expect(lookup.status === "found" && lookup.record.generation).toBe("previous-generation");
+    }
+  });
+
+  test("an active same-key replay reports progress with its receipt", async () => {
+    const h = await harness();
+    const { intentFingerprint } = await import("./operation-ledger.js");
+    const capabilities = await h.call("capabilities", {});
+    const generation = capabilities.backend!.generation;
+    const admitted = await h.storage.admitPublicOperation({
+      authority: "operator",
+      action: "project.add",
+      scope: "installation",
+      requestId: "still-running",
+      requestKey: requestKey("operator", "project.add", "installation", "still-running"),
+      fingerprint: intentFingerprint("project.add", {
+        remote: "https://example.invalid/running.git",
+        path: undefined,
+      }),
+      generation,
+    });
+    const replay = await h.call(
+      "project.add",
+      { remote: "https://example.invalid/running.git" },
+      { requestId: "still-running" },
+    );
+    expect(replay.ok).toBe(false);
+    if (!replay.ok) expect(replay.error.code).toBe("busy");
+    expect(replay.receipt?.operationId).toBe(admitted.record.operationId);
   });
 });
 

@@ -82,7 +82,42 @@ async function evaluateRun(
   record: PublicOperationRecord,
   context: PublicActionContext,
 ): Promise<OperationPatch | null> {
-  if (record.dispatch?.state !== "accepted" && record.dispatch?.state !== "unknown") return null;
+  if (record.dispatch?.state !== "accepted" && record.dispatch?.state !== "unknown") {
+    if (record.stage !== "dispatching" || record.generation === context.generation) return null;
+    const target = await runTarget(record, context);
+    if (!target) {
+      return {
+        state: "interrupted",
+        stage: "completed",
+        error: {
+          code: "run-interrupted",
+          message: "No session was created before the backend restarted",
+        },
+      };
+    }
+    const session = await context.command.storage.getNativeAgentSession(
+      nativeAgentSessionStorageKey(target.environmentId, target.agent, target.logicalSessionKey),
+    );
+    if (session?.pendingDispatch?.requestId === target.requestId) {
+      return {
+        state: "unknown",
+        dispatch: { state: "unknown", recoverable: true },
+        stage: "dispatching",
+      };
+    }
+    if (session?.dispatchedRequestIds?.includes(target.requestId)) {
+      const observed = await evaluateRun({ ...record, dispatch: { state: "accepted" } }, context);
+      return { ...observed, dispatch: { state: "accepted" } };
+    }
+    return {
+      state: "interrupted",
+      stage: "completed",
+      error: {
+        code: "run-interrupted",
+        message: "No dispatch was recorded before the backend restarted",
+      },
+    };
+  }
   const target = await runTarget(record, context);
   const observedAt = new Date(context.now()).toISOString();
   const settle = (
@@ -252,6 +287,16 @@ async function evaluateRun(
       };
       evidence = "provider-status";
     }
+  }
+  if (record.stopRequestedAt && activity === "idle") {
+    return settle(
+      {
+        state: "cancelled",
+        evidence: outcome ? evidence : "provider-status",
+        reason: "Stopped by request; changes made before the stop may remain",
+      },
+      accepted,
+    );
   }
   if (!outcome) {
     return settle(

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   isAgentPlatform,
   normalizeAgentPlatforms,
@@ -220,9 +221,17 @@ const sessionStart: MutationActionHandler<StartInput> = {
       resources: { environmentId: environment.id, projectId: environment.projectId },
       async execute(operation) {
         const requestId = operation.operationId;
+        const jobId = createHash("sha256")
+          .update(environment.id)
+          .update("\0")
+          .update(requestId)
+          .digest("hex")
+          .slice(0, 24);
+        const tabId = `agent-job-${jobId}`;
+        const sessionId = encodePublicSessionId(environment.id, tabId);
         await operation.update({
           stage: "dispatching",
-          resources: { dispatchRequestId: requestId },
+          resources: { dispatchRequestId: requestId, tabId, sessionId },
         });
         // The same durable job path the desktop and Control MCP use: stable
         // tab and session identity from (environment, request ID), and an
@@ -242,7 +251,6 @@ const sessionStart: MutationActionHandler<StartInput> = {
             activateTab: false,
           },
         );
-        const sessionId = encodePublicSessionId(environment.id, job.tabId);
         const outcome = dispatchOutcome(job.status, job.error, {
           sessionId,
           tabId: job.tabId,

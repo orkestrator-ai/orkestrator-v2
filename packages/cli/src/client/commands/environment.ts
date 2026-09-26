@@ -9,7 +9,7 @@ import type {
 } from "@orkestrator/protocol/public-api-resources";
 import { CliError } from "../errors.js";
 import { environmentLines, environmentRows, receiptLines } from "../format.js";
-import { readPrompt, readTextSource } from "../inputs.js";
+import { readBinaryFile, readPrompt } from "../inputs.js";
 import type {
   CommandContext,
   CommandOutcome,
@@ -529,17 +529,13 @@ export const environmentCommands: CommandSpec[] = [
       }
       let stdinBase64: string | undefined;
       if (options["stdin-file"] !== undefined) {
-        const text = await readTextSource(context.io, {
-          file: options["stdin-file"],
-          label: "Command stdin",
-          maxBytes: PUBLIC_API_LIMITS.execStdinMaxBytes,
-          names: { file: "--stdin-file", stdin: "--stdin" },
-          required: true,
-        }).catch((error: unknown) => {
-          if (error instanceof CliError && error.code === "empty-input") return "";
-          throw error;
-        });
-        stdinBase64 = Buffer.from(text ?? "", "utf8").toString("base64");
+        const bytes = await readBinaryFile(
+          context.io,
+          String(options["stdin-file"]),
+          "Command stdin",
+          PUBLIC_API_LIMITS.execStdinMaxBytes,
+        );
+        stdinBase64 = Buffer.from(bytes).toString("base64");
       }
       if (options["exit-code"] === true && options.wait !== true) {
         throw new CliError("invalid-input", "--exit-code needs --wait");

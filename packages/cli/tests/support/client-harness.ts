@@ -38,6 +38,7 @@ export function captureIo(
     err: [],
     stdinBytes: new Uint8Array(),
     stdout: (text) => void io.out.push(text),
+    stdoutBytes: (bytes) => void io.out.push(Buffer.from(bytes).toString("binary")),
     stderr: (text) => void io.err.push(text),
     readStdin: async (maxBytes) => {
       if (io.stdinBytes.byteLength > maxBytes) {

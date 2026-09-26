@@ -55,6 +55,43 @@ async function fixture(
 }
 
 describe("run wait exit mapping", () => {
+  test("raw run output uses base64 bytes even when text is lossy", async () => {
+    const { box } = await fixture([receipt({})], {
+      "run.output": () => ({
+        stream: "stdout",
+        text: "��",
+        base64: "//4=",
+        offset: 0,
+        totalBytes: 2,
+        complete: true,
+      }),
+    });
+    const result = await box.run(["run", "output", OPERATION, "--raw"]);
+    expect(result.code).toBe(0);
+    expect(Buffer.from(result.out, "binary")).toEqual(Buffer.from([0xff, 0xfe]));
+  });
+  test("invalid session wait options never submit a mutation", async () => {
+    const { box, gateway } = await fixture([receipt({})]);
+    for (const argv of [
+      [
+        "session",
+        "start",
+        "--environment",
+        "env",
+        "--agent",
+        "codex",
+        "--prompt",
+        "hello",
+        "--timeout",
+        "5m",
+      ],
+      ["session", "prompt", "session-id", "--prompt", "hello", "--wait", "--timeout", "25h"],
+    ]) {
+      const result = await box.run(["--json", ...argv]);
+      expect(result.code).toBe(2);
+    }
+    expect(gateway.requests).toHaveLength(0);
+  });
   test("0 only after the run succeeds", async () => {
     const running = receipt({
       state: "running",

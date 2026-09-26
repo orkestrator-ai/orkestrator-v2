@@ -141,6 +141,13 @@ const reconcileCreate: ReconcileFunction = async (record, context) => {
 
 const reconcileGenericInFlight: ReconcileFunction = async (record, context) => {
   if (!fromPreviousGeneration(record, context)) return null;
+  if (record.action === "session.steer" && record.dispatch?.recoverable === true) return null;
+  if (
+    record.action === "project.remove" &&
+    (await context.command.storage.getProject(record.resources.projectId ?? ""))
+  ) {
+    await context.command.storage.releaseProjectRemovalFence(record.resources.projectId!);
+  }
   return interrupted(
     "The backend restarted while this operation was in progress; its effect is not confirmed",
   );

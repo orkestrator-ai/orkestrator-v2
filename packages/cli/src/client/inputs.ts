@@ -61,6 +61,15 @@ async function readFileBounded(io: ClientIo, file: string, label: string, maxByt
   }
 }
 
+export async function readBinaryFile(
+  io: ClientIo,
+  file: string,
+  label: string,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  return readFileBounded(io, file, label, maxBytes);
+}
+
 export async function readTextSource(
   io: ClientIo,
   options: TextSourceOptions,

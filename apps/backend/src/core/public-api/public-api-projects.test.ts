@@ -196,6 +196,32 @@ describe("request keys and receipts", () => {
     expect(response.ok).toBe(false);
     expect((await h.storage.loadProjects()).length).toBe(1);
   });
+
+  test("a parseable namespace with an invalid operation refuses admission", async () => {
+    const h = await harness();
+    await h.call(
+      "project.add",
+      { remote: "https://example.invalid/valid.git" },
+      { requestId: "valid" },
+    );
+    const directory = path.join(h.dataDir, "public-operations");
+    const name = (await fs.readdir(directory)).find(
+      (entry) => entry.startsWith("ns-") && entry.endsWith(".json"),
+    )!;
+    const file = path.join(directory, name);
+    const namespace = JSON.parse(await fs.readFile(file, "utf8")) as {
+      operations: Array<{ requestKey: string }>;
+    };
+    namespace.operations[0]!.requestKey = "0".repeat(64);
+    await fs.writeFile(file, JSON.stringify(namespace));
+    const response = await h.call(
+      "project.add",
+      { remote: "https://example.invalid/valid.git" },
+      { requestId: "valid" },
+    );
+    expect(response.ok).toBe(false);
+    expect((await h.storage.loadProjects()).length).toBe(1);
+  });
 });
 
 describe("projects", () => {

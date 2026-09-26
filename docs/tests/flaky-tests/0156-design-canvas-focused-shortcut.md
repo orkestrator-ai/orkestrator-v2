@@ -38,3 +38,13 @@
   alone with `mise run test:logged -- --name design-canvas-alone -- bun
   --cwd=apps/web test ./src/components/design/DesignCanvasTab.test.tsx`.
   Artifact: `/tmp/orkestrator-test-run.QcdF6x/workspace-web-backend-desktop-web-public-cli-protocol.log.gz`.
+- **Recurrence (2026-09-26, Linux):** `mise run test` failed this test once
+  (49.51 ms) while validating the recurring-processes branch
+  (`implement-recurring-processes-aaceef7ccc03-r1`); the web group reported
+  7,350 passed, one failed, and root, bridges and protocol groups passed. That
+  branch routes the canvas's 3 s cursor safety check through the read
+  coordinator but does not touch the keyboard/shortcut path. The same failure
+  was also seen in a step 11 worktree with no design-canvas change. The owning
+  file passed alone three times with `bun test --cwd apps/web
+  ./src/components/design/DesignCanvasTab.test.tsx`. Artifact:
+  `/tmp/orkestrator-test-run.9Kr2d5/workspace-web-backend-desktop-web-public-cli-protocol.log.gz`.

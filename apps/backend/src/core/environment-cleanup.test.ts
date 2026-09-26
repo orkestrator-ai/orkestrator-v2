@@ -16,7 +16,7 @@ import {
 } from "./environment-cleanup.js";
 import { environmentStateDirectories } from "./environment-state-paths.js";
 import type { Environment } from "./models.js";
-import { runCommand } from "./shell.js";
+import { CommandFailedError, runCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
 
 const tempDirectories: string[] = [];
@@ -210,7 +210,7 @@ describe("environment branch cleanup", () => {
     expect(await branchExists(projectPath, "feature")).toBe(true);
   });
 
-  test("deletes a squash-merged branch whose PR merged", async () => {
+  test("keeps a squash-merged branch without a surviving pushed-tip ref", async () => {
     const { projectPath, base } = await project();
     await branchWithCommits(projectPath, "feature", base, ["a.txt"]);
 
@@ -218,7 +218,29 @@ describe("environment branch cleanup", () => {
       await cleanupEnvironmentBranch(
         entry({ projectPath, branch: "feature", createdFromCommit: base, prMerged: true }),
       ),
+    ).toBe("kept");
+    expect(await branchExists(projectPath, "feature")).toBe(true);
+  });
+
+  test("keeps a merged-PR branch with extra local commits after its tracking ref was pruned", async () => {
+    const { projectPath, base } = await project();
+    await branchWithCommits(projectPath, "feature", base, ["pushed.txt", "local.txt"]);
+    expect(
+      await cleanupEnvironmentBranch(
+        entry({ projectPath, branch: "feature", createdFromCommit: base, prMerged: true }),
+      ),
+    ).toBe("kept");
+    expect(await branchExists(projectPath, "feature")).toBe(true);
+  });
+
+  test("deletes a merged-PR branch whose tip is still reachable from the pushed ref", async () => {
+    const { projectPath, base } = await project();
+    const tip = await branchWithCommits(projectPath, "feature", base, ["pushed.txt"]);
+    await git(projectPath, "update-ref", "refs/remotes/origin/feature", tip);
+    expect(
+      await cleanupEnvironmentBranch(entry({ projectPath, branch: "feature", prMerged: true })),
     ).toBe("deleted");
+    expect(await git(projectPath, "rev-parse", "refs/remotes/origin/feature")).toBe(tip);
   });
 
   test("keeps a merged-PR branch that has local commits beyond what was pushed", async () => {
@@ -304,6 +326,64 @@ describe("environment cleanup steps", () => {
       lastError: "worktree: worktree is outside the workspaces root",
     });
   });
+
+  test("refuses a registered worktree outside the root before asking Git to remove it", async () => {
+    const { context, dataDir } = await cleanupContext();
+    const { projectPath, base } = await project();
+    const outside = path.join(await tempDir("ork-cleanup-outside-"), "worktree");
+    await git(projectPath, "worktree", "add", "-q", "-b", "feature", outside, base);
+    const cleanup = entry({ projectPath, worktreePath: outside, pending: ["worktree"] });
+    await environmentCleanupLedger(dataDir).record(cleanup);
+    expect(await runEnvironmentCleanupStep(cleanup, "worktree", context)).toBe(false);
+    expect((await fs.stat(outside)).isDirectory()).toBe(true);
+    expect(await git(projectPath, "worktree", "list", "--porcelain")).toContain(outside);
+    expect(await environmentCleanupLedger(dataDir).get("e1")).toMatchObject({
+      pending: ["worktree"],
+    });
+  });
+
+  test("refuses a worktree reached through a symlink inside the root", async () => {
+    const { context, dataDir, worktreeDir } = await cleanupContext();
+    const { projectPath, base } = await project();
+    const outside = await tempDir("ork-cleanup-symlink-target-");
+    const actual = path.join(outside, "worktree");
+    await git(projectPath, "worktree", "add", "-q", "-b", "feature", actual, base);
+    const link = path.join(worktreeDir, "link");
+    await fs.symlink(outside, link, "dir");
+    const cleanup = entry({
+      projectPath,
+      worktreePath: path.join(link, "worktree"),
+      pending: ["worktree"],
+    });
+    await environmentCleanupLedger(dataDir).record(cleanup);
+    expect(await runEnvironmentCleanupStep(cleanup, "worktree", context)).toBe(false);
+    expect(await fs.stat(actual)).toBeDefined();
+    expect(await environmentCleanupLedger(dataDir).get("e1")).toMatchObject({
+      pending: ["worktree"],
+    });
+  });
+
+  test.each(["rev-parse", "worktree"])(
+    "keeps the branch step pending when %s fails transiently",
+    async (failedCommand) => {
+      const { context, dataDir } = await cleanupContext();
+      const { projectPath, base } = await project();
+      await branchWithCommits(projectPath, "feature", base, []);
+      const cleanup = entry({ projectPath, branch: "feature", pending: ["branch"] });
+      await environmentCleanupLedger(dataDir).record(cleanup);
+      const run: CleanupCommandRunner = async (command, args, options) => {
+        if (command === "git" && args[2] === failedCommand) {
+          throw new CommandFailedError("locked", { exitCode: 128 });
+        }
+        return runCommand(command, args, options);
+      };
+      expect(await runEnvironmentCleanupStep(cleanup, "branch", context, { run })).toBe(false);
+      expect(await branchExists(projectPath, "feature")).toBe(true);
+      expect(await environmentCleanupLedger(dataDir).get("e1")).toMatchObject({
+        pending: ["branch"],
+      });
+    },
+  );
 
   test("leaves a path that a live environment now owns", async () => {
     const { context, storage, worktreeDir } = await cleanupContext();

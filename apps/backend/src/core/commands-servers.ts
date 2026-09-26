@@ -1452,6 +1452,9 @@ export async function deleteEnvironment(
         console.warn(
           `[backend] ${survivingTerminals.length} terminal process tree(s) outlived termination for ${environmentId}`,
         );
+        throw new Error(
+          "Terminal process trees are still running; environment deletion can be retried",
+        );
       }
       await deleteTerminalHistories({
         dataDir: storage.getDataDir(),
@@ -1459,6 +1462,7 @@ export async function deleteEnvironment(
       });
       if (environment)
         await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
+      if (environment?.worktreePath) gitFetchScheduler.forget(environment.worktreePath);
       // Before the container is removed and before the worktree is deleted:
       // killing the tmux sessions needs the container alive, and restoring the
       // user's `.claude/settings.local.json` from the tmux-mode backup needs

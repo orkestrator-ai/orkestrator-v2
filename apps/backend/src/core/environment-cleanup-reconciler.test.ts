@@ -11,7 +11,10 @@ import {
 import {
   MAX_ENVIRONMENT_CLEANUP_ATTEMPTS,
   ORPHANED_STATE_MIN_AGE_MS,
+  cancelScheduledEnvironmentCleanup,
   reconcileEnvironmentCleanup,
+  runStartupEnvironmentCleanup,
+  scheduleEnvironmentCleanupReconcile,
   sweepOrphanedEnvironmentState,
 } from "./environment-cleanup-reconciler.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
@@ -22,12 +25,21 @@ import { StorageService } from "./storage.js";
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
+  for (const directory of tempDirectories) cancelScheduledEnvironmentCleanup(directory);
   await Promise.all(
     tempDirectories
       .splice(0)
       .map((directory) => fs.rm(directory, { recursive: true, force: true })),
   );
 });
+
+async function eventually(predicate: () => Promise<boolean>, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await predicate())) {
+    if (Date.now() >= deadline) throw new Error("condition was not reached");
+    await Bun.sleep(10);
+  }
+}
 
 async function tempDir(prefix: string): Promise<string> {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
@@ -236,5 +248,114 @@ describe("orphaned environment state sweep", () => {
 
     await expect(sweepOrphanedEnvironmentState(context)).rejects.toThrow("unreadable");
     expect(await exists(orphan)).toBe(true);
+  });
+
+  test("startup revisits a young orphan after it ages without a restart", async () => {
+    const { context, storage, dataDir } = await reconcileContext();
+    await storage.addEnvironment(environment("live"));
+    const orphan = environmentStateDirectory(dataDir, "cursor-bridge-state", "deleted");
+    const live = environmentStateDirectory(dataDir, "cursor-bridge-state", "live");
+    await makeStateDirectory(orphan, ORPHANED_STATE_MIN_AGE_MS - 150);
+    await makeStateDirectory(live, ORPHANED_STATE_MIN_AGE_MS * 2);
+    await runStartupEnvironmentCleanup(context, { orphanSweepIntervalMs: 25 });
+    expect(await exists(orphan)).toBe(true);
+    await eventually(async () => !(await exists(orphan)));
+    expect(await exists(live)).toBe(true);
+    cancelScheduledEnvironmentCleanup(dataDir);
+  });
+
+  test("startup retries an orphan sweep after an owner lookup failure", async () => {
+    const { context, storage, dataDir } = await reconcileContext();
+    const orphan = environmentStateDirectory(dataDir, "cursor-bridge-state", "deleted");
+    await makeStateDirectory(orphan, ORPHANED_STATE_MIN_AGE_MS * 2);
+    const original = storage.listCoordinatorWorkspaces.bind(storage);
+    let calls = 0;
+    storage.listCoordinatorWorkspaces = async () => {
+      if (++calls === 1) throw new Error("temporary lookup failure");
+      return original();
+    };
+    await runStartupEnvironmentCleanup(context, { orphanSweepIntervalMs: 25 });
+    expect(await exists(orphan)).toBe(true);
+    await eventually(async () => !(await exists(orphan)));
+    expect(calls).toBeGreaterThanOrEqual(2);
+    cancelScheduledEnvironmentCleanup(dataDir);
+  });
+});
+
+describe("scheduled environment cleanup", () => {
+  test("coalesces a request during an in-flight pass into one rerun", async () => {
+    const { context, storage, dataDir } = await reconcileContext();
+    const outside = await tempDir("ork-reconcile-outside-");
+    await environmentCleanupLedger(dataDir).record(
+      entry({ worktreePath: outside, pending: ["worktree"] }),
+    );
+    const original = storage.loadEnvironments.bind(storage);
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    storage.loadEnvironments = async () => {
+      calls++;
+      if (calls === 1) await gate;
+      return original();
+    };
+    scheduleEnvironmentCleanupReconcile(context);
+    await eventually(async () => calls === 1);
+    scheduleEnvironmentCleanupReconcile(context);
+    release();
+    await eventually(async () => calls === 2);
+    expect(calls).toBe(2);
+    cancelScheduledEnvironmentCleanup(dataDir);
+  });
+
+  test("cancelling during a pass prevents both reruns and retry timers", async () => {
+    const { context, storage, dataDir } = await reconcileContext();
+    await environmentCleanupLedger(dataDir).record(entry({ pending: ["state-dirs"] }));
+    const original = storage.loadEnvironments.bind(storage);
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    storage.loadEnvironments = async () => {
+      calls++;
+      if (calls === 1) await gate;
+      return original();
+    };
+    scheduleEnvironmentCleanupReconcile(context);
+    await eventually(async () => calls === 1);
+    scheduleEnvironmentCleanupReconcile(context);
+    cancelScheduledEnvironmentCleanup(dataDir);
+    release();
+    await Bun.sleep(50);
+    expect(calls).toBe(1);
+  });
+
+  test("re-arms for a deferred ledger retry", async () => {
+    const { context, storage, dataDir } = await reconcileContext();
+    const outside = await tempDir("ork-reconcile-outside-");
+    await environmentCleanupLedger(dataDir).record(
+      entry({
+        worktreePath: outside,
+        pending: ["worktree"],
+        attempts: 1,
+        lastAttemptAt: new Date(Date.now() - 120_000 + 500).toISOString(),
+      }),
+    );
+    let calls = 0;
+    const original = storage.loadEnvironments.bind(storage);
+    storage.loadEnvironments = async () => {
+      calls++;
+      return original();
+    };
+    scheduleEnvironmentCleanupReconcile(context);
+    await eventually(
+      async () => (await environmentCleanupLedger(dataDir).get("gone"))?.attempts === 2,
+      2_000,
+    );
+    expect(calls).toBeGreaterThanOrEqual(1);
+    expect((await environmentCleanupLedger(dataDir).get("gone"))?.attempts).toBe(2);
+    cancelScheduledEnvironmentCleanup(dataDir);
   });
 });

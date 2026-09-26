@@ -186,6 +186,8 @@ type ScheduledReconcile = {
   running: Promise<void> | null;
   rerun: boolean;
   timer: ReturnType<typeof setTimeout> | null;
+  orphanTimer: ReturnType<typeof setTimeout> | null;
+  cancelled: boolean;
 };
 
 const scheduled = new Map<string, ScheduledReconcile>();
@@ -201,7 +203,13 @@ export function scheduleEnvironmentCleanupReconcile(
   options: EnvironmentCleanupReconcileOptions = {},
 ): void {
   const key = path.resolve(context.storage.getDataDir());
-  const state = scheduled.get(key) ?? { running: null, rerun: false, timer: null };
+  const state = scheduled.get(key) ?? {
+    running: null,
+    rerun: false,
+    timer: null,
+    orphanTimer: null,
+    cancelled: false,
+  };
   scheduled.set(key, state);
   if (state.running) {
     state.rerun = true;
@@ -214,11 +222,11 @@ export function scheduleEnvironmentCleanupReconcile(
   state.running = (async () => {
     try {
       const result = await reconcileEnvironmentCleanup(context, options);
-      if (result.nextDueAt !== null && !state.rerun) {
+      if (result.nextDueAt !== null && !state.rerun && !state.cancelled) {
         const delay = Math.max(1_000, result.nextDueAt - Date.now());
         state.timer = setTimeout(() => {
           state.timer = null;
-          scheduleEnvironmentCleanupReconcile(context, options);
+          if (!state.cancelled) scheduleEnvironmentCleanupReconcile(context, options);
         }, delay);
         state.timer.unref?.();
       }
@@ -226,7 +234,7 @@ export function scheduleEnvironmentCleanupReconcile(
       console.warn(`[backend] Environment cleanup reconcile failed: ${redactCleanupError(error)}`);
     } finally {
       state.running = null;
-      if (state.rerun) {
+      if (state.rerun && !state.cancelled) {
         state.rerun = false;
         scheduleEnvironmentCleanupReconcile(context, options);
       }
@@ -237,19 +245,45 @@ export function scheduleEnvironmentCleanupReconcile(
 /** Cancels any armed retry timer, for shutdown and tests. */
 export function cancelScheduledEnvironmentCleanup(dataDir: string): void {
   const state = scheduled.get(path.resolve(dataDir));
+  if (state) {
+    state.cancelled = true;
+    state.rerun = false;
+  }
   if (state?.timer) clearTimeout(state.timer);
+  if (state?.orphanTimer) clearTimeout(state.orphanTimer);
   scheduled.delete(path.resolve(dataDir));
 }
 
 /** Startup pass: clear provable orphans, then finish owed cleanup in the background. */
-export async function runStartupEnvironmentCleanup(context: CommandContext): Promise<void> {
-  try {
-    const removed = await sweepOrphanedEnvironmentState(context);
-    if (removed > 0) {
-      console.info(`[backend] Removed ${removed} orphaned environment state director(ies)`);
-    }
-  } catch (error) {
-    console.warn(`[backend] Orphaned environment state sweep failed: ${redactCleanupError(error)}`);
-  }
+export async function runStartupEnvironmentCleanup(
+  context: CommandContext,
+  options: { orphanSweepIntervalMs?: number } = {},
+): Promise<void> {
   scheduleEnvironmentCleanupReconcile(context);
+  const state = scheduled.get(path.resolve(context.storage.getDataDir()))!;
+  if (state.orphanTimer) clearTimeout(state.orphanTimer);
+  state.orphanTimer = null;
+  const interval = options.orphanSweepIntervalMs ?? ORPHANED_STATE_MIN_AGE_MS;
+  const sweep = async () => {
+    if (state.cancelled) return;
+    try {
+      const removed = await sweepOrphanedEnvironmentState(context);
+      if (removed > 0) {
+        console.info(`[backend] Removed ${removed} orphaned environment state director(ies)`);
+      }
+    } catch (error) {
+      console.warn(
+        `[backend] Orphaned environment state sweep failed: ${redactCleanupError(error)}`,
+      );
+    } finally {
+      if (!state.cancelled) {
+        state.orphanTimer = setTimeout(() => {
+          state.orphanTimer = null;
+          void sweep();
+        }, interval);
+        state.orphanTimer.unref?.();
+      }
+    }
+  };
+  await sweep();
 }

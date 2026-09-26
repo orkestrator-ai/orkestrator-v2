@@ -1,4 +1,4 @@
-import { lstat } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 
 import type { CommandContext } from "./commands-context.js";
@@ -16,7 +16,7 @@ import {
 import { environmentStateDirectories } from "./environment-state-paths.js";
 import type { Environment, Project } from "./models.js";
 import { removeConfinedDirectory } from "./path-safety.js";
-import { pathExists, runCommand } from "./shell.js";
+import { CommandFailedError, pathExists, runCommand } from "./shell.js";
 
 export type EnvironmentCleanupContext = Pick<
   CommandContext,
@@ -151,6 +151,16 @@ async function cleanupWorktree(
   // Once this path is gone, a new environment may be allocated the same one.
   // A late retry must leave it alone.
   const resolved = path.resolve(worktreePath);
+  const baseDir = getWorktreeBaseDir(context);
+  const relative = confinedRelativePath(baseDir, worktreePath);
+  if (!relative) throw new CleanupRefusedError("worktree is outside the workspaces root");
+  if (await directoryExists(worktreePath)) {
+    const canonicalRoot = await realpath(baseDir);
+    const canonicalWorktree = await realpath(worktreePath);
+    if (!confinedRelativePath(canonicalRoot, canonicalWorktree)) {
+      throw new CleanupRefusedError("worktree is outside the workspaces root");
+    }
+  }
   const environments = await context.storage.loadEnvironments();
   if (
     environments.some(
@@ -173,11 +183,6 @@ async function cleanupWorktree(
     // Git refuses to remove a directory it no longer registers, and a process
     // that outlived the terminals can re-create part of the tree after git
     // removed it. Only a path inside the workspaces root is ours to delete.
-    const baseDir = getWorktreeBaseDir(context);
-    const relative = confinedRelativePath(baseDir, worktreePath);
-    if (!relative) {
-      throw new CleanupRefusedError("worktree is outside the workspaces root");
-    }
     await removeConfinedDirectory(baseDir, relative);
   }
   if (projectPath) {
@@ -190,7 +195,7 @@ async function cleanupWorktree(
   }
 }
 
-async function gitSucceeds(
+async function gitPredicate(
   run: CleanupCommandRunner,
   projectPath: string,
   args: string[],
@@ -198,8 +203,13 @@ async function gitSucceeds(
   try {
     await run("git", ["-C", projectPath, ...args], { timeoutMs: GIT_TIMEOUT_MS });
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (error instanceof CommandFailedError && error.exitCode === 1 && !error.timedOut)
+      return false;
+    // Git's ordinary false predicate exits 1. Locks, timeouts and invalid
+    // repositories are retryable errors, not evidence that a ref is absent.
+    if ((error as { code?: unknown }).code === 1) return false;
+    throw error;
   }
 }
 
@@ -213,8 +223,11 @@ async function gitOutput(
       timeoutMs: GIT_TIMEOUT_MS,
     });
     return stdout.trim();
-  } catch {
-    return null;
+  } catch (error) {
+    if (args[0] === "symbolic-ref" && error instanceof CommandFailedError && error.exitCode === 1)
+      return null;
+    if (args[0] === "symbolic-ref" && (error as { code?: unknown }).code === 1) return null;
+    throw error;
   }
 }
 
@@ -223,7 +236,7 @@ async function refExists(
   projectPath: string,
   ref: string,
 ): Promise<boolean> {
-  return gitSucceeds(run, projectPath, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+  return gitPredicate(run, projectPath, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
 }
 
 /**
@@ -273,7 +286,7 @@ async function isAncestor(
   commit: string,
   ref: string,
 ): Promise<boolean> {
-  return gitSucceeds(run, projectPath, ["merge-base", "--is-ancestor", commit, ref]);
+  return gitPredicate(run, projectPath, ["merge-base", "--is-ancestor", commit, ref]);
 }
 
 async function branchCheckedOut(
@@ -282,9 +295,7 @@ async function branchCheckedOut(
   branch: string,
 ): Promise<boolean> {
   const listing = await gitOutput(run, projectPath, ["worktree", "list", "--porcelain"]);
-  // Unknown is treated as checked out: deleting a branch in use is not
-  // recoverable, keeping it is.
-  if (listing === null) return true;
+  if (listing === null) throw new CleanupRefusedError("worktree list unavailable");
   return listing.split("\n").some((line) => line.trim() === `branch refs/heads/${branch}`);
 }
 
@@ -292,7 +303,7 @@ export type BranchCleanupOutcome = "deleted" | "kept" | "absent";
 
 /**
  * Deletes the environment's local branch only when no work would be lost:
- * - its PR was merged, and the branch holds nothing beyond what was pushed;
+ * - its PR was merged, and the branch tip is proven to be pushed;
  * - its tip is already contained in a merge target such as `origin/HEAD`; or
  * - it has no commits beyond the one the environment was created from.
  * Anything else is kept.
@@ -302,7 +313,9 @@ export async function cleanupEnvironmentBranch(
   run: CleanupCommandRunner = runCommand,
 ): Promise<BranchCleanupOutcome> {
   const projectPath = entry.projectPath;
-  if (!projectPath || !entry.branch || !(await pathExists(projectPath))) return "absent";
+  if (!projectPath || !entry.branch) return "absent";
+  if (!(await pathExists(projectPath)))
+    throw new CleanupRefusedError("project checkout unavailable");
   let branch: string;
   try {
     branch = validateGitRefName(entry.branch, "environment branch");
@@ -310,13 +323,15 @@ export async function cleanupEnvironmentBranch(
     return "kept";
   }
   const localRef = `refs/heads/${branch}`;
+  const localExists = await refExists(run, projectPath, localRef);
+  if (!localExists) return "absent";
   const tip = await gitOutput(run, projectPath, [
     "rev-parse",
     "--verify",
     "--quiet",
     `${localRef}^{commit}`,
   ]);
-  if (!tip) return "absent";
+  if (!tip) throw new CleanupRefusedError("branch tip unavailable");
   if (await branchCheckedOut(run, projectPath, branch)) return "kept";
 
   let disposable = false;
@@ -325,7 +340,7 @@ export async function cleanupEnvironmentBranch(
     // Commits made after the PR merged exist only locally. When the pushed
     // branch is still known, the local tip must not be ahead of it.
     disposable =
-      !(await refExists(run, projectPath, tracking)) ||
+      (await refExists(run, projectPath, tracking)) &&
       (await isAncestor(run, projectPath, tip, tracking));
   }
   if (!disposable && entry.createdFromCommit) {

@@ -800,7 +800,11 @@ export async function terminateTerminalSessionsForEnvironment(
       if (!exited) survivors.push(id);
     }),
   );
-  for (const id of sessionIds) explicitlyCloseTerminalSession(id);
+  // Keep surviving processes registered so the next deletion attempt can
+  // terminate and verify them before the worktree is removed.
+  for (const id of sessionIds) {
+    if (!survivors.includes(id)) explicitlyCloseTerminalSession(id);
+  }
   return survivors;
 }
 

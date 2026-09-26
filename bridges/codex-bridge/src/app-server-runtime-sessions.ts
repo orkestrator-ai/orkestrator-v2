@@ -70,6 +70,7 @@ import {
   ThreadRegistry,
   phaseToExternalStatus,
   type BridgeSession,
+  CODEX_RESTARTED_MID_TURN_MESSAGE,
   type PromptAttachmentInput,
   type SessionPhase,
   type SessionTitleSource,
@@ -881,6 +882,16 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       this.beginAssistantTurnRender(liveState, assistantMessage);
       this.emitStatus(context);
       this.drainPendingEvents(context, review.turnId);
+      await Promise.all(
+        this.registry
+          .boundSessionsForThread(context.threadId)
+          .filter((entry) => {
+            if (!entry.restartFailure) return false;
+            entry.restartFailure = undefined;
+            return true;
+          })
+          .map((entry) => this.persistSession(entry)),
+      );
       return { outcome: "accepted", turnId: review.turnId };
     } catch (error) {
       context.dispatchInFlight = false;
@@ -1216,7 +1227,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // advance on a turn whose fate is unknown.
     const awaitingRecovery =
       session.threadId !== null && this.threadsAwaitingDispatchRecovery.has(session.threadId);
-    const phase = context?.phase ?? (awaitingRecovery ? "recovering" : "idle");
+    const phase =
+      context?.phase ??
+      (awaitingRecovery ? "recovering" : session.restartFailure ? "failed" : "idle");
     const latestDispatch = this.journal.latestForSession(sessionId);
 
     return {
@@ -1224,7 +1237,11 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       status: phaseToExternalStatus(phase),
       phase,
       title: session.title,
-      error: context?.error,
+      error:
+        context?.error ??
+        (phase === "failed" && session.restartFailure
+          ? CODEX_RESTARTED_MID_TURN_MESSAGE
+          : undefined),
       threadId: session.threadId,
       turnId: context?.activeTurn?.turnId,
       turnStartedAt: context?.turnStartedAt,
@@ -1390,6 +1407,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
           structuredOutputRequestId: session.structuredOutputRequestId,
           structuredOutput: session.structuredOutput,
           structuredOutputTurns: session.structuredOutputTurns,
+          restartFailure: session.restartFailure,
           confirmedModelsByTurn: session.confirmedModelsByTurn,
           asyncQuestionItemIds: session.asyncQuestionItemIds,
         }),

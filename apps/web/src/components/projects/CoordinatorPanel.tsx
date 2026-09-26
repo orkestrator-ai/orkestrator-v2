@@ -16,10 +16,10 @@ import {
 } from "lucide-react";
 import {
   coordinatorRuntimeId,
-  type CoordinatorSnapshot,
   type ProjectGitStatus,
   type ProjectGitSwitchConfirmation,
 } from "@orkestrator/protocol/coordinator";
+import { useCoordinatorPanelData } from "./useCoordinatorPanelData";
 import {
   AGENT_PLATFORM_LABELS,
   AGENT_PLATFORMS,
@@ -71,14 +71,23 @@ function gitSummary(status: ProjectGitStatus | null): string {
 
 export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const project = useProjectStore((state) => state.projects.find((item) => item.id === projectId));
-  const [snapshot, setSnapshot] = useState<CoordinatorSnapshot | null>(null);
-  const [git, setGit] = useState<ProjectGitStatus | null>(null);
-  const [loading, setLoading] = useState(true);
+  const {
+    snapshot,
+    git,
+    loading,
+    error: loadError,
+    load,
+    applySnapshot: setSnapshot,
+    applyGit: setGit,
+    invalidateView,
+    refreshView,
+  } = useCoordinatorPanelData(projectId);
   const [operation, setOperation] = useState<"fetch" | "sync" | "switch" | "conversation" | null>(
     null,
   );
   const [pendingSwitch, setPendingSwitch] = useState<ProjectGitSwitchConfirmation | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setError] = useState<string | null>(null);
+  const error = actionError ?? loadError;
   const [pendingLaunch, setPendingLaunch] = useState<{
     conversationId: string;
     prompt: string;
@@ -88,52 +97,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     mode?: "build" | "plan";
     executionProfileId?: string;
   } | null>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const coordinator = await backend.ensureProjectCoordinator(projectId);
-      setSnapshot(coordinator);
-      const local = await backend.getProjectGitStatus(projectId);
-      setGit(local);
-      void backend
-        .fetchProjectGit(projectId)
-        .then(setGit)
-        .catch(() => undefined);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Coordinator could not be opened");
-    } finally {
-      setLoading(false);
-    }
-  }, [projectId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  useEffect(() => {
-    const refresh = () => {
-      if (document.visibilityState !== "visible") return;
-      void Promise.all([
-        backend.getProjectGitStatus(projectId),
-        backend.getProjectCoordinator(projectId),
-      ])
-        .then(([status, coordinator]) => {
-          setGit(status);
-          if (coordinator) setSnapshot(coordinator);
-        })
-        .catch(() => undefined);
-    };
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
-    const interval = window.setInterval(refresh, 60_000);
-    return () => {
-      window.removeEventListener("focus", refresh);
-      document.removeEventListener("visibilitychange", refresh);
-      window.clearInterval(interval);
-    };
-  }, [projectId]);
 
   const runGit = useCallback(
     async (
@@ -160,8 +123,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                     : {},
                 );
         setGit(next);
-        const refreshed = await backend.getProjectCoordinator(projectId);
-        if (refreshed) setSnapshot(refreshed);
+        await refreshView();
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : `Git ${kind} failed`);
         void backend
@@ -172,7 +134,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         setOperation(null);
       }
     },
-    [projectId],
+    [projectId, refreshView, setGit],
   );
 
   const conversations = useMemo(
@@ -229,7 +191,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       setPendingLaunch({ conversationId, prompt, ...launch });
       setSnapshot(next);
     },
-    [projectId],
+    [projectId, setSnapshot],
   );
   const selected = conversations.find(
     (item) => item.id === snapshot?.workspace.selectedConversationId,
@@ -352,15 +314,11 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     setPendingLaunch(null);
   }, [launchObserved, pendingLaunch]);
 
+  // A settled turn may have changed delegations: one coalesced conditional read.
   useEffect(() => {
     if (!selectedSessionKey || coordinatorTurnActive) return;
-    void backend
-      .getProjectCoordinator(projectId)
-      .then((coordinator) => {
-        if (coordinator) setSnapshot(coordinator);
-      })
-      .catch(() => undefined);
-  }, [coordinatorTurnActive, projectId, selectedSessionKey]);
+    invalidateView();
+  }, [coordinatorTurnActive, invalidateView, selectedSessionKey]);
 
   if (!project?.localPath) {
     return (

@@ -397,7 +397,10 @@ export abstract class StorageReviews extends StorageSessions {
         ...workflow,
         controllerLease: { ownerId, token, expiresAt },
       };
-      await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
+      // A lease change alters no workflow content: keep the atomic primary
+      // write but do not rotate backups that differ only in a timestamp
+      // (the same contract as the Multi Review lease).
+      await this.saveSensitiveJson(this.loopedReviewsFile(), workflows, { backup: false });
       return { granted: true, token, expiresAt };
     });
   }
@@ -449,7 +452,8 @@ export abstract class StorageReviews extends StorageSessions {
       }
       const { controllerLease: _lease, ...released } = workflow;
       workflows[workflowId] = released;
-      await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
+      // Lease-only write; see claimLoopedReviewController.
+      await this.saveSensitiveJson(this.loopedReviewsFile(), workflows, { backup: false });
     });
   }
 

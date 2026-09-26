@@ -1,6 +1,7 @@
 import * as shared from "./native-agent-service-shared.js";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
 import {
+  PROVIDER_RETIREMENT_GRACE_MS,
   ABSENT_BRIDGE_RECHECK_MS,
   ACP_SESSION_CREATE_ATTEMPTS,
   ACP_SESSION_CREATE_RETRY_BASE_MS,
@@ -155,6 +156,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       // questions. Answering them here would run a command the user never saw
       // and cancel the card that exists to answer it.
       autoAnswerRequests: false,
+      onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
       stageImages: (images) => this.stageImages(input.environmentId, images),
       // Read per call rather than per provider: providers are cached for the
       // life of a bridge connection, so a settings edit would otherwise not
@@ -178,7 +180,12 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     provider: NativeAgentRuntimeProvider,
     connectionIdentity?: string,
   ): void {
-    this.providers.set(cacheKey, provider);
+    const previousIdentity = this.providerConnections.get(cacheKey);
+    this.installProvider(cacheKey, provider);
+    if (connectionIdentity !== previousIdentity && this.providers.get(cacheKey) === provider) {
+      // Same object, new bridge coordinates: still a new provider generation.
+      this.observations.replaceGroupGeneration(cacheKey);
+    }
     if (connectionIdentity) {
       this.providerConnections.set(cacheKey, connectionIdentity);
     } else {
@@ -223,7 +230,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       const provider = await this.options.provider(input, environment);
       await this.assertEnvironmentLive(input.environmentId);
       this.assertAcceptingWork();
-      this.providers.set(cacheKey, provider);
+      this.installProvider(cacheKey, provider);
       this.providerConnections.delete(cacheKey);
       return provider;
     }
@@ -236,6 +243,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     this.assertAcceptingWork();
     const provider = createNativeAgentProvider(connection, {
       autoAnswerRequests: false,
+      onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
       stageImages: (images) => this.stageImages(input.environmentId, images),
     });
     this.cacheProvider(cacheKey, provider, this.bridgeConnectionIdentity(connection));
@@ -291,8 +299,86 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     return evidence ? { state: "evidence", evidence } : { state: "none" };
   }
 
+  /**
+   * Put a provider in the cache, retiring whatever it replaces.
+   *
+   * A replacement is a new observation generation for the group: any read in
+   * flight against the previous provider is fenced, and the group is due.
+   */
+  protected installProvider(cacheKey: string, provider: NativeAgentRuntimeProvider): void {
+    const previous = this.providers.get(cacheKey);
+    this.providers.set(cacheKey, provider);
+    this.cancelProviderRetirement(provider);
+    if (previous === provider) return;
+    this.observations.replaceGroupGeneration(cacheKey);
+    if (previous) this.retireProvider(previous);
+  }
+
+  protected isProviderCached(provider: NativeAgentRuntimeProvider): boolean {
+    for (const cached of this.providers.values()) if (cached === provider) return true;
+    return false;
+  }
+
+  /**
+   * Dispose a provider nothing should use any more, safely.
+   *
+   * Never while a prompt it sent is inside the at-most-once window (its
+   * `dispose()` would abort that request and park a turn that may have run),
+   * never while it is still cached under another key, and only after a grace
+   * period so a projection read or an interaction answer already in flight
+   * on it can finish. What this prevents is the duplicate observer: an
+   * evicted OpenCode provider keeps its event subscription until disposed.
+   */
+  protected retireProvider(provider: NativeAgentRuntimeProvider): void {
+    if (this.stopped || this.disposedProviders.has(provider)) return;
+    if (this.isProviderCached(provider) || this.retiringProviders.has(provider)) return;
+    this.retiringProviders.set(provider, null);
+    this.scheduleProviderRetirement(provider);
+  }
+
+  /** Arm the grace timer once no dispatch is in flight on the provider. */
+  protected scheduleProviderRetirement(provider: NativeAgentRuntimeProvider): void {
+    if (!this.retiringProviders.has(provider) || this.retiringProviders.get(provider)) return;
+    if (this.providerDispatchCounts.has(provider)) return; // re-armed when it settles
+    const timer = setTimeout(
+      () => void this.finishProviderRetirement(provider),
+      Math.max(0, this.options.providerRetirementGraceMs ?? PROVIDER_RETIREMENT_GRACE_MS),
+    );
+    timer.unref?.();
+    this.retiringProviders.set(provider, timer);
+  }
+
+  protected cancelProviderRetirement(provider: NativeAgentRuntimeProvider): void {
+    const timer = this.retiringProviders.get(provider);
+    if (timer) clearTimeout(timer);
+    this.retiringProviders.delete(provider);
+  }
+
+  protected async finishProviderRetirement(provider: NativeAgentRuntimeProvider): Promise<void> {
+    if (!this.retiringProviders.has(provider)) return;
+    if (this.providerDispatchCounts.has(provider)) {
+      // A dispatch reached it during the grace period; wait for that instead.
+      this.retiringProviders.set(provider, null);
+      return;
+    }
+    this.retiringProviders.delete(provider);
+    if (this.isProviderCached(provider) || this.disposedProviders.has(provider)) return;
+    this.disposedProviders.add(provider);
+    try {
+      await provider.dispose?.();
+    } catch (error) {
+      console.warn(
+        "[native-agent] Retiring an obsolete provider failed:",
+        error instanceof Error ? error.name : "unknown error",
+      );
+    }
+  }
+
   /** Forget a provider whose environment is gone, along with its observer state. */
   protected forgetProviderState(cacheKey: string): void {
+    const previous = this.providers.get(cacheKey);
+    if (previous) this.cancelProviderRetirement(previous);
+    this.observations.replaceGroupGeneration(cacheKey);
     this.providers.delete(cacheKey);
     this.providerConnections.delete(cacheKey);
     this.absentBridgeUntil.delete(cacheKey);
@@ -324,6 +410,8 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     if (this.providers.get(cacheKey) !== provider) return;
     this.providers.delete(cacheKey);
     this.providerConnections.delete(cacheKey);
+    this.observations.replaceGroupGeneration(cacheKey);
+    this.retireProvider(provider);
   }
 
   /** Stage base64 images into the workspace so a bridge will accept them. */
@@ -382,7 +470,12 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     // Unlike observer eviction, an absent environment is safe to dispose only
     // after any provider call that passed the pre-dispatch liveness fence has
     // settled. Active providers remain cached for the next sweep to prune.
-    await Promise.allSettled(stale.map(([, provider]) => provider.dispose?.()));
+    await Promise.allSettled(
+      stale.map(([, provider]) => {
+        this.disposedProviders.add(provider);
+        return provider.dispose?.();
+      }),
+    );
   }
 
   protected trackScan(task: Promise<void>): Promise<void> {

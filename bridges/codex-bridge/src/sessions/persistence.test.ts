@@ -140,6 +140,7 @@ describe("BridgeSessionStore", () => {
       titleSource: "explicit",
       lastAcceptedRequestId: "request-1",
       structuredOutputTurns: [{ turnId: "turn-structured", accepted: true }],
+      restartFailure: { turnId: "turn-restarted" },
       confirmedModelsByTurn: { "turn-1": "gpt-rerouted" },
     });
 
@@ -206,6 +207,36 @@ describe("BridgeSessionStore", () => {
     );
 
     expect((await store.load()).map((record) => record.bridgeSessionId)).toEqual(["valid-ledger"]);
+  });
+
+  test("rejects malformed or unbounded restart-failure notices", async () => {
+    const now = Date.parse("2026-07-25T12:00:00.000Z");
+    const { codexHome, store } = await makeStore({ now: () => now });
+    await writeRecordFile(codexHome, "valid-notice", {
+      ...validRecordFields("valid-notice", now),
+      restartFailure: { turnId: "turn-1" },
+    });
+    const malformed: unknown[] = [
+      null,
+      [],
+      {},
+      { turnId: "" },
+      { turnId: 42 },
+      {
+        turnId: "x".repeat(2_049),
+      },
+      { turnId: "turn-1", extra: "x".repeat(2_049) },
+    ];
+    await Promise.all(
+      malformed.map((restartFailure, index) =>
+        writeRecordFile(codexHome, `invalid-notice-${index}`, {
+          ...validRecordFields(`invalid-notice-${index}`, now),
+          restartFailure,
+        }),
+      ),
+    );
+
+    expect((await store.load()).map((record) => record.bridgeSessionId)).toEqual(["valid-notice"]);
   });
 
   test("serializes concurrent upserts without losing either session", async () => {

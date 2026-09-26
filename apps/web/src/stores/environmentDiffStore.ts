@@ -4,12 +4,19 @@ import type {
   EnvironmentDiffStatsChange,
   EnvironmentDiffStatsEvent,
 } from "@orkestrator/protocol/diff-stats";
+import type { HydrationStatus } from "@/lib/bounded-hydration";
 
 export type { EnvironmentDiffStats };
 
 interface EnvironmentDiffState {
   /** Diff stats keyed by environment ID */
   stats: Map<string, EnvironmentDiffStats>;
+  /**
+   * Freshness of this mirror (see `@/lib/bounded-hydration`). `stale`,
+   * `degraded` and `unsupported` mean the counts may lag the backend.
+   */
+  syncStatus: HydrationStatus;
+  setSyncStatus: (status: HydrationStatus) => void;
 
   /**
    * Replaces the whole map from an authoritative backend snapshot.
@@ -34,6 +41,9 @@ function isSameStats(a: EnvironmentDiffStats, b: EnvironmentDiffStats): boolean 
 
 export const useEnvironmentDiffStore = create<EnvironmentDiffState>()((set) => ({
   stats: new Map(),
+  syncStatus: "idle",
+  setSyncStatus: (syncStatus) =>
+    set((state) => (state.syncStatus === syncStatus ? state : { syncStatus })),
 
   applySnapshot: (entries) =>
     set((state) => {

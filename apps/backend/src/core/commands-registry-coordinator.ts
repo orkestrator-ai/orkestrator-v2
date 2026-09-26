@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { isStartBuildPipelineInput, isStartMultiReviewInput } from "./commands-dependencies.js";
 import { runCommand } from "./shell.js";
 import { registerCoordinatorReviewActions } from "./coordinator-review-actions.js";
+import { CoordinatorViewRevisions } from "./coordinator-view-revisions.js";
 import { actionHash, requireCoordinatorConversation } from "./coordinator-action-scope.js";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
@@ -150,6 +151,16 @@ export function registerCoordinatorCommands(
   register("get_project_coordinator", async ({ projectId }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
     return context.coordinators.get(asNonBlankString(projectId, "projectId"));
+  });
+  // Conditional read for the coordinator panel: `{ projectId, knownGeneration,
+  // knownRevision }` answers `unchanged` without a body while the snapshot the
+  // client holds is still current. See `coordinator-view-revisions.ts`.
+  const coordinatorViews = new CoordinatorViewRevisions();
+  register("get_project_coordinator_view", async (args, context) => {
+    const coordinators = context.coordinators;
+    if (!coordinators) throw new Error("Coordinator service is unavailable");
+    const id = asNonBlankString(args.projectId, "projectId");
+    return coordinatorViews.read(id, args, () => coordinators.get(id));
   });
   register("create_coordinator_conversation", async ({ projectId, title }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");

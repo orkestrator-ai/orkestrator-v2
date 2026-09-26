@@ -30,6 +30,8 @@ mock.module("@/lib/backend", () => ({
 
 const { MAX_EXTERNAL_FILE_DROP_BYTES, MAX_EXTERNAL_FILE_DROP_COUNT, useFilesPanel } =
   await import("./useFilesPanel");
+const { resetReadCoordinatorForTests } = await import("@/lib/read-coordinator");
+const { installFakeReadCoordinator } = await import("@/lib/testing/read-coordinator");
 
 function droppedFile(name: string, bytes: number[]): File {
   const contents = Uint8Array.from(bytes);
@@ -71,6 +73,12 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetReadCoordinatorForTests();
+  getLocalGitStatusSnapshotMock.mockImplementation(async () => ({
+    unchanged: false,
+    digest: "changes",
+    value: [],
+  }));
 });
 
 afterAll(() => {
@@ -206,5 +214,96 @@ describe("useFilesPanel external file copies", () => {
       description: "The selected environment is not available",
     });
     expect(copyExternalFileMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("useFilesPanel coordinated auto-refresh", () => {
+  const snapshotCalls = () => ({
+    tree: getLocalFileTreeSnapshotMock.mock.calls.length,
+    changes: getLocalGitStatusSnapshotMock.mock.calls.length,
+  });
+
+  async function openPanel(activeTab: "all-files" | "changes" = "all-files") {
+    useFilesPanelStore.setState({ isOpen: true, activeTab });
+    const view = renderHook(() => useFilesPanel());
+    // The open read stays a direct, immediate load.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    return view;
+  }
+
+  test("keeps the 5 s cadence while visible, pauses while hidden and reconciles once", async () => {
+    const { clock, document } = installFakeReadCoordinator();
+    await openPanel();
+    expect(snapshotCalls()).toEqual({ tree: 1, changes: 1 });
+
+    await act(() => clock.advance(4_999));
+    expect(snapshotCalls()).toEqual({ tree: 1, changes: 1 });
+    await act(() => clock.advance(1));
+    expect(snapshotCalls()).toEqual({ tree: 2, changes: 2 });
+
+    document.setVisibility("hidden");
+    await act(() => clock.advance(60_000));
+    expect(snapshotCalls()).toEqual({ tree: 2, changes: 2 });
+    expect(clock.pending).toBe(0);
+
+    document.setVisibility("visible");
+    // Standard priority: 50 ms coalescing plus the start of its spread window.
+    await act(() => clock.advance(149));
+    expect(snapshotCalls()).toEqual({ tree: 2, changes: 2 });
+    await act(() => clock.advance(1));
+    expect(snapshotCalls()).toEqual({ tree: 3, changes: 3 });
+    await act(() => clock.advance(4_999));
+    expect(snapshotCalls()).toEqual({ tree: 3, changes: 3 });
+    await act(() => clock.advance(1));
+    expect(snapshotCalls()).toEqual({ tree: 4, changes: 4 });
+  });
+
+  test("a closed panel keeps no periodic demand", async () => {
+    const { clock } = installFakeReadCoordinator();
+    useFilesPanelStore.setState({ isOpen: false });
+    renderHook(() => useFilesPanel());
+    await act(() => clock.advance(30_000));
+    expect(snapshotCalls()).toEqual({ tree: 0, changes: 0 });
+    expect(clock.pending).toBe(0);
+  });
+
+  test("manual refresh reads again instead of joining an older snapshot", async () => {
+    const { clock } = installFakeReadCoordinator();
+    const { result } = await openPanel("changes");
+    expect(snapshotCalls().changes).toBe(1);
+
+    const releases: Array<() => void> = [];
+    getLocalGitStatusSnapshotMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releases.push(() => resolve({ unchanged: false, digest: "changes-2", value: [] }));
+        }),
+    );
+    await act(() => clock.advance(5_000));
+    expect(snapshotCalls().changes).toBe(2);
+
+    let refreshed = false;
+    await act(async () => {
+      void result.current.refresh().then(() => {
+        refreshed = true;
+      });
+      await Promise.resolve();
+    });
+    expect(snapshotCalls().changes).toBe(2);
+
+    await act(async () => {
+      releases.shift()!();
+      await clock.advance(0);
+    });
+    expect(snapshotCalls().changes).toBe(3);
+    expect(refreshed).toBe(false);
+
+    await act(async () => {
+      releases.shift()!();
+      await clock.advance(0);
+    });
+    expect(refreshed).toBe(true);
   });
 });

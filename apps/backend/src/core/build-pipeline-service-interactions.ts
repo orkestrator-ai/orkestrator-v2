@@ -426,6 +426,7 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
 
   protected async requireRecord(pipelineId: string): Promise<PersistedBuildPipeline> {
     const record = await this.storage.getBuildPipeline(pipelineId);
+    this.noteRecord(pipelineId, record?.snapshot);
     if (!record || !isBuildPipeline(record.snapshot)) {
       throw new Error(`Build pipeline not found: ${pipelineId}`);
     }
@@ -457,6 +458,7 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
       expectedRevision,
     );
     pipeline.backendRevision = saved.revision;
+    this.noteRecord(pipeline.id, pipeline);
     return saved;
   }
 }

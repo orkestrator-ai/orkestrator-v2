@@ -74,6 +74,7 @@ import {
   setLocalServerShutdownPromise,
   spawnLocalServerCommandImpl,
   gitFetchScheduler,
+  containerGitFetchPolicy,
   diffStatsService,
   invalidatePendingDiffStatsSync,
 } from "./commands-runtime-state.js";
@@ -1539,6 +1540,9 @@ export async function deleteEnvironment(
       invalidatePendingPrMonitorSync();
       prMonitorService.untrack(environmentId);
       if (environment?.worktreePath) gitFetchScheduler.forget(environment.worktreePath);
+      // Its clone is gone; a fetch still running for it can no longer stamp.
+      if (environment?.containerId)
+        containerGitFetchPolicy.forgetContainer(environment.containerId);
     });
   } catch (error) {
     const environment = await context.storage.getEnvironment(environmentId).catch(() => null);

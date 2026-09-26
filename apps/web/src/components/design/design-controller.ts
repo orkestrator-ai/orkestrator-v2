@@ -16,6 +16,7 @@ import type {
 } from "@orkestrator/protocol/design-operations";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { createUuid } from "@/lib/uuid";
+import { getReadCoordinator, type ReadSubscription } from "@/lib/read-coordinator";
 import {
   emptyProjection,
   useDesignStore,
@@ -34,7 +35,7 @@ import {
 } from "./design-client";
 import { loadDrafts, saveDrafts } from "./design-drafts";
 
-const POLL_MS = 3000;
+export const DESIGN_CANVAS_CURSOR_CHECK_MS = 3_000;
 const MAX_ACTIVE_LANES = 4;
 const MAX_INACTIVE_PROJECTIONS = 16;
 const MAX_INACTIVE_BYTES = 32 * 1024 * 1024;
@@ -126,7 +127,7 @@ export class DesignCanvasController {
   private completed = 0;
   private cycle: Promise<void> | null = null;
   private waiters: Array<{ target: number; resolve: () => void }> = [];
-  private pollTimer: ReturnType<typeof setInterval> | undefined;
+  private cursorCheck: ReadSubscription<void> | undefined;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private backoffMs = 0;
   /** Wakes `pump()` when the earliest deferred prepare retry becomes due. */
@@ -235,15 +236,22 @@ export class DesignCanvasController {
       this.unlisten.push(hint, reconnect);
     }
     void this.refresh();
-    // The cursor check repairs a lost final hint while the canvas is visible.
-    this.pollTimer = setInterval(() => void this.refresh(), POLL_MS);
+    // The coordinator pauses periodic reads while hidden and reconciles on return.
+    // The activation read above still subscribes to hints before reading.
+    this.cursorCheck = getReadCoordinator().subscribe({
+      key: { resource: "design-canvas-cursor", target: this.key },
+      demand: { intervalMs: DESIGN_CANVAS_CURSOR_CHECK_MS, priority: "standard" },
+      readOnSubscribe: false,
+      retainOnDispose: true,
+      read: () => this.refresh(),
+    });
     this.reconcilePending();
     this.pump();
   }
 
   private deactivate() {
-    clearInterval(this.pollTimer);
-    this.pollTimer = undefined;
+    this.cursorCheck?.dispose();
+    this.cursorCheck = undefined;
     for (const unlisten of this.unlisten.splice(0)) unlisten();
   }
 

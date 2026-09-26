@@ -482,6 +482,14 @@ export interface AgentSessionProvider {
    */
   activityBatch?(sessionIds: readonly string[]): Promise<Map<string, ProviderActivityState>>;
   /**
+   * Whether this provider's backend-held event stream is connected right now,
+   * so a turn started by anyone else will be reported through
+   * `ProviderCommonDependencies.onObservationHint`. Only a provider that
+   * answers `true` here may have its stably idle sessions observed less than
+   * every sweep; absent or `false` keeps the full cadence.
+   */
+  observationStreamLive?(): boolean;
+  /**
    * Derive cumulative session usage from an already-read transcript. The
    * function must never reinterpret current context occupancy as consumption.
    */
@@ -658,4 +666,11 @@ export interface ProviderCommonDependencies {
   stageImages?: (images: readonly ProviderPromptImage[]) => Promise<PromptAttachment[]>;
   autoAnswerRequests?: boolean;
   onInteractionObservation?: (event: ProviderInteractionObservationEvent) => void | Promise<void>;
+  /**
+   * Content-free hint that an owned session's activity or pending input may
+   * have changed (`sessionId`), or that the event stream lost continuity
+   * (`undefined`). Hints only make the next observation due; they are never
+   * applied as activity themselves. Must not throw or await.
+   */
+  onObservationHint?: (sessionId: string | undefined) => void;
 }

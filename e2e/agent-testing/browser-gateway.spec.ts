@@ -693,7 +693,15 @@ test("review validation queues across worktrees and runs while its environment i
         return run.results[0]!.status;
       })
       .toBe("queued");
-    expect(run.results[0]!.queueReason).toContain("slots");
+    await expect
+      .poll(async () => {
+        run = await invoke<ReviewValidationRun>("status_review_validation", {
+          environmentId: target!.id,
+          run,
+        });
+        return run.results[0]!.queueReason;
+      })
+      .toContain("slots");
     await page.mouse.move(1100, 20);
     await page.getByText(other!.name, { exact: true }).first().click();
     await expect

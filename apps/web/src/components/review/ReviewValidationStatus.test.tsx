@@ -1,12 +1,20 @@
-import { afterEach, describe, expect, jest, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   ReviewValidationOutput,
   ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
-import { ReviewValidationStatus } from "./ReviewValidationStatus";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
+import {
+  ReviewValidationStatus,
+  VALIDATION_OUTPUT_POLL_INTERVAL_MS,
+} from "./ReviewValidationStatus";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetReadCoordinatorForTests();
+});
 
 function runningValidation(): ReviewValidationRun {
   return {
@@ -345,35 +353,124 @@ describe("ReviewValidationStatus", () => {
       stderr: null,
     };
 
-    jest.useFakeTimers();
-    try {
-      render(<ReviewValidationStatus environmentId="env-1" run={run} loadOutput={loadOutput} />);
-      fireEvent.click(
-        screen.getByRole("button", { name: "View terminal output for bun run check" }),
-      );
-      await act(async () => Promise.resolve());
+    const { clock } = installFakeReadCoordinator();
+    render(<ReviewValidationStatus environmentId="env-1" run={run} loadOutput={loadOutput} />);
+    fireEvent.click(screen.getByRole("button", { name: "View terminal output for bun run check" }));
+    await act(async () => Promise.resolve());
 
-      expect(loadOutput).toHaveBeenCalledTimes(1);
-      act(() => jest.advanceTimersByTime(10_000));
-      expect(loadOutput).toHaveBeenCalledTimes(1);
+    expect(loadOutput).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await clock.advance(10_000);
+    });
+    expect(loadOutput).toHaveBeenCalledTimes(1);
 
-      await act(async () => {
-        resolveFirst(output);
-        await first;
-        await Promise.resolve();
-      });
-      expect(screen.getByText(/still running/)).toBeTruthy();
+    await act(async () => {
+      resolveFirst(output);
+      await first;
+      await Promise.resolve();
+    });
+    expect(screen.getByText(/still running/)).toBeTruthy();
 
-      act(() => jest.advanceTimersByTime(1_999));
-      expect(loadOutput).toHaveBeenCalledTimes(1);
-      await act(async () => {
-        jest.advanceTimersByTime(1);
-        await Promise.resolve();
-      });
-      expect(loadOutput).toHaveBeenCalledTimes(2);
-    } finally {
-      jest.useRealTimers();
-    }
+    await act(async () => {
+      await clock.advance(VALIDATION_OUTPUT_POLL_INTERVAL_MS);
+    });
+    expect(loadOutput).toHaveBeenCalledTimes(2);
+  });
+
+  test("streams appended output by offset, recovers a rotated log, and settles on completion", async () => {
+    const { clock, document: fakeDocument } = installFakeReadCoordinator();
+    const run = runningValidation();
+    const anchor = (value: string) => value.padEnd(32, "0");
+    const answers: ReviewValidationOutput[] = [
+      {
+        resultId: "check",
+        status: "running",
+        stdout: {
+          contentBase64: btoa("one\n"),
+          totalBytes: 4,
+          startOffset: 0,
+          anchor: anchor("a"),
+          mode: "tail",
+        },
+        stderr: null,
+      },
+      {
+        resultId: "check",
+        status: "running",
+        stdout: {
+          contentBase64: btoa("two\n"),
+          totalBytes: 8,
+          startOffset: 4,
+          anchor: anchor("b"),
+          mode: "append",
+        },
+        stderr: null,
+      },
+      {
+        resultId: "check",
+        status: "running",
+        stdout: {
+          contentBase64: "",
+          totalBytes: 8,
+          startOffset: 8,
+          anchor: anchor("b"),
+          mode: "append",
+        },
+        stderr: null,
+      },
+      // Rotated: the backend no longer recognises the held tail.
+      {
+        resultId: "check",
+        status: "running",
+        stdout: {
+          contentBase64: btoa("fresh\n"),
+          totalBytes: 6,
+          startOffset: 0,
+          anchor: anchor("c"),
+          mode: "tail",
+        },
+        stderr: null,
+      },
+    ];
+    const known: unknown[] = [];
+    const loadOutput = mock(
+      async (_env: string, _run: string, _result: string, knownPosition?: unknown) => {
+        known.push(knownPosition);
+        return answers.shift() ?? answers.at(-1)!;
+      },
+    );
+    render(<ReviewValidationStatus environmentId="env-1" run={run} loadOutput={loadOutput} />);
+    fireEvent.click(screen.getByRole("button", { name: "View terminal output for bun run check" }));
+    await waitFor(() => expect(screen.getByText(/one/)).toBeTruthy());
+    expect(known[0]).toBeUndefined();
+
+    await act(async () => {
+      await clock.advance(VALIDATION_OUTPUT_POLL_INTERVAL_MS);
+    });
+    await waitFor(() => expect(screen.getByText(/one\s+two/)).toBeTruthy());
+    expect(known[1]).toEqual({ stdout: { totalBytes: 4, anchor: anchor("a") } });
+    const shown = screen.getByText(/one\s+two/);
+
+    // Nothing new: no re-render of the text node.
+    await act(async () => {
+      await clock.advance(VALIDATION_OUTPUT_POLL_INTERVAL_MS);
+    });
+    expect(known[2]).toEqual({ stdout: { totalBytes: 8, anchor: anchor("b") } });
+    expect(screen.getByText(/one\s+two/)).toBe(shown);
+
+    // Hidden: no reads. Visible again: one reconcile read, which rotates.
+    act(() => fakeDocument.setVisibility("hidden"));
+    await act(async () => {
+      await clock.advance(VALIDATION_OUTPUT_POLL_INTERVAL_MS * 5);
+    });
+    expect(loadOutput).toHaveBeenCalledTimes(3);
+    act(() => fakeDocument.setVisibility("visible"));
+    await act(async () => {
+      await clock.advance(1_000);
+    });
+    expect(loadOutput).toHaveBeenCalledTimes(4);
+    await waitFor(() => expect(screen.getByText(/fresh/)).toBeTruthy());
+    expect(screen.queryByText(/two/) === null).toBe(true);
   });
 
   test("shows a clickable environment state changed note with the drifted files", () => {

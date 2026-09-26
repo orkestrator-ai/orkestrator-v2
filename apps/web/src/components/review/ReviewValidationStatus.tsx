@@ -5,7 +5,9 @@ import {
   type ReviewValidationResult,
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
+import { knownValidationOutput, mergeValidationOutput } from "./validation-output-merge";
 import { Copy, Loader2, RefreshCw, Square, SquareTerminal } from "lucide-react";
 import { toast } from "sonner";
 import { getReviewValidationOutput } from "@/lib/backend";
@@ -18,6 +20,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+
+/** Live output cadence while the modal is open on a queued or running command. */
+export const VALIDATION_OUTPUT_POLL_INTERVAL_MS = 2_000;
 
 function elapsedMs(startedAt: string, completedAt: string | undefined, now: number): number | null {
   const start = Date.parse(startedAt);
@@ -94,54 +99,103 @@ function ValidationOutputModal({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const requestIdRef = useRef(0);
-  const inFlightRequestRef = useRef<number | null>(null);
+  const inFlightRequestRef = useRef<Promise<void> | null>(null);
+  const rerunRef = useRef(false);
+  /** The merged output this modal shows; its stream positions are echoed back. */
+  const outputRef = useRef<ReviewValidationOutput | null>(null);
   const hasArtifacts = Boolean(result?.stdoutPath || result?.stderrPath);
   const resultId = result?.id;
+  const live = result?.status === "running" || result?.status === "queued";
 
-  const refresh = useCallback(async () => {
-    if (!open || !resultId || !hasArtifacts || inFlightRequestRef.current !== null) return;
-    const requestId = ++requestIdRef.current;
-    inFlightRequestRef.current = requestId;
-    setLoading(true);
-    setError(null);
-    try {
-      const next = await loadOutput(environmentId, run.id, resultId);
-      if (requestId !== requestIdRef.current) return;
-      setOutput(next);
-    } catch (reason) {
-      if (requestId !== requestIdRef.current) return;
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      if (inFlightRequestRef.current === requestId) inFlightRequestRef.current = null;
-      if (requestId === requestIdRef.current) setLoading(false);
-    }
-  }, [environmentId, hasArtifacts, loadOutput, open, resultId, run.id]);
+  /**
+   * One read in flight; a request made meanwhile (status change, manual
+   * refresh) runs once after it, so the final state is never skipped. Reads
+   * are conditional: only bytes appended since the held tail cross the wire,
+   * and an unchanged answer does not re-render.
+   */
+  const refresh = useCallback(
+    (options: { trailing?: boolean } = {}): Promise<void> => {
+      if (!open || !resultId || !hasArtifacts) return Promise.resolve();
+      if (inFlightRequestRef.current) {
+        // A periodic tick joins; an explicit or status-change request needs a
+        // read that starts after it, so it runs once more afterwards.
+        if (options.trailing !== false) rerunRef.current = true;
+        return inFlightRequestRef.current;
+      }
+      const requestId = requestIdRef.current;
+      const request = (async () => {
+        let resyncs = 0;
+        do {
+          rerunRef.current = false;
+          if (!outputRef.current) setLoading(true);
+          setError(null);
+          try {
+            const known = knownValidationOutput(outputRef.current);
+            const next = known
+              ? await loadOutput(environmentId, run.id, resultId, known)
+              : await loadOutput(environmentId, run.id, resultId);
+            if (requestId !== requestIdRef.current) return;
+            const merged = mergeValidationOutput(outputRef.current, next);
+            if (merged.resync) {
+              // The answer extends a tail this modal no longer holds: read an
+              // authoritative tail instead (bounded to one retry per request).
+              outputRef.current = null;
+              if (resyncs++ < 1) rerunRef.current = true;
+              continue;
+            }
+            if (merged.output !== outputRef.current) {
+              outputRef.current = merged.output;
+              setOutput(merged.output);
+            }
+          } catch (reason) {
+            if (requestId !== requestIdRef.current) return;
+            setError(reason instanceof Error ? reason.message : String(reason));
+          }
+        } while (rerunRef.current && requestId === requestIdRef.current);
+      })().finally(() => {
+        if (inFlightRequestRef.current === request) inFlightRequestRef.current = null;
+        if (requestId === requestIdRef.current) setLoading(false);
+      });
+      inFlightRequestRef.current = request;
+      return request;
+    },
+    [environmentId, hasArtifacts, loadOutput, open, resultId, run.id],
+  );
 
+  // Opening and every status change (including the final one) read once.
   useEffect(() => {
     if (!open) {
       requestIdRef.current += 1;
       inFlightRequestRef.current = null;
+      rerunRef.current = false;
+      outputRef.current = null;
       setOutput(null);
       setError(null);
       setLoading(false);
       return;
     }
-    let cancelled = false;
-    let timeout: number | undefined;
-    const poll = async () => {
-      await refresh();
-      if (!cancelled && (result?.status === "running" || result?.status === "queued")) {
-        timeout = window.setTimeout(() => void poll(), 2_000);
-      }
-    };
-    void poll();
+    void refresh();
     return () => {
-      cancelled = true;
       requestIdRef.current += 1;
       inFlightRequestRef.current = null;
-      if (timeout !== undefined) window.clearTimeout(timeout);
     };
   }, [open, refresh, result?.status]);
+
+  // Live output polls through the read coordinator: only while the modal is
+  // open on a queued/running command, never overlapping a slow read, paused
+  // while the document is hidden and reconciled once on return.
+  const pollInstance = useId();
+  useCoordinatedRead<void>({
+    key: {
+      resource: "review-validation-output",
+      target: `${environmentId}\u0000${run.id}\u0000${resultId ?? ""}`,
+      view: pollInstance,
+    },
+    enabled: open && hasArtifacts && Boolean(resultId),
+    readOnSubscribe: false,
+    demand: { active: live, intervalMs: VALIDATION_OUTPUT_POLL_INTERVAL_MS, priority: "standard" },
+    read: () => refresh({ trailing: false }),
+  });
 
   const stdout = useMemo(() => streamOutput("stdout", output?.stdout ?? null), [output]);
   const stderr = useMemo(() => streamOutput("stderr", output?.stderr ?? null), [output]);

@@ -73,6 +73,13 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 | [codex-duplicate-agent-cards.md](plans/codex-duplicate-agent-cards.md) | Done | Automated verification landed; isolated browser QA still pending. |
 | [sdk-coverage-2026-09-06.md](plans/sdk-coverage-2026-09-06.md) | Historical | Source review for the SDK plans. Do not pick work from this file. |
 
+## Improvements
+
+| Document | Status | Notes |
+| --- | --- | --- |
+| [Inconsistency remediation plan](improvements/inconsistencies/plan/00-index.md) | Active | Planned work in eleven numbered steps, based on the 2026-09-21 inconsistency review; implementation has not started. |
+| [Inconsistency review](improvements/incocnsistencies.md) | Historical | Nine findings against revision `88c2f9c`; the implementation plan tracks resolution. Original requested filename retained. |
+
 ## Todos
 
 These are the only unfinished `docs/todo/` files.

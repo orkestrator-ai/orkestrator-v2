@@ -123,6 +123,7 @@ describe("restored closes", () => {
     try {
       const first = harness.call("/session/closing-1/close", { method: "POST" });
       await hold.held;
+      await waitFor(() => !closingTombstones.has("closing-1"));
       const second = harness.call("/session/closing-1/close", { method: "POST" });
       const resume = harness.call("/session/resume", {
         method: "POST",

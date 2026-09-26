@@ -168,6 +168,11 @@ const publishingTombstones = new Map<
   NonNullable<ReturnType<typeof closingTombstones.get>>
 >();
 
+/** Includes a removal that has left the snapshot but is still publishing. */
+export function hasRestoredTombstone(id: string): boolean {
+  return closingTombstones.has(id) || tombstoneCloses.has(id);
+}
+
 /** The shared finishing operation for one tombstone. Rejects only on publication. */
 function finishTombstone(id: string): Promise<CloseOutcome> {
   const inFlight = tombstoneCloses.get(id);

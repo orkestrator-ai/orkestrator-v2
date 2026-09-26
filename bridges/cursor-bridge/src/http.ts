@@ -31,7 +31,11 @@ import {
   persistBarrier,
   schedulePersist,
 } from "./persistence.js";
-import { closeRestoredTombstone, closeSessionPermanently } from "./session-close.js";
+import {
+  closeRestoredTombstone,
+  closeSessionPermanently,
+  hasRestoredTombstone,
+} from "./session-close.js";
 import {
   admitSteer,
   noteSteerRefusal,
@@ -93,7 +97,6 @@ import {
 } from "./agent-session.js";
 import {
   assertSessionOpen,
-  closingTombstones,
   isObject,
   nonBlank,
   SessionClosedError,
@@ -363,7 +366,7 @@ async function routeSession(
     }
     // A close recorded by a previous process and not yet published. Answered
     // as closing until a close request finishes it, never as a live session.
-    const tombstoned = closingTombstones.has(match[1]!);
+    const tombstoned = hasRestoredTombstone(match[1]!);
     if (
       tombstoned &&
       ((!action && request.method === "DELETE") || isCloseRequest(action, request))

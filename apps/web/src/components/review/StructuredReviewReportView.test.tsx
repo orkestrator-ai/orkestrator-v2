@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
-import { StructuredReviewReportView } from "./StructuredReviewReportView";
+import {
+  StructuredReviewFindingsView,
+  StructuredReviewReportView,
+} from "./StructuredReviewReportView";
 
 afterEach(cleanup);
 beforeEach(() => {
@@ -465,5 +468,17 @@ describe("StructuredReviewReportView", () => {
       screen.getByText("No high-confidence issues were found in the reviewed scope."),
     ).toBeTruthy();
     expect(screen.getAllByText("None.").length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("renders both empty states in the findings-only view", () => {
+    render(<StructuredReviewFindingsView findings={{ issues: [], testCoverageGaps: [] }} />);
+
+    expect(screen.getByRole("article", { name: "Review findings" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Issues · 0" })).toBeTruthy();
+    expect(
+      screen.getByText("No high-confidence issues were found in the reviewed scope."),
+    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Test Coverage Gaps · 0" })).toBeTruthy();
+    expect(screen.getByText("None.")).toBeTruthy();
   });
 });

@@ -25,7 +25,10 @@ import type {
   ReviewContractValidationIssue,
   StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
-import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
+import {
+  STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+  structuredReviewFindings,
+} from "@orkestrator/protocol/structured-review";
 import { promptCarrierJson } from "./build-pipeline-handoff.js";
 import {
   reviewArtifactDirectory,
@@ -500,10 +503,7 @@ export function addressPrompt(report: StructuredReviewReport): string {
   return `${wrapSystemInstructions(
     STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
     `${STRUCTURED_REVIEW_FINDINGS_FRAME_OPEN}
-${promptCarrierJson({
-  issues: report.issues,
-  testCoverageGaps: report.testCoverageGaps,
-})}
+${promptCarrierJson(structuredReviewFindings(report))}
 ${STRUCTURED_REVIEW_FINDINGS_FRAME_CLOSE}`,
   )}
 

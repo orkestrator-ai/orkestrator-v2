@@ -37,6 +37,8 @@ export interface DesignCanvasActions {
   exitPreview(): void;
   frameAction(frameId: string, action: DesignFrameAction): void;
   focusFrame(frameId: string): void;
+  /** Selects a whole frame (board): outlined on the canvas, removable with Delete. */
+  selectFrame(frameId: string): void;
 }
 
 export const DesignCanvasContext = createContext<DesignCanvasActions | null>(null);

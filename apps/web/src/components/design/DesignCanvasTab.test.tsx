@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { invoke } from "@/lib/native/backend";
 import { resetDesignControllers } from "./design-controller";
 import { resetCapabilities } from "./design-client";
-import { FakeBackend, canvasId, deferred } from "./design-test-backend";
+import { FakeBackend, canvasId, deferred, frameA, frameB } from "./design-test-backend";
 
 const { DesignCanvasTab } = await import("./DesignCanvasTab");
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
@@ -104,6 +104,82 @@ describe("DesignCanvasTab", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(prepared("undo")).toHaveLength(1);
     input.remove();
+  });
+
+  test("selecting a frame title outlines the frame and Delete removes it", async () => {
+    render(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
+    const title = await screen.findByRole("button", { name: "Move frame A" });
+    const frame = () => document.querySelector(`[data-frame-id="${frameA}"]`)!;
+    const other = document.querySelector(`[data-frame-id="${frameB}"]`)!;
+    expect(frame().hasAttribute("data-selected")).toBe(false);
+
+    fireEvent.pointerDown(title, { button: 0, pointerId: 1 });
+    fireEvent.pointerUp(title, { button: 0, pointerId: 1 });
+    await waitFor(() => expect(frame().hasAttribute("data-selected")).toBe(true));
+    expect(frame().querySelector('[data-testid="frame-selection-outline"]')).not.toBeNull();
+    expect(title.getAttribute("aria-pressed")).toBe("true");
+    expect(other.hasAttribute("data-selected")).toBe(false);
+    expect(document.activeElement).toBe(title);
+
+    fireEvent.keyDown(title, { key: "Delete" });
+    await waitFor(() => expect(prepared("delete_frame")).toHaveLength(1));
+    expect(prepared("delete_frame")[0]!.args.descriptor).toMatchObject({
+      canvasId,
+      input: { kind: "delete_frame", frameId: frameA },
+      preconditions: { frameRevision: 1, canvasRevision: 1 },
+    });
+    await waitFor(() =>
+      expect(document.querySelector(`[data-frame-id="${frameA}"]`)).toBeNull(),
+    );
+    expect(document.querySelector(`[data-frame-id="${frameB}"]`)).not.toBeNull();
+  });
+
+  test("Backspace deletes the selected frame; Escape and the canvas background deselect it", async () => {
+    render(
+      <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+    );
+    const title = await screen.findByRole("button", { name: "Move frame B" });
+    const frame = () => document.querySelector(`[data-frame-id="${frameB}"]`);
+    const select = () => {
+      fireEvent.pointerDown(title, { button: 0, pointerId: 1 });
+      fireEvent.pointerUp(title, { button: 0, pointerId: 1 });
+    };
+
+    // Nothing selected: Delete is ignored.
+    fireEvent.keyDown(title, { key: "Delete" });
+    select();
+    await waitFor(() => expect(frame()?.hasAttribute("data-selected")).toBe(true));
+    fireEvent.keyDown(title, { key: "Escape" });
+    await waitFor(() => expect(frame()?.hasAttribute("data-selected")).toBe(false));
+    fireEvent.keyDown(title, { key: "Backspace" });
+
+    select();
+    await waitFor(() => expect(frame()?.hasAttribute("data-selected")).toBe(true));
+    fireEvent.pointerDown(screen.getByRole("main", { name: "Canvas viewport" }), {
+      button: 0,
+      pointerId: 2,
+    });
+    await waitFor(() => expect(frame()?.hasAttribute("data-selected")).toBe(false));
+    fireEvent.keyDown(title, { key: "Backspace" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(prepared("delete_frame")).toHaveLength(0);
+
+    // Keyboard activation (Enter/Space → click) selects too.
+    fireEvent.click(title);
+    await waitFor(() => expect(frame()?.hasAttribute("data-selected")).toBe(true));
+    // Typing in a text field never deletes the frame.
+    const input = document.createElement("input");
+    screen.getByRole("main", { name: "Canvas viewport" }).append(input);
+    fireEvent.keyDown(input, { key: "Backspace" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(prepared("delete_frame")).toHaveLength(0);
+    input.remove();
+
+    fireEvent.keyDown(title, { key: "Backspace" });
+    await waitFor(() => expect(prepared("delete_frame")).toHaveLength(1));
+    await waitFor(() => expect(frame()).toBeNull());
   });
 
   test("two views of one canvas share one projection", async () => {

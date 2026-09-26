@@ -105,6 +105,8 @@ export function DesignCanvasTab({
   const narrowRef = useRef(narrow);
   narrowRef.current = narrow;
   const [selection, setSelection] = useState<DesignSelection | null>(null);
+  /** A whole frame (board) selected from its title; exclusive with an element selection. */
+  const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
   const [focusedFrame, setFocusedFrame] = useState<string | null>(prefs.frameId ?? null);
   const [mode, setMode] = useState<"inspect" | "preview">("inspect");
   const [layersOpen, setLayersOpen] = useState(prefs.layers ?? true);
@@ -130,6 +132,8 @@ export function DesignCanvasTab({
   const panStart = useRef<{ x: number; y: number; origin: DesignViewport } | null>(null);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
+  const selectedFrameRef = useRef(selectedFrameId);
+  selectedFrameRef.current = selectedFrameId;
   const projectionRef = useRef(projection);
   projectionRef.current = projection;
 
@@ -142,6 +146,8 @@ export function DesignCanvasTab({
     [canvas],
   );
   const editable = projection?.snapshot === "current" || projection?.snapshot === "stale";
+  const editableRef = useRef(editable);
+  editableRef.current = editable;
   const legacy = projection?.legacy ?? false;
 
   // Persist small view preferences only.
@@ -280,6 +286,27 @@ export function DesignCanvasTab({
         preview: { frameId: base.id, patch },
         gestureKey: `${gestureId}:update_frame`,
       });
+    },
+    [controller],
+  );
+
+  const submitDeleteFrame = useCallback(
+    (target: DesignFrame) => {
+      const current = projectionRef.current;
+      if (!current) return;
+      controller.submit({
+        descriptor: {
+          input: { kind: "delete_frame", frameId: target.id },
+          preconditions: {
+            frameRevision: target.revision,
+            canvasRevision: current.revision,
+          },
+        },
+        label: `Delete ${target.name}`,
+        lane: "canvas",
+      });
+      if (selectionRef.current?.frameId === target.id) setSelection(null);
+      if (selectedFrameRef.current === target.id) setSelectedFrameId(null);
     },
     [controller],
   );
@@ -468,6 +495,7 @@ export function DesignCanvasTab({
       canvasId,
       select: (next) => {
         setSelection(next);
+        setSelectedFrameId(null);
         if (next) {
           setFocusedFrame(next.frameId);
           setPropertiesFrame(null);
@@ -508,6 +536,11 @@ export function DesignCanvasTab({
       // Through a ref so viewport/frame changes don't give every frame new props.
       frameAction: (frameId, action) => frameActionRef.current(frameId, action),
       focusFrame: setFocusedFrame,
+      selectFrame: (frameId) => {
+        setSelectedFrameId(frameId);
+        setFocusedFrame(frameId);
+        setSelection(null);
+      },
     }),
     [
       applyStyles,
@@ -665,6 +698,7 @@ export function DesignCanvasTab({
       if (event.key === "Escape") {
         if (mode === "preview") setMode("inspect");
         else if (selectionRef.current) setSelection(null);
+        else if (selectedFrameRef.current) setSelectedFrameId(null);
         else if (propertiesFrame) setPropertiesFrame(null);
         else if (narrow && (layersOpen || inspectorOpen)) {
           setLayersOpen(false);
@@ -673,6 +707,19 @@ export function DesignCanvasTab({
         } else if (historyOpen) setHistoryOpen(false);
         else return;
         event.preventDefault();
+      } else if (event.key === "Delete" || event.key === "Backspace") {
+        const current = projectionRef.current;
+        const target = selectedFrameRef.current
+          ? current?.canvas?.frames.find((frame) => frame.id === selectedFrameRef.current)
+          : undefined;
+        if (!target || selectionRef.current || !editableRef.current) return;
+        event.preventDefault();
+        // Legacy canvases may not support undo: confirm there, delete directly otherwise.
+        if (current?.legacy) setDeleteFrame(target);
+        else {
+          submitDeleteFrame(target);
+          setAnnouncement(`Deleted ${target.name}. Undo with Ctrl/⌘ + Z`);
+        }
       } else if (event.key === "!" || (event.shiftKey && event.code === "Digit1")) {
         event.preventDefault();
         fitAll();
@@ -707,6 +754,7 @@ export function DesignCanvasTab({
     ownsGlobalShortcuts,
     propertiesFrame,
     restoreHistory,
+    submitDeleteFrame,
     zoom100,
     zoomBy,
   ]);
@@ -967,7 +1015,10 @@ export function DesignCanvasTab({
                   y: event.clientY,
                   origin: viewportRef.current,
                 };
-                if (event.button === 0) setSelection(null);
+                if (event.button === 0) {
+                  setSelection(null);
+                  setSelectedFrameId(null);
+                }
               }}
               onPointerMove={(event) => {
                 const start = panStart.current;
@@ -1036,6 +1087,7 @@ export function DesignCanvasTab({
                       failure={failureForLane(projection?.intents ?? [], frame.id)}
                       canRestorePrevious={!legacy}
                       focused={focusedFrame === frame.id}
+                      frameSelected={selectedFrameId === frame.id}
                     />
                   );
                 })}
@@ -1195,21 +1247,7 @@ export function DesignCanvasTab({
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 onClick={() => {
-                  const target = deleteFrame;
-                  const current = projectionRef.current;
-                  if (!target || !current) return;
-                  controller.submit({
-                    descriptor: {
-                      input: { kind: "delete_frame", frameId: target.id },
-                      preconditions: {
-                        frameRevision: target.revision,
-                        canvasRevision: current.revision,
-                      },
-                    },
-                    label: `Delete ${target.name}`,
-                    lane: "canvas",
-                  });
-                  if (selectionRef.current?.frameId === target.id) setSelection(null);
+                  if (deleteFrame) submitDeleteFrame(deleteFrame);
                   setDeleteFrame(null);
                 }}
               >

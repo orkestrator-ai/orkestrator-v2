@@ -75,6 +75,7 @@ export const DesignFrameView = memo(function DesignFrameView({
   failure,
   canRestorePrevious,
   focused,
+  frameSelected = false,
 }: {
   /** Frame with optimistic previews applied. */
   frame: DesignFrame;
@@ -89,6 +90,8 @@ export const DesignFrameView = memo(function DesignFrameView({
   failure?: DesignFailure;
   canRestorePrevious: boolean;
   focused: boolean;
+  /** The whole frame (board) is selected: outlined and removable with Delete. */
+  frameSelected?: boolean;
 }) {
   const actions = useDesignCanvasActions();
   // Effects read actions through a ref: the bridge's lifetime must follow the
@@ -308,14 +311,22 @@ export const DesignFrameView = memo(function DesignFrameView({
       aria-label={`Frame ${frame.name}`}
       data-frame-id={frame.id}
       data-pending={pending || undefined}
+      data-selected={frameSelected || undefined}
       className="design-frame absolute"
       style={{ left: shown.x, top: shown.y, width: shown.width, height: shown.height }}
     >
       <div className="absolute -top-7 left-0 flex max-w-full items-center gap-1">
         <button
           type="button"
-          className={`max-w-full cursor-grab truncate rounded-sm px-0.5 text-left text-xs text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring ${focused ? "text-foreground" : ""}`}
-          onPointerDown={(event) => startDrag(event, "move")}
+          className={`max-w-full cursor-grab truncate rounded-sm px-0.5 text-left text-xs text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring ${frameSelected ? "text-blue-500" : focused ? "text-foreground" : ""}`}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            // WebKit does not focus buttons on click; canvas keys (Delete) need focus inside.
+            event.currentTarget.focus({ preventScroll: true });
+            actions.selectFrame(frame.id);
+            startDrag(event, "move");
+          }}
+          onClick={() => actions.selectFrame(frame.id)}
           onPointerMove={moveDrag}
           onPointerUp={() => settleDrag(true)}
           onPointerCancel={() => settleDrag(false)}
@@ -325,7 +336,8 @@ export const DesignFrameView = memo(function DesignFrameView({
           onKeyDown={onFrameKey}
           onFocus={() => actions.focusFrame(frame.id)}
           aria-label={`Move frame ${frame.name}`}
-          aria-description="Arrow keys move, Alt+Arrow keys resize, Shift for larger steps"
+          aria-pressed={frameSelected}
+          aria-description="Arrow keys move, Alt+Arrow keys resize, Shift for larger steps, Delete removes a selected frame"
         >
           {frame.name} · {Math.round(shown.width)} × {Math.round(shown.height)}
           {pending && <span className="ml-1 text-[10px] text-primary">· saving</span>}
@@ -412,6 +424,15 @@ export const DesignFrameView = memo(function DesignFrameView({
           onClick={(event) =>
             hitTest(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect())
           }
+        />
+      )}
+      {frameSelected && (
+        <div
+          data-testid="frame-selection-outline"
+          className="pointer-events-none absolute -inset-px border-blue-500"
+          // Constant on-screen thickness at any zoom.
+          style={{ borderWidth: Math.max(1, 2 / zoom) }}
+          aria-hidden
         />
       )}
       {(pending || failure) && (

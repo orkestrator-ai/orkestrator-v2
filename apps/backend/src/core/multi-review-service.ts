@@ -120,6 +120,7 @@ import {
   type MultiReviewObligation,
 } from "./multi-review-scheduling.js";
 import {
+  DEFAULT_WORKFLOW_DISCOVERY_MS,
   KeyedWorkflowSupervisor,
   keyedSchedulingEnabled,
   type KeyedWorkflowOwner,
@@ -1792,11 +1793,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       domain: "multi-review",
       kind: "multi-review-tick",
       progressIntervalMs: this.options.pollIntervalMs ?? DEFAULT_POLL_MS,
+      // Safety discovery only: every obligation is noted where it is written
+      // and woken by its events, so the adaptive scheduler's 15 s scan
+      // becomes the shared 30 s safety interval.
       discoveryIntervalMs:
         this.options.discoveryIntervalMs ??
         this.options.reconcileIntervalMs ??
-        this.options.pollIntervalMs ??
-        DEFAULT_RECONCILE_MS,
+        DEFAULT_WORKFLOW_DISCOVERY_MS,
       maxConcurrent: MAX_CONCURRENT_WORKFLOW_PASSES,
       discover: async () =>
         multiReviewDiscovery(

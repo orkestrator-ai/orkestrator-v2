@@ -327,7 +327,7 @@ describe("BuildPipelineService keyed scheduling", () => {
         if (mode === "legacy") {
           await (supervisor as unknown as { requestTick(): Promise<void> }).requestTick();
         } else {
-          // Found by discovery (still at the fallback cadence) or the key's pass.
+          // The pipeline is already indexed; its own pass settles the outbox.
           await advanceKeyedWork(time, [supervisor], 1_500);
         }
       }

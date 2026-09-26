@@ -97,6 +97,7 @@ import {
 } from "./build-pipeline-service-helpers.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
+  DEFAULT_WORKFLOW_DISCOVERY_MS,
   KeyedWorkflowSupervisor,
   keyedSchedulingEnabled,
   type KeyedWorkflowOwner,
@@ -611,7 +612,7 @@ export class LoopedReviewService implements KeyedWorkflowOwner {
       domain: "looped-review",
       kind: "looped-review-tick",
       progressIntervalMs: pollMs,
-      discoveryIntervalMs: this.options.discoveryIntervalMs ?? pollMs,
+      discoveryIntervalMs: this.options.discoveryIntervalMs ?? DEFAULT_WORKFLOW_DISCOVERY_MS,
       discover: async () => {
         const { result, validated } = await discoverLoopedReviews({
           list: () => this.storage.listAllLoopedReviewWorkflows(),
@@ -623,6 +624,10 @@ export class LoopedReviewService implements KeyedWorkflowOwner {
         return result;
       },
       advance: async (pass) => {
+        if (pass.obligation === "legacy-adoption") {
+          await this.retryLegacyAdoption(pass.key);
+          return;
+        }
         this.passTriggers.set(pass.key, pass.trigger);
         try {
           await this.runLocked(pass.key);
@@ -635,6 +640,16 @@ export class LoopedReviewService implements KeyedWorkflowOwner {
         ? { now: this.options.schedulerClock.now, timers: this.options.schedulerClock.timers }
         : {}),
     });
+  }
+
+  /** Adopts a renderer-era record once its foreign lease allows it. */
+  private async retryLegacyAdoption(workflowId: string): Promise<void> {
+    const record = await this.storage.getLoopedReviewWorkflow(workflowId);
+    if (record && !isLoopedReviewWorkflow(record.snapshot)) {
+      await this.adoptLegacy(record).catch(() => undefined);
+    }
+    const current = await this.storage.getLoopedReviewWorkflow(workflowId);
+    this.noteRecord(workflowId, current?.snapshot, current?.environmentId);
   }
 
   /** Keeps the keyed index current after an authoritative read or durable write. */

@@ -54,6 +54,7 @@ export function registerSystemCommands(
       ["build-pipeline", context.buildPipelines],
       ["looped-review", context.loopedReviews],
       ["multi-review", context.multiReviews],
+      ["native-queues", context.nativeAgents],
     ];
     const result: Record<string, unknown> = {};
     for (const [domain, owner] of owners) {

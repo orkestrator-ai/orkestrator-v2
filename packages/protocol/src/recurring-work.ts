@@ -237,6 +237,8 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   // flight, immutable local baselines never fetch (`container-git-fetch.ts`).
   "git-fetch-container": backend("F02", "read", "discovery", 300_000, "join", "next-tick"),
   "native-activity-sweep": backend("B06", "interval", "progress", 2_000, "join", "next-tick"),
+  // Step 08: one recovery job, 2 s while a launch intent is pending, else a
+  // 30 s safety pass; environment changes wake it.
   "native-launch-scan": backend(
     "B07",
     "interval",
@@ -245,6 +247,8 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "per-key-serial",
     "storage-reconcile",
   ),
+  // Step 08: one due key per queue owing a dispatch (2 s fallback, drain
+  // backoff honoured); the whole-store listing is 30 s safety discovery.
   "native-queue-scan": backend(
     "B07",
     "interval",
@@ -262,12 +266,13 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "join",
     "snapshot-rehydrate",
   ),
+  // Step 08 named due job: fixed rate, never overlapping.
   "claude-state-reconcile": backend(
     "B09",
     "interval",
     "recovery",
     2_000,
-    "unguarded",
+    "skip-while-running",
     "storage-reconcile",
   ),
   // Per tracked container, every second, trailing rerun on overlap.
@@ -282,7 +287,7 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     false,
   ),
   "tmux-queue-drain": backend("B09", "interval", "progress", 2_000, "join", "storage-reconcile"),
-  // Presence TTL is 4 s; the activity bundle refreshes every 2 s.
+  // Presence TTL is 4 s; its own fixed-rate 2 s job refreshes it (step 08).
   "mail-presence": backend("B09,B10", "interval", "progress", 2_000, "join", "next-tick"),
   "mail-injection": backend(
     "B09,B10",
@@ -292,17 +297,26 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "trailing-rerun",
     "storage-reconcile",
   ),
+  // Step 08: 2 s while a rename intent is pending, else 30 s; woken by
+  // environment changes.
   "pending-rename-reconcile": backend(
     "B09",
     "interval",
     "recovery",
     2_000,
-    "unguarded",
+    "skip-while-running",
     "storage-reconcile",
   ),
-  // Every 30 activity ticks (nominally 60 s).
+  // Step 08: its own elapsed 60 s deadline (formerly every 30 activity ticks).
   "coordinator-repair": backend("B11", "interval", "recovery", 60_000, "join", "storage-reconcile"),
-  "mail-retention": backend("B11", "interval", "maintenance", 60_000, "unguarded", "next-tick"),
+  "mail-retention": backend(
+    "B11",
+    "interval",
+    "maintenance",
+    60_000,
+    "skip-while-running",
+    "next-tick",
+  ),
   // Lease duration 30 s, swept every 15 s.
   "activity-lease-expiry": backend(
     "B12",
@@ -313,20 +327,23 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "lease-expiry",
   ),
   "tab-cleanup": backend("B13", "interval", "maintenance", 60_000, "join", "storage-reconcile"),
+  // Step 08 keyed supervision: one attempt is one pipeline's pass (every
+  // 1.5 s per pipeline with an obligation) or a 30 s safety discovery.
   "build-supervisor-tick": backend(
     "B14",
     "interval",
     "progress",
     1_500,
-    "trailing-rerun",
+    "per-key-serial",
     "storage-reconcile",
   ),
+  // Step 08 keyed supervision: per-workflow 1 s passes, 30 s safety discovery.
   "looped-review-tick": backend(
     "B15",
     "interval",
     "progress",
     1_000,
-    "trailing-rerun",
+    "per-key-serial",
     "storage-reconcile",
   ),
   "looped-review-lease-renewal": backend(
@@ -337,8 +354,9 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "unguarded",
     "lease-expiry",
   ),
-  // Adaptive due scheduler by default (reconcile scan + per-workflow due times);
-  // the legacy 1 s tick remains behind `adaptiveScheduling: false`.
+  // Step 08 keyed supervision by default (per-workflow due times, 30 s safety
+  // discovery); the adaptive due scheduler is its rollback and the legacy 1 s
+  // tick remains behind `adaptiveScheduling: false`.
   "multi-review-tick": backend(
     "B16",
     "interval",
@@ -355,12 +373,13 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "unguarded",
     "lease-expiry",
   ),
+  // Step 08 keyed supervision: per-record 1 s passes, 30 s safety discovery.
   "feature-planning-tick": backend(
     "B17",
     "interval",
     "progress",
     1_000,
-    "trailing-rerun",
+    "per-key-serial",
     "storage-reconcile",
   ),
   "validation-heartbeat": backend(

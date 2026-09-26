@@ -58,6 +58,7 @@ import {
 import type { BuildStepSelection, CommandInvoker } from "./build-pipeline-service-helpers.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
+  DEFAULT_WORKFLOW_DISCOVERY_MS,
   KeyedWorkflowSupervisor,
   keyedSchedulingEnabled,
   type KeyedWorkflowOwner,
@@ -444,7 +445,7 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       domain: "build-pipeline",
       kind: "build-supervisor-tick",
       progressIntervalMs: BUILD_PIPELINE_PROGRESS_MS,
-      discoveryIntervalMs: this.options.discoveryIntervalMs ?? BUILD_PIPELINE_PROGRESS_MS,
+      discoveryIntervalMs: this.options.discoveryIntervalMs ?? DEFAULT_WORKFLOW_DISCOVERY_MS,
       discover: () => discoverBuildPipelines(this.storage),
       advance: async (pass) => {
         this.passTriggers.set(pass.key, pass.trigger);

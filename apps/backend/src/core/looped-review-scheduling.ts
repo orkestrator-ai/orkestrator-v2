@@ -82,6 +82,17 @@ export async function discoverLoopedReviews(input: {
       if (!adopted) continue;
       record = adopted;
       valid = isLoopedReviewWorkflow(record.snapshot);
+      // Adoption refused (a foreign controller still holds the lease): keep
+      // it as a key so it is retried on the progress cadence, not the
+      // safety interval.
+      if (!valid && legacyLoopedReviewAdoption(record.snapshot)) {
+        entries.push({
+          key: record.id,
+          obligation: "legacy-adoption",
+          target: record.environmentId,
+        });
+        continue;
+      }
     }
     if (!valid) continue;
     validated.set(record.id, record.revision);

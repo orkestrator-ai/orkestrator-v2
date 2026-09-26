@@ -14,6 +14,8 @@ import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity
 const ACTIVITY_JOB_MS = 2_000;
 /** Elapsed maintenance deadline (coordinator repair, retention, tab cleanup). */
 const MAINTENANCE_JOB_MS = 60_000;
+/** Safety cadence for rename intent when none is pending. */
+const RENAME_SAFETY_MS = 30_000;
 import {
   createMcpRuntimeProbe,
   mcpRolloutLoader,
@@ -1082,10 +1084,15 @@ export class OrkestratorBackend {
           priority: "progress",
           intervalMs: ACTIVITY_JOB_MS,
           fixedRate: true,
+          // Rename intent (task 9): every 2 s while an environment carries
+          // one, else a 30 s safety pass; an environment change wakes it.
           run: async () => {
-            await observeSweepStep("pending-rename-reconcile", () =>
+            const result = (await observeSweepStep("pending-rename-reconcile", () =>
               reconcilePendingEnvironmentRenames({}, this.context),
-            );
+            )) as { pending?: unknown } | undefined;
+            return typeof result?.pending === "number" && result.pending === 0
+              ? RENAME_SAFETY_MS
+              : undefined;
           },
           onError: warn("reconcile pending environment renames"),
         });

@@ -850,6 +850,19 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
    * interactive prompt should not wait for that timer. The worker owns all
    * provider I/O and its per-queue task map coalesces concurrent notifications.
    */
+  /** Step 08 diagnostics for the keyed launch/queue driver (`null` on rollback). */
+  schedulingStatus() {
+    return this.queueScheduling?.status() ?? null;
+  }
+
+  wakeEnvironment(environmentId: string): void {
+    this.queueScheduling?.wakeEnvironment(environmentId);
+  }
+
+  async reconcileScheduling() {
+    return this.queueScheduling ? this.queueScheduling.reconcileNow() : null;
+  }
+
   notifyPromptQueueChanged(queueKey: string): void {
     if (this.stopped || !nonBlank(queueKey)) return;
     // Index the key so a busy session's queue keeps its 2 s due check.

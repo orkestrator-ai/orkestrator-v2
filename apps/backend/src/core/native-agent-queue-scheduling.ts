@@ -169,4 +169,9 @@ export class NativeQueueScheduling {
   status(): WorkflowSupervisorStatus {
     return this.queues.status();
   }
+
+  /** Full diagnostic reconciliation of the queue index. */
+  reconcileNow() {
+    return this.queues.reconcileNow();
+  }
 }

@@ -31,7 +31,7 @@ import { NATIVE_AGENT_SESSION_VERSION } from "./models.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { NativeAgentObservationBroker } from "./native-agent-observation.js";
 import { NativeQueueScheduling } from "./native-agent-queue-scheduling.js";
-import { keyedSchedulingEnabled } from "./workflow-supervisor.js";
+import { DEFAULT_WORKFLOW_DISCOVERY_MS, keyedSchedulingEnabled } from "./workflow-supervisor.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
 type PipelineSessionPhase = shared.PipelineSessionPhase;
 type TaskSnapshotImage = shared.TaskSnapshotImage;
@@ -599,7 +599,13 @@ export abstract class NativeAgentServiceBase {
         },
         {
           progressIntervalMs: progressMs,
-          discoveryIntervalMs: this.options.queueDiscoveryIntervalMs ?? progressMs,
+          // Safety discovery. A test that shortens the launch cadence keeps
+          // discovery at that cadence; production uses the 30 s interval.
+          discoveryIntervalMs:
+            this.options.queueDiscoveryIntervalMs ??
+            (Number.isFinite(launchReconcileIntervalMs)
+              ? progressMs
+              : DEFAULT_WORKFLOW_DISCOVERY_MS),
           ...(this.options.queueSchedulerClock
             ? {
                 now: this.options.queueSchedulerClock.now,

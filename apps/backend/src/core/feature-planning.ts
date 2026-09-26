@@ -50,6 +50,7 @@ import {
 } from "./build-pipeline-service-helpers.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
+  DEFAULT_WORKFLOW_DISCOVERY_MS,
   KeyedWorkflowSupervisor,
   keyedSchedulingEnabled,
   type KeyedWorkflowOwner,
@@ -439,7 +440,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
       domain: "feature-planning",
       kind: "feature-planning-tick",
       progressIntervalMs: pollMs,
-      discoveryIntervalMs: this.options.discoveryIntervalMs ?? pollMs,
+      discoveryIntervalMs: this.options.discoveryIntervalMs ?? DEFAULT_WORKFLOW_DISCOVERY_MS,
       discover: () => discoverFeaturePlanning(this.storage),
       advance: (pass) => this.runLocked(pass.key),
       admission: this.options.workflowAdmission ?? null,

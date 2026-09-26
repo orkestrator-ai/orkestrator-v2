@@ -6,6 +6,11 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { useProjectStore } from "@/stores";
 import { SYSTEM_USAGE_STALE_AFTER_MS } from "./AgentInfoButton.panels";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import {
+  installFakeReadCoordinator,
+  type FakeReadEnvironment,
+} from "@/lib/testing/read-coordinator";
 import {
   ENVIRONMENT_PROCESS_POLL_INTERVAL_MS,
   SYSTEM_USAGE_POLL_INTERVAL_MS,
@@ -126,7 +131,17 @@ function listedEnvironmentNames(): string[] {
 }
 
 describe("SystemUsageIndicator", () => {
+  let reads: FakeReadEnvironment;
+
+  /** Runs the coordinator's timers for `ms` inside React's act. */
+  async function advance(ms: number) {
+    await act(async () => {
+      await reads.clock.advance(ms);
+    });
+  }
+
   beforeEach(() => {
+    reads = installFakeReadCoordinator();
     nativeInvokeMock.mockReset();
     nativeInvokeMock.mockImplementation(async (command: string) => {
       if (command === "get_system_usage") return usageSnapshot();
@@ -149,6 +164,7 @@ describe("SystemUsageIndicator", () => {
 
   afterEach(() => {
     cleanup();
+    resetReadCoordinatorForTests();
     useProjectStore.setState({ projects: [] });
   });
 
@@ -187,31 +203,55 @@ describe("SystemUsageIndicator", () => {
       throw new Error("backend unavailable");
     });
 
-    const timers: Array<() => unknown> = [];
-    const originalSetTimeout = window.setTimeout;
-    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
-      if (timeout === SYSTEM_USAGE_POLL_INTERVAL_MS && typeof handler === "function") {
-        timers.push(() => handler());
-        return 9_000 + timers.length;
+    render(<SystemUsageIndicator />);
+    await waitFor(() => expect(calls).toBe(1));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Central processing unit (CPU) usage: 10%")).toBeTruthy(),
+    );
+
+    await advance(SYSTEM_USAGE_POLL_INTERVAL_MS - 1);
+    expect(calls).toBe(1);
+    await advance(1);
+    expect(calls).toBe(2);
+    // The rejected read must not blank a reading the backend already gave us.
+    expect(screen.getByLabelText("Central processing unit (CPU) usage: 10%")).toBeTruthy();
+    expect(screen.getByLabelText("Random-access memory (RAM) usage: 20%")).toBeTruthy();
+  });
+
+  test("a failed or hung refresh never refreshes the sample time; it ages into stale", async () => {
+    let calls = 0;
+    const hung = new Promise<never>(() => {});
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command !== "get_system_usage") return undefined;
+      calls += 1;
+      if (calls === 1) {
+        return usageSnapshot({ cpuPercent: 10, sampledAt: "2026-09-25T10:00:00.000Z" });
       }
-      return originalSetTimeout(handler, timeout, ...args);
-    }) as typeof window.setTimeout;
+      if (calls === 2) throw new Error("backend unavailable");
+      return hung;
+    });
+    render(<SystemUsageIndicator />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Central processing unit (CPU) usage: 10%")).toBeTruthy(),
+    );
+    const trigger = screen.getByRole("button", { name: "Open environment process usage" });
+    expect(trigger.getAttribute("data-sampled-at")).toBe("2026-09-25T10:00:00.000Z");
+    expect(trigger.getAttribute("title") ?? "").not.toContain("stale");
 
-    try {
-      render(<SystemUsageIndicator />);
-      await waitFor(() => expect(calls).toBe(1));
-      expect(screen.getByLabelText("Central processing unit (CPU) usage: 10%")).toBeTruthy();
+    await advance(SYSTEM_USAGE_POLL_INTERVAL_MS);
+    expect(calls).toBe(2);
+    // Failed: the same sample, still inside its freshness window.
+    expect(trigger.getAttribute("data-sampled-at")).toBe("2026-09-25T10:00:00.000Z");
+    expect(trigger.getAttribute("data-stale")).toBeNull();
 
-      await act(async () => {
-        timers.shift()?.();
-      });
-      await waitFor(() => expect(calls).toBe(2));
-      // The rejected read must not blank a reading the backend already gave us.
-      expect(screen.getByLabelText("Central processing unit (CPU) usage: 10%")).toBeTruthy();
-      expect(screen.getByLabelText("Random-access memory (RAM) usage: 20%")).toBeTruthy();
-    } finally {
-      window.setTimeout = originalSetTimeout;
-    }
+    // The retry hangs: nothing changes state, yet the sample must age out on
+    // time rather than keep claiming to be current.
+    await advance(SYSTEM_USAGE_POLL_INTERVAL_MS);
+    expect(calls).toBe(3);
+    await advance(1);
+    expect(trigger.getAttribute("data-stale")).toBe("true");
+    expect(trigger.getAttribute("data-sampled-at")).toBe("2026-09-25T10:00:00.000Z");
+    expect(screen.getByLabelText("Central processing unit (CPU) usage: —")).toBeTruthy();
   });
 
   test("opens a process panel from the meters and groups rows by environment", async () => {
@@ -428,33 +468,53 @@ describe("SystemUsageIndicator", () => {
       });
     });
 
-    const timers: Array<() => unknown> = [];
-    const originalSetTimeout = window.setTimeout;
-    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
-      if (timeout === ENVIRONMENT_PROCESS_POLL_INTERVAL_MS && typeof handler === "function") {
-        timers.push(() => handler());
-        return 8_000 + timers.length;
+    render(<SystemUsageIndicator />);
+    await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());
+    expect(processCalls).toBe(0);
+
+    openPanel();
+    await waitFor(() => expect(screen.getByText("node")).toBeTruthy());
+    expect(processCalls).toBe(1);
+
+    await advance(ENVIRONMENT_PROCESS_POLL_INTERVAL_MS);
+    await waitFor(() => expect(screen.getByText("bun")).toBeTruthy());
+    expect(processCalls).toBe(2);
+
+    // Closing the panel removes the process demand entirely; the host meters
+    // keep their own five-second cadence.
+    fireEvent.click(screen.getAllByRole("button", { name: "Close environment process usage" })[0]!);
+    await advance(ENVIRONMENT_PROCESS_POLL_INTERVAL_MS * 4);
+    expect(processCalls).toBe(2);
+  });
+
+  test("the process list pauses while the document is hidden and reconciles once on return", async () => {
+    let processCalls = 0;
+    let usageCalls = 0;
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_system_usage") {
+        usageCalls += 1;
+        return usageSnapshot();
       }
-      return originalSetTimeout(handler, timeout, ...args);
-    }) as typeof window.setTimeout;
+      if (command !== "get_environment_process_usage") return undefined;
+      processCalls += 1;
+      return processSnapshot();
+    });
 
-    try {
-      render(<SystemUsageIndicator />);
-      await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());
-      expect(processCalls).toBe(0);
+    render(<SystemUsageIndicator />);
+    openPanel();
+    await waitFor(() => expect(screen.getByText("node")).toBeTruthy());
+    expect(processCalls).toBe(1);
+    expect(usageCalls).toBe(1);
 
-      openPanel();
-      await waitFor(() => expect(screen.getByText("node")).toBeTruthy());
-      expect(processCalls).toBe(1);
+    act(() => reads.document.setVisibility("hidden"));
+    await advance(60_000);
+    expect(processCalls).toBe(1);
+    expect(usageCalls).toBe(1);
 
-      await act(async () => {
-        timers.shift()?.();
-      });
-      await waitFor(() => expect(screen.getByText("bun")).toBeTruthy());
-      expect(processCalls).toBe(2);
-    } finally {
-      window.setTimeout = originalSetTimeout;
-    }
+    act(() => reads.document.setVisibility("visible"));
+    await advance(2_000);
+    expect(processCalls).toBe(2);
+    expect(usageCalls).toBe(2);
   });
 
   test("formats process RAM as whole megabytes or one-decimal gigabytes", () => {
@@ -508,20 +568,28 @@ describe("SystemUsageIndicator", () => {
   });
 
   test("shows Data unavailable when the last process snapshot is stale", async () => {
+    let processCalls = 0;
     nativeInvokeMock.mockImplementation(async (command: string) => {
       if (command === "get_system_usage") return usageSnapshot();
       if (command === "get_environment_process_usage") {
-        return processSnapshot({
-          sampledAt: new Date(Date.now() - SYSTEM_USAGE_STALE_AFTER_MS - 1_000).toISOString(),
-        });
+        processCalls += 1;
+        if (processCalls > 1) throw new Error("ps unavailable");
+        return processSnapshot();
       }
       return undefined;
     });
 
     render(<SystemUsageIndicator />);
     openPanel();
+    await waitFor(() => expect(screen.getByText("node")).toBeTruthy());
+    expect(screen.queryByRole("status")).toBeNull();
+    // Every refresh fails; the retained list ages past the freshness window.
+    await advance(SYSTEM_USAGE_STALE_AFTER_MS + 1);
+    expect(processCalls).toBeGreaterThan(1);
     await waitFor(() =>
-      expect(screen.getByRole("status").textContent).toContain("Data unavailable"),
+      expect(screen.getAllByRole("status").map((status) => status.textContent)).toContain(
+        "Data unavailable",
+      ),
     );
     expect(screen.getByText("node")).toBeTruthy();
     expect(screen.getAllByText("117 MB")).toHaveLength(2);
@@ -535,57 +603,26 @@ describe("SystemUsageIndicator", () => {
       return usageSnapshot({ cpuPercent: 10, ramPercent: 20 });
     });
 
-    const timers = new Map<number, () => unknown>();
-    let nextId = 9_000;
-    const originalSetTimeout = window.setTimeout;
-    const originalClearTimeout = window.clearTimeout;
-    const originalVisibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
-    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
-      if (timeout === SYSTEM_USAGE_POLL_INTERVAL_MS && typeof handler === "function") {
-        const id = (nextId += 1);
-        timers.set(id, () => handler());
-        return id;
-      }
-      return originalSetTimeout(handler, timeout, ...args);
-    }) as typeof window.setTimeout;
-    window.clearTimeout = ((id?: number) => {
-      if (typeof id === "number" && timers.delete(id)) return;
-      return originalClearTimeout(id);
-    }) as typeof window.clearTimeout;
+    const { unmount } = render(<SystemUsageIndicator />);
+    await waitFor(() => expect(calls).toBe(1));
+    const scheduled = () =>
+      reads.coordinator.getDiagnostics().entries.filter((entry) => entry.timerDueAt !== null)
+        .length;
+    expect(scheduled()).toBe(1);
 
-    try {
-      const { unmount } = render(<SystemUsageIndicator />);
-      await waitFor(() => expect(calls).toBe(1));
-      expect(timers.size).toBe(1);
+    act(() => reads.document.setVisibility("hidden"));
+    expect(scheduled()).toBe(0);
+    await advance(30_000);
+    expect(calls).toBe(1);
 
-      Object.defineProperty(document, "visibilityState", {
-        configurable: true,
-        get: () => "hidden",
-      });
-      act(() => {
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
-      expect(timers.size).toBe(0);
+    act(() => reads.document.setVisibility("visible"));
+    await advance(2_000);
+    expect(calls).toBe(2);
 
-      Object.defineProperty(document, "visibilityState", {
-        configurable: true,
-        get: () => "visible",
-      });
-      await act(async () => {
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
-      await waitFor(() => expect(calls).toBe(2));
-
-      unmount();
-      expect(timers.size).toBe(0);
-      expect(calls).toBe(2);
-    } finally {
-      window.setTimeout = originalSetTimeout;
-      window.clearTimeout = originalClearTimeout;
-      if (originalVisibility)
-        Object.defineProperty(document, "visibilityState", originalVisibility);
-      else delete (document as { visibilityState?: unknown }).visibilityState;
-    }
+    unmount();
+    expect(scheduled()).toBe(0);
+    await advance(30_000);
+    expect(calls).toBe(2);
   });
 
   test("shows an empty running-environment message when nothing is sampled", async () => {
@@ -618,35 +655,21 @@ describe("SystemUsageIndicator", () => {
       });
     });
 
-    const timers: Array<() => unknown> = [];
-    const originalSetTimeout = window.setTimeout;
-    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
-      if (timeout === ENVIRONMENT_PROCESS_POLL_INTERVAL_MS && typeof handler === "function") {
-        timers.push(() => handler());
-        return 8_000 + timers.length;
-      }
-      return originalSetTimeout(handler, timeout, ...args);
-    }) as typeof window.setTimeout;
+    render(<SystemUsageIndicator />);
+    await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());
 
-    try {
-      render(<SystemUsageIndicator />);
-      await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());
+    openPanel();
+    await waitFor(() => expect(screen.getByLabelText("busy-box processes")).toBeTruthy());
+    expect(listedEnvironmentNames()).toEqual(["busy-box", "warm-box", "quiet-box"]);
+    expect(screen.getAllByText("62%").length).toBeGreaterThan(0);
 
-      openPanel();
-      await waitFor(() => expect(screen.getByLabelText("busy-box processes")).toBeTruthy());
-      expect(listedEnvironmentNames()).toEqual(["busy-box", "warm-box", "quiet-box"]);
-      expect(screen.getAllByText("62%").length).toBeGreaterThan(0);
-
-      await act(async () => {
-        timers.shift()?.();
-      });
-      await waitFor(() => expect(screen.getAllByText("91%").length).toBeGreaterThan(0));
-      expect(listedEnvironmentNames()).toEqual(["busy-box", "warm-box", "quiet-box"]);
-      expect(screen.getAllByText("3%").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("40%").length).toBeGreaterThan(0);
-    } finally {
-      window.setTimeout = originalSetTimeout;
-    }
+    await act(async () => {
+      await reads.clock.advance(ENVIRONMENT_PROCESS_POLL_INTERVAL_MS);
+    });
+    await waitFor(() => expect(screen.getAllByText("91%").length).toBeGreaterThan(0));
+    expect(listedEnvironmentNames()).toEqual(["busy-box", "warm-box", "quiet-box"]);
+    expect(screen.getAllByText("3%").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("40%").length).toBeGreaterThan(0);
   });
 
   test("re-sorts environments by CPU the next time the panel opens", async () => {
@@ -673,8 +696,17 @@ describe("SystemUsageIndicator", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Close environment process usage" })[0]!);
     expect(isPopoverOpen()).toBe(false);
 
+    // Reopening inside the freshness window shows the retained sample without
+    // another enumeration; later it reads afresh.
+    openPanel();
+    await waitFor(() => expect(screen.getByLabelText("alpha-box processes")).toBeTruthy());
+    expect(processCalls).toBe(1);
+    fireEvent.click(screen.getAllByRole("button", { name: "Close environment process usage" })[0]!);
+    await advance(ENVIRONMENT_PROCESS_POLL_INTERVAL_MS);
+
     openPanel();
     await waitFor(() => expect(screen.getAllByText("70%").length).toBeGreaterThan(0));
+    expect(processCalls).toBe(2);
     expect(listedEnvironmentNames()).toEqual(["beta-box", "alpha-box"]);
   });
 
@@ -695,34 +727,20 @@ describe("SystemUsageIndicator", () => {
       return processSnapshot({ environments });
     });
 
-    const timers: Array<() => unknown> = [];
-    const originalSetTimeout = window.setTimeout;
-    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
-      if (timeout === ENVIRONMENT_PROCESS_POLL_INTERVAL_MS && typeof handler === "function") {
-        timers.push(() => handler());
-        return 8_000 + timers.length;
-      }
-      return originalSetTimeout(handler, timeout, ...args);
-    }) as typeof window.setTimeout;
+    render(<SystemUsageIndicator />);
+    openPanel();
+    await waitFor(() => expect(listedEnvironmentNames()).toEqual(["busy-box", "quiet-box"]));
 
-    try {
-      render(<SystemUsageIndicator />);
-      openPanel();
-      await waitFor(() => expect(listedEnvironmentNames()).toEqual(["busy-box", "quiet-box"]));
-
-      await act(async () => {
-        timers.shift()?.();
-      });
-      await waitFor(() => expect(screen.getByLabelText("new-hot-box processes")).toBeTruthy());
-      expect(listedEnvironmentNames()).toEqual([
-        "busy-box",
-        "quiet-box",
-        "new-hot-box",
-        "new-cool-box",
-      ]);
-    } finally {
-      window.setTimeout = originalSetTimeout;
-    }
+    await act(async () => {
+      await reads.clock.advance(ENVIRONMENT_PROCESS_POLL_INTERVAL_MS);
+    });
+    await waitFor(() => expect(screen.getByLabelText("new-hot-box processes")).toBeTruthy());
+    expect(listedEnvironmentNames()).toEqual([
+      "busy-box",
+      "quiet-box",
+      "new-hot-box",
+      "new-cool-box",
+    ]);
   });
 
   test("keeps the first ranking when a later poll returns a single environment", async () => {
@@ -742,36 +760,22 @@ describe("SystemUsageIndicator", () => {
       return processSnapshot({ environments });
     });
 
-    const timers: Array<() => unknown> = [];
-    const originalSetTimeout = window.setTimeout;
-    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
-      if (timeout === ENVIRONMENT_PROCESS_POLL_INTERVAL_MS && typeof handler === "function") {
-        timers.push(() => handler());
-        return 8_000 + timers.length;
-      }
-      return originalSetTimeout(handler, timeout, ...args);
-    }) as typeof window.setTimeout;
+    render(<SystemUsageIndicator />);
+    openPanel();
+    await waitFor(() =>
+      expect(listedEnvironmentNames()).toEqual(["busy-box", "warm-box", "quiet-box"]),
+    );
 
-    try {
-      render(<SystemUsageIndicator />);
-      openPanel();
-      await waitFor(() =>
-        expect(listedEnvironmentNames()).toEqual(["busy-box", "warm-box", "quiet-box"]),
-      );
+    await act(async () => {
+      await reads.clock.advance(ENVIRONMENT_PROCESS_POLL_INTERVAL_MS);
+    });
+    await waitFor(() => expect(listedEnvironmentNames()).toEqual(["warm-box"]));
 
-      await act(async () => {
-        timers.shift()?.();
-      });
-      await waitFor(() => expect(listedEnvironmentNames()).toEqual(["warm-box"]));
-
-      await act(async () => {
-        timers.shift()?.();
-      });
-      await waitFor(() => expect(screen.getAllByText("91%").length).toBeGreaterThan(0));
-      expect(listedEnvironmentNames()).toEqual(["busy-box", "warm-box", "quiet-box"]);
-    } finally {
-      window.setTimeout = originalSetTimeout;
-    }
+    await act(async () => {
+      await reads.clock.advance(ENVIRONMENT_PROCESS_POLL_INTERVAL_MS);
+    });
+    await waitFor(() => expect(screen.getAllByText("91%").length).toBeGreaterThan(0));
+    expect(listedEnvironmentNames()).toEqual(["busy-box", "warm-box", "quiet-box"]);
   });
 
   test("ranks and totals environments from full-set aggregates, not clipped rows", async () => {
@@ -860,18 +864,21 @@ describe("SystemUsageIndicator", () => {
   });
 
   test("shows a header Data unavailable row when host usage is stale without a System heading", async () => {
-    const staleAt = new Date(Date.now() - SYSTEM_USAGE_STALE_AFTER_MS - 1_000).toISOString();
+    let failing = false;
     nativeInvokeMock.mockImplementation(async (command: string) => {
-      if (command === "get_system_usage") return usageSnapshot({ sampledAt: staleAt });
-      if (command === "get_environment_process_usage") {
-        return processSnapshot({ sampledAt: staleAt });
-      }
+      if (failing) throw new Error("backend unavailable");
+      if (command === "get_system_usage") return usageSnapshot();
+      if (command === "get_environment_process_usage") return processSnapshot();
       return undefined;
     });
 
     render(<SystemUsageIndicator />);
-    await waitFor(() => expect(screen.getByLabelText("Disk storage usage: —")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());
     openPanel();
+    await waitFor(() => expect(screen.getByLabelText("title-bar-layout processes")).toBeTruthy());
+    failing = true;
+    await advance(SYSTEM_USAGE_STALE_AFTER_MS + 1);
+    expect(screen.getAllByLabelText("Disk storage usage: —").length).toBeGreaterThan(0);
     const dialog = await waitFor(() =>
       screen.getByRole("dialog", { name: "Environment process usage" }),
     );

@@ -20,6 +20,7 @@ export interface InitializeBrowserPreviewsOptions {
   getWindow: () => BrowserWindow | null;
   emitState: (state: BrowserPreviewState) => void;
   emitOpenLink: (event: BrowserPreviewOpenLinkEvent) => void;
+  emitAnnotationEvent?: BrowserPreviewManagerOptions["emitAnnotationEvent"];
   openExternal: (url: string) => void;
   writeClipboardText: (text: string) => void;
   focusAddressBar: (tabId: string) => void;
@@ -85,6 +86,7 @@ export function initializeBrowserPreviews({
   getWindow,
   emitState,
   emitOpenLink,
+  emitAnnotationEvent,
   openExternal,
   writeClipboardText,
   focusAddressBar,
@@ -100,6 +102,7 @@ export function initializeBrowserPreviews({
     getWindow,
     emitState,
     emitOpenLink,
+    ...(emitAnnotationEvent ? { emitAnnotationEvent } : {}),
     openExternal,
     writeClipboardText,
     focusAddressBar,

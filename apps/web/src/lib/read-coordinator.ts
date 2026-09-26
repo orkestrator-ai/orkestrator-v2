@@ -240,6 +240,12 @@ export interface ReadCoordinatorDiagnostics {
 }
 
 export interface ReadCoordinator {
+  /**
+   * The clock `ReadState.observedAt` is measured on. Consumers that judge a
+   * retained value's age (for example "stale after 10 s") use it so a paused
+   * or hung read still ages on the same timeline.
+   */
+  readonly clock: ReadCoordinatorClock;
   subscribe<T>(options: ReadSubscriptionOptions<T>): ReadSubscription<T>;
   /**
    * Records the active backend connection. Changing from one known identity to
@@ -994,6 +1000,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
   };
 
   return {
+    clock,
     subscribe,
     setConnection,
     notifyReconnected: () => requestReconcile("reconnect"),

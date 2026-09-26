@@ -313,9 +313,21 @@ function installBrowserPreviewAnnotationRuntime(sessionId: string): void {
     placePanel(target);
     commentInput.focus();
   };
+  // Terminal transitions announce themselves to the host through the console
+  // (the preview view has no preload). The host treats it as a hint and reads
+  // the authoritative status; the marker must match
+  // BROWSER_PREVIEW_ANNOTATION_EVENT_MARKER below (this function is serialized).
+  const signal = (): void => {
+    try {
+      console.debug("__orkestrator_annotation_event__:" + JSON.stringify({ sessionId, status }));
+    } catch {
+      // The status read fallback still observes the transition.
+    }
+  };
   const cancel = (): void => {
     status = "cancelled";
     removeInspector();
+    signal();
   };
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape") return;
@@ -352,6 +364,7 @@ function installBrowserPreviewAnnotationRuntime(sessionId: string): void {
     panel.style.display = "none";
     tooltip.style.display = "none";
     positionFor(selected);
+    signal();
   });
   cancelButton.addEventListener("click", (event) => {
     event.preventDefault();
@@ -387,6 +400,34 @@ function installBrowserPreviewAnnotationRuntime(sessionId: string): void {
     destroy,
   };
   runtimeWindow[runtimeKey] = runtime;
+}
+
+/** Console prefix of a terminal-transition hint from the annotation runtime. */
+export const BROWSER_PREVIEW_ANNOTATION_EVENT_MARKER = "__orkestrator_annotation_event__:";
+
+/**
+ * Parses a console message from the preview page. Only the exact marker and a
+ * bounded, well-formed body qualify; anything else (including a page that
+ * spoofs the marker for another session) is ignored by the caller's session
+ * check, and the status read stays authoritative either way.
+ */
+export function parseBrowserPreviewAnnotationSignal(
+  message: unknown,
+): { sessionId: string; status: "submitted" | "cancelled" } | null {
+  if (typeof message !== "string" || message.length > 512) return null;
+  if (!message.startsWith(BROWSER_PREVIEW_ANNOTATION_EVENT_MARKER)) return null;
+  try {
+    const parsed: unknown = JSON.parse(
+      message.slice(BROWSER_PREVIEW_ANNOTATION_EVENT_MARKER.length),
+    );
+    if (!parsed || typeof parsed !== "object") return null;
+    const { sessionId, status } = parsed as Record<string, unknown>;
+    if (typeof sessionId !== "string" || !sessionId) return null;
+    if (status !== "submitted" && status !== "cancelled") return null;
+    return { sessionId, status };
+  } catch {
+    return null;
+  }
 }
 
 export function browserPreviewAnnotationStartScript(sessionId: string): string {

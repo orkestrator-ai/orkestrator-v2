@@ -1,3 +1,4 @@
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type {
@@ -73,7 +74,10 @@ const data = {
 beforeEach(() => {
   useMultiReviewStore.setState({ workflows: new Map() });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetReadCoordinatorForTests();
+});
 
 describe("conditional reviewer transcript reads", () => {
   test("an unchanged answer keeps the shown messages and refreshes the status", () => {
@@ -84,6 +88,24 @@ describe("conditional reviewer transcript reads", () => {
     );
     expect(merged.messages).toBe(previous.messages);
     expect(merged.stalledSince).toBe(STARTED_AT);
+  });
+
+  test("an unchanged answer with unchanged reviewer state keeps the same object", () => {
+    const previous = transcript();
+    const same = mergeMultiReviewReviewerTranscript(
+      previous,
+      transcript({ transcript: "unchanged", messages: [] }),
+    );
+    // No new identity: the message projection is not rebuilt on each poll.
+    expect(same).toBe(previous);
+    // Reviewer or workflow state that moved without new text still renders.
+    const moved = mergeMultiReviewReviewerTranscript(
+      previous,
+      transcript({ transcript: "unchanged", messages: [], workflowPhase: "consolidating" }),
+    );
+    expect(moved).not.toBe(previous);
+    expect(moved.workflowPhase).toBe("consolidating");
+    expect(moved.messages).toBe(previous.messages);
   });
 
   test("a snapshot replaces the list, and an old backend's response is a snapshot", () => {

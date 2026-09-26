@@ -402,7 +402,8 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   ),
   // Demand-driven by clients (title bar 5 s); concurrent reads join.
   "system-usage-sample": backend("C08", "read", "interactive", 5_000, "join", "none"),
-  "process-usage": backend("C08", "read", "interactive", 3_000, "unguarded", "none"),
+  // Open process panels only (3 s); concurrent reads from every client join.
+  "process-usage": backend("C08", "read", "interactive", 3_000, "join", "none"),
   "opencode-reconnect": backend(
     "B22",
     "event",
@@ -448,6 +449,9 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "join",
     "snapshot-rehydrate",
   ),
+  // Step 09: C05–C07 are scheduled by the read coordinator (hidden pause,
+  // reconcile on return); reads are conditional (source token, byte offsets)
+  // and init-log tails are shared across clients by the backend.
   "client-reviewer-transcript": external(
     "renderer",
     "C05",
@@ -472,16 +476,17 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "interval",
     "interactive",
     1_000,
-    "skip-while-running",
+    "join",
     "snapshot-rehydrate",
   ),
+  // One read-coordinator key shared by every host-meter consumer (step 09).
   "client-system-meters": external(
     "renderer",
     "C08",
     "interval",
     "interactive",
     5_000,
-    "skip-while-running",
+    "join",
     "none",
   ),
   "client-docker-availability": external(
@@ -499,18 +504,24 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "interval",
     "discovery",
     30_000,
-    "unguarded",
+    // Step 09: young in-flight probes are joined; only stalled ones superseded.
+    "join",
     "none",
   ),
+  // Step 09: coordinator view is event-led (scoped `coordinator` changes,
+  // conditional reads, resource-sync safety checks); the 60 s cadence is the
+  // repository-status probe (and the full poll kept for older backends).
   "client-coordinator-panel": external(
     "renderer",
     "C11",
-    "interval",
+    "event",
     "interactive",
     60_000,
-    "unguarded",
+    "join",
     "snapshot-rehydrate",
   ),
+  // Step 09: the 3 s cursor check runs through the read coordinator (hidden
+  // pause, reconcile on return); a longer quiet interval is not yet qualified.
   "client-design-canvas": external(
     "renderer",
     "C12",
@@ -520,6 +531,8 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "trailing-rerun",
     "snapshot-rehydrate",
   ),
+  // Step 09: terminal native events plus a 1 s fallback on desktops that
+  // report operation ids; older desktops keep the 150 ms poll listed here.
   "client-browser-annotation": external(
     "renderer",
     "C13",
@@ -535,7 +548,8 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "interval",
     "interactive",
     1_500,
-    "unguarded",
+    // Step 09: read-coordinator key; one read in flight, pending logins only.
+    "join",
     "snapshot-rehydrate",
   ),
   "bridge-sse-keepalive": external(

@@ -1,7 +1,10 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, mock, test } from "bun:test";
 import { BrowserPreviewManager } from "../../../apps/desktop/electron/browser-preview-manager";
-import { BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT } from "../../../apps/desktop/electron/browser-preview-annotation-script";
+import {
+  BROWSER_PREVIEW_ANNOTATION_EVENT_MARKER,
+  BROWSER_PREVIEW_ANNOTATION_STATUS_SCRIPT,
+} from "../../../apps/desktop/electron/browser-preview-annotation-script";
 import type { ContextMenuParams, MenuItemConstructorOptions } from "electron";
 
 class FakeWebContents extends EventEmitter {
@@ -77,6 +80,7 @@ class FakeWebContents extends EventEmitter {
 function createHarness(
   options: {
     loadURLImplementation?: (url: string) => Promise<void>;
+    emitAnnotationEvent?: (event: unknown) => void;
   } = {},
 ) {
   const createHarnessOptions = options;
@@ -138,6 +142,9 @@ function createHarness(
     openExternal,
     writeClipboardText,
     focusAddressBar,
+    ...(options.emitAnnotationEvent
+      ? { emitAnnotationEvent: options.emitAnnotationEvent as never }
+      : {}),
   });
   return {
     manager,
@@ -355,9 +362,8 @@ describe("BrowserPreviewManager", () => {
     const contents = harness.views[0]!.webContents;
     const element = annotationElementDetails();
 
-    await expect(harness.manager.startAnnotation(input.tabId)).resolves.toEqual({
-      status: "active",
-    });
+    const started = await harness.manager.startAnnotation(input.tabId);
+    expect(started).toEqual({ status: "active", operationId: expect.any(String) });
     contents.annotationStatus = JSON.stringify({
       status: "submitted",
       comment: "Make this action clearer",
@@ -368,6 +374,7 @@ describe("BrowserPreviewManager", () => {
       status: "submitted",
       comment: "Make this action clearer",
       element,
+      operationId: started.operationId,
       screenshotDataUrl: "data:image/png;base64,c2NyZWVuc2hvdA==",
     });
     expect(contents.capturePage).toHaveBeenCalledTimes(1);
@@ -405,6 +412,7 @@ describe("BrowserPreviewManager", () => {
 
     await expect(harness.manager.getAnnotationStatus(input.tabId)).resolves.toEqual({
       status: "inactive",
+      operationId: expect.any(String),
     });
     expect(contents.capturePage).not.toHaveBeenCalled();
     expect(contents.executeJavaScript).toHaveBeenCalledTimes(3);
@@ -425,6 +433,7 @@ describe("BrowserPreviewManager", () => {
 
     await expect(harness.manager.getAnnotationStatus(input.tabId)).resolves.toEqual({
       status: "inactive",
+      operationId: expect.any(String),
     });
     expect(contents.capturePage).not.toHaveBeenCalled();
   });
@@ -506,8 +515,42 @@ describe("BrowserPreviewManager", () => {
     await expect(harness.manager.getAnnotationStatus(input.tabId)).resolves.toEqual({
       status: "error",
       message: "The selected element contains too much page data. Try a smaller element.",
+      operationId: expect.any(String),
     });
     expect(contents.executeJavaScript).toHaveBeenCalledTimes(3);
+  });
+
+  test("forwards only the running operation's terminal console hint", async () => {
+    const emitAnnotationEvent = mock((_event: unknown) => undefined);
+    const harness = createHarness({ emitAnnotationEvent });
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+    const hint = (sessionId: string, status: string) => ({
+      message: `${BROWSER_PREVIEW_ANNOTATION_EVENT_MARKER}${JSON.stringify({ sessionId, status })}`,
+    });
+
+    // No operation yet: a page cannot announce one.
+    contents.emit("console-message", hint("forged", "submitted"));
+    expect(emitAnnotationEvent).not.toHaveBeenCalled();
+
+    const started = await harness.manager.startAnnotation(input.tabId);
+    const operationId = started.operationId!;
+    contents.emit("console-message", hint("forged", "submitted"));
+    contents.emit("console-message", { message: "ordinary page log" });
+    contents.emit("console-message", hint(operationId, "active"));
+    expect(emitAnnotationEvent).not.toHaveBeenCalled();
+
+    contents.emit("console-message", hint(operationId, "submitted"));
+    expect(emitAnnotationEvent).toHaveBeenCalledWith({
+      tabId: input.tabId,
+      operationId,
+      status: "submitted",
+    });
+
+    // Once cancelled by the host, a late hint for that operation is dropped.
+    await harness.manager.cancelAnnotation(input.tabId);
+    contents.emit("console-message", hint(operationId, "cancelled"));
+    expect(emitAnnotationEvent).toHaveBeenCalledTimes(1);
   });
 
   test("offers Interrogate and inspects the clicked element in that preview", async () => {

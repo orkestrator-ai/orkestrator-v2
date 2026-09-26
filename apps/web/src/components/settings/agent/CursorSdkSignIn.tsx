@@ -9,6 +9,7 @@
  * `target="_blank"`, so its only fallback is to hand the user the URL.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { Check, Copy, Loader2, LogIn, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { writeText } from "@/lib/native/clipboard";
@@ -63,40 +64,48 @@ export function CursorSdkSignIn({ credentialRevision, onCredentialChange }: Curs
     };
   }, []);
 
-  const refresh = useCallback(async () => {
-    try {
-      const next = await cursorSdkLoginStatus();
-      if (!mounted.current) return next;
-      if (next) {
-        const key = credentialStateKey(next);
-        const previous = credentialStateRef.current;
-        credentialStateRef.current = key;
-        setProgress(next);
-        setError(null);
-        // A failed attempt that leaves the resolved credential untouched is not
-        // a change; only a terminal state that actually moved it is.
-        if (previous !== undefined && previous !== key && next.state !== "pending") {
-          onCredentialChangeRef.current?.();
-        }
-      }
-      return next;
-    } catch (cause) {
-      if (mounted.current) setError(cause instanceof Error ? cause.message : String(cause));
-      return null;
+  const apply = useCallback((next: CursorSdkLoginProgress | null | undefined) => {
+    if (!mounted.current || !next) return;
+    const key = credentialStateKey(next);
+    const previous = credentialStateRef.current;
+    credentialStateRef.current = key;
+    setProgress(next);
+    setError(null);
+    // A failed attempt that leaves the resolved credential untouched is not
+    // a change; only a terminal state that actually moved it is.
+    if (previous !== undefined && previous !== key && next.state !== "pending") {
+      onCredentialChangeRef.current?.();
     }
   }, []);
+
+  // Login status is observed through the read coordinator: one read in flight
+  // (every caller joins or queues behind it, so answers apply in order), a
+  // completion-scheduled 1.5 s cadence only while a login is pending, paused
+  // while the document is hidden. Closing settings removes this observation
+  // only; the backend owns the login until its deadline or a cancel.
+  const loginPending = progress?.state === "pending";
+  const status = useCoordinatedRead<CursorSdkLoginProgress | null>({
+    key: { resource: "cursor-sdk-login", target: "backend" },
+    readOnSubscribe: false,
+    demand: { intervalMs: loginPending ? POLL_INTERVAL_MS : null, priority: "standard" },
+    read: () => cursorSdkLoginStatus(),
+    onState: (state) => {
+      if (state.status === "current") apply(state.value);
+      else if (state.status === "error" && mounted.current) {
+        const cause = state.error;
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    },
+  });
+  const statusRefresh = status.refresh;
+  /** Explicit read that starts after the call (after a start, cancel or sign-out). */
+  const refresh = useCallback(async () => {
+    await statusRefresh();
+  }, [statusRefresh]);
 
   useEffect(() => {
     void refresh();
   }, [credentialRevision, refresh]);
-
-  // Polls only while a login is actually in flight, so an idle settings pane
-  // costs nothing.
-  useEffect(() => {
-    if (progress?.state !== "pending") return;
-    const timer = setInterval(() => void refresh(), POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [progress?.state, refresh]);
 
   const signIn = async () => {
     setBusy(true);

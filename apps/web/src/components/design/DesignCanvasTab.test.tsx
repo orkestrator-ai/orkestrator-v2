@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import type { DesignCanvas, DesignHistoryStatus } from "@orkestrator/protocol/design-canvas";
 
 const canvasId = "00000000-0000-4000-8000-000000000001";
@@ -43,7 +45,7 @@ const getChanges = mock(
 );
 mock.module("./design-client", () => ({ designAction, getCanvas, getCanvasState, getChanges }));
 
-const { DesignCanvasTab } = await import("./DesignCanvasTab");
+const { DESIGN_CANVAS_CURSOR_CHECK_MS, DesignCanvasTab } = await import("./DesignCanvasTab");
 const originalOrkestrator = window.orkestrator;
 const originalResizeObserver = globalThis.ResizeObserver;
 
@@ -81,6 +83,7 @@ describe("DesignCanvasTab history", () => {
 
   afterEach(() => {
     cleanup();
+    resetReadCoordinatorForTests();
     window.orkestrator = originalOrkestrator;
     globalThis.ResizeObserver = originalResizeObserver;
   });
@@ -217,5 +220,51 @@ describe("DesignCanvasTab history", () => {
 
     expect(event.defaultPrevented).toBe(true);
     await waitFor(() => expect(designAction).toHaveBeenCalledTimes(1));
+  });
+
+  test("the cursor safety check keeps 3 s while visible, pauses hidden and repairs a missed hint on return", async () => {
+    const reads = installFakeReadCoordinator();
+    try {
+      const view = render(
+        <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+      );
+      await waitFor(() => expect(getChanges).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await reads.clock.advance(DESIGN_CANVAS_CURSOR_CHECK_MS * 2);
+      });
+      expect(getChanges).toHaveBeenCalledTimes(3);
+
+      act(() => reads.document.setVisibility("hidden"));
+      // A change lands while hidden and its final hint is lost.
+      canvas = { ...canvas, revision: canvas.revision + 1 };
+      await act(async () => {
+        await reads.clock.advance(DESIGN_CANVAS_CURSOR_CHECK_MS * 20);
+      });
+      expect(getChanges).toHaveBeenCalledTimes(3);
+      const snapshots = getCanvasState.mock.calls.length;
+
+      act(() => reads.document.setVisibility("visible"));
+      await act(async () => {
+        await reads.clock.advance(1_000);
+      });
+      await waitFor(() => expect(getChanges).toHaveBeenCalledTimes(4));
+      await waitFor(() => expect(getCanvasState.mock.calls.length).toBe(snapshots + 1));
+
+      // An inactive canvas schedules nothing.
+      view.rerender(
+        <DesignCanvasTab
+          canvasId={canvasId}
+          environmentId="env-1"
+          isActive={false}
+          ownsGlobalShortcuts
+        />,
+      );
+      await act(async () => {
+        await reads.clock.advance(DESIGN_CANVAS_CURSOR_CHECK_MS * 10);
+      });
+      expect(getChanges).toHaveBeenCalledTimes(4);
+    } finally {
+      resetReadCoordinatorForTests();
+    }
   });
 });

@@ -808,6 +808,24 @@ describe("unexpected exit", () => {
     expect(health.lastExitSignal).toBe("SIGSEGV");
   });
 
+  test("logs how an unexpected exit happened, but not an intentional restart", async () => {
+    const h = harness();
+    const error = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await h.supervisor.ensureReady();
+      await h.supervisor.restartNow("test reason");
+      expect(error.mock.calls.flat().map(String).join("\n")).not.toContain("exited unexpectedly");
+
+      h.children[1]!.exit(null, "SIGKILL");
+      const output = error.mock.calls.flat().map(String).join("\n");
+      expect(output).toMatch(
+        /\[codex-bridge\]\[app-server:2\] exited unexpectedly \(code=null, signal=SIGKILL, pid=\S+, uptimeMs=\d+\)/,
+      );
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   test("refuses to answer a server request from a dead generation", async () => {
     const h = harness();
     await h.supervisor.ensureReady();

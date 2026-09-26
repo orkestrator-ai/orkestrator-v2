@@ -1,5 +1,6 @@
 import "./design.css";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { Plus, Minus, Save, Download, Layers, MousePointer2, Undo2, Redo2 } from "lucide-react";
 import {
   DESIGN_EVENT,
@@ -18,6 +19,9 @@ import { DesignFrameView, type DesignSelection } from "./DesignFrameView";
 import { DesignInspector } from "./DesignInspector";
 import { DesignFrameBridge } from "./frame-bridge";
 import { LatestMutationQueue } from "./latest-mutation-queue";
+
+/** Backstop cursor check for a missed final change hint (unchanged 3 s cadence). */
+export const DESIGN_CANVAS_CURSOR_CHECK_MS = 3_000;
 
 const EMPTY_HISTORY: DesignHistoryStatus = {
   revision: 0,
@@ -159,17 +163,30 @@ export function DesignCanvasTab({
       void refresh();
     });
     void refresh();
-    const timer = setInterval(() => {
-      void refresh();
-    }, 3000);
     return () => {
       disposed = true;
       sync.current = null;
-      clearInterval(timer);
       unlisten?.();
       reconnect?.();
     };
   }, [canvasId, environmentId, isActive, errorOf]);
+  // The periodic cursor check (a missed final hint's backstop) runs through the
+  // read coordinator: same 3 s cadence while the canvas is active, paused while
+  // the document is hidden and reconciled once on return. Subscribe-before-read
+  // and the cursor/reset protocol above are unchanged; the check only drives
+  // the effect's serialized refresh.
+  const cursorCheckInstance = useId();
+  useCoordinatedRead<void>({
+    key: {
+      resource: "design-canvas-cursor",
+      target: `${environmentId}\u0000${canvasId}`,
+      view: cursorCheckInstance,
+    },
+    enabled: isActive,
+    readOnSubscribe: false,
+    demand: { intervalMs: DESIGN_CANVAS_CURSOR_CHECK_MS, priority: "standard" },
+    read: () => sync.current?.() ?? Promise.resolve(),
+  });
   mutationWorker.current = async (request) => {
     setError(null);
     setNotice("");

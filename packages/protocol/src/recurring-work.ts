@@ -499,6 +499,8 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "join",
     "snapshot-rehydrate",
   ),
+  // Step 09: the 3 s cursor check runs through the read coordinator (hidden
+  // pause, reconcile on return); a longer quiet interval is not yet qualified.
   "client-design-canvas": external(
     "renderer",
     "C12",

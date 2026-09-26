@@ -5762,6 +5762,53 @@ describe("pr monitor commands", () => {
     });
   });
 
+  test("snapshot reads are stamped and answer compact conditional reads", async () => {
+    await withCommands(async (invoke) => {
+      try {
+        await invoke("pr_monitor_watch", { environmentId: "e1", mode: "create-pending" });
+        const stamped = (await invoke("get_pr_monitor_state", {})) as {
+          entries: Array<Record<string, unknown>>;
+          generation: string;
+          revision: number;
+        };
+        expect(isPrMonitorSnapshot(stamped)).toBe(true);
+        expect(typeof stamped.generation).toBe("string");
+        expect(stamped.revision).toBeGreaterThan(0);
+
+        await expect(
+          invoke("get_pr_monitor_state", {
+            knownGeneration: stamped.generation,
+            knownRevision: stamped.revision,
+          }),
+        ).resolves.toEqual({
+          status: "unchanged",
+          generation: stamped.generation,
+          revision: stamped.revision,
+        });
+
+        await invoke("pr_monitor_watch", { environmentId: "e1", mode: "merge-pending" });
+        const changed = (await invoke("get_pr_monitor_state", {
+          knownGeneration: stamped.generation,
+          knownRevision: stamped.revision,
+        })) as { status: string; revision: number; snapshot: { entries: unknown[] } };
+        expect(changed.status).toBe("snapshot");
+        expect(changed.revision).toBeGreaterThan(stamped.revision);
+        expect(changed.snapshot.entries).toEqual([
+          expect.objectContaining({ environmentId: "e1", mode: "merge-pending" }),
+        ]);
+
+        await expect(
+          invoke("get_pr_monitor_state", { knownGeneration: "stale", knownRevision: 1 }),
+        ).resolves.toMatchObject({ status: "reset", reason: "generation" });
+        await expect(
+          invoke("get_pr_monitor_state", { knownGeneration: stamped.generation }),
+        ).resolves.toMatchObject({ status: "reset", reason: "invalid-request" });
+      } finally {
+        shutdownPrMonitorTracking();
+      }
+    });
+  });
+
   test("conflict-resolution refresh intent is durable and backend-only", async () => {
     await withCommands(async (invoke, storage) => {
       try {

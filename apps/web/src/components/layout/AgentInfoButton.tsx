@@ -66,14 +66,13 @@ import {
   forkNativeAgentSession,
   getBuildPipelineSessionProjection,
   getNativeAgentProjection,
-  getSystemUsage,
   performNativeAgentSessionAction,
   performNativeAgentMcpAction,
   signOutNativeAgent,
   stopNativeAgentBackgroundTask,
   updateNativeAgentControls,
 } from "@/lib/backend";
-import type { SystemUsageSnapshot } from "@/lib/backend";
+import { useSystemUsage } from "@/hooks/useSystemUsage";
 import {
   normalizeClaudeMessagesForDisplay,
   normalizeCodexNativeMessage,
@@ -117,6 +116,9 @@ interface ControlUpdateState {
 }
 
 const EMPTY_CLAUDE_TASKS: Record<string, never> = {};
+
+/** Host-meter freshness requested while the agent-information popover is open. */
+export const AGENT_INFO_SYSTEM_USAGE_INTERVAL_MS = 3_000;
 
 interface ActiveNativeSession {
   provider: AgentPlatform;
@@ -195,8 +197,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [runtimeNoticeDialogId, setRuntimeNoticeDialogId] = useState<string | null>(null);
   const [busyState, setBusyState] = useState<SessionActionState | null>(null);
-  const [systemUsage, setSystemUsage] = useState<SystemUsageSnapshot | null>(null);
-  const [systemUsageCheckedAt, setSystemUsageCheckedAt] = useState(() => Date.now());
+  // Joins the title bar's host sample; while open this popover's faster demand
+  // wins, and closing it restores the title bar's cadence.
+  const systemUsage = useSystemUsage({
+    intervalMs: AGENT_INFO_SYSTEM_USAGE_INTERVAL_MS,
+    active: open,
+  });
   const [steerState, setSteerState] = useState<SessionValueState<string>>({
     sessionIdentity: null,
     value: "",
@@ -1005,38 +1011,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     }
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    let active = true;
-    let requestPending = false;
-    let refreshTimer: number | undefined;
-    const refresh = async () => {
-      if (requestPending) return;
-      requestPending = true;
-      try {
-        const snapshot = await getSystemUsage();
-        if (active && snapshot) {
-          setSystemUsage(snapshot);
-          setSystemUsageCheckedAt(Date.now());
-        }
-      } catch {
-        // Resource meters are supplementary. Keep the last authoritative
-        // snapshot if a transient backend request fails.
-        if (active) setSystemUsageCheckedAt(Date.now());
-      } finally {
-        requestPending = false;
-        if (active) {
-          refreshTimer = window.setTimeout(refresh, 3_000);
-        }
-      }
-    };
-    void refresh();
-    return () => {
-      active = false;
-      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
-    };
-  }, [open]);
-
   /*
    * Escape must be *claimed*, not merely observed. All three chat tabs bind a
    * window-level Escape handler that aborts the running turn, guarded only by
@@ -1121,7 +1095,11 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
         </header>
 
         <div className="max-h-[min(76vh,42rem)] overflow-y-auto p-4">
-          <SystemUsagePanel usage={systemUsage} checkedAt={systemUsageCheckedAt} />
+          <SystemUsagePanel
+            usage={systemUsage.sample}
+            stale={systemUsage.stale}
+            sampledAt={systemUsage.sampledAt}
+          />
           {activeSession ? (
             <div className="space-y-5">
               {activeTab &&

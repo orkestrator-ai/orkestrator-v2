@@ -1,5 +1,10 @@
 import { createContext, useContext, useState } from "react";
-import type { ReviewIssue, StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import type {
+  ReviewCoverageGap,
+  ReviewIssue,
+  StructuredReviewFindings,
+  StructuredReviewReport,
+} from "@orkestrator/protocol/structured-review";
 import {
   Braces,
   CheckCircle2,
@@ -183,6 +188,92 @@ function List({
   );
 }
 
+function IssuesSection({ issues }: { issues: readonly ReviewIssue[] }) {
+  return (
+    <Section
+      title={`Issues · ${issues.length}`}
+      icon={<CircleAlert className="size-4 text-amber-400" />}
+    >
+      {issues.length === 0 ? (
+        <EmptyLine>No high-confidence issues were found in the reviewed scope.</EmptyLine>
+      ) : (
+        <ol className="space-y-3">
+          {issues.map((issue, index) => (
+            <li
+              key={`${issue.file}-${issue.line}-${issue.title}-${index}`}
+              className={cn("rounded-lg border p-3.5", severityStyles[issue.severity])}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded bg-background/35 px-1.5 py-0.5 font-mono text-xs font-semibold">
+                  {issue.severity}
+                </span>
+                <span className="text-xs">{issue.confidence}% confidence</span>
+                <span className="text-xs opacity-80">{issue.category}</span>
+                <ReviewModelPills models={issue.reviewModels} />
+              </div>
+              <h4 className="mt-2 text-sm font-semibold text-foreground">
+                {index + 1}. {issue.title}
+              </h4>
+              <p className="mt-1 break-all font-mono text-xs text-foreground/65">
+                {location(issue.file, issue.line)}
+                {issue.symbol ? ` · ${issue.symbol}` : ""}
+              </p>
+              <dl className="mt-3 grid gap-2 text-sm text-foreground/85">
+                <div>
+                  <dt className="inline font-medium text-foreground">Description: </dt>
+                  <dd className="inline">{issue.description}</dd>
+                </div>
+                <div>
+                  <dt className="inline font-medium text-foreground">Evidence: </dt>
+                  <dd className="inline">{issue.evidence}</dd>
+                </div>
+                <div>
+                  <dt className="inline font-medium text-foreground">Suggestion: </dt>
+                  <dd className="inline">{issue.suggestion}</dd>
+                </div>
+                <div>
+                  <dt className="inline font-medium text-foreground">Verification: </dt>
+                  <dd className="inline">{issue.verification}</dd>
+                </div>
+              </dl>
+              {!!issue.alternativeFixes?.length && (
+                <div className="mt-3 border-t border-current/15 pt-2">
+                  <p className="text-xs font-medium text-foreground">Alternative fixes</p>
+                  <List items={issue.alternativeFixes} render={(value) => String(value)} />
+                </div>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+    </Section>
+  );
+}
+
+function CoverageGapsSection({ gaps }: { gaps: readonly ReviewCoverageGap[] }) {
+  return (
+    <Section
+      title={`Test Coverage Gaps · ${gaps.length}`}
+      icon={<FileWarning className="size-4 text-orange-400" />}
+    >
+      <List
+        items={gaps}
+        render={(value) => {
+          const gap = value as ReviewCoverageGap;
+          return (
+            <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+              <ReviewModelPills models={gap.reviewModels} />
+              <span>
+                <code>{gap.file}</code> — {gap.untestedBehavior}
+              </span>
+            </span>
+          );
+        }}
+      />
+    </Section>
+  );
+}
+
 export interface StructuredReviewReportViewProps {
   report: StructuredReviewReport;
   className?: string;
@@ -217,6 +308,47 @@ export function StructuredReviewReportView(props: StructuredReviewReportViewProp
       }}
     >
       <ReportArticle {...props} />
+    </CollapsibleSectionsContext.Provider>
+  );
+}
+
+export interface StructuredReviewFindingsViewProps {
+  findings: StructuredReviewFindings;
+  className?: string;
+  /** Render both sections collapsed behind a disclosure, as the report does. */
+  collapsibleSections?: boolean;
+  /** Stable prefix for section expansion state; see the report view. */
+  sectionExpansionKey?: string;
+}
+
+/**
+ * A report reduced to the findings a fix turn was asked to address.
+ *
+ * The build pipeline's address prompt frames only the issues and coverage gaps,
+ * which no longer validate as a report. They are drawn with the report's own
+ * sections so the severities, icons and colours match the report they came
+ * from.
+ */
+export function StructuredReviewFindingsView({
+  findings,
+  className,
+  collapsibleSections = false,
+  sectionExpansionKey,
+}: StructuredReviewFindingsViewProps) {
+  return (
+    <CollapsibleSectionsContext.Provider
+      value={{ collapsible: collapsibleSections, sectionExpansionKey }}
+    >
+      <article
+        className={cn(
+          "rounded-xl border border-border/50 bg-card/40 p-4 shadow-sm @sm:p-5",
+          className,
+        )}
+        aria-label="Review findings"
+      >
+        <IssuesSection issues={findings.issues} />
+        <CoverageGapsSection gaps={findings.testCoverageGaps} />
+      </article>
     </CollapsibleSectionsContext.Provider>
   );
 }
@@ -508,83 +640,9 @@ function ReportArticle({
         />
       </Section>
 
-      <Section
-        title={`Issues · ${report.issues.length}`}
-        icon={<CircleAlert className="size-4 text-amber-400" />}
-      >
-        {report.issues.length === 0 ? (
-          <EmptyLine>No high-confidence issues were found in the reviewed scope.</EmptyLine>
-        ) : (
-          <ol className="space-y-3">
-            {report.issues.map((issue, index) => (
-              <li
-                key={`${issue.file}-${issue.line}-${issue.title}-${index}`}
-                className={cn("rounded-lg border p-3.5", severityStyles[issue.severity])}
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded bg-background/35 px-1.5 py-0.5 font-mono text-xs font-semibold">
-                    {issue.severity}
-                  </span>
-                  <span className="text-xs">{issue.confidence}% confidence</span>
-                  <span className="text-xs opacity-80">{issue.category}</span>
-                  <ReviewModelPills models={issue.reviewModels} />
-                </div>
-                <h4 className="mt-2 text-sm font-semibold text-foreground">
-                  {index + 1}. {issue.title}
-                </h4>
-                <p className="mt-1 break-all font-mono text-xs text-foreground/65">
-                  {location(issue.file, issue.line)}
-                  {issue.symbol ? ` · ${issue.symbol}` : ""}
-                </p>
-                <dl className="mt-3 grid gap-2 text-sm text-foreground/85">
-                  <div>
-                    <dt className="inline font-medium text-foreground">Description: </dt>
-                    <dd className="inline">{issue.description}</dd>
-                  </div>
-                  <div>
-                    <dt className="inline font-medium text-foreground">Evidence: </dt>
-                    <dd className="inline">{issue.evidence}</dd>
-                  </div>
-                  <div>
-                    <dt className="inline font-medium text-foreground">Suggestion: </dt>
-                    <dd className="inline">{issue.suggestion}</dd>
-                  </div>
-                  <div>
-                    <dt className="inline font-medium text-foreground">Verification: </dt>
-                    <dd className="inline">{issue.verification}</dd>
-                  </div>
-                </dl>
-                {!!issue.alternativeFixes?.length && (
-                  <div className="mt-3 border-t border-current/15 pt-2">
-                    <p className="text-xs font-medium text-foreground">Alternative fixes</p>
-                    <List items={issue.alternativeFixes} render={(value) => String(value)} />
-                  </div>
-                )}
-              </li>
-            ))}
-          </ol>
-        )}
-      </Section>
+      <IssuesSection issues={report.issues} />
 
-      <Section
-        title={`Test Coverage Gaps · ${report.testCoverageGaps.length}`}
-        icon={<FileWarning className="size-4 text-orange-400" />}
-      >
-        <List
-          items={report.testCoverageGaps}
-          render={(value) => {
-            const gap = value as (typeof report.testCoverageGaps)[number];
-            return (
-              <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
-                <ReviewModelPills models={gap.reviewModels} />
-                <span>
-                  <code>{gap.file}</code> — {gap.untestedBehavior}
-                </span>
-              </span>
-            );
-          }}
-        />
-      </Section>
+      <CoverageGapsSection gaps={report.testCoverageGaps} />
 
       <Section title="Verdict">
         <div className="flex items-start gap-3">

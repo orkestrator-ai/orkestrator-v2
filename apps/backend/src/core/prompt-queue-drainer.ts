@@ -8,6 +8,7 @@ import type { StorageService } from "./storage.js";
 import type { Environment } from "./models.js";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -96,10 +97,16 @@ export class PromptQueueDrainer {
    */
   drainAll(): Promise<void> {
     if (this.stopped) return Promise.resolve();
-    if (this.sweep) return this.sweep;
-    const sweep = this.runSweep().finally(() => {
-      if (this.sweep === sweep) this.sweep = null;
-    });
+    recurringWorkMetrics.requested("tmux-queue-drain");
+    if (this.sweep) {
+      recurringWorkMetrics.coalesced("tmux-queue-drain");
+      return this.sweep;
+    }
+    const sweep = recurringWorkMetrics
+      .observe("tmux-queue-drain", () => this.runSweep())
+      .finally(() => {
+        if (this.sweep === sweep) this.sweep = null;
+      });
     this.sweep = sweep;
     return sweep;
   }

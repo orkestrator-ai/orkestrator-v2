@@ -84,6 +84,7 @@ import {
   type ProgressiveCacheTier,
   type ProgressiveReadOutcome,
 } from "./native-agent-progressive-metrics.js";
+import { OPEN_CODE_INLINE_ERROR_ID_PREFIX } from "./opencode-messages.js";
 import { readReadableHostFile } from "./path-safety.js";
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
 import {
@@ -1698,6 +1699,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       ...snapshot,
       messages: normalized,
       omittedParts: undefined,
+      byteOmittedMessages: undefined,
       ...(historyStartIndex === undefined ? {} : { historyStartIndex }),
       complete: normalized.length < liveWindow.messages,
       freshness: "current",
@@ -1838,9 +1840,28 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const pageable =
       localPageable ||
       (sourceComplete === false && bounded.messages.length >= input.liveWindow.messages);
+    /*
+     * Whole messages dropped for bytes ahead of this window, by the provider or
+     * by the bound above. One oversized turn leaves a tail too short to fill
+     * the count window, so neither signal above fires and the reader saw an
+     * unexplained cut. A wider live window cannot restore these, but history
+     * paging can, and the renderer offers it for exactly this shape: an
+     * incomplete window reporting byte-omitted messages. A joined prefix has
+     * already restored part of the provider's omission, so count from the
+     * joined start when it is positioned.
+     */
+    const providerByteOmitted =
+      sourceComplete === false && snapshot.byteOmittedMessages
+        ? (projectedStartIndex ?? snapshot.byteOmittedMessages)
+        : 0;
+    const localByteOmitted =
+      bounded.window.truncationReason === "bytes" ? (bounded.window.omittedMessages ?? 0) : 0;
+    const byteOmitted = providerByteOmitted > 0 || localByteOmitted > 0;
     const truncated =
-      Boolean(bounded.window.truncated || normalized.window.truncated) || sourceComplete === false;
-    const complete = !pageable && sourceComplete !== false;
+      Boolean(bounded.window.truncated || normalized.window.truncated) ||
+      sourceComplete === false ||
+      byteOmitted;
+    const complete = !pageable && sourceComplete !== false && !byteOmitted;
     const historyEpoch =
       snapshot.historyEpoch ??
       (previous?.value.identity.providerSessionId === providerSessionId
@@ -1866,6 +1887,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           ...bounded.window,
           truncated,
           canLoadEarlier: pageable,
+          ...(byteOmitted
+            ? {
+                truncationReason: "bytes" as const,
+                omittedMessages: providerByteOmitted + (bounded.window.omittedMessages ?? 0),
+              }
+            : {}),
         },
         ...(snapshot.title ? { title: snapshot.title } : {}),
         ...(snapshot.revision === undefined ? {} : { providerRevision: snapshot.revision }),
@@ -3669,7 +3696,22 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       const messageIds = new Set(
         transcript.messages.map((message) => (message as { id?: unknown })?.id),
       );
+      // A provider that already renders its failure inline (OpenCode) ends the
+      // transcript with that row; a second terminal row would repeat it.
+      const lastMessageId = (transcript.messages.at(-1) as { id?: unknown } | undefined)?.id;
+      const inlineError =
+        typeof lastMessageId === "string" &&
+        lastMessageId.startsWith(OPEN_CODE_INLINE_ERROR_ID_PREFIX)
+          ? (transcript.messages.at(-1) as { content?: unknown })
+          : undefined;
       const terminalMessages = terminalNotices
+        .filter(
+          (notice) =>
+            notice.kind !== "error" ||
+            typeof inlineError?.content !== "string" ||
+            (inlineError.content !== notice.message &&
+              !inlineError.content.endsWith(`: ${notice.message}`)),
+        )
         .map((notice) => ({
           id: `native-terminal:${notice.kind}:${createHash("sha256")
             .update(notice.message)

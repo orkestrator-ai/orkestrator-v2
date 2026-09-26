@@ -1,7 +1,9 @@
 # 08 — Schedule workflow and queue work by key and deadline
 
-Status: Not started. Dependencies: 02, 07; step 11 before slower reconciliation.
-Finding: F06.
+Status: Implemented with unit/integration and driven-harness qualification;
+real-stack (isolated profile, live providers) qualification remains for step 12
+— see [Completion notes](#completion-notes). Dependencies: 02, 07; step 11
+before slower reconciliation. Finding: F06.
 
 ## Outcome
 
@@ -97,3 +99,160 @@ leases. A missed wakeup converges within the documented safety interval. Rollbac
 returns one domain at a time to its old driver using the same records; disable
 the new driver before enabling the old one. Rebuildable indexes can be discarded
 without losing authoritative state.
+
+## Completion notes
+
+Recorded 2026-09-26. One commit per review unit, each domain individually
+revertible:
+
+| Unit | Commit |
+| --- | --- |
+| Keyed workflow supervisor, elapsed poll gate, result wakeups, rollback switch | `72b1a64f` |
+| Feature planning | `c8dce7c0` |
+| Build pipeline | `c01e666d` |
+| Looped review (critical lease renewal) | `9a00525e` |
+| Multi review | `4e65a011` |
+| Native launch intents and prompt queues | `5e74f662` |
+| `index.ts` activity bundle split, elapsed maintenance | `0d8e13d4` |
+| Broad discovery slowed to a 30 s safety interval (task 12) | `0a18501f` |
+| Driven workflow baseline | `cd1bc998` |
+
+### What landed
+
+- **`KeyedWorkflowSupervisor`** (`apps/backend/src/core/workflow-supervisor.ts`)
+  on the step 02 `RecurringScheduler`: a rebuildable, bounded index of keys
+  that still owe work, each progressed on its own due time with one run per
+  key, plus a separate authoritative discovery pass. Keys are noted only
+  after successful authoritative reads and fenced saves; `start()` returns
+  without waiting for the first pass; a failed or partial enumeration never
+  drops known obligations; a corrupt record is skipped without blocking
+  others. Wake reasons are a finite set (`start`, `resume`, `retry`,
+  `cancel`, `enqueue`, `provider-transition`, `result-accepted`,
+  `environment-change`, `storage-change`, `explicit`). Real changes
+  invalidate (one trailing pass while running); `provider-transition` and
+  `environment-change` are hints that only pull a due time forward, so a
+  periodic tick alone cannot chain reruns and a domain that writes on every
+  pass does not wake itself. Passes run under the `workflow-provider`
+  admission pool (per-target bound, nested hand-off for reviewer fan-out);
+  lease renewal runs on the scheduler's separate critical pool.
+- **Obligations (task 1)** are named per domain, not inferred from a phase
+  called `running`:
+  - Feature planning: every active phase (exchange/readiness/reply waits),
+    nothing terminal. Discovery keeps using `listActiveFeaturePlanning`.
+  - Build pipeline: result consumption in any phase, provisioning, review
+    fan-out, stage progression, terminal side effects. A terminal pipeline
+    that still owes a result consumption is now finished without a restart.
+  - Looped review: result consumption in any phase, cancelling, prepared
+    dispatch, awaiting result, phase start, legacy adoption. A parked
+    ambiguous dispatch owes nothing until an explicit retry/discard.
+  - Multi review: result consumption, cancellation, durable interactive Fix
+    handoff, paused-stop retry, interactive Fix observation, reviewers,
+    single step (`multi-review-scheduling.ts`, shared by every driver).
+  - Native queues: a queue owes work while pending or holding a reserved
+    in-flight head; parked (including unreconciled ambiguous dispatch),
+    empty and tmux queues owe nothing. Launch intent is one recovery job.
+- **Scoped wakeups (task 4)**: workflow-result acceptance (post-commit hook
+  on `WorkflowResultService`), environment readiness/execution-identity
+  changes, provider transitions, enqueue/turn-end and queue mutations,
+  deletion events (retire a key at once) and explicit commands.
+- **Elapsed deadlines (task 7)**: `ElapsedPollGate` keeps attempt-counted
+  graces and final-usage probes (build reviewers, looped missing-result
+  grace, multi-review idle-result/final-usage at 3 s spacing) meaning the
+  same wall time: a burst of wakeups cannot exhaust them, and a slowed
+  cadence cannot stretch them.
+- **Leases (task 8)**: the 5 s renewal of held 15 s review leases runs on the
+  critical pool and keeps its deadline while every best-effort pass is
+  blocked on a provider; a stolen lease is dropped and fences further writes.
+  Lease-only writes no longer rotate snapshot backups.
+- **Activity bundle (tasks 10–11)**: `BackendActivityJobs`
+  (`backend-activity-jobs.ts`) replaces the 2 s `setInterval` and the 60 s tab
+  timer. Native activity sweep, Claude terminal state, tmux queue fallback,
+  mail presence, mail injection and pending renames are separate fixed-rate,
+  non-overlapping 2 s jobs, so a hung sweep no longer delays the presence
+  refresh behind the 4 s presence TTL. Coordinator notification repair, mail
+  retention and tab teardown/orphan cleanup run on their own elapsed 60 s
+  deadlines instead of `% 30` of the activity tick (one-hour orphan grace
+  unchanged). Each operation keeps its instrumentation and overlap guard.
+  Queue and environment changes pull the tmux and rename jobs forward.
+- **Safety interval (task 12)**: authoritative discovery for feature
+  planning, build pipelines, looped and multi reviews and native
+  queues/launches drops from the per-tick listing (1–2 s; 15 s for multi
+  review) to `DEFAULT_WORKFLOW_DISCOVERY_MS` = 30 s, while every key with an
+  obligation keeps its 1–1.5 s (or due-time) progress cadence. Rename intent
+  runs every 2 s only while one is pending, otherwise 30 s, and is woken by
+  environment changes. 30 s is the low end of the trial range: a missed
+  wakeup converges within it (tested), and nothing measured argued for
+  accepting a longer worst case. The full diagnostic reconciliation route is
+  `reconcile_workflow_scheduling`, which also reconciles the native queue
+  index.
+
+### Rollback
+
+`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` takes a comma-separated list of
+domains (`feature-planning`, `build-pipeline`, `looped-review`,
+`multi-review`, `native-queues`, `backend-activity`) or `all`. It is read
+once at construction, so a domain runs exactly one driver: the new driver is
+never started when the old one is selected. Indexes are discarded on
+rollback; durable records, dispatch journals and leases are untouched.
+`multi-review` rollback restores the adaptive due scheduler; its
+`adaptiveScheduling: false` option still selects the legacy tick.
+
+### Before / after (driven harness)
+
+`apps/backend/scripts/recurring-baseline-workflows.ts` drives the real
+feature-planning, build-pipeline and looped-review supervisors over a real
+temporary store with 200 completed and 2 active records per store for 10
+minutes, in rollback (whole-store tick) and keyed modes. The artifact's
+`workflows` block (see `baseline/step-12-final.json`):
+
+| Domain | Mode | Attempts | Records scanned | Storage reads | Provider reads |
+| --- | --- | --- | --- | --- | --- |
+| Feature planning | rollback | 600 | 0¹ | 1,800 | 1,200 |
+| Feature planning | keyed | 1,223 | 4,242 | 1,223 | 1,202 |
+| Build pipeline | rollback | 400 | 80,800 | 1,200 | 800 |
+| Build pipeline | keyed | 823 | 4,242 | 823 | 802 |
+| Looped review | rollback | 600 | 121,200 | 6,604 | 1,200 |
+| Looped review | keyed | 1,223 | 4,242 | 6,035 | 1,202 |
+
+¹ Feature planning already listed active records only, so its rollback scan
+count is not charged as retained history.
+
+Records scanned now scale with active obligations plus one 30 s discovery,
+not with retained history: −95 % for build pipelines and −96.5 % for looped
+reviews at 200 completed records, and the gap grows with history. Attempts
+roughly double because each active key is its own short pass rather than one
+whole-store tick; each pass reads only its own record, so storage reads fall
+(−32 % feature planning, −31 % build, −9 % looped review). Provider reads are
+unchanged within one pass per active key, as required — progress cadence was
+not slowed. Multi review is not driven (its idle cost depends on active
+workflows; see the harness limitations).
+
+### Tests
+
+`workflow-supervisor.test.ts` (selection scales with obligations; settled
+keys dropped; slow key isolation; dirty-vs-periodic reruns; self-write loop;
+lost wake during probe; missed wakeup converges within the safety interval;
+restart between durable commit and wakeup; failed enumeration; corrupt
+record; start returns while a pass hangs; admission bound and nested
+hand-off; critical jobs on time under a full best-effort pool; scoped wakes;
+`reconcileNow`; rollback switch per domain; content-free status; elapsed
+gate against bursts and slowed cadence). Per domain: old and new drivers make
+the same transitions from one persisted fixture (feature planning, build
+pipeline, looped review); retained history only read by discovery;
+cancellation during a slow provider read; lease renewal under saturation;
+stolen lease; missing-result grace under a wakeup burst; interactive Fix and
+runnable-state classification (multi review); simultaneous enqueues dispatch
+once; backoff honoured; parked ambiguous dispatch stays parked; enqueue by
+another writer found by discovery (native queues); fixed-rate jobs, elapsed
+maintenance and error isolation (`backend-activity-jobs.test.ts`), plus
+`index.test.ts` wiring. All pass on the integration branch; aggregate results
+are recorded in step 12.
+
+### Not done / untested constraints
+
+- No live isolated-profile run with real providers: zero-renderer workflow
+  completion and rehydration on another client are covered by unit and
+  integration tests only (step 12 records what was run).
+- Multi review is not driven by the harness.
+- Coarser mail retention (task 11's optional trial) was not attempted;
+  retention runs on the same 60 s elapsed deadline as before.

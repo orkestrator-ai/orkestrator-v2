@@ -16,8 +16,10 @@ import {
   ReviewContractValidationError,
   safeParseReviewFindingPool,
   safeParseReviewReconciliation,
+  safeParseStructuredReviewFindings,
   safeParseStructuredReviewReport,
   stripStructuredReviewProvenance,
+  structuredReviewFindings,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   type ReviewFindingPool,
   type ReviewReconciliation,
@@ -259,6 +261,36 @@ describe("structured review report contract", () => {
       data: emptyReport,
     });
     expect(isStructuredReviewReport(emptyReport)).toBe(true);
+  });
+
+  test("projects and validates the two-field findings document", () => {
+    const findings = structuredReviewFindings(fullyPopulatedReport);
+
+    expect(findings).toEqual({
+      issues: fullyPopulatedReport.issues,
+      testCoverageGaps: fullyPopulatedReport.testCoverageGaps,
+    });
+    expect(safeParseStructuredReviewFindings(findings)).toEqual({
+      success: true,
+      data: findings,
+    });
+    expect(safeParseStructuredReviewFindings(structuredReviewFindings(emptyReport))).toMatchObject({
+      success: true,
+    });
+  });
+
+  test("rejects missing, extra, and invalid findings fields", () => {
+    const findings = structuredReviewFindings(fullyPopulatedReport);
+    const invalid = [
+      { issues: findings.issues },
+      { ...findings, reviewSummary: "Unexpected report field" },
+      { ...findings, issues: [{ ...findings.issues[0], confidence: 101 }] },
+      { ...findings, testCoverageGaps: [{ ...findings.testCoverageGaps[0], file: 42 }] },
+    ];
+
+    for (const candidate of invalid) {
+      expect(safeParseStructuredReviewFindings(candidate).success).toBe(false);
+    }
   });
 
   test("accepts every fully populated report field and optional fixes", () => {

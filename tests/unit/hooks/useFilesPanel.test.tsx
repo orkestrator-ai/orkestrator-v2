@@ -124,6 +124,8 @@ mock.module("@/lib/backend", () => ({
 
 const { useFilesPanel, FileBatchActionError } =
   await import("../../../apps/web/src/hooks/useFilesPanel");
+const { resetReadCoordinatorForTests } = await import("@/lib/read-coordinator");
+const { installFakeReadCoordinator } = await import("@/lib/testing/read-coordinator");
 
 const change: GitFileChange = {
   path: "src/App.tsx",
@@ -1580,25 +1582,8 @@ describe("useFilesPanel", () => {
   });
 
   test("silent auto-refresh reloads the active tab without toggling loading state", async () => {
-    const originalSetInterval = globalThis.setInterval;
-    const originalClearInterval = globalThis.clearInterval;
-    let intervalCallback: (() => void) | null = null;
-    const clearIntervalMock = mock(() => {});
-
-    globalThis.setInterval = ((callback: TimerHandler, timeout?: number, ...args: unknown[]) => {
-      if (timeout === 5000) {
-        intervalCallback = callback as () => void;
-        return 1 as unknown as ReturnType<typeof setInterval>;
-      }
-      return originalSetInterval(callback, timeout, ...args);
-    }) as typeof setInterval;
-    globalThis.clearInterval = ((intervalId: Parameters<typeof clearInterval>[0]) => {
-      if (intervalId === (1 as unknown as Parameters<typeof clearInterval>[0])) {
-        clearIntervalMock(intervalId);
-        return;
-      }
-      originalClearInterval(intervalId);
-    }) as typeof clearInterval;
+    // The 5 s auto-refresh is scheduled by the read coordinator.
+    const { clock } = installFakeReadCoordinator();
 
     try {
       const environment = createMockEnvironment({
@@ -1619,11 +1604,9 @@ describe("useFilesPanel", () => {
       await waitFor(() => {
         expect(mockGetGitStatus).toHaveBeenCalledTimes(1);
       });
-      expect(intervalCallback).not.toBeNull();
+      expect(clock.pending).toBe(1);
 
-      await act(async () => {
-        intervalCallback?.();
-      });
+      await act(() => clock.advance(5_000));
 
       await waitFor(() => {
         expect(mockGetGitStatus).toHaveBeenCalledTimes(2);
@@ -1632,30 +1615,14 @@ describe("useFilesPanel", () => {
       expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
 
       unmount();
-      expect(clearIntervalMock).toHaveBeenCalledWith(1);
+      expect(clock.pending).toBe(0);
     } finally {
-      globalThis.setInterval = originalSetInterval;
-      globalThis.clearInterval = originalClearInterval;
+      resetReadCoordinatorForTests();
     }
   });
 
   test("silent auto-refresh reloads changes and tree on the all-files tab", async () => {
-    const originalSetInterval = globalThis.setInterval;
-    const originalClearInterval = globalThis.clearInterval;
-    let intervalCallback: (() => void) | null = null;
-
-    globalThis.setInterval = ((callback: TimerHandler, timeout?: number, ...args: unknown[]) => {
-      if (timeout === 5000) {
-        intervalCallback = callback as () => void;
-        return 2 as unknown as ReturnType<typeof setInterval>;
-      }
-      return originalSetInterval(callback, timeout, ...args);
-    }) as typeof setInterval;
-    globalThis.clearInterval = ((intervalId: Parameters<typeof clearInterval>[0]) => {
-      if (intervalId !== (2 as unknown as Parameters<typeof clearInterval>[0])) {
-        originalClearInterval(intervalId);
-      }
-    }) as typeof clearInterval;
+    const { clock } = installFakeReadCoordinator();
 
     try {
       const environment = createMockEnvironment({
@@ -1690,9 +1657,7 @@ describe("useFilesPanel", () => {
         expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
       });
 
-      await act(async () => {
-        intervalCallback?.();
-      });
+      await act(() => clock.advance(5_000));
 
       await waitFor(() => {
         expect(mockGetGitStatus).toHaveBeenCalledTimes(2);
@@ -1703,8 +1668,7 @@ describe("useFilesPanel", () => {
       expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
       expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
     } finally {
-      globalThis.setInterval = originalSetInterval;
-      globalThis.clearInterval = originalClearInterval;
+      resetReadCoordinatorForTests();
     }
   });
 });

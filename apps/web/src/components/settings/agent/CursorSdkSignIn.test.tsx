@@ -8,6 +8,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { CursorSdkLoginProgress } from "@/types";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 
 const invokeCalls: Array<{ command: string }> = [];
 let progress: CursorSdkLoginProgress = {
@@ -79,7 +81,10 @@ beforeEach(() => {
   progress = { state: "idle", auth: { authenticated: false, source: "none" } };
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetReadCoordinatorForTests();
+});
 
 describe("starting a sign-in", () => {
   test("asks the backend to start it and never opens a window itself", async () => {
@@ -281,5 +286,56 @@ describe("credential-change notifications", () => {
     fireEvent.click(screen.getByRole("button", { name: /Sign out/ }));
 
     await waitFor(() => expect(onChange).toHaveBeenCalled());
+  });
+});
+
+describe("pending-login observation", () => {
+  const statusCalls = () =>
+    invokeCalls.filter((call) => call.command === "cursor_sdk_login_status").length;
+
+  test("polls only while pending, hidden pauses it, and closing settings never cancels", async () => {
+    const { clock, document: fakeDocument } = installFakeReadCoordinator();
+    progress = pendingProgress;
+    const view = await mount();
+    await act(async () => {
+      await clock.advance(0);
+    });
+    const afterMount = statusCalls();
+    await act(async () => {
+      await clock.advance(4_500);
+    });
+    expect(statusCalls()).toBe(afterMount + 3);
+
+    act(() => fakeDocument.setVisibility("hidden"));
+    await act(async () => {
+      await clock.advance(30_000);
+    });
+    expect(statusCalls()).toBe(afterMount + 3);
+    act(() => fakeDocument.setVisibility("visible"));
+    await act(async () => {
+      await clock.advance(1_000);
+    });
+    expect(statusCalls()).toBe(afterMount + 4);
+
+    view.unmount();
+    await act(async () => {
+      await clock.advance(30_000);
+    });
+    expect(statusCalls()).toBe(afterMount + 4);
+    // Removing the observation is not a cancellation: the backend owns it.
+    expect(invokeCalls.some((call) => call.command === "cursor_sdk_login_cancel")).toBe(false);
+  });
+
+  test("settled logins schedule nothing", async () => {
+    const { clock } = installFakeReadCoordinator();
+    await mount();
+    await act(async () => {
+      await clock.advance(0);
+    });
+    const afterMount = statusCalls();
+    await act(async () => {
+      await clock.advance(60_000);
+    });
+    expect(statusCalls()).toBe(afterMount);
   });
 });

@@ -393,9 +393,11 @@ exit 42
       const commands = createCommandRegistry();
 
       await withFakeCodex(codexSlugScript("Reconcile Session State"), async () => {
+        // The pass reports renames pending when it started; the backend's
+        // rename job uses it to choose its 2 s or 30 s safety cadence.
         await expect(
           commands.get("reconcile_pending_environment_renames")?.({}, context),
-        ).resolves.toBeUndefined();
+        ).resolves.toEqual({ pending: 1 });
 
         await waitForCondition(
           () => emitted.some(({ event }) => event === "environment-renamed"),

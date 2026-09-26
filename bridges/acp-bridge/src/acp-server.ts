@@ -5,6 +5,7 @@ import {
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
+import { watchClientDisconnect } from "./acp-client-disconnect.js";
 import { applyOriginPolicy, acceptsGzip, json, RESPONSE_ACCEPTS_GZIP, route } from "./acp-http.js";
 import {
   HttpError,
@@ -27,29 +28,13 @@ export const server = createServer((request, response) => {
     acceptsGzip(request.headers["accept-encoding"]);
   if (!applyOriginPolicy(request, response)) return;
   const controller = new AbortController();
-  const abortDisconnectedClient = () => {
-    if (!response.writableEnded) controller.abort();
-  };
-  request.once("aborted", abortDisconnectedClient);
-  request.socket.once("end", abortDisconnectedClient);
-  request.socket.once("close", abortDisconnectedClient);
-  response.once("close", abortDisconnectedClient);
-  const disconnectPoll = setInterval(() => {
-    if (request.socket.destroyed || !request.socket.writable) abortDisconnectedClient();
-  }, 50);
-  disconnectPoll.unref();
+  const stopWatchingClient = watchClientDisconnect(request, response, () => controller.abort());
   void route(request, response, controller.signal)
     .catch((error: unknown) => {
       const status = error instanceof HttpError ? error.status : 500;
       json(response, status, { error: error instanceof Error ? error.message : String(error) });
     })
-    .finally(() => {
-      clearInterval(disconnectPoll);
-      request.off("aborted", abortDisconnectedClient);
-      request.socket.off("end", abortDisconnectedClient);
-      request.socket.off("close", abortDisconnectedClient);
-      response.off("close", abortDisconnectedClient);
-    });
+    .finally(stopWatchingClient);
 });
 
 server.listen(port, hostname, () =>

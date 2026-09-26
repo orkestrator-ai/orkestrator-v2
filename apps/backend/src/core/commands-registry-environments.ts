@@ -300,7 +300,7 @@ export function registerEnvironmentCommands(
   });
   register("reconcile_pending_environment_renames", async (args, context) => {
     assertOnlyKeys(args, [], "arguments");
-    await reconcilePendingEnvironmentRenames(context);
+    return { pending: await reconcilePendingEnvironmentRenames(context) };
   });
   register("get_environment_status", async ({ environmentId }, context) => {
     const { storage } = context;

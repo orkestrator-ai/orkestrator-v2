@@ -198,6 +198,14 @@ export interface SdkResultMessage extends SdkMessageBase {
    * the client and the record a fork or file rewind must address.
    */
   user_message_uuid?: string;
+  /**
+   * Client uuids of every user message this turn consumed, including sends
+   * folded into it. Absent on a turn the CLI started itself, such as the
+   * answer to a replayed background-task notification.
+   */
+  user_message_uuids?: string[];
+  /** How many results this process wrote before this one; absent from older producers. */
+  result_index?: number;
 }
 
 /** Type guard for compact boundary message */

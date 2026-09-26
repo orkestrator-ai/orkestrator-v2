@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ConnectionList } from "@orkestrator/protocol/connections";
 import { publishConnections } from "@/lib/connections";
-import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
+import { PROBE_SUPERSEDE_AFTER_MS, ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 
 const originalReload = window.location.reload;
 const originalClientPlatform = window.__orkestratorClientPlatform;
@@ -297,19 +297,34 @@ describe("server connection switcher", () => {
       },
       { probe },
     );
-    render(<ServerConnectionSwitcher />);
-    const trigger = await screen.findByRole("button", { name: "Connected server: Active" });
-    await waitFor(() => expect(trigger.querySelector('[data-status="checking"]')).toBeTruthy());
+    let now = Date.now();
+    const nowSpy = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      render(<ServerConnectionSwitcher />);
+      const trigger = await screen.findByRole("button", { name: "Connected server: Active" });
+      await waitFor(() => expect(trigger.querySelector('[data-status="checking"]')).toBeTruthy());
 
-    fireEvent.focus(window);
-    await waitFor(() => expect(trigger.querySelector('[data-status="ready"]')).toBeTruthy());
-    await act(async () => first.resolve(false));
-    expect(trigger.querySelector('[data-status="ready"]')).toBeTruthy();
+      // A focus burst while the probe is young joins it instead of stacking.
+      fireEvent.focus(window);
+      fireEvent.focus(window);
+      expect(probe).toHaveBeenCalledTimes(1);
 
-    fireEvent.focus(window);
-    await waitFor(() => expect(trigger.querySelector('[data-status="unavailable"]')).toBeTruthy());
-    fireEvent.focus(window);
-    await waitFor(() => expect(trigger.querySelector('[data-status="ready"]')).toBeTruthy());
+      // A stalled probe is superseded, and its late answer is fenced out.
+      now += PROBE_SUPERSEDE_AFTER_MS;
+      fireEvent.focus(window);
+      await waitFor(() => expect(trigger.querySelector('[data-status="ready"]')).toBeTruthy());
+      await act(async () => first.resolve(false));
+      expect(trigger.querySelector('[data-status="ready"]')).toBeTruthy();
+
+      fireEvent.focus(window);
+      await waitFor(() =>
+        expect(trigger.querySelector('[data-status="unavailable"]')).toBeTruthy(),
+      );
+      fireEvent.focus(window);
+      await waitFor(() => expect(trigger.querySelector('[data-status="ready"]')).toBeTruthy());
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   test("discards an active probe result after unmount", async () => {

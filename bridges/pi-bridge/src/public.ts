@@ -146,13 +146,14 @@ export { parseTranscriptFromIndex as parseFromIndex } from "@orkestrator/protoco
 /**
  * Liveness for the backend's activity sweep.
  *
- * `blocked` outranks `working` because it is the more actionable answer: a
- * session parked on an approval is not going to progress on its own, and a
- * build pipeline that reads it as merely busy will wait for a turn that is
- * waiting for a person.
+ * A parked approval outranks `working` because it is the more actionable
+ * answer: a session parked on an approval is not going to progress on its
+ * own. It is reported in the shared activity vocabulary as `waiting` — the
+ * backend's observer accepts only `idle`/`working`/`waiting`/`missing`, and
+ * the `blocked` this route used to answer failed the whole provider group.
  */
 export function publicActivity(state: SessionState): JsonObject {
-  if (sessionIsBlocked(state)) return { activity: "blocked" };
+  if (sessionIsBlocked(state)) return { activity: "waiting" };
   return { activity: sessionIsWorking(state) ? "working" : "idle" };
 }
 

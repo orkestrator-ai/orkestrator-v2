@@ -1783,6 +1783,8 @@ exit 0
         // a client would otherwise only have learned from the event.
         const rehydrated = (await commands.get("get_environment_diff_stats")?.({}, context)) as {
           entries: Array<{ environmentId: string; stats: Record<string, unknown> }>;
+          generation: string;
+          revision: number;
         };
         expect(rehydrated.entries).toContainEqual(
           expect.objectContaining({
@@ -1790,6 +1792,33 @@ exit 0
             stats: { additions: 3, deletions: 0, filesChanged: 2, truncated: false },
           }),
         );
+
+        // The stamped legacy shape doubles as the client's known position: a
+        // conditional read at that position is answered without a body, and
+        // an older position receives the captured snapshot.
+        expect(rehydrated.revision).toBeGreaterThan(0);
+        await expect(
+          commands.get("get_environment_diff_stats")?.(
+            { knownGeneration: rehydrated.generation, knownRevision: rehydrated.revision },
+            context,
+          ),
+        ).resolves.toEqual({
+          status: "unchanged",
+          generation: rehydrated.generation,
+          revision: rehydrated.revision,
+        });
+        const older = (await commands.get("get_environment_diff_stats")?.(
+          { knownGeneration: rehydrated.generation, knownRevision: rehydrated.revision - 1 },
+          context,
+        )) as { status: string; snapshot: { entries: unknown[] } };
+        expect(older.status).toBe("snapshot");
+        expect(older.snapshot.entries).toEqual(rehydrated.entries);
+        await expect(
+          commands.get("get_environment_diff_stats")?.(
+            { knownGeneration: "another-generation", knownRevision: 0 },
+            context,
+          ),
+        ).resolves.toMatchObject({ status: "reset", reason: "generation" });
       } finally {
         await commands
           .get("delete_environment")?.({ environmentId: environment.id }, context)
@@ -2280,14 +2309,17 @@ exit 1
               truncated: true,
             });
 
-            const execsBefore = (await fs.readFile(logs.exec, "utf8")).trim().split("\n").length;
+            // Status-script execs only: the container fetch policy may run its
+            // own (separate) fetch exec in the background after the first scan.
+            const statusExecs = async () =>
+              (await fs.readFile(logs.exec, "utf8")).split("ORKESTRATOR_NAME_STATUS").length - 1;
+            const execsBefore = await statusExecs();
             const files = (await commands.get("get_git_status")?.(
               { containerId: environment.containerId, targetBranch: "main" },
               context,
             )) as Array<{ path: string }>;
             expect(files).toHaveLength(2_001);
-            const execsAfter = (await fs.readFile(logs.exec, "utf8")).trim().split("\n").length;
-            expect(execsAfter).toBe(execsBefore);
+            expect(await statusExecs()).toBe(execsBefore);
           },
         );
       } finally {

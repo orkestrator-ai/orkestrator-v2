@@ -5,6 +5,7 @@ import {
   startParentWatchdog,
   startReparentWatchdog,
 } from "../../../packages/protocol/src/parent-watchdog";
+import { FakeIntervals } from "../../../packages/protocol/src/fake-intervals";
 
 const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -84,6 +85,29 @@ describe("startParentWatchdog", () => {
     stop();
     await tick(20);
     expect(fired).toBe(0);
+  });
+
+  test("uses the caller's interval and ignores a callback that was already due at stop()", () => {
+    const timers = new FakeIntervals();
+    let fired = 0;
+    const stop = startParentWatchdog({
+      parentPid: 4213,
+      pollIntervalMs: 5_000,
+      isAlive: () => false,
+      timers,
+      onParentExit: () => {
+        fired += 1;
+      },
+    });
+    expect(timers.periods()).toEqual([5_000]);
+    const [entry] = [...timers.armed.values()];
+
+    stop();
+    stop();
+    entry!.callback();
+
+    expect(fired).toBe(0);
+    expect(timers.armed.size).toBe(0);
   });
 
   test("the built-in liveness probe treats a live, unsignalable parent as alive", async () => {

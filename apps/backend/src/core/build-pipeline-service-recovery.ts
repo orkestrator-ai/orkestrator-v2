@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { needsBuildTerminalReconciliation } from "./build-pipeline-scheduling.js";
 import type {
   BuildPipeline,
   BuildPipelineAgent,
@@ -349,12 +350,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
   }
 
   protected needsTerminalReconciliation(pipeline: BuildPipeline): boolean {
-    if (pipeline.phase !== "complete" && pipeline.phase !== "failed") return false;
-    return Boolean(
-      pipeline.source &&
-      pipeline.completionCommentStatus !== "posted" &&
-      pipeline.completionCommentStatus !== "failed",
-    );
+    return needsBuildTerminalReconciliation(pipeline);
   }
 
   protected async reconcileTerminalState(pipeline: BuildPipeline): Promise<void> {

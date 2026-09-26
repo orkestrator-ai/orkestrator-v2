@@ -465,6 +465,22 @@ async function routeSession(
   if (action === "dispatch" && request.method === "GET") {
     return json(response, 200, publicDispatch(state, url.searchParams.get("requestId") || ""));
   }
+  if (action === "dispatch" && subject === "discard" && request.method === "POST") {
+    const body = await readJson(request);
+    const requestId = typeof body.requestId === "string" ? body.requestId : "";
+    const entry = state.promptJournal.get(requestId);
+    if (!entry || entry.state !== "ambiguous") {
+      return json(response, 409, { error: "Only an ambiguous prompt can be discarded" });
+    }
+    setPromptJournal(state, { ...entry, state: "discarded" });
+    try {
+      await persistBarrier();
+    } catch (error) {
+      if (state.promptJournal.get(requestId)?.state === "discarded") setPromptJournal(state, entry);
+      throw error;
+    }
+    return json(response, 200, { discarded: true });
+  }
   if (action === "steer" && subject === "dispatch" && request.method === "GET") {
     const entry = state.steerJournal.get(url.searchParams.get("requestId") || "");
     return json(response, 200, {
@@ -909,6 +925,9 @@ async function handlePrompt(
   // idempotency key. A restarted bridge never sees this flag.
   const retryAfterFailedSend = journaled?.state === "ambiguous" && journaled.sendFailed === true;
   if (requestId && journaled && !retryAfterFailedSend) {
+    if (journaled.state === "discarded") {
+      throw new HttpError(410, "This Cursor prompt was discarded; send a new requestId");
+    }
     if (journaled.local) {
       return json(response, 200, { accepted: true, local: true, duplicate: true });
     }
@@ -931,7 +950,7 @@ async function handlePrompt(
   if (requestId && !promptJournalHasRoom(state, requestId)) {
     return json(response, 409, {
       error:
-        "This Cursor session has too many prompts with an unresolved outcome; resolve or discard them before sending another",
+        "This Cursor session has too many prompts with an unresolved outcome; discard an ambiguous prompt before sending another",
       kind: "prompt-journal-saturated",
     });
   }

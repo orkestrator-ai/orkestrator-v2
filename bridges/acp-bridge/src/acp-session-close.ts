@@ -122,6 +122,7 @@ async function runClose(state: SessionState): Promise<RetainingCloseOutcome> {
   if (settlement) await within(settlement, CLOSE_CANCEL_WAIT_MS);
 
   if (state.child) children.add(state.child);
+  for (const child of state.cursorToolReplayChildren ?? []) children.add(child);
   for (const child of children) await child.close();
   if (Array.from(children).some((child) => !exited(child))) return "pending";
 

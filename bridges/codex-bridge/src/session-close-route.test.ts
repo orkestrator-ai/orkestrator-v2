@@ -248,6 +248,93 @@ describe("POST /session/:id/close", () => {
     expect(count(h, "turn/start")).toBe(1);
   });
 
+  test("a concurrent DELETE keeps its tombstone when strict close publication fails", async () => {
+    const h = await harness();
+    const app = closeApp(h);
+    const sessionId = await idleThreadSession(h);
+    await waitUntil(
+      async () => (await persistedSessionIds()).includes(sessionId),
+      "session record persisted",
+    );
+    const gate = deferredSignal();
+    const original = BridgeSessionStore.prototype.publishRemoval;
+    let attempts = 0;
+    const publish = spyOn(BridgeSessionStore.prototype, "publishRemoval").mockImplementation(
+      async function (this: BridgeSessionStore, id: string) {
+        attempts += 1;
+        if (attempts === 1) {
+          await gate.promise;
+          throw new Error("first tombstone failed");
+        }
+        return original.call(this, id);
+      },
+    );
+    try {
+      const closing = close(app, sessionId);
+      await waitUntil(() => attempts === 1, "close publishing removal");
+      const deleting = h.runtime.deleteSession(sessionId);
+      await waitUntil(() => attempts === 2, "DELETE publishing removal");
+      gate.resolve();
+      expect((await closing).status).toBe(503);
+      expect(await deleting).toBe(true);
+      expect(await persistedSessionIds()).not.toContain(sessionId);
+      expect(h.runtime.getStatus(sessionId)).toBeNull();
+    } finally {
+      gate.resolve();
+      publish.mockRestore();
+    }
+  });
+
+  test("concurrent close and DELETE both leave a published removal", async () => {
+    const h = await harness();
+    const app = closeApp(h);
+    const sessionId = await idleThreadSession(h);
+    const gate = deferredSignal();
+    const original = BridgeSessionStore.prototype.publishRemoval;
+    let attempts = 0;
+    const publish = spyOn(BridgeSessionStore.prototype, "publishRemoval").mockImplementation(
+      async function (this: BridgeSessionStore, id: string) {
+        attempts += 1;
+        if (attempts === 1) await gate.promise;
+        return original.call(this, id);
+      },
+    );
+    try {
+      const closing = close(app, sessionId);
+      await waitUntil(() => attempts === 1, "close publishing removal");
+      const deleting = h.runtime.deleteSession(sessionId);
+      gate.resolve();
+      expect((await closing).status).toBe(200);
+      expect(await deleting).toBe(true);
+      expect(await persistedSessionIds()).not.toContain(sessionId);
+    } finally {
+      gate.resolve();
+      publish.mockRestore();
+    }
+  });
+
+  test("close during detached thread resume refuses the late attachment", async () => {
+    const resume = gated({ thread: threadPayload("thread-1") });
+    const h = await harness({ "thread/resume": resume.respond });
+    const app = closeApp(h);
+    const sessionId = await idleThreadSession(h);
+    const context = h.runtime.getRegistry().getThreadForSession(sessionId)!;
+    await (
+      h.runtime as unknown as { detachThread: (context: typeof context) => Promise<void> }
+    ).detachThread(context);
+    const prompting = h.runtime.prompt(sessionId, {
+      prompt: "late",
+      requestId: "req-late",
+      attachments: [],
+    });
+    await h.child().waitForRequest("thread/resume");
+    expect((await close(app, sessionId)).body).toEqual({ closed: true, retained: true });
+    resume.release();
+    expect(await prompting).toEqual(CLOSING);
+    expect(h.runtime.getStatus(sessionId)).toBeNull();
+    expect(count(h, "turn/start")).toBe(1);
+  });
+
   test("refuses work that arrives after the turn is terminal but before the release", async () => {
     const h = await harness();
     const app = closeApp(h);

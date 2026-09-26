@@ -304,6 +304,8 @@ export interface SessionState {
   /** Coalesces best-effort Cursor metadata replays within one live session. */
   cursorToolReplayTimer?: ReturnType<typeof setTimeout>;
   cursorToolReplayRunning?: boolean;
+  /** Replay children that close must terminate before acknowledging removal. */
+  cursorToolReplayChildren?: Set<AcpProcess>;
   /**
    * The pass this session still owes. `live` runs mid-turn and may only touch
    * settled calls; `final` runs once the turn is over and supersedes a pending

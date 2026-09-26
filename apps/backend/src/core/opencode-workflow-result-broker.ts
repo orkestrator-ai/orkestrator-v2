@@ -22,6 +22,7 @@ import { openCodeMessageFinishReason } from "./opencode-turn-recovery.js";
 import { closeOpenCodeSessionRetaining } from "./opencode-session-close.js";
 
 const TURN_METADATA_KEY = "orkestrator.workflowResultTurn";
+class MissingOpenCodeSessionError extends Error {}
 
 /**
  * Registration may be warmed up, but permissions belong to a dispatched request.
@@ -270,6 +271,7 @@ export class OpenCodeWorkflowResultBroker {
       });
       return "aborted";
     } catch (error) {
+      if (options.missingIsGone && error instanceof MissingOpenCodeSessionError) return "missing";
       throw new ProviderUnavailableError("OpenCode abort is unavailable", { cause: error });
     }
   }
@@ -305,6 +307,7 @@ export class OpenCodeWorkflowResultBroker {
       { sessionID: sessionId, directory: this.directory },
       this.requestOptions(),
     );
+    if (response.response?.status === 404) throw new MissingOpenCodeSessionError();
     assertSdkResponse(response, "OpenCode workflow-result permission read");
     const session = asRecord(response.data);
     if (!session) throw new Error("OpenCode returned no session permission state");

@@ -145,8 +145,7 @@ function requestStop(state: SessionState): void {
  * The session itself was never restored — a tombstone is not a session — so
  * the only thing left that may still be executing is a run the SDK kept alive
  * across the restart. That run is looked up and cancelled; a lookup that
- * cannot answer is not evidence of one, but a run found and not stopped is,
- * and keeps the tombstone.
+ * cannot answer or a run that does not stop keeps the tombstone for a retry.
  *
  * One operation per id, shared by every caller — a close request, the startup
  * sweep, a resume of the same conversation — so a second request can never
@@ -158,12 +157,16 @@ export async function closeRestoredTombstone(
   id: string,
   ackTimeoutMs: number = CLOSE_ACK_TIMEOUT_MS,
 ): Promise<CloseOutcome> {
-  if (!closingTombstones.has(id)) return "closed";
+  if (!closingTombstones.has(id) && !tombstoneCloses.has(id)) return "closed";
   const outcome = await withBudget(finishTombstone(id), ackTimeoutMs);
   return outcome === "timeout" ? "pending" : outcome;
 }
 
 const tombstoneCloses = new Map<string, Promise<CloseOutcome>>();
+const publishingTombstones = new Map<
+  string,
+  NonNullable<ReturnType<typeof closingTombstones.get>>
+>();
 
 /** The shared finishing operation for one tombstone. Rejects only on publication. */
 function finishTombstone(id: string): Promise<CloseOutcome> {
@@ -189,15 +192,23 @@ async function runTombstoneClose(id: string): Promise<CloseOutcome> {
     // Bounded on its own: the run listing has a catalogue timeout and each
     // cancellation an acknowledgement timeout.
     const survivors = await cancelSurvivingRuns(tombstone.agentId, CANCEL_ACK_TIMEOUT_MS);
-    if (survivors === "running") return "pending";
+    if (survivors === "running" || survivors === "unknown") return "pending";
   }
   if (closingTombstones.get(id) !== tombstone) return "closed";
   closingTombstones.delete(id);
+  publishingTombstones.set(id, tombstone);
   try {
-    await persistBarrier();
+    await persistBarrier(() => {
+      // Roll back inside the write queue, before a later snapshot can omit an
+      // unpublished tombstone after a transient write failure.
+      if (!closingTombstones.has(id)) closingTombstones.set(id, tombstone);
+      publishingTombstones.delete(id);
+    });
   } catch (error) {
     if (!closingTombstones.has(id)) closingTombstones.set(id, tombstone);
     throw error;
+  } finally {
+    publishingTombstones.delete(id);
   }
   return "closed";
 }
@@ -213,7 +224,7 @@ async function runTombstoneClose(id: string): Promise<CloseOutcome> {
  * it.
  */
 export async function finishTombstonesForAgent(agentId: string): Promise<void> {
-  const pending = Array.from(closingTombstones.values()).filter(
+  const pending = [...closingTombstones.values(), ...publishingTombstones.values()].filter(
     (tombstone) => tombstone.agentId === agentId,
   );
   for (const tombstone of pending) {
@@ -227,7 +238,7 @@ export async function finishTombstonesForAgent(agentId: string): Promise<void> {
 
 /** Whether adopting `agentId` has to wait for {@link finishTombstonesForAgent}. */
 export function hasTombstoneForAgent(agentId: string): boolean {
-  for (const tombstone of closingTombstones.values()) {
+  for (const tombstone of [...closingTombstones.values(), ...publishingTombstones.values()]) {
     if (tombstone.agentId === agentId) return true;
   }
   return false;

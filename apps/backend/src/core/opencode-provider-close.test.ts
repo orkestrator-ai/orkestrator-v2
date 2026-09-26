@@ -130,6 +130,21 @@ describe("OpenCode close retains the conversation", () => {
     }
   });
 
+  test("treats a 404 ownership read after a successful abort as gone", async () => {
+    const fake = openCodeFake();
+    fake.setSessionGetResponse("gone-session", {
+      error: { name: "NotFound" },
+      response: { status: 404 },
+    });
+    const provider = interactiveProvider(fake);
+    try {
+      await expect(provider.closeSession!("gone-session")).resolves.toBeUndefined();
+      expect(fake.deleteCalls).toEqual([]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("settles the workflow turn it stops", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);

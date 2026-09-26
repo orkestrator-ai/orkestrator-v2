@@ -231,6 +231,31 @@ describe("prompt journal retention", () => {
     expect(state.promptJournal.has("old-0")).toBe(true);
   });
 
+  test("discarding an ambiguous id frees capacity and survives restart", async () => {
+    const state = await harness.createSession();
+    fillWithProtected(state);
+    await persistBarrier();
+    sessions.clear();
+    clientSessionKeys.clear();
+    await loadPersistedState();
+    const restored = sessions.get(state.id)!;
+    const agent = attachFake(restored);
+    expect(restored.promptJournal.size).toBe(MAX_PROMPT_JOURNAL);
+    const discard = await harness.call(`/session/${state.id}/dispatch/discard`, {
+      method: "POST",
+      body: JSON.stringify({ requestId: "old-0" }),
+    });
+    expect(discard.status).toBe(200);
+    expect(restored.promptJournal.get("old-0")?.state).toBe("discarded");
+    expect((await prompt(restored, "old-0")).status).toBe(410);
+    expect((await prompt(restored, "new-1")).status).toBe(202);
+    expect(agent.sends).toHaveLength(1);
+    sessions.clear();
+    clientSessionKeys.clear();
+    await loadPersistedState();
+    expect(sessions.get(state.id)?.promptJournal.has("new-1")).toBe(true);
+  });
+
   test("settled records are evicted first; unresolved evidence is kept", async () => {
     const state = await harness.createSession();
     const agent = attachFake(state);

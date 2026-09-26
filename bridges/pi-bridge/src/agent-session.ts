@@ -345,7 +345,7 @@ export async function createSession(
  * rather than a corner case.
  */
 export async function ensureSession(state: SessionState): Promise<AgentSession> {
-  if (closingSessions.has(state)) throw new Error("This Pi session is closed");
+  if (closingSessions.has(state)) throw new SessionClosingError();
   if (state.session) return state.session;
   state.attaching ??= attach(state).finally(() => {
     state.attaching = undefined;
@@ -575,7 +575,7 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
       // The state is already closed. Disposal is best-effort, and the attach
       // still fails authoritatively below rather than resurrecting it.
     }
-    throw new Error("This Pi session was closed while it was attaching");
+    throw new SessionClosingError();
   }
   state.session = session;
   state.piSessionId = session.sessionId;
@@ -1146,11 +1146,13 @@ export async function resumeSession(
   // session that already owns the file.
   for (const existing of sessions.values()) {
     if (existing.sessionFile === resolved) {
+      if (isSessionClosed(existing)) throw new SessionClosingError();
       if (policy && JSON.stringify(existing.policy) !== JSON.stringify(policy)) {
         if (existing.status === "running" || existing.dispatching) {
           throw new Error("The Pi session is already running");
         }
         await detachSession(existing);
+        if (isSessionClosed(existing)) throw new SessionClosingError();
         existing.policy = resolvePiExecutionPolicy(policy);
       }
       applyComposerPatch(existing, patch);
@@ -1166,6 +1168,7 @@ export async function resumeSession(
   const inFlight = sessionResumptions.get(resolved);
   if (inFlight) {
     const existing = await inFlight;
+    if (isSessionClosed(existing)) throw new SessionClosingError();
     applyComposerPatch(existing, patch);
     existing.lastAccessed = Date.now();
     return existing;

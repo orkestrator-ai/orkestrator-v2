@@ -332,6 +332,7 @@ async function routeGlobal(
       throw new HttpError(409, "Session is already running");
     }
     await reconcileAgentMcp(state);
+    assertSessionOpen(state);
     if (typeof body.readOnly === "boolean") {
       if (
         (state.readOnly === true) !== body.readOnly &&
@@ -364,6 +365,7 @@ async function routeGlobal(
       parseComposerPatch(body),
       isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
     ).catch((error) => {
+      if (error instanceof SessionClosingError) throw error;
       throw new HttpError(400, errorText(error));
     });
     storeAgentMcp(state, body.agentMcp);
@@ -573,6 +575,7 @@ async function routeSession(
     // which is exactly the check `ensureSession` itself makes.
     const wasAttached = Boolean(state.session);
     await ensureSession(state);
+    assertSessionOpen(state);
     // `sessionFile` is what re-attaches to the same Pi conversation after a
     // restart. Create persists the bridge id; this persists the pointer — but
     // only on the call that actually minted one. The backend attaches before
@@ -878,6 +881,7 @@ async function handleSteer(
   if (
     state.session !== session ||
     state.status !== "running" ||
+    isSessionClosed(state) ||
     state.dispatching ||
     piRunId(state) !== expectedRunId
   ) {
@@ -947,6 +951,7 @@ function steerStillPendingOnRun(
   return (
     state.session === session &&
     state.status === "running" &&
+    !isSessionClosed(state) &&
     !state.dispatching &&
     piRunId(state) === expectedRunId &&
     state.pendingSteerDeliveries.some((candidate) => candidate.requestId === requestId)
@@ -1199,6 +1204,7 @@ async function handleAdmittedPrompt(
     if (
       state.session !== session ||
       state.status !== "running" ||
+      isSessionClosed(state) ||
       state.dispatching ||
       state.compacting ||
       piRunId(state) !== expectedRunId
@@ -1220,6 +1226,7 @@ async function handleAdmittedPrompt(
     if (
       state.session !== session ||
       state.status !== "running" ||
+      isSessionClosed(state) ||
       state.dispatching ||
       state.compacting ||
       piRunId(state) !== expectedRunId

@@ -148,7 +148,7 @@ describe("close racing startup", () => {
       expect((await turn).status).toBe(202);
       expect((await closing).status).toBe(200);
       expect(agent.sends).toHaveLength(1);
-      expect(agent.cancels).toBe(1);
+      expect(agent.cancels).toBeGreaterThanOrEqual(1);
       expect(state.activeRun).toBeUndefined();
       expect(state.cancelTurn).toBeUndefined();
       await expectGoneOnDisk(state);
@@ -490,6 +490,30 @@ describe("close of work that will not stop on request", () => {
       return Object.assign(run, { cancel });
     }) as typeof agent.send;
   }
+
+  test("hard abort invokes provider cancellation again after a settled abort", async () => {
+    const state = await harness.createSession();
+    const runGate = deferred();
+    const agent = attachFake(state, { hold: runGate.promise });
+    let cancels = 0;
+    runWithCancel(agent, async () => {
+      cancels += 1;
+    });
+    try {
+      expect((await prompt(state, "run-1")).status).toBe(202);
+      expect((await harness.call(`/session/${state.id}/abort`, { method: "POST" })).status).toBe(
+        200,
+      );
+      expect(cancels).toBe(1);
+      expect(
+        (await harness.call(`/session/${state.id}/hard-abort`, { method: "POST" })).status,
+      ).toBe(200);
+      expect(cancels).toBe(2);
+    } finally {
+      runGate.resolve();
+      await state.turnCompletion;
+    }
+  });
 
   test("a rejected cancel is observed and the close waits for the run's own end", async () => {
     const state = await harness.createSession();

@@ -141,7 +141,6 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
    * the session are refused, so nothing can start a turn between "the last turn
    * is terminal" and the release that would orphan it.
    */
-  protected readonly closingSessionIds = new Set<string>();
   /**
    * Session objects whose removal is being (or has been) published. Their
    * records are never upserted again: a write queued behind the tombstone would
@@ -1375,8 +1374,13 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
   }
 
   async deleteSession(sessionId: string): Promise<boolean> {
+    const session = this.registry.getSession(sessionId);
+    if (session) this.deleteClaims.add(session);
     return (await this.releaseBridgeSession(sessionId, "best-effort")) === "released";
   }
+
+  /** A destructive release wins over a concurrent close's failed-write rollback. */
+  private readonly deleteClaims = new WeakSet<BridgeSession>();
 
   /**
    * Shared release for DELETE and the ordinary tab close.
@@ -1413,11 +1417,11 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       await this.store.publishRemoval(sessionId);
     } catch (error) {
       if (publication === "strict") {
-        this.retiredSessions.delete(session);
-        // Updates skipped while the fence was up are written back, and a
-        // tombstone that landed before its write reported failure is replaced by
-        // the live record again: the registry and the disk agree it still exists.
-        if (this.registry.getSession(sessionId) === session) await this.persistSession(session);
+        if (!this.deleteClaims.has(session)) {
+          this.retiredSessions.delete(session);
+          // Restore updates only if no concurrent DELETE has claimed removal.
+          if (this.registry.getSession(sessionId) === session) await this.persistSession(session);
+        }
         return "unpublished";
       }
       console.warn(

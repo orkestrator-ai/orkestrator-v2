@@ -9,7 +9,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { writeFile } from "node:fs/promises";
 import { useCursorAgentForTests } from "./agent-session.js";
-import { loadPersistedState } from "./persistence.js";
+import { MAX_CLOSING_TOMBSTONES } from "./config.js";
+import { loadPersistedState, persistBarrier } from "./persistence.js";
 import { finishRestoredTombstones } from "./session-close.js";
 import { closingTombstones, sessions } from "./state.js";
 import { fakeAgent } from "./testing/fake-agent.js";
@@ -92,6 +93,66 @@ function useRuns(
 }
 
 describe("restored closes", () => {
+  test("an unreadable run catalogue leaves the tombstone for a retry", async () => {
+    await restartWithTombstones([{ id: "closing-1", agentId: "agent-x" }]);
+    const run = survivingRun("run-old");
+    let lists = 0;
+    const restore = useRuns(async () => {
+      lists += 1;
+      if (lists === 1) throw new Error("store unavailable");
+      return { items: [run] };
+    });
+    try {
+      const first = await harness.call("/session/closing-1/close", { method: "POST" });
+      expect(first.status).toBe(503);
+      expect(closingTombstones.has("closing-1")).toBe(true);
+      closingTombstones.clear();
+      await loadPersistedState();
+      expect(closingTombstones.has("closing-1")).toBe(true);
+      expect((await harness.call("/session/closing-1/close", { method: "POST" })).status).toBe(200);
+      expect(run.cancels).toBe(1);
+    } finally {
+      restore();
+    }
+  });
+
+  test("a publication in flight still fences a second close and resume", async () => {
+    await restartWithTombstones([{ id: "closing-1", agentId: "agent-x" }]);
+    const restore = useRuns(async () => ({ items: [] }));
+    const hold = holdPublication();
+    try {
+      const first = harness.call("/session/closing-1/close", { method: "POST" });
+      await hold.held;
+      const second = harness.call("/session/closing-1/close", { method: "POST" });
+      const resume = harness.call("/session/resume", {
+        method: "POST",
+        body: JSON.stringify({ sessionId: "agent-x", policy: defaultPolicy }),
+      });
+      hold.failWith(new Error("disk full"));
+      hold.release();
+      expect((await first).status).toBe(503);
+      expect((await second).status).toBe(503);
+      expect((await resume).status).not.toBe(201);
+      expect(closingTombstones.has("closing-1")).toBe(true);
+    } finally {
+      hold.restore();
+      restore();
+    }
+  });
+
+  test("more than the tombstone cap refuses publication without dropping an id", async () => {
+    const entries = Array.from({ length: MAX_CLOSING_TOMBSTONES + 1 }, (_, index) => ({
+      id: `closing-${index}`,
+    }));
+    await restartWithTombstones(entries);
+    await expect(persistBarrier()).rejects.toThrow("Too many pending Cursor session closes");
+    closingTombstones.clear();
+    await loadPersistedState();
+    expect(closingTombstones.size).toBe(entries.length);
+    expect(closingTombstones.has("closing-0")).toBe(true);
+    expect(closingTombstones.has(`closing-${MAX_CLOSING_TOMBSTONES}`)).toBe(true);
+  });
+
   test("startup finishes them: a surviving run is cancelled and the removal published", async () => {
     await restartWithTombstones([{ id: "closing-1", agentId: "agent-x" }, { id: "closing-2" }]);
     const run = survivingRun("run-old");

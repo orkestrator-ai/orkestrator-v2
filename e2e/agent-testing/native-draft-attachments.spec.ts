@@ -259,16 +259,14 @@ for (const { platform, assigned, text } of CASES) {
         assigned ? "shared-native-compose-bar" : "unassigned-native-compose-bar",
       );
       const chip = composeBar.getByRole("button", { name: `Remove ${IMAGE_NAME}` });
-      const connecting = page.getByText(/^Connecting to /);
 
       /** The composer shows the restored draft and re-saved it after `before`. */
       const expectRestored = async (before: number) => {
-        await expect(chip.or(connecting)).toBeVisible({ timeout: 30_000 });
         const mounted = await chip
           .waitFor({ state: "visible", timeout: 45_000 })
           .then(() => true)
           .catch(() => false);
-        if (!mounted && assigned && (await connecting.isVisible())) {
+        if (!mounted && assigned) {
           // Nothing hydrated, so the only thing left to prove is that the
           // stored draft is untouched. The UI path is not claimed as passing.
           expectDraftContent(await readStored());

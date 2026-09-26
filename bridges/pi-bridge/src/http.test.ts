@@ -24,11 +24,12 @@ const { setDeleteCancelTimeoutForTests } = await import("./http.js");
 // froze a different token and every request here would 401 — a failure that
 // looks like broken routing rather than a test that was never self-sufficient.
 const { authToken: TOKEN } = await import("./config.js");
-const { newSessionState, setAgentSessionTestHooks } = await import("./agent-session.js");
+const { isSessionClosed, newSessionState, setAgentSessionTestHooks } =
+  await import("./agent-session.js");
 const { refreshModels } = await import("./models.js");
 const { setModelRuntimeFactoryForTests } = await import("./runtime.js");
 const { sessions, clientSessionKeys, piRunId } = await import("./state.js");
-const { loadPersistedState } = await import("./persistence.js");
+const { loadPersistedState, setPersistWriteGateForTests } = await import("./persistence.js");
 const { applySessionEvent } = await import("./translate.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 const { buildCommandCatalogue, publishCommandCatalogue } = await import("./commands.js");
@@ -906,6 +907,33 @@ describe("successful lifecycle routes", () => {
     }
   });
 
+  test("an attach racing close answers session-closing", async () => {
+    const state = seedSession();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    setAgentSessionTestHooks({
+      createAgentSession: async () => {
+        await gate;
+        return fakeAgentSession();
+      },
+    });
+    try {
+      const attaching = call(`/session/${state.id}/attach`, { method: "POST", body: "{}" });
+      await waitFor(() => state.attaching !== undefined);
+      const closing = call(`/session/${state.id}/close`, { method: "POST" });
+      await waitFor(() => isSessionClosed(state));
+      release();
+      expect((await attaching).status).toBe(409);
+      expect((await closing).status).toBe(200);
+    } finally {
+      release();
+      sessions.delete(state.id);
+      resetTestDependencies();
+    }
+  });
+
   test("accepts and completes a prompt through the HTTP route", async () => {
     const state = seedSession();
     const prompts: string[] = [];
@@ -1390,6 +1418,49 @@ describe("cancel", () => {
 });
 
 describe("steering", () => {
+  test("withdraws a steer whose session closes during the Pi call", async () => {
+    const state = seedSession();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = false;
+    let clears = 0;
+    state.session = fakeAgentSession({
+      steer: async () => {
+        entered = true;
+        await gate;
+      },
+      clearQueue: () => {
+        clears += 1;
+        return { steering: [], followUp: [] };
+      },
+      pendingMessageCount: 1,
+    });
+    state.status = "running";
+    state.promptSequence = 3;
+    try {
+      const steering = call(`/session/${state.id}/steer`, {
+        method: "POST",
+        body: JSON.stringify({
+          input: "late instruction",
+          requestId: "steer-close",
+          expectedRunId: piRunId(state),
+        }),
+      });
+      await waitFor(() => entered);
+      const closing = call(`/session/${state.id}/close`, { method: "POST" });
+      await waitFor(() => isSessionClosed(state));
+      release();
+      expect((await steering).status).toBe(409);
+      expect(clears).toBe(1);
+      await closing;
+    } finally {
+      release();
+      sessions.delete(state.id);
+    }
+  });
+
   test("answers idle rather than failing when no turn is running", async () => {
     const state = seedSession();
     // The caller's view of the turn is a poll behind, so a steer that lands
@@ -1766,6 +1837,89 @@ describe("steering", () => {
 });
 
 describe("provider-owned follow-ups", () => {
+  test("close during prepared-journal publication prevents a follow-up enqueue", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "pi-follow-up-close-"));
+    const previous = process.env.PI_BRIDGE_STATE_DIR;
+    process.env.PI_BRIDGE_STATE_DIR = stateDirectory;
+    const state = seedSession();
+    state.status = "running";
+    let followUps = 0;
+    state.session = fakeAgentSession({
+      followUp: async () => {
+        followUps += 1;
+      },
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = false;
+    setPersistWriteGateForTests(async () => {
+      if (!held && state.promptJournal.get("follow-up-barrier")?.state === "prepared") {
+        held = true;
+        await gate;
+      }
+    });
+    try {
+      const following = call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "Do this next", requestId: "follow-up-barrier" }),
+      });
+      await waitFor(() => held);
+      const closing = call(`/session/${state.id}/close`, { method: "POST" });
+      await waitFor(() => isSessionClosed(state));
+      release();
+      expect((await following).status).toBe(409);
+      expect(followUps).toBe(0);
+      await closing;
+    } finally {
+      release();
+      setPersistWriteGateForTests();
+      sessions.delete(state.id);
+      if (previous === undefined) delete process.env.PI_BRIDGE_STATE_DIR;
+      else process.env.PI_BRIDGE_STATE_DIR = previous;
+      await rm(stateDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("withdraws a follow-up whose session closes during Pi input handling", async () => {
+    const state = seedSession();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = false;
+    let clears = 0;
+    state.session = fakeAgentSession({
+      followUp: async () => {
+        entered = true;
+        await gate;
+      },
+      clearQueue: () => {
+        clears += 1;
+        return { steering: [], followUp: [] };
+      },
+      pendingMessageCount: 1,
+    });
+    state.status = "running";
+    try {
+      const following = call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "Do this next", requestId: "follow-up-close" }),
+      });
+      await waitFor(() => entered);
+      const closing = call(`/session/${state.id}/close`, { method: "POST" });
+      await waitFor(() => isSessionClosed(state));
+      release();
+      expect((await following).status).toBe(409);
+      expect(clears).toBe(1);
+      await closing;
+    } finally {
+      release();
+      sessions.delete(state.id);
+    }
+  });
+
   test("journals and exposes a second prompt while a turn is running", async () => {
     const state = seedSession();
     const followUps: string[] = [];

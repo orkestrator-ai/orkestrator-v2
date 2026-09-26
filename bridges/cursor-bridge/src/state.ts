@@ -158,7 +158,7 @@ export type BridgeMessagePart =
 
 export interface PromptJournalEntry {
   requestId: string;
-  state: "prepared" | "accepted" | "completed" | "failed" | "ambiguous";
+  state: "prepared" | "accepted" | "completed" | "failed" | "ambiguous" | "discarded";
   acceptedAt: number;
   /** Set when this id answered an idle `/steer` locally. */
   local?: boolean;

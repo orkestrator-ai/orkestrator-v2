@@ -147,13 +147,21 @@ export async function dispatchPrompt(
     state.revision += 1;
   });
 
-  // One cancellation per run, however many callers ask: a user's cancel, a
-  // parked one and a permanent close can all reach this handle.
+  // Share only an in-flight cancellation. A later hard abort must reach the
+  // provider again if the first cancellation did not stop the run.
   let cancelling: Promise<void> | undefined;
-  state.cancelTurn = () =>
-    (cancelling ??= (async () => {
-      await (diagnostics ? diagnostics.cancel(run, "user") : run.cancel().catch(() => undefined));
-    })());
+  state.cancelTurn = () => {
+    if (!cancelling) {
+      const attempt = (async () => {
+        await (diagnostics ? diagnostics.cancel(run, "user") : run.cancel().catch(() => undefined));
+      })();
+      const shared = attempt.finally(() => {
+        if (cancelling === shared) cancelling = undefined;
+      });
+      cancelling = shared;
+    }
+    return cancelling;
+  };
 
   // The user cancelled while `send` was still open, so this turn was stopped
   // before it had anything to stop. Honour it now rather than letting a turn
@@ -876,7 +884,12 @@ export function journal(
  * are the ones retention may drop.
  */
 function protectedJournalEntry(entry: PromptJournalEntry): boolean {
-  return !entry.local && entry.state !== "completed" && entry.state !== "failed";
+  return (
+    !entry.local &&
+    entry.state !== "completed" &&
+    entry.state !== "failed" &&
+    entry.state !== "discarded"
+  );
 }
 
 /**

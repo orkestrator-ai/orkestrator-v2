@@ -120,6 +120,38 @@ function fakeAgentSession(sessionFile: string, onDispose: () => void): AgentSess
 }
 
 describe("POST /session/:id/close", () => {
+  test("resume refuses a JSONL file whose existing owner is closing", async () => {
+    const sessionDir = await mkdtemp(join(tmpdir(), "pi-close-resume-"));
+    const previous = process.env.PI_SESSION_DIR;
+    process.env.PI_SESSION_DIR = sessionDir;
+    const sessionFile = join(sessionDir, "conversation.jsonl");
+    await writeFile(sessionFile, "", "utf8");
+    const state = newSessionState();
+    state.sessionFile = sessionFile;
+    state.status = "running";
+    sessions.set(state.id, state);
+    const hung = deferred();
+    state.cancelTurn = () => hung.promise;
+    setDeleteCancelTimeoutForTests(5);
+    try {
+      expect((await close(state.id)).status).toBe(503);
+      const response = await nativeFetch(`${origin}/session/resume`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ sessionId: sessionFile }),
+      });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ kind: "session-closing" });
+    } finally {
+      hung.resolve();
+      setDeleteCancelTimeoutForTests();
+      sessions.delete(state.id);
+      if (previous === undefined) delete process.env.PI_SESSION_DIR;
+      else process.env.PI_SESSION_DIR = previous;
+      await rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
   test("releases a completed session but keeps its Pi JSONL conversation", async () => {
     const sessionFile = join(directory, "conversation.jsonl");
     await writeFile(sessionFile, '{"type":"session"}\n');

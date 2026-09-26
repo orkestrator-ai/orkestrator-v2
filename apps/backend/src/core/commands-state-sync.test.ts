@@ -3098,6 +3098,7 @@ describe("durable tab teardown commands", () => {
           peekBridge: async () => ({ port: 4000, authToken: "test-token" }),
           fetch: deleteRequest as unknown as typeof fetch,
           deleteTimeoutMs: 20,
+          closeTimeoutMs: 20,
         },
       },
     );

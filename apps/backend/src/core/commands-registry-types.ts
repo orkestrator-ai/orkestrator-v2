@@ -35,6 +35,7 @@ export type CommandRegistryOptions = {
     ) => Promise<{ port: number; authToken: string } | null>;
     fetch?: typeof fetch;
     deleteTimeoutMs?: number;
+    closeTimeoutMs?: number;
     /** Clock for the per-intent retry backoff (tests). */
     now?: () => number;
   };

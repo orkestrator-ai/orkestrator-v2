@@ -135,6 +135,8 @@ import {
 } from "@orkestrator/protocol/native-agent";
 
 export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
+  /** Close admission fence shared with lazy thread reattachment. */
+  protected readonly closingSessionIds = new Set<string>();
   async start(): Promise<void> {
     if (this.started) return;
     if (this.startPromise) return this.startPromise;
@@ -512,7 +514,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    */
   protected async ensureAttached(sessionId: string): Promise<ThreadContext | undefined> {
     const session = this.registry.getSession(sessionId);
-    if (!session) return undefined;
+    if (!session || this.closingSessionIds.has(sessionId)) return undefined;
 
     const existing = this.registry.getThreadForSession(sessionId);
     const generation = this.options.engine.info().generation;
@@ -533,7 +535,10 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       await this.synchronizeAttachedModelOverrides(attached, modelsBeforeAttach);
       const pendingHydrate = this.transcriptHydrateInFlight.get(attached.threadId);
       if (pendingHydrate) await pendingHydrate;
-      return attached;
+      return this.registry.getSession(sessionId) === session &&
+        !this.closingSessionIds.has(sessionId)
+        ? attached
+        : undefined;
     }
     // No thread id yet: lazy creation on first prompt, nothing to re-attach.
     if (!session.threadId) return undefined;
@@ -542,6 +547,13 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     try {
       const modelsBeforeAttach = this.snapshotBoundModelOverrides(threadId);
       const thread = await this.options.engine.resumeThread(threadId, { config: session.config });
+      if (
+        this.registry.getSession(sessionId) !== session ||
+        this.closingSessionIds.has(sessionId)
+      ) {
+        await this.options.engine.unsubscribeThread(thread.handle).catch(() => undefined);
+        return undefined;
+      }
       // Always through `attach`: it is idempotent for an existing context, and it
       // is the only thing that registers this session in `bridgeSessionIds`.
       const context = this.registry.attach(sessionId, threadId, {
@@ -558,7 +570,10 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       await this.hydrateAttachedTranscript(context, session, thread);
       await this.synchronizeAttachedModelOverrides(context, modelsBeforeAttach);
       this.reattachedThreads += 1;
-      return context;
+      return this.registry.getSession(sessionId) === session &&
+        !this.closingSessionIds.has(sessionId)
+        ? context
+        : undefined;
     } catch (error) {
       // Only a proven missing rollout invalidates the durable binding. A
       // timeout, restart, or temporary RPC failure is ambiguous and must leave

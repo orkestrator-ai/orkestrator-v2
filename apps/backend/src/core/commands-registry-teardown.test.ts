@@ -38,7 +38,11 @@ async function withTeardown<T>(
     providerCloses: ProviderClose[];
     clock: { now: number };
   }) => Promise<T>,
-  options: { deleteTimeoutMs?: number; closeProvider?: ProviderCloseResponder } = {},
+  options: {
+    deleteTimeoutMs?: number;
+    closeTimeoutMs?: number;
+    closeProvider?: ProviderCloseResponder;
+  } = {},
 ): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-tab-close-"));
   const storage = new StorageService(dataDir);
@@ -77,6 +81,7 @@ async function withTeardown<T>(
       peekBridge: async () => ({ port: 4000, authToken: "test-token" }),
       fetch: fetchImpl as unknown as typeof fetch,
       ...(options.deleteTimeoutMs ? { deleteTimeoutMs: options.deleteTimeoutMs } : {}),
+      ...(options.closeTimeoutMs ? { closeTimeoutMs: options.closeTimeoutMs } : {}),
       now: () => clock.now,
     },
   });
@@ -137,6 +142,27 @@ async function mapTab(
 const retained = () => Response.json({ closed: true, retained: true });
 
 describe("tab close retains conversation history", () => {
+  test("a bridge close can finish after the legacy request budget", async () => {
+    await withTeardown(
+      async () => {
+        await Bun.sleep(70);
+        return retained();
+      },
+      async ({ invoke, storage }) => {
+        const key = await mapTab(storage, "claude", "tab-slow", "claude-slow");
+        await expect(
+          invoke("teardown_tab", {
+            environmentId: "e1",
+            tabId: "tab-slow",
+            kind: "claude-native",
+          }),
+        ).resolves.toEqual({ completed: true });
+        expect(await storage.getNativeAgentSession(key)).toBeNull();
+      },
+      { deleteTimeoutMs: 20, closeTimeoutMs: 200 },
+    );
+  });
+
   test("closes every bridge platform through POST close and never DELETE", async () => {
     await withTeardown(retained, async ({ invoke, storage, calls, released }) => {
       for (const [agent, kind] of [
@@ -340,7 +366,7 @@ describe("tab close retains conversation history", () => {
         await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
         expect(await storage.getNativeAgentSession(key)).toBeNull();
       },
-      { deleteTimeoutMs: 20 },
+      { deleteTimeoutMs: 20, closeTimeoutMs: 20 },
     );
   });
 

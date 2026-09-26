@@ -40,6 +40,7 @@ export function registerTeardownCommands(
   type TabTeardownIntent = NonNullable<Environment["tabTeardownIntents"]>[string];
   const tabTeardownFetch = options.tabTeardown?.fetch ?? fetch;
   const tabTeardownDeleteTimeoutMs = Math.max(1, options.tabTeardown?.deleteTimeoutMs ?? 5_000);
+  const tabTeardownCloseTimeoutMs = Math.max(1, options.tabTeardown?.closeTimeoutMs ?? 20_000);
   const tabTeardownReconciliationConcurrency = 4;
   /**
    * Pending intents are retried by the backend's periodic (60 s, coalesced)
@@ -87,17 +88,16 @@ export function registerTeardownCommands(
     method: "POST" | "DELETE",
     headers: Record<string, string>,
   ): Promise<Response> => {
+    const timeoutMs = method === "POST" ? tabTeardownCloseTimeoutMs : tabTeardownDeleteTimeoutMs;
     const controller = new AbortController();
     let rejectTimeout!: (error: Error) => void;
     const timeoutResult = new Promise<Response>((_resolve, reject) => {
       rejectTimeout = reject;
     });
     const timeout = setTimeout(() => {
-      rejectTimeout(
-        new Error(`Tab teardown request timed out after ${tabTeardownDeleteTimeoutMs}ms`),
-      );
+      rejectTimeout(new Error(`Tab teardown request timed out after ${timeoutMs}ms`));
       controller.abort();
-    }, tabTeardownDeleteTimeoutMs);
+    }, timeoutMs);
     timeout.unref?.();
     try {
       return await Promise.race([

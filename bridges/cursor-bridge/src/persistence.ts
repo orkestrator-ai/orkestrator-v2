@@ -50,6 +50,8 @@ let tail: Promise<void> = Promise.resolve();
  * waiting write however many callers pile up.
  */
 let pending: Promise<void> | undefined;
+/** Rollbacks that must run before a failed write releases the next queued snapshot. */
+let pendingFailureHooks: Set<() => void> | undefined;
 /** Shutdown has begun. Best-effort writes stop; mandatory ones are refused. */
 let admissionClosed = false;
 /** Callers currently waiting in {@link persistBarrier}. */
@@ -105,14 +107,14 @@ export function schedulePersist(): void {
  * resolves. A configured directory that cannot be written is a failure, not
  * stateless mode.
  */
-export async function persistBarrier(): Promise<void> {
+export async function persistBarrier(onFailure?: () => void): Promise<void> {
   if (!stateFilePath()) return;
   if (admissionClosed) {
     throw new PersistenceError("persistence-closed", "Cursor bridge is shutting down");
   }
   barrierWaiters += 1;
   try {
-    await enqueue();
+    await enqueue(onFailure);
   } finally {
     barrierWaiters -= 1;
   }
@@ -127,15 +129,27 @@ export function persistBarrierWaitersForTests(): number {
   return barrierWaiters;
 }
 
-function enqueue(): Promise<void> {
-  if (pending) return pending;
-  const operation = tail.then(() => {
-    // The snapshot is taken synchronously at the start of `persistNow`, so
-    // from this point a new caller's mutation is not covered and must queue
-    // a write of its own.
-    pending = undefined;
-    return persistNow();
-  });
+function enqueue(onFailure?: () => void): Promise<void> {
+  if (pending) {
+    if (onFailure) pendingFailureHooks?.add(onFailure);
+    return pending;
+  }
+  const failureHooks = new Set<() => void>();
+  if (onFailure) failureHooks.add(onFailure);
+  pendingFailureHooks = failureHooks;
+  const operation = tail
+    .then(() => {
+      // The snapshot is taken synchronously at the start of `persistNow`, so
+      // from this point a new caller's mutation is not covered and must queue
+      // a write of its own.
+      pending = undefined;
+      pendingFailureHooks = undefined;
+      return persistNow();
+    })
+    .catch((error) => {
+      for (const rollback of failureHooks) rollback();
+      throw error;
+    });
   pending = operation;
   tail = operation.catch(() => undefined);
   return operation;
@@ -162,6 +176,7 @@ export async function drainPersistence(): Promise<void> {
 export function reopenPersistenceForTests(): void {
   admissionClosed = false;
   pending = undefined;
+  pendingFailureHooks = undefined;
   failing = undefined;
   lastShed = new Set();
 }
@@ -229,8 +244,14 @@ function buildSnapshot(): {
   const envelope: Omit<PersistedState, "sessions"> = {
     version: 1,
     provider: "cursor",
-    ...(closing.length > 0 ? { closing: closing.slice(-MAX_CLOSING_TOMBSTONES) } : {}),
+    ...(closing.length > 0 ? { closing } : {}),
   };
+  if (closing.length > MAX_CLOSING_TOMBSTONES) {
+    throw new PersistenceError(
+      "persistence-budget-exceeded",
+      "Too many pending Cursor session closes to publish safely",
+    );
+  }
   const budgeted: BudgetedSession[] = live.map((state) => ({
     id: state.id,
     lastAccessed: state.lastAccessed,
@@ -380,7 +401,7 @@ export async function loadPersistedState(): Promise<void> {
   // retried close completes it (see `closeRestoredTombstone`).
   const closing = new Set<string>();
   if (Array.isArray(parsed.closing)) {
-    for (const entry of parsed.closing.slice(-MAX_CLOSING_TOMBSTONES)) {
+    for (const entry of parsed.closing) {
       if (!isObject(entry) || !nonBlank(entry.id) || entry.id.length > 128) continue;
       closing.add(entry.id);
       closingTombstones.set(entry.id, {
@@ -579,7 +600,7 @@ function readCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
 }
 
-function readJournalState(value: unknown): "completed" | "failed" | "ambiguous" {
-  if (value === "completed" || value === "failed") return value;
+function readJournalState(value: unknown): "completed" | "failed" | "ambiguous" | "discarded" {
+  if (value === "completed" || value === "failed" || value === "discarded") return value;
   return "ambiguous";
 }

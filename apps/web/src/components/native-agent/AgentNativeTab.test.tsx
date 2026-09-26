@@ -1163,6 +1163,43 @@ describe("AgentNativeTab", () => {
     }
   });
 
+  test("an assigned Grok composer restores its image after a cold remount", async () => {
+    const tabId = "tab-grok-draft-remount";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const draftKey = composeDraftKey("grok", "env-1", sessionKey);
+    const image = {
+      id: "grok-image-1",
+      type: "image",
+      name: "layout.png",
+      path: "/tmp/layout.png",
+      previewUrl: "data:image/png;base64,abc",
+    };
+    composeDraftRecords.set(draftKey, {
+      draftKey,
+      ownerType: "environment",
+      ownerId: "env-1",
+      value: { text: "Review the layout", mentions: [], attachments: [image] },
+      updatedAt: "2026-09-15T00:00:00.000Z",
+      revision: 1,
+    });
+
+    const first = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
+    expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
+    await waitFor(() => expect(composeDraftRecords.get(draftKey)?.revision).toBeGreaterThan(1));
+    const savedRevision = composeDraftRecords.get(draftKey)!.revision;
+    first.unmount();
+    useNativeComposeStore.setState({ drafts: new Map() });
+
+    const remounted = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
+    expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
+    expect((await screen.findByRole("textbox")).textContent).toBe("Review the layout");
+    await waitFor(() =>
+      expect(composeDraftRecords.get(draftKey)?.revision).toBeGreaterThan(savedRevision),
+    );
+    expect(composeDraftRecords.get(draftKey)?.value).toMatchObject({ attachments: [image] });
+    remounted.unmount();
+  });
+
   test("unlocks a preserved draft when authoritative readiness recovers", async () => {
     let authenticationRequired = true;
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({

@@ -10,7 +10,6 @@ import {
   BUILD_PIPELINE_AGENTS,
   LAUNCH_RETRY_MS,
   MAX_QUEUE_DISPATCH_ATTEMPTS,
-  OPENCODE_INCOMPLETE_TURN_CONTINUATION,
   OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT,
   OPENCODE_RECOVERY_MAX_CANDIDATES,
   OPENCODE_RECOVERY_RETRY_BASE_MS,
@@ -26,6 +25,7 @@ import {
   isEnvironmentReadyForAgents,
   nonBlank,
   openCodeIncompleteTurnRequestId,
+  openCodeTurnRecoveryPrompt,
   readProviderStatus,
   resolveAgentPlatformSettings,
   resolveStartupLaunchFromSettings,
@@ -644,7 +644,8 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           this.openCodeRecoveryCandidates.delete(session.key);
           return;
         }
-        latest.retryAt = this.now() + OPENCODE_RECOVERY_RETRY_BASE_MS;
+        latest.retryAt =
+          result === "retry" ? this.now() + OPENCODE_RECOVERY_RETRY_BASE_MS : result.retryAt;
       })
       .catch((error) => {
         const latest = this.openCodeRecoveryCandidates.get(session.key);
@@ -677,12 +678,14 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
    * stalled shape (`unknown` finish, reasoning only, no error, no pending
    * tools) must be present, and the fixed continuation prompt as the latest
    * user turn means recovery already ran and stalled again — that turn is left
-   * for the user. Dispatch itself goes through the durable per-request-id
-   * journal, so a re-observed edge or a backend restart cannot double-send.
+   * for the user. A turn ended by a retryable provider error is continued the
+   * same way, after a backoff and within a small retry budget. Dispatch itself
+   * goes through the durable per-request-id journal, so a re-observed edge or
+   * a backend restart cannot double-send.
    */
   protected async recoverOpenCodeIncompleteTurnOnce(
     session: PersistedNativeAgentSession,
-  ): Promise<"complete" | "retry"> {
+  ): Promise<"complete" | "retry" | { retryAt: number }> {
     if (this.stopped) return "complete";
     const environment = await this.storage.getEnvironment(session.environmentId);
     if (
@@ -708,8 +711,19 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       limit: OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT,
     });
     if (this.stopped) return "complete";
-    const initialRecovery = inspectOpenCodeIncompleteTurn(initialMessages);
+    const initialRecovery = inspectOpenCodeIncompleteTurn(initialMessages, {
+      historyComplete: initialMessages.length < OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT,
+      now: this.now(),
+    });
     if (!initialRecovery) return "complete";
+    if (
+      initialRecovery.action === "continue" &&
+      initialRecovery.notBefore !== undefined &&
+      initialRecovery.notBefore > this.now()
+    ) {
+      return { retryAt: initialRecovery.notBefore };
+    }
+    const providerError = initialRecovery.reason === "provider-error";
     let disposition: "complete" | "retry" = "complete";
     let confirmedAssistantMessageId: string | undefined;
     try {
@@ -720,7 +734,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           logicalSessionKey: session.logicalSessionKey,
           origin: session.origin,
           interactionPolicy: session.interactionPolicy,
-          prompt: OPENCODE_INCOMPLETE_TURN_CONTINUATION,
+          prompt: openCodeTurnRecoveryPrompt(initialRecovery),
           requestId: openCodeIncompleteTurnRequestId(initialRecovery.assistantMessageId),
         },
         async (lockedSession, lockedProvider) => {
@@ -769,7 +783,10 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
             disposition = "retry";
             return { dispatch: false };
           }
-          const recovery = inspectOpenCodeIncompleteTurn(messages);
+          const recovery = inspectOpenCodeIncompleteTurn(messages, {
+            historyComplete: messages.length < OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT,
+            now: this.now(),
+          });
           if (!recovery) return { dispatch: false };
           if (recovery.assistantMessageId !== initialRecovery.assistantMessageId) {
             disposition = "retry";
@@ -778,7 +795,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           confirmedAssistantMessageId = recovery.assistantMessageId;
           if (recovery.action === "exhausted") {
             console.warn(
-              `[native-agent] OpenCode turn for ${session.environmentId} ended incomplete again after an automatic continuation; leaving it for the user`,
+              providerError
+                ? `[native-agent] OpenCode turn for ${session.environmentId} failed with a provider error again after automatic retries; leaving it for the user`
+                : `[native-agent] OpenCode turn for ${session.environmentId} ended incomplete again after an automatic continuation; leaving it for the user`,
             );
             return {
               dispatch: false,
@@ -790,7 +809,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
             };
           }
           console.warn(
-            `[native-agent] Continuing an incomplete OpenCode turn for ${session.environmentId}`,
+            providerError
+              ? `[native-agent] Retrying an OpenCode turn that failed with a provider error for ${session.environmentId}`
+              : `[native-agent] Continuing an incomplete OpenCode turn for ${session.environmentId}`,
           );
           // Publish synchronously after the last awaited guard. A direct/manual
           // claim now fails until provider acceptance finishes, closing the

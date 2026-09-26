@@ -104,6 +104,7 @@ import {
 import {
   inspectOpenCodeIncompleteTurn,
   openCodeIncompleteTurnRequestId,
+  openCodeTurnRecoveryPrompt,
   OPENCODE_INCOMPLETE_TURN_CONTINUATION,
 } from "./opencode-turn-recovery.js";
 
@@ -806,6 +807,7 @@ export {
   stagePromptImages,
   inspectOpenCodeIncompleteTurn,
   openCodeIncompleteTurnRequestId,
+  openCodeTurnRecoveryPrompt,
   OPENCODE_INCOMPLETE_TURN_CONTINUATION,
 };
 

@@ -74,6 +74,8 @@ describe("sendPrompt", () => {
           content: [{ type: "text", text: "Inspect the implementation" }],
         },
         parent_tool_use_id: null,
+        // The client uuid every result answering this prompt echoes.
+        uuid: expect.any(String),
       },
     ]);
   });

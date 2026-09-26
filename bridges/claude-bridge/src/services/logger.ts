@@ -52,6 +52,7 @@ const DEBUG_EVENTS = new Set([
   "[session-manager] Resolving promise for question:",
   "[session-manager] SDK env PATH",
   "[session-manager] SDK event received",
+  "[session-manager] Result for other input skipped",
   "[session-manager] Session init data captured",
   "[session-manager] Session initialized, stored SDK session ID:",
   "[session-manager] Starting query",

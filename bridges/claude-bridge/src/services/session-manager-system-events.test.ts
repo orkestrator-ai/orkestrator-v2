@@ -22,6 +22,7 @@ import {
   normalizePersistedSessionMessages,
   parseTaskNotification,
   refreshSettledToolRows,
+  subagentInterruptedNoticeText,
 } from "./session-manager-messages.js";
 import { THINKING_TOKENS_EMIT_INTERVAL_MS, memoryRecallPart } from "./session-manager-prompt.js";
 
@@ -779,6 +780,37 @@ describe("interruptions", () => {
     expect(
       session.messages.filter((message) => message.role === "user").map((m) => m.content),
     ).toEqual(["hello"]);
+  });
+
+  test("a subagent's interruption marker names the subagent, not the user", async () => {
+    // The CLI writes the same marker into a background agent's sidechain when
+    // it stops that agent on its own, e.g. winding down idle background work.
+    const subagentMarker = (parentToolUseId: string) => ({
+      type: "user",
+      parent_tool_use_id: parentToolUseId,
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "[Request interrupted by user for tool use]" }],
+      },
+    });
+    const session = await runTurn("subagent-interrupt-marker", (call) => {
+      call.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "agent-perf",
+        tool_use_id: "agent-call-1",
+        description: "Perf pass",
+      });
+      call.push(subagentMarker("agent-call-1"));
+      // One stop is one row, however many frames repeat the marker.
+      call.push(subagentMarker("agent-call-1"));
+      call.push(subagentMarker("unknown-call"));
+    });
+    expect(statusRows(session.messages).map((part) => part!.content)).toEqual([
+      subagentInterruptedNoticeText("Perf pass"),
+      subagentInterruptedNoticeText(),
+    ]);
+    expect(subagentInterruptedNoticeText("Perf pass")).toBe("Subagent stopped: Perf pass");
   });
 });
 

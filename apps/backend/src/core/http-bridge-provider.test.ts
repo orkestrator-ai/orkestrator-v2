@@ -2110,6 +2110,51 @@ describe("HTTP bridge progressive transcript", () => {
     expect(snapshot.omittedParts).toBeUndefined();
   });
 
+  test.each([
+    {
+      name: "a byte trim",
+      value: { truncated: true, truncationReason: "bytes", omittedMessages: 19 },
+      expected: 19,
+    },
+    {
+      name: "a count trim",
+      value: { truncated: true, truncationReason: "count", omittedMessages: 19 },
+      expected: undefined,
+    },
+    {
+      name: "a byte trim without whole messages",
+      value: { truncated: true, truncationReason: "bytes", omittedParts: 3 },
+      expected: undefined,
+    },
+    {
+      name: "a malformed count",
+      value: { truncated: true, truncationReason: "bytes", omittedMessages: "19" },
+      expected: undefined,
+    },
+  ])("reads byte-omitted messages from $name", async ({ value, expected }) => {
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          version: 1,
+          status: "snapshot",
+          token: "bt1.byte-omitted",
+          value: {
+            messages: [{ id: "m1", content: "hello", parts: [] }],
+            startIndex: 19,
+            messageWindow: value,
+            complete: false,
+            generation: 1,
+            contentEpoch: 1,
+          },
+        }),
+      codexConnection,
+    );
+
+    const snapshot = await provider.transcriptSnapshot!("session-1", transcriptOptions);
+    if ("unchanged" in snapshot) throw new Error("expected a snapshot");
+    expect(snapshot.byteOmittedMessages).toBe(expected);
+  });
+
   test("rejects a malformed transcript envelope instead of showing an empty tab", async () => {
     for (const body of [
       { version: 1, status: "snapshot" },

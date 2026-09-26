@@ -1357,10 +1357,16 @@ export interface HeldSdkPrompt {
  * AsyncIterable avoids that single-turn path, but only while the iterable
  * itself remains open; a one-message generator still closes at the first
  * result because `canUseTool` makes the SDK wait there before ending input.
+ *
+ * `promptUuid` becomes the prompt's client uuid, which the CLI echoes on every
+ * result that answers it — the only way to tell this turn's result from one
+ * for a turn the CLI started itself. It also becomes the prompt's transcript
+ * uuid. Messages pushed later carry their own.
  */
 export function holdSdkPromptOpen(
   sdkPrompt: string | AsyncIterable<SDKUserMessage>,
   signal: AbortSignal,
+  promptUuid?: string,
 ): HeldSdkPrompt {
   let closed = false;
   let resolveClosed!: () => void;
@@ -1390,18 +1396,25 @@ export function holdSdkPromptOpen(
 
   async function* stream(): AsyncIterable<SDKUserMessage> {
     try {
+      // One uuid names one message: only the first prompt message takes it.
+      let promptUuidAvailable = Boolean(promptUuid);
+      const withPromptUuid = (message: SDKUserMessage): SDKUserMessage => {
+        if (!promptUuidAvailable || message.uuid) return message;
+        promptUuidAvailable = false;
+        return { ...message, uuid: promptUuid as SDKUserMessage["uuid"] };
+      };
       if (typeof sdkPrompt === "string") {
-        yield {
+        yield withPromptUuid({
           type: "user",
           message: {
             role: "user",
             content: [{ type: "text", text: sdkPrompt }],
           },
           parent_tool_use_id: null,
-        };
+        });
       } else {
         for await (const message of sdkPrompt) {
-          yield message;
+          yield withPromptUuid(message);
         }
       }
       while (!closed) {

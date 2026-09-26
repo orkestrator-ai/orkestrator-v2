@@ -112,7 +112,7 @@ describe("InitializationLogs", () => {
     first.unmount();
     render(<InitializationLogs containerId="container-1" />);
     await waitFor(() => expect(screen.getByText("kept tail")).toBeTruthy());
-    expect(screen.queryByText("Loading container logs...")).toBeNull();
+    expect(screen.queryByText("Loading container logs...") === null).toBe(true);
   });
 
   test("polls once a second by default and not while the document is hidden", async () => {

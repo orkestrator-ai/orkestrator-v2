@@ -245,6 +245,37 @@ describe("DesignHistoryPanel", () => {
     });
   });
 
+  test("long undo and redo labels wrap inside the pane instead of overflowing it", async () => {
+    history.mockResolvedValue(page([entry("a")]));
+    const long = 'Change styles "3 · Road to PR — stage flow & PR-stage states"';
+    renderPanel(
+      projection(
+        {},
+        {
+          canRedo: true,
+          undoLabel: long,
+          redoLabel: long,
+          canUndo: false,
+          undoBlockedReason: `"Frame 2" changed after this edit`,
+        },
+      ),
+    );
+    await screen.findByText("Edit a");
+
+    const section = screen.getByRole("region", { name: "Undo and redo" });
+    // A bare `grid` sizes its implicit column to max-content, so a long
+    // button label would push every row past the pane edge.
+    expect(section.className).toContain("grid-cols-1");
+    expect(section.className).toContain("[overflow-wrap:anywhere]");
+    for (const name of [/^Undo Change styles/, /^Redo Change styles/]) {
+      const button = within(section).getByRole("button", { name });
+      expect(button.className).toContain("whitespace-normal");
+      expect(button.className).not.toContain("whitespace-nowrap");
+      expect(button.className).toContain("h-auto");
+      expect(button.className).toContain("max-w-full");
+    }
+  });
+
   test("a blocked undo explains why and offers the checkpoint instead", async () => {
     history.mockResolvedValue(
       page([entry("agent", { actor: "agent", label: "Agent edit" }), entry("mine")]),

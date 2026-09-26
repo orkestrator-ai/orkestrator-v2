@@ -1,8 +1,6 @@
 # 10 — Observe completion of a particular run
 
-Status: Planned.
-Depends on: [05](05-operation-receipts-and-idempotency.md),
-[09](09-sessions-and-prompt-dispatch.md).
+Status: Verified — Claude, Codex, OpenCode qualified; Pi, Cursor, Grok withdrawn as `unsupported`; see record.
 Index: [CLI commands plan](00-cli-commands-index.md).
 
 ## Target behavior
@@ -75,12 +73,36 @@ late frames and result expiry. Live qualification remains in step 14.
 
 ## Acceptance and handoff
 
-- [ ] Completion is positively correlated to the selected request.
-- [ ] State/results survive the documented restart and disconnected-client cases.
-- [ ] Missing provider evidence remains unknown/unsupported.
-- [ ] Wait deadlines/signals leave work running and recovery identity available.
-- [ ] Multi-session and fast-turn cases cannot produce false success.
+- [x] Completion is positively correlated to the selected request.
+- [x] State/results survive the documented restart and disconnected-client cases.
+- [x] Missing provider evidence remains unknown/unsupported.
+- [x] Wait deadlines/signals leave work running and recovery identity available.
+- [x] Multi-session and fast-turn cases cannot produce false success.
 
 Publish a provider completion matrix with evidence and limitations. If one
 mapping fails qualification, withdraw that capability alone and preserve its
 run evidence; do not downgrade uncertainty into successful idle status.
+
+## Implementation record
+
+Revision: working tree on `a9337716`, 2026-09-26.
+
+- Observer: [`run-observer.ts`](../../../../apps/backend/src/core/public-api/run-observer.ts)
+  settles a run only from evidence about its own request (dispatch journal,
+  turn activity, per-request turn outcome, one coalesced provider read).
+  Providers without a qualified mapping end `unknown`/`unsupported`.
+- Qualification found that OpenCode reads idle both after a failed turn and
+  just after a prompt is accepted. Both were settled as success. Fixed with a
+  request-scoped `turnTerminalError` provider read (failed/aborted → failed,
+  no finished answer → pending).
+
+| Provider | Completion | Evidence |
+| --- | --- | --- |
+| Claude | qualified | live local + container runs, file assertion + follow-up |
+| Codex | qualified | live local + container runs (model pinned) |
+| OpenCode | qualified | live local ×2 + container after the fix; unit tests for failed/aborted/unfinished |
+| Pi, Cursor, Grok | unsupported | not live-qualified; `capabilities` reports it |
+
+- Waiting: `client-waits.test.ts` (exit 0 only on success, 6 interaction,
+  7 unknown, 5 deadline keeps the receipt), `public-api-sessions.test.ts`
+  (multi-session, consecutive runs).

@@ -12,6 +12,7 @@ export default defineConfig({
     "browser-gateway.spec.ts",
     "design-canvas.spec.ts",
     "web-annotations-gateway.spec.ts",
+    "cli-ui.spec.ts",
   ],
   fullyParallel: false,
   workers: 1,

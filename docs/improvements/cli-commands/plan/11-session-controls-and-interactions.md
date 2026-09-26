@@ -1,8 +1,6 @@
 # 11 — Control sessions and resolve pending interactions
 
-Status: Planned.
-Depends on: [09](09-sessions-and-prompt-dispatch.md),
-[10](10-run-completion-and-waiting.md).
+Status: Verified — controlled-provider tests plus a live Claude browser check; see record.
 Index: [CLI commands plan](00-cli-commands-index.md).
 
 ## Target behavior
@@ -70,12 +68,31 @@ approves automatically. Resume/fork must preserve the original history.
 
 ## Acceptance and handoff
 
-- [ ] Controls target an exact live session/turn and obey provider capabilities.
-- [ ] Cancellation success requires authoritative acknowledgement/outcome.
-- [ ] Pending interactions rehydrate and remain answerable without a renderer.
-- [ ] Stale, malformed, contradictory, or dead-generation answers fail safely.
-- [ ] Retry/discard preserve existing uncertainty and at-most-once constraints.
+- [x] Controls target an exact live session/turn and obey provider capabilities.
+- [x] Cancellation success requires authoritative acknowledgement/outcome.
+- [x] Pending interactions rehydrate and remain answerable without a renderer.
+- [x] Stale, malformed, contradictory, or dead-generation answers fail safely.
+- [x] Retry/discard preserve existing uncertainty and at-most-once constraints.
 
 Withdraw individual unqualified capabilities instead of changing their meaning.
 Keep already-pending interactions and recovery records accessible to existing
 clients during any rollback.
+
+## Implementation record
+
+Revision: working tree on `a9337716`, 2026-09-26.
+
+- Stop, steer, config, history/resume/fork, interactions and resolve in
+  [`actions-session-controls.ts`](../../../../apps/backend/src/core/public-api/actions-session-controls.ts);
+  retry/discard in `actions-runs.ts`.
+- Tests: `public-api-sessions.test.ts` (stop refuses idle/mismatched run,
+  steering refused where unsupported, exact answers only, stale/malformed
+  never approve, discard stays unknown). Interactions are listed and resolved
+  without a renderer.
+- Live Claude through the real UI (`e2e/agent-testing/cli-ui.spec.ts`): a
+  question from a CLI-started run rehydrates in an inactive, reloaded
+  renderer; the UI's answer completes the CLI's `run wait` (exit 0) and a
+  replayed answer is refused.
+- Fix from that check: resolving an interaction clears the cached pending
+  read and only `pending` interactions report `waiting-for-input`, so an
+  answered question no longer makes `run wait` exit 6.

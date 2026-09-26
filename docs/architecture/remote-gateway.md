@@ -29,6 +29,16 @@ Do not run a standalone backend alongside Electron against the same data
 directory. Do not use Tailscale Funnel; the backend is intended to stay
 private to the tailnet.
 
+The published package runs the same service with `orkestrator serve` (the
+bare `orkestrator --host …` forms keep working). Its client commands
+(`orkestrator project list`, `environment start`, …) attach to an
+already-running backend through `POST /__orkestrator/invoke` with the bearer
+token, using one versioned command, `public_action`; they never start a
+backend. Once serving, every backend publishes a mode-0600
+`<data dir>/backend-instance.json` naming its endpoint, generation and the
+path of its auth file (never the token). See
+[public-cli.md](public-cli.md).
+
 ## Connecting `orkestrator.dev`
 
 Both devices must be on the same Tailscale network. The hosted client requires

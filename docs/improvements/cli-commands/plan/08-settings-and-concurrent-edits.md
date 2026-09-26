@@ -1,7 +1,6 @@
 # 08 — Edit project and environment settings safely
 
-Status: Planned.
-Depends on: [06](06-project-commands.md), [07](07-environment-lifecycle.md).
+Status: Verified — see record.
 Index: [CLI commands plan](00-cli-commands-index.md).
 
 ## Target behavior
@@ -67,11 +66,27 @@ No test should pass merely because the write response echoed the requested value
 
 ## Acceptance and handoff
 
-- [ ] Public setting fields have typed validation and explicit unset behavior.
-- [ ] Updates are atomic at their documented scope and revision conflicts are enforced.
-- [ ] Concurrent callers preserve unrelated state and all launch-intent fields.
-- [ ] Responses distinguish storage changes from live application.
-- [ ] UI rehydration reads the same authoritative effective configuration.
+- [x] Public setting fields have typed validation and explicit unset behavior.
+- [x] Updates are atomic at their documented scope and revision conflicts are enforced.
+- [x] Concurrent callers preserve unrelated state and all launch-intent fields.
+- [x] Responses distinguish storage changes from live application.
+- [x] UI rehydration reads the same authoritative effective configuration.
 
 Keep new revision fields backward-readable. Reverting CLI config support must
 not restore a stale whole-config write path or discard saved overrides.
+
+## Implementation record
+
+Revision: working tree on `a9337716`, 2026-09-26.
+
+- Typed descriptors (`PUBLIC_PROJECT_SETTINGS`, `PUBLIC_ENVIRONMENT_SETTINGS`),
+  patch-only updates with content-hash revisions checked under the owning
+  lock ([`actions-settings.ts`](../../../../apps/backend/src/core/public-api/actions-settings.ts),
+  `updateProjectAtRevision`/`patch*AtRevision`). `null` is not unset;
+  `--unset` is explicit. Each value reports `application`
+  (`applied`/`next-start`/`next-environment`).
+- `updateEnvironment` no longer drops `initialConversationMode`.
+- Tests: `public-api-projects.test.ts` (partial edits, stale revision,
+  unknown keys, launch intent preserved); `local-lifecycle` scenario stale
+  revision. UI rehydration: `cli-ui.spec.ts` (value in the open dialog and
+  after reload).

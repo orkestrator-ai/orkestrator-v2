@@ -4,6 +4,7 @@
     "build": {
       "inputs": [
         "$TURBO_DEFAULT$",
+        "src/**",
         "$TURBO_ROOT$/tsconfig.json",
         "$TURBO_ROOT$/apps/backend/package.json",
         "$TURBO_ROOT$/apps/backend/tsconfig.json",

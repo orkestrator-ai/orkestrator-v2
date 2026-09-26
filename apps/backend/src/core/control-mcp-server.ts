@@ -1,11 +1,9 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
-import { normalizeAgentPlatforms, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { nativeAgentCapabilities, type AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   COORDINATOR_ASYNC_CONTRACT,
   coordinatorRuntimeId,
@@ -15,7 +13,21 @@ import {
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
+import { canonicalJson } from "@orkestrator/protocol/public-api";
 import { z } from "zod";
+import {
+  allEnvironments,
+  compactMessages,
+  environmentSummary,
+  launchEnvironmentCreateInput,
+  launchOptions,
+  MAX_TRANSCRIPT_MESSAGES,
+  nativeTab,
+  paneTabs,
+  projectSummary,
+  terminalSessionId,
+  validateSelection,
+} from "./control-shared-actions.js";
 import { registerControlReviewActions } from "./control-mcp-review-actions.js";
 import { normalizedWorkflow, workflowSummary } from "./control-workflow-summary.js";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
@@ -25,8 +37,6 @@ const CONTROL_MCP_DESCRIPTOR = "control-mcp.json";
 export const DEFAULT_CONTROL_MCP_PORT = 34_122;
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const MAX_PROMPT_LENGTH = 100_000;
-const MAX_TRANSCRIPT_MESSAGES = 100;
-const MAX_TRANSCRIPT_BYTES = 1024 * 1024;
 const MAX_TERMINAL_OUTPUT_CHARS = 256 * 1024;
 const COORDINATOR_CREDENTIAL_TTL_MS = 12 * 60 * 60 * 1_000;
 const MAX_COORDINATOR_CREDENTIALS = 512;
@@ -116,7 +126,8 @@ export type CoordinatorControlConnection = {
   token: string;
 };
 
-export type ControlMcpInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+export type { ControlMcpInvoker } from "./control-shared-actions.js";
+import type { ControlMcpInvoker } from "./control-shared-actions.js";
 
 function configuredControlMcpPort(): number {
   const configured = process.env.ORKESTRATOR_CONTROL_MCP_PORT?.trim();
@@ -254,154 +265,6 @@ function toolResult(value: JsonRecord, summary: JsonRecord = value) {
   };
 }
 
-function projectSummary(project: JsonRecord): JsonRecord {
-  return {
-    id: project.id,
-    name: project.name,
-    addedAt: project.addedAt,
-    order: project.order,
-    hasLocalCheckout: typeof project.localPath === "string" && project.localPath.length > 0,
-  };
-}
-
-function environmentSummary(environment: JsonRecord): JsonRecord {
-  return {
-    id: environment.id,
-    projectId: environment.projectId,
-    name: environment.name,
-    branch: environment.branch,
-    environmentType: environment.environmentType,
-    status: environment.status,
-    setupPhase: environment.setupPhase,
-    lifecycleOperation: environment.lifecycleOperation,
-    lifecycleError: environment.lifecycleError,
-    agentActivityState: environment.agentActivityState,
-    hasUnreadWork: environment.hasUnreadWork,
-    pendingAgentLaunch: environment.pendingAgentLaunch,
-    startupAgentSession: environment.startupAgentSession,
-    prUrl: environment.prUrl,
-    prState: environment.prState,
-    createdAt: environment.createdAt,
-    lastActivityAt: environment.lastActivityAt,
-  };
-}
-
-function paneTabs(layout: unknown): JsonRecord[] {
-  if (!isRecord(layout)) return [];
-  const tabs: JsonRecord[] = [];
-  const activePaneId = typeof layout.activePaneId === "string" ? layout.activePaneId : null;
-  const visit = (node: unknown): void => {
-    if (!isRecord(node)) return;
-    if (node.kind === "leaf" && typeof node.id === "string" && Array.isArray(node.tabs)) {
-      for (const rawTab of node.tabs) {
-        if (!isRecord(rawTab) || typeof rawTab.id !== "string") continue;
-        const native = isRecord(rawTab.nativeAgentData) ? rawTab.nativeAgentData : undefined;
-        tabs.push({
-          id: rawTab.id,
-          type: rawTab.type,
-          title: rawTab.displayTitle,
-          paneId: node.id,
-          active: activePaneId === node.id && node.activeTabId === rawTab.id,
-          ...(native
-            ? {
-                agent: native.platform,
-                hasProviderSession:
-                  typeof native.sessionId === "string" && native.sessionId.length > 0,
-              }
-            : {}),
-        });
-      }
-      return;
-    }
-    if (node.kind === "split" && Array.isArray(node.children)) {
-      for (const child of node.children) visit(child);
-    }
-  };
-  visit(layout.root);
-  return tabs;
-}
-
-function terminalSessionId(environment: JsonRecord, environmentId: string, tabId: string): string {
-  return environment.environmentType === "local"
-    ? `local-${environmentId}:${tabId}`
-    : `${String(environment.containerId ?? "")}:${tabId}`;
-}
-
-function nativeTab(
-  layout: unknown,
-  tabId: string,
-): { tab: JsonRecord; agent: AgentPlatform } | null {
-  if (!isRecord(layout)) return null;
-  let result: { tab: JsonRecord; agent: AgentPlatform } | null = null;
-  const visit = (node: unknown): void => {
-    if (result || !isRecord(node)) return;
-    if (node.kind === "leaf" && Array.isArray(node.tabs)) {
-      const tab = node.tabs.find((candidate) => isRecord(candidate) && candidate.id === tabId);
-      if (!isRecord(tab) || tab.type !== "agent-native" || !isRecord(tab.nativeAgentData)) return;
-      const platform = tab.nativeAgentData.platform;
-      if (
-        platform === "claude" ||
-        platform === "codex" ||
-        platform === "cursor" ||
-        platform === "grok" ||
-        platform === "opencode" ||
-        platform === "pi"
-      ) {
-        result = { tab, agent: platform };
-      }
-      return;
-    }
-    if (node.kind === "split" && Array.isArray(node.children)) {
-      for (const child of node.children) visit(child);
-    }
-  };
-  visit(layout.root);
-  return result;
-}
-
-function compactMessages(messages: unknown[]): { messages: JsonRecord[]; truncated: boolean } {
-  const compact: JsonRecord[] = [];
-  let bytes = 2;
-  let truncated = false;
-  for (const raw of messages.slice(-MAX_TRANSCRIPT_MESSAGES).reverse()) {
-    if (!isRecord(raw)) continue;
-    const content = typeof raw.content === "string" ? raw.content.slice(0, 100_000) : "";
-    const parts = Array.isArray(raw.parts)
-      ? raw.parts.slice(0, 100).flatMap((part) => {
-          if (!isRecord(part)) return [];
-          return [
-            {
-              type: part.type,
-              ...(typeof part.toolName === "string" ? { toolName: part.toolName } : {}),
-              ...(typeof part.name === "string" ? { name: part.name } : {}),
-              ...(typeof part.status === "string" ? { status: part.status } : {}),
-            },
-          ];
-        })
-      : [];
-    const message: JsonRecord = {
-      id: raw.id,
-      role: raw.role,
-      content,
-      createdAt: raw.createdAt,
-      ...(typeof raw.modelId === "string" ? { modelId: raw.modelId } : {}),
-      ...(parts.length > 0 ? { parts } : {}),
-    };
-    const size = Buffer.byteLength(JSON.stringify(message), "utf8") + 1;
-    if (bytes + size > MAX_TRANSCRIPT_BYTES) {
-      truncated = true;
-      break;
-    }
-    bytes += size;
-    compact.push(message);
-  }
-  compact.reverse();
-  return {
-    messages: compact,
-    truncated: truncated || messages.length > compact.length,
-  };
-}
-
 function ticketSummary(task: JsonRecord): JsonRecord {
   return {
     id: task.id,
@@ -432,199 +295,6 @@ const agentSelectionSchema = z.object({
   model: z.string().trim().min(1).max(500),
   reasoningEffort: z.string().trim().min(1).max(100).optional(),
 });
-
-async function allEnvironments(
-  invoke: ControlMcpInvoker,
-  projectId?: string,
-): Promise<JsonRecord[]> {
-  if (projectId) return asArray(await invoke("get_environment_snapshots", { projectId }));
-  const projects = asArray(await invoke("get_projects"));
-  const groups = await Promise.all(
-    projects.map((project) =>
-      invoke("get_environment_snapshots", { projectId: project.id }).then(asArray),
-    ),
-  );
-  return groups.flat();
-}
-
-function reasoningOptions(ids: unknown): Array<{ id: string; label: string }> {
-  if (!Array.isArray(ids)) return [];
-  return ids.flatMap((id) => {
-    if (typeof id !== "string" || !id.trim()) return [];
-    const label =
-      id === "xhigh"
-        ? "Extra high"
-        : id.replace(/[-_]+/g, " ").replace(/^\w/, (letter) => letter.toUpperCase());
-    return [{ id, label }];
-  });
-}
-
-async function cachedLaunchModels(
-  invoke: ControlMcpInvoker,
-  projectId: string,
-): Promise<AgentModel[]> {
-  const [rawCache, rawOpenCode] = await Promise.all([
-    invoke<unknown>("get_agent_model_catalog_cache"),
-    invoke<unknown>("get_opencode_model_catalog_cache", { projectId }),
-  ]);
-  const cache = isRecord(rawCache) ? rawCache : {};
-  const catalogModels = (key: string): JsonRecord[] => {
-    const catalog = isRecord(cache[key]) ? cache[key] : undefined;
-    return catalog ? asArray(catalog.models) : [];
-  };
-  const claude = catalogModels("claude").flatMap((model): AgentModel[] => {
-    if (typeof model.id !== "string" || typeof model.name !== "string") return [];
-    const reasoning = reasoningOptions(model.supportedEffortLevels ?? ["low", "medium", "high"]);
-    return [
-      {
-        platform: "claude",
-        id: model.id,
-        label: model.name,
-        providerLabel: "Claude",
-        reasoning,
-        defaultReasoningId: reasoning.some(({ id }) => id === "high") ? "high" : reasoning[0]?.id,
-        parameters: [
-          {
-            id: "thinking",
-            label: "Thinking",
-            kind: "select",
-            options: [
-              { id: "adaptive", label: "Adaptive" },
-              { id: "budget-8192", label: "8K budget" },
-              { id: "budget-16384", label: "16K budget" },
-              { id: "disabled", label: "Disabled" },
-            ],
-            defaultValue: "adaptive",
-            scope: "session",
-          },
-        ],
-        supportsSpeed: model.supportsFastMode !== false,
-        supportsMode: true,
-      },
-    ];
-  });
-  const codex = catalogModels("codex").flatMap((model): AgentModel[] => {
-    if (typeof model.id !== "string" || typeof model.name !== "string") return [];
-    const explicitReasoning = asArray(model.reasoningOptions).flatMap((option) =>
-      typeof option.effort === "string" && typeof option.label === "string"
-        ? [{ id: option.effort, label: option.label }]
-        : [],
-    );
-    const reasoning =
-      explicitReasoning.length > 0
-        ? explicitReasoning
-        : reasoningOptions(model.reasoningEfforts ?? ["medium", "high"]);
-    return [
-      {
-        platform: "codex",
-        id: model.id,
-        label: model.name,
-        providerLabel: "Codex",
-        reasoning,
-        defaultReasoningId:
-          typeof model.defaultReasoningEffort === "string"
-            ? model.defaultReasoningEffort
-            : reasoning[0]?.id,
-        supportsSpeed: true,
-        supportsMode: true,
-      },
-    ];
-  });
-  const openCodeSnapshot = isRecord(rawOpenCode) ? rawOpenCode : {};
-  const openCode = asArray(openCodeSnapshot.models).flatMap((model): AgentModel[] => {
-    if (
-      typeof model.id !== "string" ||
-      typeof model.name !== "string" ||
-      typeof model.provider !== "string"
-    ) {
-      return [];
-    }
-    const variants = Array.isArray(model.variants)
-      ? model.variants.filter((variant): variant is string => typeof variant === "string")
-      : [];
-    return [
-      {
-        platform: "opencode",
-        id: model.id,
-        label: model.name,
-        providerLabel: model.provider,
-        reasoning: [{ id: "default", label: "Default" }, ...reasoningOptions(variants)],
-        defaultReasoningId: "default",
-        supportsSpeed: false,
-        supportsMode: false,
-        ...(typeof model.contextWindow === "number" ? { contextWindow: model.contextWindow } : {}),
-        ...(typeof model.supportsImageInput === "boolean"
-          ? { supportsImageInput: model.supportsImageInput }
-          : {}),
-      },
-    ];
-  });
-  const providerNeutral = ["cursor", "grok", "pi"].flatMap((key) =>
-    catalogModels(key).filter(
-      (model): model is JsonRecord & AgentModel =>
-        typeof model.id === "string" &&
-        typeof model.label === "string" &&
-        typeof model.platform === "string",
-    ),
-  );
-  return [...claude, ...codex, ...openCode, ...providerNeutral];
-}
-
-async function launchOptions(
-  invoke: ControlMcpInvoker,
-  projectId: string,
-  preferredEnvironmentId?: string,
-): Promise<{ enabledAgents: AgentPlatform[]; models: AgentModel[] }> {
-  const project = await invoke<unknown>("get_project", { projectId });
-  if (!isRecord(project)) throw new Error(`Project not found: ${projectId}`);
-  const config = await invoke<unknown>("get_config");
-  const global = isRecord(config) && isRecord(config.global) ? config.global : {};
-  const enabledAgents = normalizeAgentPlatforms(global.enabledAgentPlatforms);
-  const environments = await allEnvironments(invoke, projectId);
-  const environmentId =
-    preferredEnvironmentId ??
-    (typeof environments[0]?.id === "string" ? environments[0].id : undefined);
-  let models: AgentModel[] = [];
-  if (environmentId) {
-    const raw = await invoke<unknown>("get_native_agent_model_catalog", { environmentId });
-    if (Array.isArray(raw)) models = raw as AgentModel[];
-  } else {
-    models = await cachedLaunchModels(invoke, projectId);
-  }
-  return { enabledAgents, models };
-}
-
-async function validateSelection(
-  invoke: ControlMcpInvoker,
-  input: {
-    projectId: string;
-    environmentId?: string;
-    agent: AgentPlatform;
-    modelId?: string;
-    reasoningId?: string;
-    fastMode?: boolean;
-  },
-): Promise<void> {
-  const options = await launchOptions(invoke, input.projectId, input.environmentId);
-  if (!options.enabledAgents.includes(input.agent)) {
-    throw new Error(`Agent platform is disabled: ${input.agent}`);
-  }
-  if (input.reasoningId && !input.modelId) throw new Error("reasoningId requires modelId");
-  if (input.fastMode === true && !nativeAgentCapabilities(input.agent).composer.speed) {
-    throw new Error(`Fast mode is not available for ${input.agent}`);
-  }
-  if (!input.modelId) return;
-  const model = options.models.find(
-    (candidate) => candidate.platform === input.agent && candidate.id === input.modelId,
-  );
-  if (!model) throw new Error(`Model is not available for ${input.agent}: ${input.modelId}`);
-  if (input.reasoningId && !(model.reasoning ?? []).some(({ id }) => id === input.reasoningId)) {
-    throw new Error(`Reasoning option is not available for ${input.modelId}: ${input.reasoningId}`);
-  }
-  if (input.fastMode === true && model.supportsSpeed !== true) {
-    throw new Error(`Fast mode is not available for ${input.modelId}`);
-  }
-}
 
 /**
  * What every coordinator delegation tool says about what happens next.
@@ -1174,29 +844,7 @@ async function createControlMcp(
         assertCoordinatorLaunchBaseMatchesCheckout(input, repository);
       }
       await validateSelection(invoke, input);
-      const createInput = {
-        projectId: input.projectId,
-        name: input.name,
-        networkAccessMode: input.networkAccessMode,
-        initialPrompt: input.prompt,
-        environmentType: input.environmentType,
-        namingPrompt: input.name ? undefined : input.prompt,
-        agentSettings: {
-          defaultAgent: input.agent,
-          platforms: {
-            [input.agent]: {
-              mode: "native",
-              ...(typeof input.fastMode === "boolean" ? { fastMode: input.fastMode } : {}),
-            },
-          },
-        },
-        pendingAgentLaunch: true,
-        initialAgentModel: input.modelId,
-        initialReasoningEffort: input.reasoningId,
-        initialConversationMode: input.conversationMode,
-        ...(input.baseBranch ? { delegationBaseBranch: input.baseBranch } : {}),
-        ...(input.baseCommit ? { delegationBaseCommit: input.baseCommit } : {}),
-      };
+      const createInput = launchEnvironmentCreateInput(input);
       const launch = coordinatorScope
         ? await invoke<unknown>("launch_coordinator_environment", {
             scope: coordinatorScope,
@@ -1207,6 +855,12 @@ async function createControlMcp(
             environment: await invoke<unknown>("create_environment", {
               ...createInput,
               controlRequestId: input.requestId,
+              // Reusing a requestId with a different launch is a caller
+              // mistake; the fingerprint turns it into a conflict instead of
+              // silently returning the first environment.
+              controlRequestFingerprint: createHash("sha256")
+                .update(canonicalJson(createInput))
+                .digest("hex"),
             }),
           };
       const environment = isRecord(launch) ? launch.environment : null;

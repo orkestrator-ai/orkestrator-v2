@@ -215,6 +215,12 @@ run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts"
 description = "One-shot real-stack design-canvas validation with disposable profile cleanup"
 run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts --design"
 
+[tasks."test:cli:scenarios"]
+description = "Run targeted CLI scenarios against isolated packaged backends (credential-free unless --provider)"
+raw_args = true
+depends = ["build:cli"]
+run = "bun packages/cli/scripts/run-scenarios.ts"
+
 [tasks."test:agent:docker"]
 description = "Run the Docker agent browser fixture"
 env = { ORKESTRATOR_AGENT_TEST_DOCKER = "1" }

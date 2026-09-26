@@ -26,6 +26,7 @@ Refreshed 2026-09-17 against the current tree.
 | [control-mcp.md](architecture/control-mcp.md) | Living | Control MCP operator guide. |
 | [mcp-management.md](architecture/mcp-management.md) | Living | Per-provider MCP server management: sources, precedence, safe writes, secrets, apply states, evidence. |
 | [remote-gateway.md](architecture/remote-gateway.md) | Living | Standalone backend, Tailscale Serve, flags, troubleshooting. |
+| [public-cli.md](architecture/public-cli.md) | Living | `orkestrator` client commands: backend selection, JSON/exit contract, request keys and retention, lifecycle waits, settings, sessions, request-specific completion, exec, scenarios. |
 | [event-snapshot-recovery.md](architecture/event-snapshot-recovery.md) | Living | Which sequence each consumer may compare, revisioned view snapshots/outcomes, bounded client hydration, best-effort PR notifications. |
 | [web-page-annotations.md](architecture/web-page-annotations.md) | Living | Preview notes, capture spool, backend threads, native dispatch, review, migration. Real-stack gates pending. |
 | [browser-previews.md](architecture/browser-previews.md) | Living | Service previews: registry, desktop tunnel, private HTTPS origins, relay, kill switch, rollback. |
@@ -79,7 +80,7 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 
 | Document | Status | Notes |
 | --- | --- | --- |
-| [CLI commands plan](improvements/cli-commands/plan/00-cli-commands-index.md) | Active | Fifteen planned steps for project/environment control, durable prompt runs, and targeted CLI testing; implementation has not started. Source: [CLI review](improvements/cli-commands.md). |
+| [CLI commands plan](improvements/cli-commands/plan/00-cli-commands-index.md) | Active | Steps 01–14 verified (unit, real-backend, packaged, local and container scenarios, live Claude/Codex/OpenCode, real-browser CLI→UI and question rehydration); step 15 awaits review and merge. Pi/Cursor/Grok live runs and macOS are outstanding. Living guide: [public-cli.md](architecture/public-cli.md). Source: [CLI review](improvements/cli-commands.md). |
 | [Inconsistency remediation plan](improvements/inconsistencies/plan/00-index.md) | Active | Planned work in eleven numbered steps, based on the 2026-09-21 inconsistency review; implementation has not started. |
 | [Inconsistency review](improvements/incocnsistencies.md) | Historical | Nine findings against revision `88c2f9c`; the implementation plan tracks resolution. Original requested filename retained. |
 

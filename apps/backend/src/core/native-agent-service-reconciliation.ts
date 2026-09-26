@@ -1342,7 +1342,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     );
     // This read is the last look at the previous turn before the next prompt
     // replaces its status; keep its content-free outcome for observers.
-    await this.recordObservedTurnOutcome(session, status, statusDetail);
+    await this.recordObservedTurnOutcome(session, status, statusDetail, provider);
     await this.assertEnvironmentLive(queue.environmentId);
     if (status === "running") {
       const requestId =

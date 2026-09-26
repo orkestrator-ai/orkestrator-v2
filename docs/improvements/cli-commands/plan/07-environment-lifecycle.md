@@ -1,8 +1,6 @@
 # 07 — Control environment creation and lifecycle
 
-Status: Planned.
-Depends on: [04](04-shared-actions-and-discovery.md),
-[05](05-operation-receipts-and-idempotency.md), [06](06-project-commands.md).
+Status: Verified — local and container lifecycle qualified; see record.
 Index: [CLI commands plan](00-cli-commands-index.md).
 
 ## Target behavior
@@ -73,12 +71,27 @@ Begin step 14's packaged local lifecycle scenario now.
 
 ## Acceptance and handoff
 
-- [ ] Each lifecycle action returns/queryably retains its own receipt and resource IDs.
-- [ ] Ready means setup-ready and setup failure never looks successful.
-- [ ] Disconnect does not cancel accepted work or cleanup.
-- [ ] Request conflicts, deletion races, and restart interruption are explicit.
-- [ ] Local/container paths use existing ownership and lifecycle implementations.
+- [x] Each lifecycle action returns/queryably retains its own receipt and resource IDs.
+- [x] Ready means setup-ready and setup failure never looks successful.
+- [x] Disconnect does not cancel accepted work or cleanup.
+- [x] Request conflicts, deletion races, and restart interruption are explicit.
+- [x] Local/container paths use existing ownership and lifecycle implementations.
 
 Do not advertise untested container support for a new lifecycle behavior.
 Withdrawing CLI verbs must leave backend recovery/cleanup of accepted actions
 enabled and preserve operation history.
+
+## Implementation record
+
+Revision: working tree on `a9337716`, 2026-09-26.
+
+- Lifecycle wraps the registered commands in
+  [`actions-environments.ts`](../../../../apps/backend/src/core/public-api/actions-environments.ts);
+  `--wait ready` means setup-ready, setup failure fails the operation and
+  keeps the environment. Create validates an explicit base commit. Stop,
+  recreate and delete drain exec workers first.
+- Legacy MCP/UI create conflicts on a reused request with a different intent
+  (`controlRequestFingerprint`).
+- Evidence: `local-lifecycle`, `setup-failure`, `client-exit` scenarios
+  (local) and `local-lifecycle` (container, image
+  `orkestrator-v2:dev-7e8f587df147`); see [step 14](14-targeted-testing-and-qualification.md#evidence).

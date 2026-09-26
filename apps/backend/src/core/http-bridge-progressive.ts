@@ -131,11 +131,18 @@ export async function readHttpBridgeTranscriptSnapshot(input: {
     typeof value.contentEpoch === "string" || Number.isSafeInteger(value.contentEpoch)
       ? String(value.contentEpoch)
       : "legacy";
-  const omittedParts = asRecord(value.messageWindow)?.omittedParts;
+  const messageWindow = asRecord(value.messageWindow);
+  const omittedParts = messageWindow?.omittedParts;
+  const omittedMessages = messageWindow?.omittedMessages;
   return {
     messages: value.messages,
     ...(Number.isSafeInteger(omittedParts) && (omittedParts as number) > 0
       ? { omittedParts: omittedParts as number }
+      : {}),
+    ...(messageWindow?.truncationReason === "bytes" &&
+    Number.isSafeInteger(omittedMessages) &&
+    (omittedMessages as number) > 0
+      ? { byteOmittedMessages: omittedMessages as number }
       : {}),
     ...(Number.isSafeInteger(value.startIndex) && (value.startIndex as number) >= 0
       ? { historyStartIndex: value.startIndex as number }

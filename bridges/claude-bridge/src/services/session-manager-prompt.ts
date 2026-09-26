@@ -241,6 +241,7 @@ import {
   bashToolResultOutcomes,
   bashToolUseIdsFromAssistantMessage,
   appendInterruptedNotice,
+  appendSubagentInterruptedNotice,
   boundedNoticeText,
   buildMessageParts,
   memoryRecallPart,
@@ -248,6 +249,7 @@ import {
   provisionalBackgroundTaskId,
   provisionalBackgroundTaskLaunchesFromAssistantMessage,
   refreshSettledToolRows,
+  resultAnswersOtherInput,
   taskNotificationNoticePart,
 } from "./session-manager-messages.js";
 export { memoryRecallPart } from "./session-manager-messages.js";
@@ -854,7 +856,10 @@ export async function sendPrompt(
       testHooks?.afterAttachmentCanonicalValidation,
       testHooks?.afterAttachmentInitialValidation,
     );
-    const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal);
+    // Names this prompt on every result that answers it; see
+    // `resultAnswersOtherInput`.
+    const promptUuid = crypto.randomUUID();
+    const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal, promptUuid);
     /**
      * Closing stdin starts the CLI's exit. `session.queryControl` stays set
      * until this turn's `finally`, so without this marker a read-only control
@@ -868,6 +873,9 @@ export async function sendPrompt(
     };
     closeSdkInput = closeTurnInput;
     let receivedResult = false;
+    // Unlike `receivedResult`, never reset: a task notification re-arms the
+    // turn for a continuation whose result names no prompt at all.
+    let receivedPromptResult = false;
     let localCommandOutputSeen = false;
     const ownsActiveTurn = () =>
       !abortController.signal.aborted &&
@@ -1935,11 +1943,36 @@ export async function sendPrompt(
           taskMessage.task_id
         ) {
           const correlated = takeProvisionalBackgroundTask(session, taskMessage.tool_use_id);
-          const previous = session.backgroundTasks?.[taskMessage.task_id] ?? correlated.task;
+          const stored = session.backgroundTasks?.[taskMessage.task_id] ?? correlated.task;
+          // A `SendMessage` resume re-runs a finished agent under its old task
+          // id, announced by a `task_started` from the resuming call. That is a
+          // new run, not a late edge of the old one: left terminal, nothing
+          // held this query's input open for it, and the CLI stopped the agent
+          // once its idle wind-down ran out.
+          const resumedRun =
+            taskMessage.subtype === "task_started" &&
+            stored !== undefined &&
+            !LIVE_BACKGROUND_TASK_STATUSES.has(stored.status) &&
+            typeof taskMessage.tool_use_id === "string" &&
+            taskMessage.tool_use_id !== stored.toolUseId;
+          if (resumedRun) {
+            // The finished run's parked snapshot must not describe this one.
+            const parked = takeSettlingBackgroundTask(session, taskMessage.task_id);
+            if (parked) closeQueryControlIfUnused(session, parked.owner);
+          }
+          const previous = resumedRun
+            ? {
+                ...stored,
+                status: "running" as const,
+                startedAt: Date.now(),
+                endedAt: undefined,
+                error: undefined,
+              }
+            : stored;
           const patchedStatus = taskMessage.patch?.status ?? previous?.status ?? "running";
-          // Task ids are process-unique. Because level and edge messages may
-          // be delivered in either order, a late start/progress edge must
-          // enrich a terminal record rather than resurrect it.
+          // Within one run, level and edge messages may be delivered in either
+          // order, so a late start/progress edge must enrich a terminal record
+          // rather than resurrect it.
           const status =
             previous &&
             !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status) &&
@@ -2456,6 +2489,7 @@ export async function sendPrompt(
           unattachedTaskNotifications,
           attachedTaskToolUseIds,
           interrupted,
+          subagentInterrupted,
         } = parseMessageContent(
           message,
           toolTracker,
@@ -2555,6 +2589,20 @@ export async function sendPrompt(
           );
         }
         if (interrupted) appendInterruptedNotice(session, sessionId);
+        else if (subagentInterrupted) {
+          const parentToolUseId = sdkUserMessage.parent_tool_use_id;
+          const stoppedTask = parentToolUseId
+            ? (Object.values(session.backgroundTasks ?? {}) as BackgroundTaskSnapshot[]).find(
+                (task) => task.toolUseId === parentToolUseId,
+              )
+            : undefined;
+          appendSubagentInterruptedNotice(
+            session,
+            sessionId,
+            stoppedTask?.description,
+            parentToolUseId ?? undefined,
+          );
+        }
         // Skip adding user message replay as we already added it
       } else if (message.type === "auth_status") {
         const auth = message as SDKAuthStatusMessage;
@@ -2576,10 +2624,25 @@ export async function sendPrompt(
           createdAt: new Date().toISOString(),
         });
       } else if (isSdkResultMessage(message as SdkMessageBase)) {
-        diagnostics?.terminalSettled("resolved");
         // Only allowlisted metadata reaches the shared debug sink.
         const resultMsg = message as SdkResultMessage;
+        // A resumed CLI can finish a turn of its own (a replayed task
+        // notification) before it reaches this prompt. That result says
+        // nothing about this turn; ending on it closed the CLI's input, which
+        // later stopped its background agents. Only this turn's first result
+        // is filtered: once it has arrived, a continuation's result is the
+        // legitimate end of the retained turn.
+        if (!receivedPromptResult && resultAnswersOtherInput(resultMsg, promptUuid)) {
+          debugLog("[session-manager] Result for other input skipped", {
+            sessionId,
+            subtype: resultMsg.subtype,
+            durationMs: resultMsg.duration_ms,
+          });
+          continue;
+        }
+        diagnostics?.terminalSettled("resolved");
         receivedResult = true;
+        receivedPromptResult = true;
         debugLog("[session-manager] Query result", {
           sessionId,
           subtype: resultMsg.subtype,

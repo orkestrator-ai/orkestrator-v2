@@ -68,8 +68,7 @@ import {
   collectNormalizedOpenCodeSubagentIds,
   collectRawOpenCodeSubagentIds,
   hydrateNormalizedOpenCodeSubagents,
-  normalizeOpenCodeInlineError,
-  normalizeOpenCodeInteractiveMessage,
+  normalizeOpenCodeTranscriptMessages,
   normalizeOpenCodeTerminalState,
   openCodeStructuredPrompt,
 } from "./opencode-messages.js";
@@ -1102,14 +1101,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       this.readInteractiveMetadata(sessionId),
     ]);
     const eventVersionAfter = this.streamState.eventVersion(sessionId);
-    const normalizedMessages = rawMessages.flatMap((message, index) => {
-      const normalized = normalizeOpenCodeInteractiveMessage(message, index, (type) =>
-        this.health.recordUnknown(`part:${type}`),
-      );
-      if (!normalized) return [];
-      const inlineError = normalizeOpenCodeInlineError(message);
-      return inlineError ? [normalized, inlineError] : [normalized];
-    });
+    const normalizedMessages = normalizeOpenCodeTranscriptMessages(rawMessages, (type) =>
+      this.health.recordUnknown(`part:${type}`),
+    );
     const messages = await this.hydrateSubagentTranscripts(
       normalizedMessages,
       collectRawOpenCodeSubagentIds(rawMessages),
@@ -1264,12 +1258,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           const raw = await this.messages(childSessionId, {
             limit: OPENCODE_SUBAGENT_MESSAGE_LIMIT,
           });
-          const messages = raw.flatMap((message, index) => {
-            const normalized = normalizeOpenCodeInteractiveMessage(message, index, (type) =>
-              this.health.recordUnknown(`part:${type}`),
-            );
-            return normalized ? [normalized] : [];
-          });
+          const messages = normalizeOpenCodeTranscriptMessages(raw, (type) =>
+            this.health.recordUnknown(`part:${type}`),
+          );
           return { messages, nestedIds: collectRawOpenCodeSubagentIds(raw) };
         }),
       );

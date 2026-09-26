@@ -2462,6 +2462,47 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("keeps a distinct stream error and stop notice beside an inline failure", async () => {
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "error",
+        messages: [
+          {
+            id: "error-opencode-assistant-failed",
+            role: "assistant",
+            content: "Model request failed (HTTP 400): Bad Request",
+            parts: [{ type: "text", content: "Model request failed (HTTP 400): Bad Request" }],
+            createdAt: "2026-09-26T11:32:24.987Z",
+          },
+        ],
+        notices: [
+          { kind: "error", message: "Bad Request" },
+          { kind: "error", message: "Connection lost while receiving events" },
+          { kind: "stopped", message: "Query stopped by user." },
+        ],
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-native-distinct-inline-error-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "env-env-1:tab-distinct-inline-error",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(
+          projection?.messages.map((message) => (message as { content?: unknown }).content),
+        ).toEqual([
+          "Model request failed (HTTP 400): Bad Request",
+          "Connection lost while receiving events",
+          "Query stopped by user.",
+        ]);
+      },
+    );
+  });
+
   test("does not poll tab-facing projection routes without a foreground reader", async () => {
     const stub = createProviderStub("codex", {
       interactiveSnapshot: async () => ({ status: "idle", messages: [] }),

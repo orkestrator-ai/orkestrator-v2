@@ -1707,6 +1707,104 @@ describe("NativeAgentService", () => {
       );
     });
 
+    test("does not revive old or undated provider errors on the first idle observation", async () => {
+      const now = 1_790_422_344_987;
+      for (const time of [{ created: now - 86_400_000, completed: now - 86_399_000 }, {}]) {
+        const { provider, send } = createProviderStub("opencode", {
+          activity: async () => "idle",
+          messages: async () => [
+            stalledUser,
+            {
+              info: {
+                id: "assistant-abandoned",
+                role: "assistant",
+                time,
+                error: { name: "APIError", data: { message: "Gateway failed", statusCode: 503 } },
+              },
+              parts: [],
+            },
+          ],
+        });
+        await withService(
+          {
+            prefix: "orkestrator-native-opencode-abandoned-error-",
+            provider: async () => provider,
+            now: () => now,
+          },
+          async ({ storage, service }) => {
+            await storage.adoptNativeAgentSession({
+              key: nativeAgentSessionStorageKey("env-1", "opencode", "tab-1"),
+              environmentId: "env-1",
+              agent: "opencode",
+              logicalSessionKey: "tab-1",
+              providerSessionId: "provider-1",
+            });
+            await service.reconcileAgentActivity();
+            await waitForCondition(() => recoveryTasks(service).size === 0);
+            expect(send).not.toHaveBeenCalled();
+          },
+        );
+      }
+    });
+
+    test("exhausts a retry budget clipped by the 64-message window after restart", async () => {
+      const now = 1_790_422_344_987;
+      const transcript: unknown[] = [stalledUser];
+      for (let retry = 0; retry < 4; retry += 1) {
+        transcript.push({
+          info: { id: `retry-${retry}`, role: "user" },
+          parts: [{ type: "text", text: OPENCODE_PROVIDER_ERROR_CONTINUATION }],
+        });
+        transcript.push(
+          ...Array.from({ length: 62 }, (_, index) => ({
+            info: { id: `tool-${retry}-${index}`, role: "assistant" },
+            parts: [{ type: "tool", state: { status: "completed" } }],
+          })),
+        );
+        transcript.push({
+          info: {
+            id: `failed-${retry}`,
+            role: "assistant",
+            time: { created: now - 2_000, completed: now - 1_000 },
+            error: { name: "APIError", data: { message: "Gateway failed", statusCode: 503 } },
+          },
+          parts: [],
+        });
+      }
+      const { provider, send } = createProviderStub("opencode", {
+        activity: async () => "idle",
+        messages: async () => transcript.slice(-64),
+      });
+      await withService(
+        {
+          prefix: "orkestrator-native-opencode-clipped-retries-",
+          provider: async () => provider,
+          now: () => now,
+        },
+        async ({ storage, service }) => {
+          const key = nativeAgentSessionStorageKey("env-1", "opencode", "tab-1");
+          await storage.adoptNativeAgentSession({
+            key,
+            environmentId: "env-1",
+            agent: "opencode",
+            logicalSessionKey: "tab-1",
+            providerSessionId: "provider-1",
+          });
+          await captureWarnings(async () => {
+            await service.reconcileAgentActivity();
+            await waitForCondition(() => recoveryTasks(service).size === 0);
+          });
+          expect(send).not.toHaveBeenCalled();
+          expect(
+            (await storage.getNativeAgentSession(key))?.openCodeIncompleteTurnNotice,
+          ).toMatchObject({
+            kind: "exhausted",
+            assistantMessageId: "failed-3",
+          });
+        },
+      );
+    });
+
     test("recovers an incomplete transcript on the first idle snapshot after restart", async () => {
       const { provider, send } = createProviderStub("opencode", {
         activity: async () => "idle",

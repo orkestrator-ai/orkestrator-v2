@@ -44,6 +44,8 @@ export const OPENCODE_PROVIDER_ERROR_CONTINUATION =
  * failed message completed. Its length is the retry budget.
  */
 export const OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS = [5_000, 15_000, 45_000] as const;
+/** A restart may resume a recent backoff, but must not revive an abandoned turn. */
+export const OPENCODE_PROVIDER_ERROR_MAX_AGE_MS = 5 * 60_000;
 
 /**
  * HTTP statuses that will fail the same way on retry: credentials, billing,
@@ -168,15 +170,20 @@ function isRetryableProviderError(error: unknown): boolean {
   return typeof statusCode !== "number" || !NON_RETRYABLE_PROVIDER_STATUSES.has(statusCode);
 }
 
-/** Consecutive automatic continuations ending at the latest user turn. */
-function trailingAutomaticContinuations(messages: readonly unknown[]): number {
+/** Count back to a manual prompt; a clipped history cannot prove the budget remains. */
+function trailingAutomaticContinuations(messages: readonly unknown[]): {
+  count: number;
+  foundManualBoundary: boolean;
+} {
   let count = 0;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messageInfo(messages[index])?.role !== "user") continue;
-    if (!AUTOMATIC_CONTINUATIONS.has(textContent(messages[index]).trim())) break;
+    if (!AUTOMATIC_CONTINUATIONS.has(textContent(messages[index]).trim())) {
+      return { count, foundManualBoundary: true };
+    }
     count += 1;
   }
-  return count;
+  return { count, foundManualBoundary: false };
 }
 
 function hasPendingToolWork(entry: unknown): boolean {
@@ -206,6 +213,7 @@ function hasPendingToolWork(entry: unknown): boolean {
  */
 export function inspectOpenCodeIncompleteTurn(
   messages: readonly unknown[],
+  options: { historyComplete?: boolean; now?: number } = {},
 ): OpenCodeIncompleteTurnRecovery | null {
   let latestUserIndex = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -245,21 +253,29 @@ export function inspectOpenCodeIncompleteTurn(
 
   // Both recoveries share one budget, so alternating failure shapes cannot
   // keep the session continuing itself indefinitely.
-  const automatic = trailingAutomaticContinuations(messages);
+  const { count: automatic, foundManualBoundary } = trailingAutomaticContinuations(messages);
+  const budgetUnknown = options.historyComplete === false && !foundManualBoundary;
   const settings = turnExecutionSettings(messages[latestUserIndex], latestAssistant);
   if (providerError) {
     const retries = OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS.length;
     const time = isRecord(info.time) ? info.time : undefined;
-    const failedAt =
-      typeof time?.completed === "number"
-        ? time.completed
-        : typeof time?.created === "number"
-          ? time.created
-          : undefined;
+    const failedAt = [time?.completed, time?.created].find(
+      (candidate): candidate is number =>
+        typeof candidate === "number" && Number.isFinite(new Date(candidate).getTime()),
+    );
+    if (
+      options.now !== undefined &&
+      (failedAt === undefined ||
+        !Number.isFinite(options.now) ||
+        failedAt > options.now ||
+        options.now - failedAt > OPENCODE_PROVIDER_ERROR_MAX_AGE_MS)
+    ) {
+      return null;
+    }
     return {
-      action: automatic >= retries ? "exhausted" : "continue",
+      action: budgetUnknown || automatic >= retries ? "exhausted" : "continue",
       reason: "provider-error",
-      ...(failedAt !== undefined && automatic < retries
+      ...(failedAt !== undefined && !budgetUnknown && automatic < retries
         ? { notBefore: failedAt + OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS[automatic]! }
         : {}),
       assistantMessageId: info.id,
@@ -269,6 +285,7 @@ export function inspectOpenCodeIncompleteTurn(
   return {
     action:
       textContent(messages[latestUserIndex]).trim() === OPENCODE_INCOMPLETE_TURN_CONTINUATION ||
+      budgetUnknown ||
       automatic >= OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS.length
         ? "exhausted"
         : "continue",

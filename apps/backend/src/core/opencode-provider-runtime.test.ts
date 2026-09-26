@@ -234,6 +234,18 @@ describe("OpenCode provider runtime", () => {
               },
               parts: [{ id: "child-text", type: "text", text: "Child finished" }],
             },
+            {
+              info: {
+                id: "child-failed",
+                role: "assistant",
+                time: { created: 3, completed: 4 },
+                error: {
+                  name: "APIError",
+                  data: { message: "Child provider failed", statusCode: 503 },
+                },
+              },
+              parts: [],
+            },
           ],
         };
       }
@@ -282,6 +294,10 @@ describe("OpenCode provider runtime", () => {
                 expect.objectContaining({
                   type: "text",
                   content: "Child finished",
+                }),
+                expect.objectContaining({
+                  type: "text",
+                  content: "Model request failed (HTTP 503): Child provider failed",
                 }),
               ],
               subagentActionCount: 0,
@@ -374,6 +390,14 @@ describe("OpenCode provider runtime", () => {
         createdAt: new Date(2).toISOString(),
       });
       expect(snapshot?.notices).toBeUndefined();
+      const progressive = await provider.transcriptSnapshot!("owned-session", {
+        limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+        targetBytes: 512 * 1024,
+      });
+      expect(
+        "messages" in progressive &&
+          progressive.messages.map((message) => (message as { id?: unknown }).id),
+      ).toEqual(["assistant-failed", "error-opencode-assistant-failed", "user-2", "assistant-2"]);
     } finally {
       await provider.dispose?.();
     }

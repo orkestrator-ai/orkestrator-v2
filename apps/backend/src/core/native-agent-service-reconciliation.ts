@@ -711,7 +711,10 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       limit: OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT,
     });
     if (this.stopped) return "complete";
-    const initialRecovery = inspectOpenCodeIncompleteTurn(initialMessages);
+    const initialRecovery = inspectOpenCodeIncompleteTurn(initialMessages, {
+      historyComplete: initialMessages.length < OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT,
+      now: this.now(),
+    });
     if (!initialRecovery) return "complete";
     if (
       initialRecovery.action === "continue" &&
@@ -780,7 +783,10 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
             disposition = "retry";
             return { dispatch: false };
           }
-          const recovery = inspectOpenCodeIncompleteTurn(messages);
+          const recovery = inspectOpenCodeIncompleteTurn(messages, {
+            historyComplete: messages.length < OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT,
+            now: this.now(),
+          });
           if (!recovery) return { dispatch: false };
           if (recovery.assistantMessageId !== initialRecovery.assistantMessageId) {
             disposition = "retry";

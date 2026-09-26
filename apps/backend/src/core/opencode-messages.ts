@@ -478,11 +478,11 @@ export function normalizeOpenCodeInlineError(value: unknown): Record<string, unk
       ? `Model request failed${typeof statusCode === "number" ? ` (HTTP ${statusCode})` : ""}: ${terminal.message}`
       : terminal.message;
   const time = asRecord(info.time);
-  const rawTime = typeof time?.completed === "number" ? time.completed : time?.created;
-  const createdAt =
-    typeof rawTime === "number" && Number.isFinite(rawTime)
-      ? new Date(rawTime).toISOString()
-      : "1970-01-01T00:00:00.000Z";
+  const validDate = [time?.completed, time?.created]
+    .filter((candidate): candidate is number => typeof candidate === "number")
+    .map((candidate) => new Date(candidate))
+    .find((candidate) => Number.isFinite(candidate.getTime()));
+  const createdAt = validDate?.toISOString() ?? "1970-01-01T00:00:00.000Z";
   return {
     id: `${OPEN_CODE_INLINE_ERROR_ID_PREFIX}${messageId}`,
     role: "assistant",
@@ -490,4 +490,17 @@ export function normalizeOpenCodeInlineError(value: unknown): Record<string, unk
     parts: [{ type: "text", content }],
     createdAt,
   };
+}
+
+/** Keep root, progressive, and child transcripts on the same error rendering path. */
+export function normalizeOpenCodeTranscriptMessages(
+  messages: readonly unknown[],
+  recordUnknown: (type: string) => void,
+): Record<string, unknown>[] {
+  return messages.flatMap((message, index) => {
+    const normalized = normalizeOpenCodeInteractiveMessage(message, index, recordUnknown);
+    if (!normalized) return [];
+    const inlineError = normalizeOpenCodeInlineError(message);
+    return inlineError ? [normalized, inlineError] : [normalized];
+  });
 }

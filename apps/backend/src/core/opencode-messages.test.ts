@@ -133,6 +133,15 @@ describe("normalizeOpenCodeInlineError", () => {
     ).toMatchObject({ content: "Invalid API key" });
   });
 
+  test("falls back to the created time when completion is outside Date's range", () => {
+    const message = failed({ name: "APIError", data: { message: "Unavailable" } });
+    message.info.time.completed = 1e20;
+    expect(normalizeOpenCodeInlineError(message)).toMatchObject({
+      createdAt: new Date(10).toISOString(),
+      content: "Model request failed: Unavailable",
+    });
+  });
+
   test("ignores user stops, successful messages, and messages without an id", () => {
     expect(normalizeOpenCodeInlineError(failed({ name: "MessageAbortedError" }))).toBeNull();
     expect(normalizeOpenCodeInlineError(failed(undefined))).toBeNull();

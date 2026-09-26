@@ -5,6 +5,7 @@ import {
   openCodeTurnRecoveryPrompt,
   OPENCODE_INCOMPLETE_TURN_CONTINUATION,
   OPENCODE_PROVIDER_ERROR_CONTINUATION,
+  OPENCODE_PROVIDER_ERROR_MAX_AGE_MS,
   OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS,
 } from "./opencode-turn-recovery.js";
 
@@ -100,6 +101,54 @@ describe("inspectOpenCodeIncompleteTurn provider errors", () => {
         expect(recovery).not.toHaveProperty("notBefore");
       }
     }
+  });
+
+  test("exhausts when a bounded history cannot prove where automatic retries began", () => {
+    const history: unknown[] = [user("Open the PR")];
+    for (let retry = 0; retry < 4; retry += 1) {
+      history.push(user(OPENCODE_PROVIDER_ERROR_CONTINUATION, `retry-${retry}`));
+      history.push(
+        ...Array.from({ length: 62 }, (_, index) =>
+          stalledAssistant({
+            id: `tool-heavy-${retry}-${index}`,
+            parts: [{ type: "tool", state: { status: "completed" } }],
+          }),
+        ),
+      );
+      history.push(failedAssistant({ id: `failed-${retry}` }));
+    }
+    expect(
+      inspectOpenCodeIncompleteTurn(history.slice(-64), { historyComplete: false }),
+    ).toMatchObject({
+      action: "exhausted",
+      reason: "provider-error",
+      assistantMessageId: "failed-3",
+    });
+  });
+
+  test("does not retry an old, future, or undated provider failure", () => {
+    const now = 1_000_000;
+    expect(
+      inspectOpenCodeIncompleteTurn([user("Open the PR"), failedAssistant()], { now }),
+    ).toBeNull();
+    expect(
+      inspectOpenCodeIncompleteTurn(
+        [user("Open the PR"), failedAssistant({ completed: now + 1 })],
+        { now },
+      ),
+    ).toBeNull();
+    const undated = failedAssistant();
+    undated.info.time = { created: Number.NaN, completed: Number.NaN };
+    expect(inspectOpenCodeIncompleteTurn([user("Open the PR"), undated], { now })).toBeNull();
+    expect(
+      inspectOpenCodeIncompleteTurn(
+        [
+          user("Open the PR"),
+          failedAssistant({ completed: now - OPENCODE_PROVIDER_ERROR_MAX_AGE_MS }),
+        ],
+        { now },
+      ),
+    ).toMatchObject({ action: "continue", reason: "provider-error" });
   });
 
   test("a manual prompt resets the retry budget", () => {

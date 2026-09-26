@@ -3699,11 +3699,19 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       // A provider that already renders its failure inline (OpenCode) ends the
       // transcript with that row; a second terminal row would repeat it.
       const lastMessageId = (transcript.messages.at(-1) as { id?: unknown } | undefined)?.id;
-      const endsWithInlineError =
+      const inlineError =
         typeof lastMessageId === "string" &&
-        lastMessageId.startsWith(OPEN_CODE_INLINE_ERROR_ID_PREFIX);
+        lastMessageId.startsWith(OPEN_CODE_INLINE_ERROR_ID_PREFIX)
+          ? (transcript.messages.at(-1) as { content?: unknown })
+          : undefined;
       const terminalMessages = terminalNotices
-        .filter((notice) => !(endsWithInlineError && notice.kind === "error"))
+        .filter(
+          (notice) =>
+            notice.kind !== "error" ||
+            typeof inlineError?.content !== "string" ||
+            (inlineError.content !== notice.message &&
+              !inlineError.content.endsWith(`: ${notice.message}`)),
+        )
         .map((notice) => ({
           id: `native-terminal:${notice.kind}:${createHash("sha256")
             .update(notice.message)

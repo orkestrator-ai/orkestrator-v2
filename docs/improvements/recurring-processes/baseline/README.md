@@ -17,6 +17,7 @@ IDs (B01–B25, C01–C16, L01–L14) referenced below.
 | `step-05-pr-monitoring.json` | Same harness after step 05 (lifecycle-aware PR monitoring). Only `pr-detection`/`pr-check-rollup` counters and the physical units they charge differ from step 01; see "Step 05 re-run" below. |
 | `step-07-baseline.json` | Same scenarios at the step 07 commit (identical counters), plus the driven `nativeObservation` block: the real native activity sweep and queue scan in rollback vs shared mode. |
 | `step-03-snapshots.json` | Same harness after step 03 (shared worktree snapshots), plus two appended two-client scenarios. Compare with `--compare step-01-baseline.json`. |
+| `step-04-container-fetch.json` | Same harness after step 04 (container fetch policy), on the branch that also carries steps 05 and 07. Container fetches are driven through the real `ContainerGitFetchPolicy`; see "Step 04" below. |
 
 ## How to run
 
@@ -240,6 +241,63 @@ Scenarios without a client are unchanged (identical counters).
   where two unsynchronised clients join less often than in this lockstep
   model (a second read within 3 s still reuses the first).
 
+## Step 04 — container fetch policy (after)
+
+Artifact `step-04-container-fetch.json`. The container scan seam now charges
+one local-only status exec, and consults the real `ContainerGitFetchPolicy`
+(5 min attempt cooldown per container generation + clone + ref, joined in
+flight, background fetches in the shared `git-docker-scan` pool). Each fetch
+is one separate `docker exec` (`PHYSICAL_COST.containerFetchDockerExecs`).
+The modelled remote is idle: fetches succeed and never move `origin/main`, so
+no fetch-triggered rescan occurs. Compared with `step-03-snapshots.json`:
+diff scans, file-list reads and tree walks are identical in every scenario;
+the other differences are step 05's PR monitoring, which this branch also
+carries (tabulated in "Step 05 re-run").
+
+Before step 04 every container status scan ran `git fetch origin <ref>`, so
+network fetch attempts equalled container scans (the `git-fetch-container`
+`requested` count, which was the only counter). After, `requested` still
+counts every consultation and `started` counts real attempts. 10 min warm
+idle:
+
+| Scenario | Container scans (unchanged) | Network fetch attempts before → after | Startup (30 s) attempts before → after | docker exec/min change from step 04 |
+| --- | --- | --- | --- | --- |
+| `env1-container-c1` | 120 | 120 → 2 | 7 → 1 | +0.2 (84 → 84.2) |
+| `env1-container-c2` | 120 | 120 → 2 | 7 → 1 | +0.2 |
+| `env10-mixed-*-pr-wf200` (5 containers) | 200 | 200 → 10 | 15 → 5 | +1.0 |
+| `env10-container-c0-pr` | 400 | 400 → 20 | 30 → 10 | +2.0 |
+| `env50-mixed-*-pr-wf200` (25 containers) | 1,000 | 1,000 → 50 | 75 → 25 | +5.0 |
+| `env50-container-c1-pr` | 2,080 | 2,080 → 100 | 154 → 50 | +10.0 |
+
+(`docker exec/min` totals in the artifact also include step 05's PR
+reduction, e.g. `env50-container-c1-pr` 3,384 → 3,304.2 = −89.8 from step 05
++10 from step 04.)
+
+- **Network work follows fetch policy, not the Files-panel cadence**: one
+  attempt per container per 5 min (plus one at startup): −95% for containers
+  polled every 15 s without a panel (20:1), −98% for the container whose
+  Files panel is open (60:1; 12 reads per minute used to be 12 fetch
+  attempts).
+- **Exec count is not reduced.** Every status exec is now local-only (no
+  network round trip, no remote auth, no `.git` lock contention with a fetch),
+  but the separate fetch exec adds 0.2 execs per container per minute. Per-scan
+  host cost (the exec itself) is unchanged and remains dominated by state
+  polls (step 07's area).
+- **The 3 s container file-list bound was reconsidered and kept.** A 5 s
+  panel poll with any bound of 5 s or more would serve every other read from
+  the previous poll, letting a change take up to ~10 s to show — over the 6 s
+  Files-panel budget. The single-client container panel therefore still costs
+  one status exec per read (84 exec/min including state polls); it is simply
+  cheaper per exec now.
+- **Immutable creation commits never fetch** (not modelled here: every
+  fixture uses `main`); **missing refs** get one bounded recovery fetch per
+  cooldown window; **failures** back off 5 → 10 → 20 → 30 min.
+- Not modelled: a moving remote (each fetch that moves `origin/<ref>` adds
+  one rescan exec via `invalidateBaseline`), merges/explicit refreshes (each
+  makes the key due at once; explicit refreshes coalesce within 15 s), and
+  fetch durations (a slow fetch holds the container's single scan slot, see
+  the plan's completion notes).
+
 ## Limitations — what this does not measure
 
 This is a deterministic **call-count** baseline, not live wall-clock profiling.
@@ -326,7 +384,7 @@ shipped behavior yet. The step 02 primitives default to these where they apply
 | Terminal PR discovery after successful repair | 5 min plus immediate explicit and completion-edge wakeups | Scheduler `requestSooner`/`invalidate` |
 | Git/Docker status scans | 4 total scans, 1 per target | `git-docker-scan` pool: 4 concurrent, 1 per target |
 | GitHub detection | 2 concurrent; bounded fair waiting; shared cooldown by safe auth/host scope | `external-pr` pool; cooldown is step 05 |
-| Container fetch freshness | 5 min between attempts; immutable local base does not fetch | Step 04 |
+| Container fetch freshness | 5 min between attempts; immutable local base does not fetch | Step 04: `ContainerGitFetchPolicy` (5 min, failures doubling to 30 min, explicit refresh ≥ 15 s apart) |
 | Client foreground polling | Preserve cadence during coordinator migration | Step 06 |
 | Client quiet native views | Later 3/5/10/15 s backoff after event coverage passes | Step 06/07 |
 | Active workflow progress | Preserve 1–1.5 s fallback until scoped notifications qualify | `workflow-provider` pool: 8 concurrent, 2 per target |

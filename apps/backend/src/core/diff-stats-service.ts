@@ -11,6 +11,7 @@ import {
 import {
   WORKTREE_SNAPSHOT_CHANGED_EVENT,
   type WorktreeReadStamp,
+  type WorktreeRemoteFreshness,
   type WorktreeSnapshotFreshness,
   type WorktreeSnapshotRemoval,
   type WorktreeSnapshotRevisionsSnapshot,
@@ -140,6 +141,12 @@ export interface DiffStatsServiceOptions {
   generation?: string;
   /** Content-free cost accounting; defaults to the process-wide recorder. */
   metrics?: RecurringWorkMetrics;
+  /**
+   * Remote-tracking freshness of a target's comparison base (the container
+   * fetch policy). Read whenever the snapshot state is published; call
+   * {@link DiffStatsService.remoteFreshnessChanged} when it changes.
+   */
+  remoteFreshness?: (target: DiffStatsTarget) => WorktreeRemoteFreshness | undefined;
 }
 
 export interface RetryPolicy {
@@ -274,7 +281,10 @@ export class DiffStatsService {
       | "cancelDelay"
       | "startWatcher"
     >
-  > & { onWarning?: DiffStatsServiceOptions["onWarning"] };
+  > & {
+    onWarning?: DiffStatsServiceOptions["onWarning"];
+    remoteFreshness?: DiffStatsServiceOptions["remoteFreshness"];
+  };
   private readonly metrics: RecurringWorkMetrics;
   private readonly admission: WorkAdmissionPool | null;
   private readonly failureRetry: RetryPolicy;
@@ -310,6 +320,7 @@ export class DiffStatsService {
         options.cancelDelay ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>)),
       startWatcher: options.startWatcher ?? startWorktreeWatcher,
       onWarning: options.onWarning,
+      remoteFreshness: options.remoteFreshness,
     };
     this.generation = options.generation ?? randomUUID();
     this.metrics = options.metrics ?? recurringWorkMetrics;
@@ -627,6 +638,16 @@ export class DiffStatsService {
     this.adhoc.invalidateTarget(lookup);
     const entry = this.findEntry(lookup);
     if (entry) this.request(entry, "hint");
+  }
+
+  /**
+   * The remote freshness reported by `remoteFreshness` changed for a target
+   * without its file list changing (a fetch that found nothing new, a failed
+   * or invalidated fetch). Republishes the snapshot state if it differs.
+   */
+  remoteFreshnessChanged(lookup: WorktreeLookup): void {
+    const entry = this.findEntry(lookup);
+    if (entry?.active) this.publishSnapshot(entry);
   }
 
   /** Forces a scan now, e.g. after an operation known to change the tree. */
@@ -1098,6 +1119,16 @@ export class DiffStatsService {
     });
   }
 
+  private remoteFreshnessOf(entry: DiffStatsEntry): WorktreeRemoteFreshness | undefined {
+    try {
+      const remote = this.options.remoteFreshness?.(entry.target);
+      return remote ? { ...remote } : undefined;
+    } catch (error) {
+      this.warn(`Failed to read remote freshness for ${entry.target.environmentId}`, error);
+      return undefined;
+    }
+  }
+
   private freshnessOf(entry: DiffStatsEntry): WorktreeSnapshotFreshness {
     if (!entry.active) return "stale";
     if (entry.failure) return entry.fileList ? "stale" : "failed";
@@ -1123,6 +1154,8 @@ export class DiffStatsService {
       freshness: this.freshnessOf(entry),
       watched: this.isQualified(entry),
     };
+    const remote = this.remoteFreshnessOf(entry);
+    if (remote) state.remote = remote;
     if (entry.published && isSameSnapshotState(entry.published, state)) return;
     entry.published = state;
     this.announceSnapshot(state);
@@ -1218,6 +1251,9 @@ function isSameSnapshotState(a: WorktreeSnapshotState, b: WorktreeSnapshotState)
     a.fileListRevision === b.fileListRevision &&
     a.treeRevision === b.treeRevision &&
     a.freshness === b.freshness &&
-    a.watched === b.watched
+    a.watched === b.watched &&
+    a.remote?.state === b.remote?.state &&
+    a.remote?.lastSuccessAt === b.remote?.lastSuccessAt &&
+    a.remote?.failure === b.remote?.failure
   );
 }

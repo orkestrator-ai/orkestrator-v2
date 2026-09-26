@@ -392,7 +392,12 @@ export class RecurringScheduler {
     this.metrics = options.metrics ?? recurringWorkMetrics;
     const diagnostics =
       options.diagnostics === undefined ? recurringDiagnosticsRegistry : options.diagnostics;
-    this.unregisterDiagnostics = diagnostics?.addScheduler(this) ?? (() => undefined);
+    const unregisterStatus = diagnostics?.addScheduler(this) ?? (() => undefined);
+    const unregisterSuspension = diagnostics?.addSuspensionListener(this) ?? (() => undefined);
+    this.unregisterDiagnostics = () => {
+      unregisterStatus();
+      unregisterSuspension();
+    };
   }
 
   /**
@@ -541,6 +546,23 @@ export class RecurringScheduler {
    * overdue key runs once, in priority order.
    */
   wake(): void {
+    this.schedulePump();
+  }
+
+  /**
+   * Translates a host suspension into this scheduler's monotonic time. The
+   * monotonic clock does not advance while the host sleeps, so a key due 10 s
+   * before a 60 s sleep is, in wall time, 50 s overdue on resume. Every pending
+   * due time moves earlier by `suspendedMs` (never before now), so each overdue
+   * key runs once, in priority order; missed intervals are not replayed.
+   */
+  compensateSuspension(suspendedMs: number): void {
+    if (this.disposed || !Number.isFinite(suspendedMs) || suspendedMs <= 0) return;
+    const now = this.now();
+    for (const entry of this.entries.values()) {
+      if (entry.dueAt === Infinity || entry.dueAt <= now) continue;
+      entry.dueAt = Math.max(now, entry.dueAt - suspendedMs);
+    }
     this.schedulePump();
   }
 

@@ -9,6 +9,8 @@ import {
   type WorkflowWakeReason,
 } from "./workflow-supervisor.js";
 import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
+import { HostSuspendDetector } from "./host-suspend-detector.js";
+import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 
 /** Former activity-bundle cadence, per named job. */
 const ACTIVITY_JOB_MS = 2_000;
@@ -117,6 +119,7 @@ export class OrkestratorBackend {
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
+  private hostSuspendDetector: HostSuspendDetector | null = null;
   private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
   private tabResourceSweep: ReturnType<typeof setInterval> | null = null;
   /** Step 08 named due jobs; `null` on the rollback bundle. Never both. */
@@ -687,6 +690,12 @@ export class OrkestratorBackend {
         });
     }, FRONTEND_AGENT_ACTIVITY_LEASE_MS / 2);
     this.activityLeaseSweep.unref?.();
+    // Monotonic deadlines do not count time the host spent asleep; on resume
+    // every scheduler runs its overdue keys once instead of waiting it out.
+    this.hostSuspendDetector ??= new HostSuspendDetector({
+      onSuspend: (suspendedMs) => recurringDiagnosticsRegistry.notifySuspension(suspendedMs),
+    });
+    this.hostSuspendDetector.start();
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
     // pidfile they still hold blocks this instance's app-server ownership.
@@ -1226,6 +1235,8 @@ export class OrkestratorBackend {
       clearInterval(this.activityLeaseSweep);
       this.activityLeaseSweep = null;
     }
+    this.hostSuspendDetector?.stop();
+    this.hostSuspendDetector = null;
     if (this.nativeActivitySweep) {
       clearInterval(this.nativeActivitySweep);
       this.nativeActivitySweep = null;

@@ -10,6 +10,7 @@ import {
 } from "./commands-dependencies.js";
 import { gitDockerScanPool } from "./git-docker-scan-pool.js";
 import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./container-git-fetch.js";
+import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import type {
   ChildProcessWithoutNullStreams,
   ClientEnvironment,
@@ -555,6 +556,7 @@ export const containerGitFetchPolicy = new ContainerGitFetchPolicy({
     diffStatsService.remoteFreshnessChanged({ containerId });
   },
 });
+recurringDiagnosticsRegistry.addFetchPolicy("container-git-fetch", containerGitFetchPolicy);
 
 /**
  * Known remote mutations (a merge through the backend) and lifecycle changes

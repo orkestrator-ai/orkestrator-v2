@@ -177,18 +177,21 @@ export type EventHarness = {
   stream: AsyncIterable<unknown>;
   push(value: unknown): void;
   close(): void;
+  fail(error: Error): void;
 };
 
 export function eventHarness(signal: AbortSignal): EventHarness {
   const queued: unknown[] = [];
-  const waiters: Array<(result: IteratorResult<unknown>) => void> = [];
+  const waiters: Array<{
+    resolve: (result: IteratorResult<unknown>) => void;
+    reject: (error: Error) => void;
+  }> = [];
   let closed = false;
+  let failure: Error | undefined;
   const close = () => {
     if (closed) return;
     closed = true;
-    for (const waiter of waiters.splice(0)) {
-      waiter({ done: true, value: undefined });
-    }
+    for (const waiter of waiters.splice(0)) waiter.resolve({ done: true, value: undefined });
   };
   // A signal that was already aborted before subscribe() ran never fires the
   // event, so listening alone would leave the stream open forever and hang the
@@ -203,20 +206,25 @@ export function eventHarness(signal: AbortSignal): EventHarness {
             if (queued.length > 0) {
               return Promise.resolve({ done: false, value: queued.shift() });
             }
+            if (failure) return Promise.reject(failure);
             if (closed) {
               return Promise.resolve({ done: true, value: undefined });
             }
-            return new Promise((resolve) => waiters.push(resolve));
+            return new Promise((resolve, reject) => waiters.push({ resolve, reject }));
           },
         };
       },
     },
     push(value) {
       const waiter = waiters.shift();
-      if (waiter) waiter({ done: false, value });
+      if (waiter) waiter.resolve({ done: false, value });
       else queued.push(value);
     },
     close,
+    fail(error) {
+      failure = error;
+      for (const waiter of waiters.splice(0)) waiter.reject(error);
+    },
   };
 }
 
@@ -252,6 +260,7 @@ export type OpenCodeFake = {
   sessionListOptions: Array<{ signal?: AbortSignal } | undefined>;
   readonly subscribeCallCount: number;
   subscriptions: EventHarness[];
+  subscriptionOptions: Array<{ signal: AbortSignal; sseMaxRetryAttempts?: number }>;
   setPending(
     permissions: Array<Record<string, unknown>>,
     questions: Array<Record<string, unknown>>,
@@ -306,6 +315,7 @@ export function openCodeFake(): OpenCodeFake {
   const questionRejections: Array<Record<string, unknown>> = [];
   const questionReplies: Array<Record<string, unknown>> = [];
   const subscriptions: EventHarness[] = [];
+  const subscriptionOptions: OpenCodeFake["subscriptionOptions"] = [];
   let subscribeCallCount = 0;
   let subscribeFailures: Array<"throw" | "missing-stream"> = [];
   let permissionListCallCount = 0;
@@ -392,8 +402,12 @@ export function openCodeFake(): OpenCodeFake {
       },
     },
     event: {
-      async subscribe(_parameters: unknown, options: { signal: AbortSignal }) {
+      async subscribe(
+        _parameters: unknown,
+        options: { signal: AbortSignal; sseMaxRetryAttempts?: number },
+      ) {
         subscribeCallCount += 1;
+        subscriptionOptions.push(options);
         const failure = subscribeFailures.shift();
         if (failure === "throw") throw new Error("subscribe failed");
         if (failure === "missing-stream") return { data: true };
@@ -590,6 +604,7 @@ export function openCodeFake(): OpenCodeFake {
       return subscribeCallCount;
     },
     subscriptions,
+    subscriptionOptions,
     setPromptError(error: unknown) {
       promptError = error;
     },

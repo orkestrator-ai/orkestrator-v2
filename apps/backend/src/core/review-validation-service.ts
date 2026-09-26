@@ -2,7 +2,10 @@ import { withContainerRuntimeCredential } from "./commands-runtime-state.js";
 import {
   isReviewValidationRun,
   newReviewValidationRun,
+  isReviewValidationOutputAnchor,
+  REVIEW_VALIDATION_OUTPUT_ANCHOR_BYTES,
   REVIEW_VALIDATION_OUTPUT_MAX_BYTES,
+  type ReviewValidationOutputKnown,
   type ReviewValidationOutput,
   type ReviewValidationOutputStream,
   type ReviewValidationRun,
@@ -25,6 +28,7 @@ import type { ReviewPreparationResult } from "./looped-review-prompts.js";
 const REVIEW_VALIDATION_OUTPUT_READER = String.raw`
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const input = JSON.parse(Buffer.from(process.argv[1], "base64").toString());
 const root = fs.realpathSync(input.root);
 const directory = path.join(root, ".orkestrator", "review-artifacts", input.runId);
@@ -60,16 +64,38 @@ function readStream(name) {
   try {
     const info = fs.fstatSync(fd);
     if (!info.isFile() || info.size > 32 * 1024 * 1024) throw new Error("Invalid validation artifact");
+    const readRange = (start, length) => {
+      const content = Buffer.alloc(length);
+      let offset = 0;
+      while (offset < length) {
+        const read = fs.readSync(fd, content, offset, length - offset, start + offset);
+        if (read === 0) break;
+        offset += read;
+      }
+      return content.subarray(0, offset);
+    };
+    const anchorAt = (end) => {
+      const start = Math.max(0, end - input.anchorBytes);
+      return crypto.createHash("sha256").update(readRange(start, end - start)).digest("hex").slice(0, 32);
+    };
+    const anchor = anchorAt(info.size);
+    const known = input.known && input.known[name];
+    // Append only when the client provably holds this file's content up to
+    // its known size: not truncated, not rotated, and the gap fits the bound.
+    if (
+      known &&
+      Number.isSafeInteger(known.totalBytes) &&
+      known.totalBytes >= 0 &&
+      known.totalBytes <= info.size &&
+      info.size - known.totalBytes <= input.maxBytes &&
+      anchorAt(known.totalBytes) === known.anchor
+    ) {
+      const delta = readRange(known.totalBytes, info.size - known.totalBytes);
+      return { contentBase64: delta.toString("base64"), totalBytes: info.size, startOffset: known.totalBytes, anchor, mode: "append" };
+    }
     const length = Math.min(info.size, input.maxBytes);
     const startOffset = info.size - length;
-    const content = Buffer.alloc(length);
-    let offset = 0;
-    while (offset < length) {
-      const read = fs.readSync(fd, content, offset, length - offset, startOffset + offset);
-      if (read === 0) break;
-      offset += read;
-    }
-    return { contentBase64: content.subarray(0, offset).toString("base64"), totalBytes: info.size, startOffset };
+    return { contentBase64: readRange(startOffset, length).toString("base64"), totalBytes: info.size, startOffset, anchor, mode: "tail" };
   } finally { fs.closeSync(fd); }
 }
 process.stdout.write(JSON.stringify({
@@ -85,13 +111,44 @@ function validationIdentity(value: string, label: string): string {
   return value;
 }
 
-/** Authoritative, bounded output snapshot used by the validation log modal. */
+/**
+ * Accepts only well-formed known positions; anything else is ignored, which
+ * yields an authoritative tail rather than an error (older clients send none).
+ */
+function parseKnownOutput(value: unknown): ReviewValidationOutputKnown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const known: ReviewValidationOutputKnown = {};
+  for (const name of ["stdout", "stderr"] as const) {
+    const stream = (value as Record<string, unknown>)[name];
+    if (!stream || typeof stream !== "object") continue;
+    const { totalBytes, anchor } = stream as Record<string, unknown>;
+    if (
+      Number.isSafeInteger(totalBytes) &&
+      (totalBytes as number) >= 0 &&
+      isReviewValidationOutputAnchor(anchor)
+    ) {
+      known[name] = { totalBytes: totalBytes as number, anchor };
+    }
+  }
+  return known;
+}
+
+/**
+ * Authoritative, bounded output snapshot used by the validation log modal.
+ *
+ * With `knownValue` (per stream: the `totalBytes` and `anchor` of the tail the
+ * client holds) a stream that only grew answers `mode: "append"` with just the
+ * new bytes. Truncation, rotation (the anchor no longer matches), a gap larger
+ * than the bound, or a malformed position answer an authoritative `tail`.
+ */
 export async function readReviewValidationOutput(
   environmentId: string,
   runIdValue: string,
   resultIdValue: string,
   context: CommandContext,
+  knownValue?: unknown,
 ): Promise<ReviewValidationOutput> {
+  const known = parseKnownOutput(knownValue);
   const runId = validationIdentity(runIdValue, "review validation run ID");
   const resultId = validationIdentity(resultIdValue, "review validation result ID");
   const environment = await context.storage.getEnvironment(environmentId);
@@ -102,7 +159,14 @@ export async function readReviewValidationOutput(
     throw new Error("Review validation container is unavailable");
   }
   const payload = Buffer.from(
-    JSON.stringify({ root, runId, resultId, maxBytes: REVIEW_VALIDATION_OUTPUT_MAX_BYTES }),
+    JSON.stringify({
+      root,
+      runId,
+      resultId,
+      maxBytes: REVIEW_VALIDATION_OUTPUT_MAX_BYTES,
+      anchorBytes: REVIEW_VALIDATION_OUTPUT_ANCHOR_BYTES,
+      known,
+    }),
   ).toString("base64");
   const args = ["-e", REVIEW_VALIDATION_OUTPUT_READER, payload];
   const { stdout } =
@@ -129,10 +193,23 @@ export async function readReviewValidationOutput(
           },
         );
   const parsed: unknown = JSON.parse(stdout);
-  const validStream = (stream: unknown): stream is ReviewValidationOutputStream | null => {
+  const validStream = (
+    stream: unknown,
+    name: "stdout" | "stderr",
+  ): stream is ReviewValidationOutputStream | null => {
     if (stream === null) return true;
     if (!stream || typeof stream !== "object" || Array.isArray(stream)) return false;
     const candidate = stream as Record<string, unknown>;
+    if (candidate.anchor !== undefined && !isReviewValidationOutputAnchor(candidate.anchor)) {
+      return false;
+    }
+    if (candidate.mode !== undefined && candidate.mode !== "tail" && candidate.mode !== "append") {
+      return false;
+    }
+    // An append must continue exactly where this request said the client is.
+    if (candidate.mode === "append" && candidate.startOffset !== known[name]?.totalBytes) {
+      return false;
+    }
     if (
       typeof candidate.contentBase64 !== "string" ||
       !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
@@ -166,8 +243,8 @@ export async function readReviewValidationOutput(
     !["pending", "queued", "running", "passed", "failed", "skipped", "incomplete"].includes(
       parsed.status,
     ) ||
-    !validStream(parsed.stdout) ||
-    !validStream(parsed.stderr)
+    !validStream(parsed.stdout, "stdout") ||
+    !validStream(parsed.stderr, "stderr")
   ) {
     throw new Error("Review validation returned invalid output");
   }

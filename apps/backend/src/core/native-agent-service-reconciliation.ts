@@ -23,6 +23,7 @@ import {
   inspectOpenCodeIncompleteTurn,
   isAgentTurnEndTransition,
   isEnvironmentReadyForAgents,
+  nativeAgentSessionStorageKey,
   nonBlank,
   openCodeIncompleteTurnRequestId,
   openCodeTurnRecoveryPrompt,
@@ -136,12 +137,52 @@ import {
   type SavedInitialPromptAttachment,
 } from "@orkestrator/protocol/initial-prompt-attachments";
 import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import {
+  nativeAgentObservationCapabilities,
+  nativeAgentObservationGroupKey,
+  observationSatisfies,
+  QUEUE_BUSY_OBSERVATION_MAX_AGE_MS,
+  type NativeAgentObservationDemand,
+  type NativeAgentObservationStatus,
+  type NativeAgentObservationView,
+  type NativeAgentObservationWakeReason,
+} from "./native-agent-observation.js";
+import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 
 export abstract class NativeAgentServiceReconciliation extends NativeAgentServicePrompt {
-  reconcileAgentActivity(): Promise<void> {
+  /**
+   * Run (or join) one activity sweep.
+   *
+   * `startedAfter` is for a consumer that needs an answer read *after* its
+   * request — a demand for a post-dispatch or fresher observation. It passes
+   * the sweep number it saw ({@link activityScanNumber}) when the demand was
+   * made and joins a sweep in flight only if that sweep started later; a
+   * sweep that started earlier may already have read the group, so every such
+   * caller shares one follow-up sweep instead.
+   */
+  reconcileAgentActivity(options: { startedAfter?: number } = {}): Promise<void> {
     if (this.stopped) return Promise.resolve();
-    if (this.activityScan) return this.activityScan;
-    const scan = this.trackScan(this.reconcileAgentActivityOnce()).finally(() => {
+    recurringWorkMetrics.requested("native-activity-sweep");
+    if (this.activityScan) {
+      recurringWorkMetrics.coalesced("native-activity-sweep");
+      if (options.startedAfter === undefined || this.activityScanNumber > options.startedAfter) {
+        return this.activityScan;
+      }
+      this.activityScanFollowUp ??= this.activityScan
+        .catch(() => undefined)
+        .then(() => {
+          this.activityScanFollowUp = null;
+          return this.reconcileAgentActivity();
+        });
+      return this.activityScanFollowUp;
+    }
+    this.activityScanNumber += 1;
+    const scan = this.trackScan(
+      recurringWorkMetrics.observe("native-activity-sweep", () =>
+        this.reconcileAgentActivityOnce(),
+      ),
+    ).finally(() => {
       if (this.activityScan === scan) this.activityScan = null;
     });
     this.activityScan = scan;
@@ -256,23 +297,80 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           failedEnvironments.add(first.environmentId);
           continue;
         }
+        // A stably idle group whose provider holds a qualified wakeup path is
+        // not due yet. Its retained, confirmed observations still feed the
+        // aggregate; nothing is re-announced because nothing was re-read.
+        if (
+          !this.observations.isGroupDue(groupKey) &&
+          this.contributeRetainedGroup(activityByEnvironment, group, sessionOwner)
+        ) {
+          recurringWorkMetrics.cacheHit("native-activity-sweep");
+          continue;
+        }
+        recurringWorkMetrics.cacheMiss("native-activity-sweep");
+        /*
+         * Captured before anything is read, including the bridge peek: a
+         * dispatch that begins after this point makes every answer below
+         * pre-dispatch evidence for that session, and it is refused rather
+         * than allowed to overwrite the `working` the dispatch recorded.
+         */
+        let ticket = this.observations.beginRead(
+          groupKey,
+          group.map((session) => session.key),
+        );
+        let settledIdle = true;
+        const applyObservation = async (
+          session: PersistedNativeAgentSession,
+          activity: AgentActivityState,
+          details: { readyForInput?: boolean; pendingInteraction?: boolean } = {},
+        ): Promise<void> => {
+          if (!this.observations.accepts(ticket, session.key)) {
+            settledIdle = false;
+            if (!this.contributeRetained(activityByEnvironment, session, sessionOwner)) {
+              failedEnvironments.add(session.environmentId);
+            }
+            return;
+          }
+          if (
+            await this.recordActivity(
+              activityByEnvironment,
+              session,
+              activity,
+              Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
+              sessionOwner,
+              details.readyForInput,
+              () => this.observations.accepts(ticket, session.key),
+            )
+          )
+            completionCandidates.add(session.environmentId);
+          if (!this.observations.accepts(ticket, session.key)) {
+            settledIdle = false;
+            if (!this.contributeRetained(activityByEnvironment, session, sessionOwner)) {
+              failedEnvironments.add(session.environmentId);
+            }
+            return;
+          }
+          // Published after the edge is durable, so a storage failure above
+          // leaves no fresh record contradicting the retained edge state.
+          this.observations.record(ticket, {
+            sessionKey: session.key,
+            providerSessionId: session.providerSessionId,
+            activity,
+            ...(details.readyForInput !== undefined
+              ? { readyForInput: details.readyForInput }
+              : {}),
+            ...(details.pendingInteraction !== undefined
+              ? { pendingInteraction: details.pendingInteraction }
+              : {}),
+          });
+          if (activity !== "idle") settledIdle = false;
+        };
         // A bridge known to be absent stays absent until something starts it,
         // and starting one always runs through `provider()`, which clears this.
         // Re-probing on every tick would mean a `docker exec` per container
         // every two seconds to re-learn an answer that cannot have changed.
         if ((this.absentBridgeUntil.get(groupKey) ?? 0) > this.now()) {
-          for (const session of group) {
-            if (
-              await this.recordActivity(
-                activityByEnvironment,
-                session,
-                "idle",
-                Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
-                sessionOwner,
-              )
-            )
-              completionCandidates.add(session.environmentId);
-          }
+          for (const session of group) await applyObservation(session, "idle");
           continue;
         }
         let provider: NativeAgentRuntimeProvider | undefined;
@@ -282,23 +380,19 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
             // No bridge is running for this environment, so no turn can be
             // executing. That is an answer, not a failure — recording it is
             // what retires a `working` indicator left behind by a crash.
-            for (const session of group) {
-              if (
-                await this.recordActivity(
-                  activityByEnvironment,
-                  session,
-                  "idle",
-                  Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
-                  sessionOwner,
-                )
-              )
-                completionCandidates.add(session.environmentId);
-            }
+            for (const session of group) await applyObservation(session, "idle");
             this.activityAttempts.delete(groupKey);
             this.activityRetryAt.delete(groupKey);
             this.absentBridgeUntil.set(groupKey, this.now() + ABSENT_BRIDGE_RECHECK_MS);
+            this.observations.noteGroupObserved(groupKey, {
+              settledIdle,
+              wakeupQualified: false,
+            });
             continue;
           }
+          // Results are fenced against the provider actually read from: a
+          // replacement installed from here on makes them inert.
+          ticket = this.observations.withCurrentGeneration(ticket);
           this.absentBridgeUntil.delete(groupKey);
           for (const session of group) {
             provider.registerSession?.(session.providerSessionId, {
@@ -343,6 +437,8 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
                 session.key,
                 session.providerSessionId,
               );
+              this.observations.forget(session.key);
+              settledIdle = false;
               continue;
             }
             if (session.agent === "codex" && observation?.asyncQuestionItemIds?.length) {
@@ -361,22 +457,25 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
                 );
               }
             }
-            if (
-              await this.recordActivity(
-                activityByEnvironment,
-                session,
-                activity,
-                Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
-                sessionOwner,
-                observation?.readyForInput,
-              )
-            )
-              completionCandidates.add(session.environmentId);
+            await applyObservation(session, activity, {
+              ...(observation?.readyForInput !== undefined
+                ? { readyForInput: observation.readyForInput }
+                : {}),
+              pendingInteraction:
+                activity === "waiting" || (observation?.asyncQuestionItemIds?.length ?? 0) > 0,
+            });
           }
           this.activityAttempts.delete(groupKey);
           this.activityRetryAt.delete(groupKey);
+          this.observations.noteGroupObserved(groupKey, {
+            settledIdle:
+              settledIdle &&
+              !group.some((session) => this.openCodeRecoveryCandidates.has(session.key)),
+            wakeupQualified: this.observationWakeupQualified(first.agent, provider),
+          });
         } catch (error) {
           failedEnvironments.add(first.environmentId);
+          this.observations.noteGroupFailed(groupKey);
           this.backOffActivityGroup(groupKey);
           if (provider) {
             this.evictProvider(first, provider);
@@ -424,6 +523,8 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         this.observedSessionActivity.delete(key);
       }
     }
+    this.observations.retainSessions(liveSessionsByKey);
+    this.observations.retainGroups(new Set(groups.keys()));
 
     for (const environment of environments) {
       if (failedEnvironments.has(environment.id)) continue;
@@ -450,6 +551,127 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     }
   }
 
+  /**
+   * Stage a session's retained observation into the aggregate, with no edge.
+   *
+   * Used where this pass holds no applicable answer for the session: its
+   * group is not due, or its read was fenced by a dispatch. Returns false when
+   * nothing is retained for the current provider session, in which case the
+   * caller must withhold the environment's commit rather than publish an
+   * aggregate that silently omits the session.
+   */
+  protected contributeRetained(
+    activityByEnvironment: Map<
+      string,
+      Record<string, { state: AgentActivityState; updatedAt: string }>
+    >,
+    session: PersistedNativeAgentSession,
+    owner: "environment" | "coordinator",
+  ): boolean {
+    const observed = this.observedSessionActivity.get(session.key);
+    if (!observed || observed.providerSessionId !== session.providerSessionId) return false;
+    if (owner === "environment") {
+      const sources = activityByEnvironment.get(session.environmentId) ?? {};
+      sources[session.key] = { state: observed.state, updatedAt: "1970-01-01T00:00:00.000Z" };
+      activityByEnvironment.set(session.environmentId, sources);
+    }
+    return true;
+  }
+
+  /** A not-due group is skipped only when every session has a retained idle. */
+  protected contributeRetainedGroup(
+    activityByEnvironment: Map<
+      string,
+      Record<string, { state: AgentActivityState; updatedAt: string }>
+    >,
+    group: readonly PersistedNativeAgentSession[],
+    owner: "environment" | "coordinator",
+  ): boolean {
+    const retained = group.every((session) => {
+      const observed = this.observedSessionActivity.get(session.key);
+      return (
+        observed?.providerSessionId === session.providerSessionId &&
+        observed.state === "idle" &&
+        !this.openCodeRecoveryCandidates.has(session.key)
+      );
+    });
+    if (!retained) return false;
+    for (const session of group) this.contributeRetained(activityByEnvironment, session, owner);
+    return true;
+  }
+
+  /**
+   * Whether a stably idle group of this provider may back off right now: the
+   * capability matrix names a push path for externally started work *and* the
+   * provider reports that path live (an OpenCode event stream that is
+   * connected, not reconnecting). Everything else keeps every sweep.
+   */
+  protected observationWakeupQualified(
+    agent: BuildPipelineAgent,
+    provider: NativeAgentRuntimeProvider,
+  ): boolean {
+    return (
+      this.options.observationSharing !== false &&
+      nativeAgentObservationCapabilities(agent)?.idleBackoffWakeup === "provider-event-stream" &&
+      provider.observationStreamLive?.() === true
+    );
+  }
+
+  /**
+   * The shared observation for one session, reading only when the retained
+   * one does not satisfy the demand.
+   *
+   * This is the entry point for consumers that need to know whether a
+   * session is busy — workflows and queues (step 08), mail, the coordinator —
+   * instead of issuing their own provider read. It never starts a bridge,
+   * attaches, hydrates or touches liveness: a miss wakes the session's group
+   * and runs (or queues one follow-up) activity sweep, which uses the no-touch
+   * observer path. `requirePostDispatch` refuses any answer read before the
+   * latest dispatch to the session, so a cached pre-dispatch idle can never
+   * advance a pipeline. A failed read answers `recovering`, never idle.
+   */
+  async observeSessionActivity(
+    input: { environmentId: string; agent: BuildPipelineAgent; logicalSessionKey: string },
+    demand: NativeAgentObservationDemand = {},
+  ): Promise<NativeAgentObservationView> {
+    if (this.stopped) return { freshness: "unknown", postDispatch: false };
+    // Captured before any await: only a sweep that starts after this demand
+    // can answer it if the retained observation does not.
+    const demandedAfter = this.activityScanNumber;
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const session = await this.storage.getNativeAgentSession(key);
+    if (!session) return { freshness: "unknown", postDispatch: false };
+    const retained = this.observations.view(key, session.providerSessionId);
+    if (observationSatisfies(retained, demand)) {
+      recurringWorkMetrics.cacheHit("native-activity-sweep");
+      return retained;
+    }
+    this.observations.wakeGroup(
+      nativeAgentObservationGroupKey(input.environmentId, input.agent),
+      "demand",
+    );
+    await this.reconcileAgentActivity({ startedAfter: demandedAfter });
+    return this.observations.view(key, session.providerSessionId);
+  }
+
+  /** Wake one environment's provider group(s) for the next sweep. */
+  wakeObservation(
+    environmentId: string,
+    reason: NativeAgentObservationWakeReason,
+    agent?: BuildPipelineAgent,
+  ): void {
+    this.observations.wakeEnvironment(environmentId, reason, agent);
+  }
+
+  /** Content-free observer state for diagnostics and the client's gap anchor. */
+  observationStatus(): NativeAgentObservationStatus & { stamp: ViewRevisionStamp } {
+    return { ...this.observations.status(), stamp: this.observations.stamp() };
+  }
+
   /** Stage one session's observed state into the per-environment aggregate. */
   protected async recordActivity(
     activityByEnvironment: Map<
@@ -467,6 +689,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
      */
     owner: "environment" | "coordinator" = "environment",
     readyForInput?: boolean,
+    stillApplicable?: () => boolean,
   ): Promise<boolean> {
     const observed = this.observedSessionActivity.get(session.key);
     const currentObservation =
@@ -520,13 +743,16 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         new Date(this.now()).toISOString(),
       );
     }
+    if (stillApplicable && !stillApplicable()) return false;
     this.observedSessionActivity.set(session.key, {
       providerSessionId: session.providerSessionId,
       state,
       ...(readyForInput !== undefined ? { readyForInput } : {}),
     });
     if (previous !== state) {
+      const observation = this.observations.nextStamp();
       this.options.onActivityTransition?.({
+        observation,
         environmentId: session.environmentId,
         sessionKey: session.key,
         providerSessionId: session.providerSessionId,
@@ -873,11 +1099,11 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     return task;
   }
 
-  protected async reconcilePendingLaunches(): Promise<void> {
-    if (this.stopped) return;
+  protected async reconcilePendingLaunches(): Promise<number> {
+    if (this.stopped) return 0;
     const now = Date.now();
     const environments = await this.storage.loadEnvironments();
-    if (this.stopped) return;
+    if (this.stopped) return 0;
     await this.pruneProviders(
       new Set(
         environments
@@ -885,17 +1111,18 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           .map((environment) => environment.id),
       ),
     );
-    if (this.stopped) return;
+    if (this.stopped) return 0;
+    const pending = environments.filter(
+      (environment) =>
+        environment.pendingAgentLaunch &&
+        (environment.status === "creating" || environment.status === "running"),
+    );
     await Promise.allSettled(
-      environments
-        .filter(
-          (environment) =>
-            environment.pendingAgentLaunch &&
-            (environment.status === "creating" || environment.status === "running") &&
-            (this.launchRetryAt.get(environment.id) ?? 0) <= now,
-        )
+      pending
+        .filter((environment) => (this.launchRetryAt.get(environment.id) ?? 0) <= now)
         .map((environment) => this.reconcileInitialLaunch(environment.id)),
     );
+    return pending.length;
   }
 
   /**
@@ -916,6 +1143,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     if (!BUILD_PIPELINE_AGENTS.includes(agent)) return;
     const queueKey = `${agent}\0${logicalSessionKey}`;
     const queue = await this.storage.getPromptQueue(queueKey);
+    this.queueScheduling?.note(queue, queueKey);
     if (!queue || queue.dispatchError) return;
     if (queue.inFlight === undefined && queue.messages.length === 0) return;
     await this.drainPromptQueue(queueKey);
@@ -1057,6 +1285,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       return;
     }
     const queue = await this.storage.getPromptQueue(queueKey);
+    this.queueScheduling?.note(queue, queueKey);
     if (!queue || queue.dispatchError) return;
     if (queue.inFlight === undefined && queue.messages.length === 0) return;
     const environment = await this.assertEnvironmentLive(queue.environmentId);
@@ -1072,6 +1301,21 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     if (this.composeDraftHoldsQueue(draft?.value)) return;
 
     const head = queue.inFlight?.message ?? queue.messages[0];
+    /*
+     * Share the activity sweep's answer instead of reading the provider again.
+     * `ensureSession` and the status read below are tab-facing reads — a
+     * liveness touch on Codex, a transcript hydrate on Claude — and a busy
+     * session with a queued prompt used to pay both on every two-second pass
+     * for the whole turn. A fresh, confirmed busy answer ends this pass exactly
+     * as a `running` status would; the turn-end edge drains the queue, and an
+     * answer older than two sweeps falls back to the authoritative read.
+     * Idle is never taken from here: dispatch still requires the provider's
+     * own current status below.
+     */
+    if (this.queueSessionObservedBusy(queue.environmentId, agent, logicalSessionKey, head)) {
+      recurringWorkMetrics.cacheHit("native-queue-scan");
+      return;
+    }
     const mode = this.queueExecutionMode(agent, head);
     const session = await this.ensureSession({
       environmentId: queue.environmentId,
@@ -1241,6 +1485,45 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         reservation.requestId,
       );
     }
+  }
+
+  /** A fresh, confirmed observation says the session cannot take this head now. */
+  protected queueSessionObservedBusy(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+    head: unknown,
+  ): boolean {
+    const requestId =
+      head && typeof head === "object"
+        ? (this.queueString(head as Record<string, unknown>, "requestId") ??
+          this.queueString(head as Record<string, unknown>, "id"))
+        : undefined;
+    if (this.options.observationSharing === false) return false;
+    // An async-question answer is delivered *into* a running Codex turn.
+    if (agent === "codex" && requestId && nativeAsyncQuestionItemId(requestId)) return false;
+    const key = nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey);
+    const observed = this.observedSessionActivity.get(key);
+    if (!observed) return false;
+    const view = this.observations.view(key, observed.providerSessionId);
+    const record = view.record;
+    if (
+      !record ||
+      // Only the provider's own confirmation. The `working` a dispatch records
+      // at acceptance is not evidence the turn is still running: a turn that
+      // finished before the next sweep must still release its queue here.
+      record.source !== "provider" ||
+      view.freshness === "recovering" ||
+      view.ageMs === undefined ||
+      view.ageMs > QUEUE_BUSY_OBSERVATION_MAX_AGE_MS ||
+      record.activity !== observed.state
+    ) {
+      return false;
+    }
+    return (
+      record.activity === "waiting" ||
+      (record.activity === "working" && record.readyForInput !== true)
+    );
   }
 
   protected async reconcileInitialLaunchOnce(environmentId: string): Promise<void> {

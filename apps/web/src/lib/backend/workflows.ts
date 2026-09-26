@@ -18,6 +18,7 @@ import type {
 import type {
   LoopedReviewWorkflow as BackendLoopedReviewWorkflow,
   ReviewValidationOutput,
+  ReviewValidationOutputKnown,
   StartLoopedReviewInput,
 } from "@orkestrator/protocol/review-workflow";
 import type {
@@ -62,15 +63,22 @@ import type {
   NativeAgentCommandRefreshOutcome,
 } from "@orkestrator/protocol/native-agent";
 
+/**
+ * Bounded validation output. With `known` (the size and anchor of the tail the
+ * caller holds per stream) a current backend answers only the appended bytes;
+ * an older backend ignores it and answers a full tail.
+ */
 export async function getReviewValidationOutput(
   environmentId: string,
   runId: string,
   resultId: string,
+  known?: ReviewValidationOutputKnown,
 ): Promise<ReviewValidationOutput> {
   return invoke<ReviewValidationOutput>("get_review_validation_output", {
     environmentId,
     runId,
     resultId,
+    ...(known && (known.stdout || known.stderr) ? { known } : {}),
   });
 }
 import {
@@ -422,6 +430,8 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
   projectionSyncVersions: number[];
   historyPagingVersions: number[];
   progressiveViewVersions?: number[];
+  /** Stamped, session-scoped activity announcements (step 07). */
+  observationEventVersions?: number[];
 }> {
   const response = await invoke<unknown>("get_native_agent_sync_capabilities");
   if (!response || typeof response !== "object" || Array.isArray(response)) {
@@ -438,7 +448,11 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
     (candidate.progressiveViewVersions !== undefined &&
       (!Array.isArray(candidate.progressiveViewVersions) ||
         candidate.progressiveViewVersions.length > 16 ||
-        !candidate.progressiveViewVersions.every(Number.isSafeInteger)))
+        !candidate.progressiveViewVersions.every(Number.isSafeInteger))) ||
+    (candidate.observationEventVersions !== undefined &&
+      (!Array.isArray(candidate.observationEventVersions) ||
+        candidate.observationEventVersions.length > 16 ||
+        !candidate.observationEventVersions.every(Number.isSafeInteger)))
   ) {
     throw new Error("Invalid native agent sync capabilities response");
   }
@@ -446,6 +460,7 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
     projectionSyncVersions: number[];
     historyPagingVersions: number[];
     progressiveViewVersions?: number[];
+    observationEventVersions?: number[];
   };
 }
 

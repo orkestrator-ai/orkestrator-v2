@@ -48,6 +48,36 @@ export interface ReviewValidationOutputStream {
   contentBase64: string;
   totalBytes: number;
   startOffset: number;
+  /**
+   * Additive (step 09). Digest of the last {@link REVIEW_VALIDATION_OUTPUT_ANCHOR_BYTES}
+   * bytes before `totalBytes`: the client echoes it back to prove which file
+   * content its held tail ends with. Absent from older backends.
+   */
+  anchor?: string;
+  /**
+   * Additive (step 09). `append`: `contentBase64` holds only the bytes from
+   * the client's known `totalBytes` (= `startOffset`) to the end. `tail` or
+   * absent: an authoritative bounded tail that replaces what the client holds.
+   */
+  mode?: "tail" | "append";
+}
+
+/** Bytes digested for a stream anchor; a mismatch means truncation or rotation. */
+export const REVIEW_VALIDATION_OUTPUT_ANCHOR_BYTES = 64;
+
+/** What a client already holds for one stream, echoed on a conditional read. */
+export interface ReviewValidationOutputKnownStream {
+  totalBytes: number;
+  anchor: string;
+}
+
+export interface ReviewValidationOutputKnown {
+  stdout?: ReviewValidationOutputKnownStream;
+  stderr?: ReviewValidationOutputKnownStream;
+}
+
+export function isReviewValidationOutputAnchor(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{32}$/.test(value);
 }
 
 export interface ReviewValidationOutput {

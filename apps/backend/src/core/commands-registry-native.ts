@@ -1,5 +1,6 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { NATIVE_AGENT_DISCOVERY_SECTIONS } from "@orkestrator/protocol/native-agent";
+import { NATIVE_AGENT_OBSERVATION_EVENT_VERSION } from "@orkestrator/protocol/native-agent-observation";
 import { BUILD_PIPELINE_AGENTS, nativeAgentSessionStorageKey } from "./commands-dependencies.js";
 import {
   asString,
@@ -174,10 +175,16 @@ export function registerNativeAgentCommands(
     });
   });
 
-  register("get_native_agent_sync_capabilities", () => ({
+  register("get_native_agent_sync_capabilities", (_args, context) => ({
     projectionSyncVersions: [1],
     historyPagingVersions: [1],
     progressiveViewVersions: [1],
+    // Additive (step 07): activity announcements name their session and carry
+    // the observer's stamp; `observation` anchors a client's gap detection.
+    observationEventVersions: [NATIVE_AGENT_OBSERVATION_EVENT_VERSION],
+    ...(context.nativeAgents
+      ? { observation: context.nativeAgents.observationStatus().stamp }
+      : {}),
   }));
 
   register("get_native_agent_transcript_update", async (args, context) => {

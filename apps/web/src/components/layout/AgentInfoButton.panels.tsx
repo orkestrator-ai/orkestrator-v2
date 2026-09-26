@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type ComponentType, type SVGProps } from "r
 import { ChevronRight, CircuitBoard, Cpu, HardDrive, MemoryStick } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import type { SystemUsageSnapshot } from "@/lib/backend";
+import { formatSampleTime, SYSTEM_USAGE_STALE_AFTER_MS } from "@/hooks/useSystemUsage";
 import {
   Dialog,
   DialogContent,
@@ -74,32 +75,37 @@ function SystemMetric({
   );
 }
 
-export const SYSTEM_USAGE_STALE_AFTER_MS = 10_000;
+export { SYSTEM_USAGE_STALE_AFTER_MS };
 
-export function isSystemUsageFresh(
-  usage: SystemUsageSnapshot | null,
-  checkedAt: number,
-): usage is SystemUsageSnapshot {
-  if (!usage) return false;
-  const sampledAt = Date.parse(usage.sampledAt);
-  return Number.isFinite(sampledAt) && checkedAt - sampledAt <= SYSTEM_USAGE_STALE_AFTER_MS;
-}
-
+/**
+ * Host meters shared by the title bar and the agent-information popover.
+ *
+ * `stale` comes from the shared usage read (`useSystemUsage`): it is judged on
+ * this client's clock from when the retained sample was requested, so a remote
+ * backend's clock skew cannot make an old sample look current, and a failed
+ * refresh never makes it look newer. `sampledAt` is the backend's own
+ * measurement time, surfaced so the user can tell which sample is shown.
+ */
 export function SystemUsagePanel({
   usage,
-  checkedAt,
+  stale: staleSample,
+  sampledAt = null,
   heading = true,
 }: {
   usage: SystemUsageSnapshot | null;
-  checkedAt: number;
+  stale: boolean;
+  sampledAt?: string | null;
   heading?: boolean;
 }) {
-  const freshUsage = isSystemUsageFresh(usage, checkedAt) ? usage : null;
+  const freshUsage = usage && !staleSample ? usage : null;
   const stale = usage !== null && freshUsage === null;
+  const sampleTime = formatSampleTime(sampledAt);
   return (
     <section
       className={heading ? "mb-4 border-b border-border/60 pb-4" : undefined}
       aria-label="System usage"
+      title={sampleTime ? `${stale ? "Last sampled" : "Sampled"} at ${sampleTime}` : undefined}
+      data-sampled-at={sampledAt ?? undefined}
     >
       {heading || stale ? (
         <div className="flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">

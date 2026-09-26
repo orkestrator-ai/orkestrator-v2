@@ -1078,7 +1078,7 @@ describe("session routes", () => {
     });
   });
 
-  test("reports a parked approval as blocked rather than merely busy", async () => {
+  test("reports a parked approval as waiting rather than merely busy", async () => {
     const state = seedSession();
     state.approvals.set("a1", {
       id: "a1",
@@ -1090,8 +1090,10 @@ describe("session routes", () => {
       settle: () => undefined,
     });
 
+    // The shared activity vocabulary: the backend observer rejects anything
+    // else, and `blocked` used to fail the whole provider group.
     expect(await (await call(`/session/${state.id}/activity`)).json()).toEqual({
-      activity: "blocked",
+      activity: "waiting",
     });
   });
 

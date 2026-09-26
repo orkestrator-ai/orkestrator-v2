@@ -16,6 +16,7 @@ import {
 } from "@orkestrator/protocol/resource-events";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
 import { primePrefetchedCommandResponses } from "@/lib/prefetched-command-responses";
+import { notifyReadCoordinatorReconnected } from "@/lib/read-coordinator";
 
 /**
  * Client half of the backend change feed.
@@ -147,6 +148,40 @@ async function deliverResourceResync(request: ResourceResyncRequest): Promise<bo
   return succeeded;
 }
 
+export type ViewSafetyCheckReason = "interval" | "resource-gap";
+type ViewSafetyCheckHandler = (reason: ViewSafetyCheckReason) => void;
+const viewSafetyCheckHandlers = new Set<ViewSafetyCheckHandler>();
+
+/**
+ * Subscribes an ephemeral event-led view (PR monitor, diff statistics, later
+ * file/tree/coordinator views) to the existing low-frequency safety cadence.
+ *
+ * These views are owned by in-memory backend services whose generation and
+ * revision semantics differ from the persistent-resource manifest, so they are
+ * not added to it. Instead each view runs its own compact conditional read
+ * (normally an `unchanged` answer without a body) on the manifest's interval
+ * and whenever the resource stream shows a gap — evidence that the transport
+ * may also have lost this view's events. No new high-frequency timer exists
+ * per feature. Reconnects are handled by each view's own connection listener.
+ */
+export function onViewSafetyCheck(handler: ViewSafetyCheckHandler): () => void {
+  viewSafetyCheckHandlers.add(handler);
+  return () => {
+    viewSafetyCheckHandlers.delete(handler);
+  };
+}
+
+/** Runs every registered view safety check. Exported for tests. */
+export function requestViewSafetyChecks(reason: ViewSafetyCheckReason): void {
+  for (const handler of Array.from(viewSafetyCheckHandlers)) {
+    try {
+      handler(reason);
+    } catch (error) {
+      console.error("[resource-sync] View safety check threw:", error);
+    }
+  }
+}
+
 /** Explicit, intentionally broad diagnostic and last-resort recovery action. */
 export function requestResourceResync(): void {
   void deliverResourceResync({ resources: null, reason: "explicit" });
@@ -201,6 +236,7 @@ export function resetResourceSync(): void {
   pending.clear();
   handlers.clear();
   resyncHandlers.clear();
+  viewSafetyCheckHandlers.clear();
 }
 
 /**
@@ -494,6 +530,7 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
     const revision = event.payload.revision;
     if (lastRevision !== null && (revision <= lastRevision || revision > lastRevision + 1)) {
       requestManifestResync();
+      requestViewSafetyChecks("resource-gap");
     }
     lastRevision = revision;
     dispatchResourceChange(event.payload);
@@ -512,11 +549,15 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
       bootResyncAt = null;
       return;
     }
+    // Presentation reads reconcile on the same confirmed-miss signal: the
+    // coordinator resets read backoff and re-reads active keys, critical first.
+    notifyReadCoordinatorReconnected();
     requestManifestResync();
   });
 
   const intervalId = setInterval(() => {
     requestManifestResync();
+    requestViewSafetyChecks("interval");
   }, RESOURCE_MANIFEST_INTERVAL_MS);
 
   const stop = () => {

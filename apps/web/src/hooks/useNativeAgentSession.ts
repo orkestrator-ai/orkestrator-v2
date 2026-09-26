@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type {
@@ -56,9 +56,16 @@ import {
   stopNativeAgentBackgroundTask,
   updateNativeAgentControls,
 } from "@/lib/backend";
+import { nativeSessionReadDemand } from "@/lib/native-session-read-policy";
+import {
+  nativeObservationInvalidationMatches,
+  subscribeNativeObservationInvalidations,
+} from "@/lib/native-observation-events";
+import { NATIVE_AGENT_OBSERVATION_EVENT_VERSION } from "@orkestrator/protocol/native-agent-observation";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 import { createSessionKey } from "@/lib/utils";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import {
   evictNativeAgentHistoryCaches,
   useNativeAgentProjectionStore,
@@ -70,8 +77,7 @@ import {
 const DEFAULT_MESSAGE_WINDOW = 512;
 /** Mirrors the backend ceiling, so the button stops offering what it would clamp. */
 const MAX_MESSAGE_WINDOW = 4_096;
-const ACTIVE_PROJECTION_REFRESH_MS = 500;
-export const IDLE_PROJECTION_REFRESH_MS = 1_500;
+export { IDLE_PROJECTION_REFRESH_MS } from "@/lib/native-session-read-policy";
 const CLIENT_HISTORY_MAX_MESSAGES = 4_096;
 const CLIENT_HISTORY_MAX_BYTES = 8 * 1024 * 1024;
 const CLIENT_HISTORY_TOTAL_MAX_BYTES = 32 * 1024 * 1024;
@@ -81,6 +87,8 @@ const HISTORY_PAGE_MAX_MESSAGES = 200;
 let syncCapability: {
   supported: boolean;
   progressive: boolean;
+  /** The backend announces stamped, session-scoped activity invalidations. */
+  observationEvents?: boolean;
   checkedAt: number;
   generation: number;
 } | null = null;
@@ -257,8 +265,17 @@ async function nativeAgentSyncSupported(): Promise<boolean> {
       const capabilities = await getNativeAgentSyncCapabilities();
       const supported = capabilities.projectionSyncVersions?.includes(1) === true;
       const progressive = capabilities.progressiveViewVersions?.includes(1) === true;
+      const observationEvents =
+        capabilities.observationEventVersions?.includes(NATIVE_AGENT_OBSERVATION_EVENT_VERSION) ===
+        true;
       if (generation === syncCapabilityGeneration) {
-        syncCapability = { supported, progressive, checkedAt: Date.now(), generation };
+        syncCapability = {
+          supported,
+          progressive,
+          observationEvents,
+          checkedAt: Date.now(),
+          generation,
+        };
       }
       return supported;
     } catch (error) {
@@ -284,6 +301,17 @@ async function nativeAgentSyncSupported(): Promise<boolean> {
   } finally {
     if (syncCapabilityRequest === request) syncCapabilityRequest = null;
   }
+}
+
+/**
+ * Whether the connected backend announces stamped, session-scoped activity
+ * invalidations (step 07). Synchronous and conservative: false until the
+ * capability read for the current backend generation has answered.
+ */
+export function nativeObservationEventsSupported(): boolean {
+  return Boolean(
+    syncCapability?.generation === syncCapabilityGeneration && syncCapability.observationEvents,
+  );
 }
 
 async function nativeAgentProgressiveSupported(): Promise<boolean> {
@@ -766,6 +794,8 @@ export function useNativeAgentSession<TMessage = unknown>({
         reconcileAfterInFlight?: boolean;
       }) => Promise<NativeAgentSessionProjection<TMessage> | null>
     >(null);
+  /** Background-read invalidation, owned by the read coordinator below. */
+  const coordinatedInvalidateRef = useRef<() => void>(() => {});
   const pendingDispatchRef = useRef<{
     prompt: string;
     requestId: string;
@@ -1686,12 +1716,9 @@ export function useNativeAgentSession<TMessage = unknown>({
     if (refreshesInFlightRef.current > 0 || establishingSessionRef.current > 0) return;
     reconcileAfterInFlightRef.current = false;
     if (!backgroundRefreshEnabledRef.current) return;
-    queueMicrotask(() => {
-      void refreshRef.current?.({
-        manual: false,
-        reconcileAfterInFlight: true,
-      });
-    });
+    // Through the read coordinator, so the trailing read joins/defers like
+    // every other background read (e.g. waits for a hidden document).
+    queueMicrotask(() => coordinatedInvalidateRef.current());
   }, []);
 
   const refresh = useCallback(
@@ -2388,6 +2415,39 @@ export function useNativeAgentSession<TMessage = unknown>({
     void connect().then(() => undefined);
   }, [connect, enabled, isActive]);
 
+  /*
+   * Background reads — the 500/1,500 ms cadence, resource-change hints, resync
+   * and trailing reconciles — are scheduled by the shared read coordinator:
+   * one timer, joined reads with a single dirty flag, paused while the
+   * document is hidden, and reconciled first (critical) on return.
+   * Reads apply into this instance's fenced state (sequence/epoch, conditional
+   * tokens), so the key's view is this instance. Explicit and post-mutation
+   * reads stay direct `refresh()` calls, as do connect/adopt reads.
+   */
+  const readInstanceId = useId();
+  const { invalidate: coordinatedInvalidate } = useCoordinatedRead({
+    key: {
+      resource: "native-agent-session",
+      target: `${environmentId}\u0000${platform}\u0000${sessionKey}`,
+      view: readInstanceId,
+    },
+    enabled,
+    readOnSubscribe: false,
+    retainOnDispose: false,
+    demand: nativeSessionReadDemand(platform, runtimeProjection?.turn.phase, {
+      active: enabled && isActive,
+      observationEvents: nativeObservationEventsSupported(),
+    }),
+    read: async (context) => {
+      await (refreshRef.current?.(
+        context.reason === "interval"
+          ? { manual: false }
+          : { manual: false, reconcileAfterInFlight: true },
+      ) ?? Promise.resolve(null));
+    },
+  });
+  coordinatedInvalidateRef.current = coordinatedInvalidate;
+
   useEffect(() => {
     const unsubscribeChange = onResourceChanged("native-agent-session", (change) => {
       if (
@@ -2397,36 +2457,39 @@ export function useNativeAgentSession<TMessage = unknown>({
         (change.agent === undefined ||
           (change.agent === platform && change.logicalSessionKey === sessionKey))
       ) {
-        void refresh({ manual: false, reconcileAfterInFlight: true });
+        coordinatedInvalidate();
       }
     });
     const unsubscribeResync = onResourceResync(() => {
       invalidateNativeAgentSyncCapability();
-      if (enabled && isActive) {
-        void refresh({ manual: false, reconcileAfterInFlight: true });
+      if (enabled && isActive) coordinatedInvalidate();
+    });
+    /*
+     * The backend observer announces every activity transition, stamped: a
+     * turn starting or ending, a question or approval parking the turn. This
+     * is what lets a qualified idle view read less often — it is told when it
+     * must read. A missed announcement (stamp gap) or a new observer lifetime
+     * re-reads every view.
+     */
+    const unsubscribeObservation = subscribeNativeObservationInvalidations((invalidation) => {
+      if (
+        enabled &&
+        isActive &&
+        nativeObservationInvalidationMatches(invalidation, {
+          environmentId,
+          agent: platform,
+          logicalSessionKey: sessionKey,
+        })
+      ) {
+        coordinatedInvalidate();
       }
     });
     return () => {
       unsubscribeChange();
       unsubscribeResync();
+      unsubscribeObservation();
     };
-  }, [enabled, environmentId, isActive, platform, refresh, sessionKey]);
-
-  useEffect(() => {
-    if (!enabled || !isActive) return;
-    const active =
-      runtimeProjection?.turn.phase === "running" ||
-      runtimeProjection?.turn.phase === "blocked" ||
-      runtimeProjection?.turn.phase === "cancelling" ||
-      runtimeProjection?.turn.phase === "recovering";
-    const timer = window.setInterval(
-      () => {
-        void refresh({ manual: false });
-      },
-      active ? ACTIVE_PROJECTION_REFRESH_MS : IDLE_PROJECTION_REFRESH_MS,
-    );
-    return () => window.clearInterval(timer);
-  }, [enabled, isActive, refresh, runtimeProjection?.turn.phase]);
+  }, [coordinatedInvalidate, enabled, environmentId, isActive, platform, sessionKey]);
 
   const send = useCallback(
     async (

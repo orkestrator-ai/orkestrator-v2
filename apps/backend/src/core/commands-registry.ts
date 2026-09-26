@@ -202,16 +202,15 @@ export function createCommandRegistry(
     schedulePendingEnvironmentRename(environmentId, context);
   };
 
-  const reconcilePendingEnvironmentRenames = async (context: CommandContext): Promise<void> => {
+  const reconcilePendingEnvironmentRenames = async (context: CommandContext): Promise<number> => {
     const now = Date.now();
     const environments = await context.storage.loadEnvironments();
     const tasks: Promise<void>[] = [];
+    let pending = 0;
     for (const environment of environments) {
-      if (
-        environment.status !== "running" ||
-        !environment.pendingRenamePrompt?.trim() ||
-        (pendingEnvironmentRenameRetryAt.get(environment.id) ?? 0) > now
-      ) {
+      if (environment.status !== "running" || !environment.pendingRenamePrompt?.trim()) continue;
+      pending += 1;
+      if ((pendingEnvironmentRenameRetryAt.get(environment.id) ?? 0) > now) {
         continue;
       }
       tasks.push(
@@ -221,6 +220,7 @@ export function createCommandRegistry(
       );
     }
     await Promise.all(tasks);
+    return pending;
   };
 
   const dependencies: RegistryDependencies = {

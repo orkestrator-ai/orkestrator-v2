@@ -6,6 +6,8 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   MANUAL_REFRESH_TIMEOUT_MS,
@@ -102,7 +104,10 @@ beforeEach(() => {
   useMultiReviewStore.setState({ workflows: new Map() });
   useMessagePartExpansionStore.getState().reset();
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetReadCoordinatorForTests();
+});
 
 async function openTranscriptRefreshMenu() {
   fireEvent.contextMenu(screen.getByTestId("multi-review-reviewer-transcript-body"));
@@ -319,53 +324,93 @@ describe("MultiReviewReviewerTab", () => {
         activeRequests -= 1;
       }
     });
-    let intervalCallback: (() => void) | undefined;
-    const originalSetInterval = window.setInterval;
-    const originalClearInterval = window.clearInterval;
-    window.setInterval = ((callback: TimerHandler) => {
-      if (typeof callback === "function") intervalCallback = () => callback();
-      return 1;
-    }) as typeof window.setInterval;
-    window.clearInterval = mock(() => undefined) as typeof window.clearInterval;
-    let unmount: (() => void) | undefined;
+    const { clock } = installFakeReadCoordinator();
+    const { unmount } = render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+      />,
+    );
 
-    try {
-      ({ unmount } = render(
-        <MultiReviewReviewerTab
-          data={{
-            environmentId: "env-1",
-            workflowId: "multi-1",
-            reviewerId: "reviewer-1",
-            isLocal: true,
-          }}
-          isActive
-          loadTranscript={loadTranscript}
-        />,
-      ));
+    const body = screen.getByTestId("multi-review-reviewer-transcript-body");
+    expect(body.classList.contains("flex")).toBe(true);
+    expect(body.classList.contains("flex-col")).toBe(true);
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(1));
 
-      const body = screen.getByTestId("multi-review-reviewer-transcript-body");
-      expect(body.classList.contains("flex")).toBe(true);
-      expect(body.classList.contains("flex-col")).toBe(true);
-      await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(1));
+    // Two poll periods elapse while the first read is still out.
+    await act(async () => {
+      await clock.advance(REFRESH_INTERVAL_MS * 2);
+    });
+    expect(loadTranscript).toHaveBeenCalledTimes(1);
+    expect(maximumActiveRequests).toBe(1);
 
-      act(() => {
-        intervalCallback?.();
-        intervalCallback?.();
-      });
-      expect(loadTranscript).toHaveBeenCalledTimes(1);
-      expect(maximumActiveRequests).toBe(1);
+    await act(async () => {
+      resolveFirst(completed);
+      await first;
+    });
+    await waitFor(() => expect(activeRequests).toBe(0));
+    expect(maximumActiveRequests).toBe(1);
+    unmount();
+  });
 
-      await act(async () => {
-        resolveFirst(completed);
-        await first;
-      });
-      await waitFor(() => expect(activeRequests).toBe(0));
-      expect(maximumActiveRequests).toBe(1);
-    } finally {
-      unmount?.();
-      window.setInterval = originalSetInterval;
-      window.clearInterval = originalClearInterval;
-    }
+  test("polls a running reviewer only while visible and reconciles on return", async () => {
+    const { clock, document: fakeDocument } = installFakeReadCoordinator();
+    const running: MultiReviewReviewerTranscript = {
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+      workflowPhase: "reviewing",
+      agent: "codex",
+      model: "gpt-5.6",
+      status: "running",
+      transcript: "snapshot",
+      sourceToken: "token-1",
+      messages: [],
+    };
+    const loadTranscript = mock(
+      async (_workflowId: string, _reviewerId: string, options?: { knownSourceToken?: string }) =>
+        options?.knownSourceToken === "token-1"
+          ? { ...running, transcript: "unchanged" as const }
+          : running,
+    );
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+      />,
+    );
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalled());
+    await act(async () => {
+      await clock.advance(0);
+    });
+    const afterMount = loadTranscript.mock.calls.length;
+    await act(async () => {
+      await clock.advance(REFRESH_INTERVAL_MS * 3);
+    });
+    expect(loadTranscript.mock.calls.length).toBe(afterMount + 3);
+
+    act(() => fakeDocument.setVisibility("hidden"));
+    await act(async () => {
+      await clock.advance(REFRESH_INTERVAL_MS * 10);
+    });
+    expect(loadTranscript.mock.calls.length).toBe(afterMount + 3);
+
+    act(() => fakeDocument.setVisibility("visible"));
+    await act(async () => {
+      await clock.advance(1_000);
+    });
+    expect(loadTranscript.mock.calls.length).toBe(afterMount + 4);
   });
 
   test("queues a manual refresh behind an in-flight transcript poll", async () => {
@@ -405,14 +450,7 @@ describe("MultiReviewReviewerTab", () => {
       if (calls === 3) return await poll;
       return await manual;
     });
-    let intervalCallback: (() => void) | undefined;
-    const originalSetInterval = window.setInterval;
-    const originalClearInterval = window.clearInterval;
-    window.setInterval = ((callback: TimerHandler) => {
-      if (typeof callback === "function") intervalCallback = () => callback();
-      return 1;
-    }) as typeof window.setInterval;
-    window.clearInterval = mock(() => undefined) as typeof window.clearInterval;
+    const { clock } = installFakeReadCoordinator();
     let unmount: (() => void) | undefined;
 
     try {
@@ -429,10 +467,12 @@ describe("MultiReviewReviewerTab", () => {
         />,
       ));
 
-      // The status-dependent effect performs one settling read before arming
-      // the stable running-state interval used below.
+      // The status-dependent effect performs one settling read before the
+      // stable running-state poll used below.
       await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
-      act(() => intervalCallback?.());
+      await act(async () => {
+        await clock.advance(REFRESH_INTERVAL_MS);
+      });
       await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(3));
 
       fireEvent.click(await openTranscriptRefreshMenu());
@@ -453,8 +493,6 @@ describe("MultiReviewReviewerTab", () => {
       expect(loadTranscript).toHaveBeenCalledTimes(4);
     } finally {
       unmount?.();
-      window.setInterval = originalSetInterval;
-      window.clearInterval = originalClearInterval;
     }
   });
 
@@ -716,30 +754,24 @@ describe("MultiReviewReviewerTab", () => {
       messages: [],
     };
     const loadTranscript = mock(async () => running);
-    const originalSetInterval = window.setInterval;
-    const delays: number[] = [];
-    window.setInterval = ((...args: Parameters<typeof originalSetInterval>) => {
-      delays.push((args[1] as number | undefined) ?? 0);
-      return originalSetInterval(...args);
-    }) as typeof window.setInterval;
-    try {
-      render(
-        <MultiReviewReviewerTab
-          data={{
-            environmentId: "env-1",
-            workflowId: "multi-1",
-            reviewerId: "reviewer-1",
-            isLocal: true,
-          }}
-          isActive
-          loadTranscript={loadTranscript}
-        />,
-      );
-      await waitFor(() => expect(loadTranscript).toHaveBeenCalled());
-    } finally {
-      window.setInterval = originalSetInterval;
-    }
-    expect(delays).toContain(REFRESH_INTERVAL_MS);
+    const { coordinator } = installFakeReadCoordinator();
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+      />,
+    );
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalled());
+    const poll = coordinator
+      .getDiagnostics()
+      .entries.find((entry) => entry.id.includes("multi-review-reviewer-transcript"));
+    expect(poll?.cadenceMs).toBe(REFRESH_INTERVAL_MS);
   });
 
   test("shows elapsed thinking status only while the reviewer is running", async () => {

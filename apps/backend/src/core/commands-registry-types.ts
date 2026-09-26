@@ -69,5 +69,6 @@ export type RegistryDependencies = {
     prompt: string,
     context: CommandContext,
   ) => Promise<void>;
-  reconcilePendingEnvironmentRenames: (context: CommandContext) => Promise<void>;
+  /** Resolves with how many environments still carry a rename intent. */
+  reconcilePendingEnvironmentRenames: (context: CommandContext) => Promise<number>;
 };

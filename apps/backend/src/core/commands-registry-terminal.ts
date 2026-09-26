@@ -32,6 +32,16 @@ import {
   CommandFailedError,
 } from "./commands-dependencies.js";
 import type { EnvironmentDiffStatsSnapshot } from "./commands-dependencies.js";
+import type { EnvironmentDiffStatsSnapshotOutcome } from "@orkestrator/protocol/diff-stats";
+import type {
+  WorktreeReadStamp,
+  WorktreeSnapshotRevisionsOutcome,
+  WorktreeSnapshotRevisionsSnapshot,
+} from "@orkestrator/protocol/worktree-snapshots";
+import {
+  parseViewSnapshotRequest,
+  resolveViewSnapshotOutcome,
+} from "@orkestrator/protocol/view-sync";
 import {
   terminalProcesses,
   terminalSessionConfigs,
@@ -42,8 +52,8 @@ import {
   terminalOutputTruncated,
   CONTAINER_INTERACTIVE_SHELL_COMMAND,
   CONTAINER_SAFE_BASE64_READER,
-  DIFF_CACHE_MAX_AGE_MS,
   diffStatsService,
+  containerGitFetchPolicy,
   syncDiffStatsTracking,
   asString,
   asRecord,
@@ -61,7 +71,6 @@ import {
   createEnvironmentCommandRunner,
   parseGitPorcelainPaths,
   findEnvironmentByContainerId,
-  conditionalSnapshot,
   readTerminalOutputBuffer,
   logSetupTerminal,
   resolveLocalShellPath,
@@ -83,15 +92,6 @@ import {
   isSetupTerminalSessionId,
   isTerminalSessionAttachable,
   dockerExec,
-  buildFileTree,
-  CONTAINER_FILE_TREE_LISTER,
-  MAX_FILE_TREE_NODES,
-  parseContainerFileTree,
-  buildContainerGitStatusScript,
-  isMissingTargetRefResponse,
-  parseContainerGitStatusResponse,
-  getLocalGitStatus,
-  getContainerGitStatusDetailed,
   validateWorkspaceMutationPath,
   pruneLocalInitialPromptBatches,
   containerPruneInitialPromptBatchesCommand,
@@ -115,6 +115,7 @@ import {
   readLocalFileAtBranch,
 } from "./commands-helpers.js";
 import type { GitFileChange } from "./commands-helpers.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
   parseReviewWorktreeFingerprint,
   REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
@@ -127,6 +128,39 @@ import {
   resumeTerminalHistory,
   resizeTerminalHistory,
 } from "./terminal-history.js";
+
+/**
+ * Answers a file-list or tree read in the command's legacy shapes.
+ *
+ * Without `knownDigest` the raw array, exactly as before. With it, the
+ * conditional `{ unchanged, digest, value? }` answer whose digest is the one
+ * older clients already hold (`sha256(JSON.stringify(value))`), plus an
+ * additive `view` stamp when a tracked owner served the read. The digest is
+ * computed once per owner result, not once per read.
+ */
+function snapshotResponse<T>(
+  kind: "file-list-read" | "file-tree-read",
+  value: T,
+  digest: string,
+  knownDigest: unknown,
+  view: WorktreeReadStamp | undefined,
+): T | { unchanged: boolean; digest: string; value?: T; view?: WorktreeReadStamp } {
+  if (knownDigest === undefined) return value;
+  const unchanged = typeof knownDigest === "string" && knownDigest === digest;
+  // An unchanged response still paid for whatever read produced it; the two
+  // are counted apart so a small response is never mistaken for less work.
+  recurringWorkMetrics.outcome(kind, unchanged ? "unchanged" : "changed");
+  return {
+    unchanged,
+    digest,
+    ...(unchanged ? {} : { value }),
+    ...(view ? { view } : {}),
+  };
+}
+
+function refreshRequested(value: unknown): boolean {
+  return value === true;
+}
 
 function resizeTerminalHistoryBestEffort(sessionId: string, cols: number, rows: number): void {
   try {
@@ -700,28 +734,22 @@ export function registerTerminalCommands(
 
   register(
     "get_local_git_status",
-    async ({ worktreePath, targetBranch, includeUncommitted, knownDigest }) => {
-      const resolvedWorktreePath = asString(worktreePath, "worktreePath");
-      const ref = asString(targetBranch, "targetBranch");
-      const includeWorkingTree = includeUncommitted !== false;
-      if (!includeWorkingTree) {
-        return conditionalSnapshot(
-          await getLocalGitStatus(resolvedWorktreePath, ref, false),
-          knownDigest,
-        );
-      }
-
-      // The sidebar badge and the Files panel look at the same environment and used
-      // to ask for it separately. Whichever arrives first pays for the scan.
-      const cached = diffStatsService.cachedChanges(
-        { worktreePath: resolvedWorktreePath },
-        ref,
-        DIFF_CACHE_MAX_AGE_MS,
+    async ({ worktreePath, targetBranch, includeUncommitted, knownDigest, refresh }) => {
+      // The sidebar badge, every client's Files panel and the background scan
+      // look at the same worktree; they share one read owner and one scan.
+      const read = await diffStatsService.readFileList({
+        lookup: { worktreePath: asString(worktreePath, "worktreePath") },
+        comparisonRef: asString(targetBranch, "targetBranch"),
+        includeUncommitted: includeUncommitted !== false,
+        refresh: refreshRequested(refresh),
+      });
+      return snapshotResponse(
+        "file-list-read",
+        read.changes as GitFileChange[],
+        read.digest,
+        knownDigest,
+        read.view,
       );
-      if (cached) return conditionalSnapshot(cached as GitFileChange[], knownDigest);
-      const changes = await getLocalGitStatus(resolvedWorktreePath, ref, true);
-      diffStatsService.adoptScan({ worktreePath: resolvedWorktreePath }, ref, changes);
-      return conditionalSnapshot(changes, knownDigest);
     },
   );
   /**
@@ -732,18 +760,50 @@ export function registerTerminalCommands(
    * also arms tracking, so the first client to ask starts the work even if no
    * lifecycle command has run since the backend started.
    */
-  register("get_environment_diff_stats", async (_args, context) => {
+  register("get_environment_diff_stats", async (args, context) => {
     await syncDiffStatsTracking(context);
-    return { entries: diffStatsService.snapshot() } satisfies EnvironmentDiffStatsSnapshot;
+    // Legacy `{ entries }` shape (additively stamped) without known-revision
+    // arguments; the compact conditional outcome from `view-sync.ts` with them.
+    const request = parseViewSnapshotRequest(args);
+    if (request.kind === "absent") {
+      return diffStatsService.revisionedSnapshot() satisfies EnvironmentDiffStatsSnapshot;
+    }
+    return resolveViewSnapshotOutcome(request, diffStatsService.currentRevision(), () => ({
+      entries: diffStatsService.snapshot(),
+    })) satisfies EnvironmentDiffStatsSnapshotOutcome;
   });
   register("refresh_environment_diff_stats", async ({ environmentId }, context) => {
     await syncDiffStatsTracking(context);
-    diffStatsService.refresh(asString(environmentId, "environmentId"));
+    const id = asString(environmentId, "environmentId");
+    const environment = await context.storage.getEnvironment(id).catch(() => null);
+    if (environment && environment.environmentType !== "local" && environment.containerId) {
+      containerGitFetchPolicy.invalidate({ containerId: environment.containerId }, "explicit");
+    }
+    diffStatsService.refresh(id);
+  });
+  /**
+   * File-list and tree revisions of every tracked environment
+   * (`@orkestrator/protocol/worktree-snapshots`). Like the diff-stat snapshot,
+   * it arms tracking and answers conditional reads compactly.
+   */
+  register("get_worktree_snapshot_revisions", async (args, context) => {
+    await syncDiffStatsTracking(context);
+    const request = parseViewSnapshotRequest(args);
+    if (request.kind === "absent") {
+      return diffStatsService.revisionedWorktreeSnapshot() satisfies WorktreeSnapshotRevisionsSnapshot;
+    }
+    return resolveViewSnapshotOutcome(request, diffStatsService.currentWorktreeRevision(), () => ({
+      entries: diffStatsService.worktreeSnapshotEntries(),
+    })) satisfies WorktreeSnapshotRevisionsOutcome;
   });
 
-  register("get_local_file_tree", async ({ worktreePath, knownDigest }) =>
-    conditionalSnapshot(await buildFileTree(asString(worktreePath, "worktreePath")), knownDigest),
-  );
+  register("get_local_file_tree", async ({ worktreePath, knownDigest, refresh }) => {
+    const read = await diffStatsService.readTree({
+      lookup: { worktreePath: asString(worktreePath, "worktreePath") },
+      refresh: refreshRequested(refresh),
+    });
+    return snapshotResponse("file-tree-read", read.tree, read.digest, knownDigest, read.view);
+  });
   register("read_local_file", ({ worktreePath, filePath }) =>
     readTextFile(asString(worktreePath, "worktreePath"), asString(filePath, "filePath")),
   );
@@ -817,37 +877,30 @@ export function registerTerminalCommands(
 
   register(
     "get_git_status",
-    async ({ containerId, targetBranch, includeUncommitted, knownDigest }) => {
+    async ({ containerId, targetBranch, includeUncommitted, knownDigest, refresh }) => {
       const ref = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
-      const includeWorkingTree = includeUncommitted !== false;
-      const resolvedContainerId = asString(containerId, "containerId");
-
-      if (includeWorkingTree) {
-        const cached = diffStatsService.cachedChanges(
-          { containerId: resolvedContainerId },
-          ref,
-          DIFF_CACHE_MAX_AGE_MS,
-        );
-        if (cached) return conditionalSnapshot(cached as GitFileChange[], knownDigest);
-        const changes = (await getContainerGitStatusDetailed(resolvedContainerId, ref, true))
-          .changes;
-        diffStatsService.adoptScan({ containerId: resolvedContainerId }, ref, changes);
-        return conditionalSnapshot(changes, knownDigest);
-      }
-
-      const output = await dockerExec(
-        resolvedContainerId,
-        buildContainerGitStatusScript(ref, includeWorkingTree),
-      );
-      // Distinguishes "the requested baseline is not in this container" - which
-      // happens when a container is recreated from a different clone - from a
-      // corrupt response, so callers do not see both as one opaque exec failure.
-      if (isMissingTargetRefResponse(output)) {
-        throw new Error(`Target ref is not present in the container: ${ref}`);
-      }
-      return conditionalSnapshot(
-        parseContainerGitStatusResponse(output, includeWorkingTree),
+      const id = asString(containerId, "containerId");
+      const explicit = refreshRequested(refresh);
+      // A manual refresh also asks for the remote: the fetch policy makes the
+      // ref due (unless a fetch started or ended in the last 15 s) and the
+      // post-click scan below starts it in the background. The read itself
+      // answers from local refs and never waits for the network; a fetch
+      // that moves the base announces a new file-list revision.
+      if (explicit) containerGitFetchPolicy.invalidate({ containerId: id, ref }, "explicit");
+      // A missing baseline surfaces as "Target ref is not present in the
+      // container" from the scanner, distinct from a corrupt response.
+      const read = await diffStatsService.readFileList({
+        lookup: { containerId: id },
+        comparisonRef: ref,
+        includeUncommitted: includeUncommitted !== false,
+        refresh: explicit,
+      });
+      return snapshotResponse(
+        "file-list-read",
+        read.changes as GitFileChange[],
+        read.digest,
         knownDigest,
+        read.view,
       );
     },
   );
@@ -904,12 +957,12 @@ export function registerTerminalCommands(
       ...(captured.fingerprint === undefined ? {} : { fingerprint: captured.fingerprint }),
     };
   });
-  register("get_file_tree", async ({ containerId, knownDigest }) => {
-    const output = await dockerExec(
-      asString(containerId, "containerId"),
-      `node -e ${quoteShell(CONTAINER_FILE_TREE_LISTER)} -- /workspace ${MAX_FILE_TREE_NODES}`,
-    );
-    return conditionalSnapshot(parseContainerFileTree(output), knownDigest);
+  register("get_file_tree", async ({ containerId, knownDigest, refresh }) => {
+    const read = await diffStatsService.readTree({
+      lookup: { containerId: asString(containerId, "containerId") },
+      refresh: refreshRequested(refresh),
+    });
+    return snapshotResponse("file-tree-read", read.tree, read.digest, knownDigest, read.view);
   });
   register("read_container_file", async ({ containerId, filePath }) => {
     const target = validateRelativeFilePath(asString(filePath, "filePath"));

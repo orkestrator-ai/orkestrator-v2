@@ -1,38 +1,11 @@
 import type { DesignStyleProperty } from "./DesignStyleField";
 
-export const inspectorSections: { title: string; properties: DesignStyleProperty[] }[] = [
-  {
-    title: "Position",
-    properties: [
-      {
-        name: "position",
-        label: "Type",
-        options: ["static", "relative", "absolute", "fixed", "sticky"],
-        wide: true,
-      },
-      { name: "top", label: "Top" },
-      { name: "left", label: "Left" },
-      { name: "bottom", label: "Bottom" },
-      { name: "right", label: "Right" },
-    ],
-  },
-  {
-    title: "Size",
-    properties: [
-      { name: "width", label: "Width" },
-      { name: "height", label: "Height" },
-      { name: "min-width", label: "Min width" },
-      { name: "min-height", label: "Min height" },
-      { name: "max-width", label: "Max width" },
-      { name: "max-height", label: "Max height" },
-      {
-        name: "box-sizing",
-        label: "Box sizing",
-        options: ["border-box", "content-box"],
-        wide: true,
-      },
-    ],
-  },
+export interface InspectorSection {
+  title: string;
+  properties: DesignStyleProperty[];
+}
+
+export const inspectorSections: InspectorSection[] = [
   {
     title: "Layout",
     properties: [
@@ -90,44 +63,40 @@ export const inspectorSections: { title: string; properties: DesignStyleProperty
         ],
         wide: true,
       },
-      { name: "gap", label: "Gap", wide: true },
-      { name: "padding", label: "Padding" },
-      { name: "margin", label: "Margin" },
-    ],
-  },
-  {
-    title: "Appearance",
-    properties: [
-      { name: "background-color", label: "Fill", color: true, wide: true },
-      { name: "border-color", label: "Border color", color: true, wide: true },
-      { name: "border-width", label: "Border width" },
       {
-        name: "border-style",
-        label: "Border style",
-        options: [
-          "none",
-          "solid",
-          "dashed",
-          "dotted",
-          "double",
-          "groove",
-          "ridge",
-          "inset",
-          "outset",
-        ],
-      },
-      { name: "border-radius", label: "Radius" },
-      { name: "opacity", label: "Opacity (0–1)" },
-      {
-        name: "visibility",
-        label: "Visibility",
-        options: ["visible", "hidden", "collapse"],
+        name: "position",
+        label: "Position",
+        options: ["static", "relative", "absolute", "fixed", "sticky"],
         wide: true,
       },
+      { name: "top", label: "Top" },
+      { name: "left", label: "Left" },
+      { name: "bottom", label: "Bottom" },
+      { name: "right", label: "Right" },
     ],
   },
   {
-    title: "Text",
+    title: "Size and spacing",
+    properties: [
+      { name: "width", label: "Width" },
+      { name: "height", label: "Height" },
+      { name: "min-width", label: "Min width" },
+      { name: "min-height", label: "Min height" },
+      { name: "max-width", label: "Max width" },
+      { name: "max-height", label: "Max height" },
+      {
+        name: "box-sizing",
+        label: "Box sizing",
+        options: ["border-box", "content-box"],
+        wide: true,
+      },
+      { name: "padding", label: "Padding" },
+      { name: "margin", label: "Margin" },
+      { name: "gap", label: "Gap", wide: true },
+    ],
+  },
+  {
+    title: "Typography",
     properties: [
       { name: "font-size", label: "Size" },
       {
@@ -161,4 +130,39 @@ export const inspectorSections: { title: string; properties: DesignStyleProperty
       { name: "color", label: "Color", color: true, wide: true },
     ],
   },
+  {
+    title: "Appearance",
+    properties: [
+      { name: "background-color", label: "Fill", color: true, wide: true },
+      { name: "border-color", label: "Border color", color: true, wide: true },
+      { name: "border-width", label: "Border width" },
+      {
+        name: "border-style",
+        label: "Border style",
+        options: [
+          "none",
+          "solid",
+          "dashed",
+          "dotted",
+          "double",
+          "groove",
+          "ridge",
+          "inset",
+          "outset",
+        ],
+      },
+      { name: "border-radius", label: "Radius" },
+      { name: "opacity", label: "Opacity (0–1)" },
+      {
+        name: "visibility",
+        label: "Visibility",
+        options: ["visible", "hidden", "collapse"],
+        wide: true,
+      },
+    ],
+  },
 ];
+
+export const groupedPropertyNames: ReadonlySet<string> = new Set(
+  inspectorSections.flatMap((section) => section.properties.map((property) => property.name)),
+);

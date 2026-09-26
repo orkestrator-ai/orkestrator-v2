@@ -9,6 +9,10 @@
  * no mounted renderer is involved, which is what makes the recovery survive
  * closed tabs, inactive environments, and app restarts.
  *
+ * The same path retries turns a provider API error ended mid-flight (for
+ * example a gateway 400 that OpenCode marks non-retryable), with backoff and a
+ * bounded retry budget.
+ *
  * The inspection works on raw `session.messages()` SDK payloads
  * (`{ info, parts }`), the same authoritative transcript OpenCode persists.
  */
@@ -25,8 +29,41 @@
 export const OPENCODE_INCOMPLETE_TURN_CONTINUATION =
   "Continue from the current session state. Do not repeat completed actions. Finish the remaining work and provide the final conclusion.";
 
+/**
+ * Continuation prompt for turns a provider API error ended mid-flight.
+ *
+ * Like {@link OPENCODE_INCOMPLETE_TURN_CONTINUATION}, its exact value is the
+ * durable retry counter: the number of consecutive automatic continuations at
+ * the end of the transcript bounds the retries across restarts.
+ */
+export const OPENCODE_PROVIDER_ERROR_CONTINUATION =
+  "The previous model request failed with a provider error. Continue from the current session state. Do not repeat completed actions. Finish the remaining work and provide the final conclusion.";
+
+/**
+ * Wait before each automatic retry of a provider error, measured from when the
+ * failed message completed. Its length is the retry budget.
+ */
+export const OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS = [5_000, 15_000, 45_000] as const;
+/** A restart may resume a recent backoff, but must not revive an abandoned turn. */
+export const OPENCODE_PROVIDER_ERROR_MAX_AGE_MS = 5 * 60_000;
+
+/**
+ * HTTP statuses that will fail the same way on retry: credentials, billing,
+ * an unknown model, or a request the provider refuses to accept at this size.
+ */
+const NON_RETRYABLE_PROVIDER_STATUSES = new Set([401, 402, 403, 404, 413]);
+
+const AUTOMATIC_CONTINUATIONS = new Set<string>([
+  OPENCODE_INCOMPLETE_TURN_CONTINUATION,
+  OPENCODE_PROVIDER_ERROR_CONTINUATION,
+]);
+
 export interface OpenCodeIncompleteTurnRecovery {
   action: "continue" | "exhausted";
+  /** Which failure shape was detected; selects the continuation prompt. */
+  reason: "incomplete" | "provider-error";
+  /** Earliest epoch ms a provider-error retry may be dispatched (backoff). */
+  notBefore?: number;
   /** Stalled assistant message id; keys the durable dispatch request id. */
   assistantMessageId: string;
   /** `providerID/modelID` of the stalled turn, when the transcript reports it. */
@@ -119,6 +156,36 @@ export function openCodeMessageFinishReason(entry: unknown): string | undefined 
   return typeof finish === "string" && finish.trim().length > 0 ? finish.trim() : undefined;
 }
 
+/**
+ * A provider API failure worth retrying automatically.
+ *
+ * Only `APIError` qualifies: aborts, auth failures, output-length and context
+ * overflow errors are either deliberate or deterministic. Statuses that cannot
+ * succeed on retry are excluded; everything else — including 400s gateways
+ * return for transient upstream faults — is retried within a small budget.
+ */
+function isRetryableProviderError(error: unknown): boolean {
+  if (!isRecord(error) || error.name !== "APIError") return false;
+  const statusCode = isRecord(error.data) ? error.data.statusCode : undefined;
+  return typeof statusCode !== "number" || !NON_RETRYABLE_PROVIDER_STATUSES.has(statusCode);
+}
+
+/** Count back to a manual prompt; a clipped history cannot prove the budget remains. */
+function trailingAutomaticContinuations(messages: readonly unknown[]): {
+  count: number;
+  foundManualBoundary: boolean;
+} {
+  let count = 0;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messageInfo(messages[index])?.role !== "user") continue;
+    if (!AUTOMATIC_CONTINUATIONS.has(textContent(messages[index]).trim())) {
+      return { count, foundManualBoundary: true };
+    }
+    count += 1;
+  }
+  return { count, foundManualBoundary: false };
+}
+
 function hasPendingToolWork(entry: unknown): boolean {
   for (const part of messageParts(entry)) {
     if (part.type !== "tool") continue;
@@ -135,14 +202,18 @@ function hasPendingToolWork(entry: unknown): boolean {
  * - final assistant text means the turn is usable, even if its reason is odd;
  * - an assistant error means the turn was aborted or failed — a user stop
  *   stamps `MessageAbortedError` on the message, so continuing would re-run
- *   work the user deliberately stopped;
+ *   work the user deliberately stopped. The exception is a retryable provider
+ *   `APIError`, retried with backoff up to the length of
+ *   {@link OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS};
  * - a pending tool or subagent means continuing could overlap side effects;
  * - the fixed continuation prompt as the latest user turn means recovery
  *   already ran once and the provider stalled again — report `exhausted`
- *   instead of looping.
+ *   instead of looping. Consecutive automatic continuations of either kind
+ *   share the provider-error retry budget.
  */
 export function inspectOpenCodeIncompleteTurn(
   messages: readonly unknown[],
+  options: { historyComplete?: boolean; now?: number } = {},
 ): OpenCodeIncompleteTurnRecovery | null {
   let latestUserIndex = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -164,11 +235,13 @@ export function inspectOpenCodeIncompleteTurn(
   if (!latestAssistant) return null;
 
   const info = messageInfo(latestAssistant)!;
+  if (typeof info.id !== "string") return null;
+  const providerError = isRetryableProviderError(info.error);
   if (
-    typeof info.id !== "string" ||
-    (info.error !== undefined && info.error !== null) ||
-    openCodeMessageFinishReason(latestAssistant) !== "unknown" ||
-    textContent(latestAssistant).trim().length > 0
+    !providerError &&
+    ((info.error !== undefined && info.error !== null) ||
+      openCodeMessageFinishReason(latestAssistant) !== "unknown" ||
+      textContent(latestAssistant).trim().length > 0)
   ) {
     return null;
   }
@@ -178,14 +251,55 @@ export function inspectOpenCodeIncompleteTurn(
     if (hasPendingToolWork(message)) return null;
   }
 
+  // Both recoveries share one budget, so alternating failure shapes cannot
+  // keep the session continuing itself indefinitely.
+  const { count: automatic, foundManualBoundary } = trailingAutomaticContinuations(messages);
+  const budgetUnknown = options.historyComplete === false && !foundManualBoundary;
+  const settings = turnExecutionSettings(messages[latestUserIndex], latestAssistant);
+  if (providerError) {
+    const retries = OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS.length;
+    const time = isRecord(info.time) ? info.time : undefined;
+    const failedAt = [time?.completed, time?.created].find(
+      (candidate): candidate is number =>
+        typeof candidate === "number" && Number.isFinite(new Date(candidate).getTime()),
+    );
+    if (
+      options.now !== undefined &&
+      (failedAt === undefined ||
+        !Number.isFinite(options.now) ||
+        failedAt > options.now ||
+        options.now - failedAt > OPENCODE_PROVIDER_ERROR_MAX_AGE_MS)
+    ) {
+      return null;
+    }
+    return {
+      action: budgetUnknown || automatic >= retries ? "exhausted" : "continue",
+      reason: "provider-error",
+      ...(failedAt !== undefined && !budgetUnknown && automatic < retries
+        ? { notBefore: failedAt + OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS[automatic]! }
+        : {}),
+      assistantMessageId: info.id,
+      ...settings,
+    };
+  }
   return {
     action:
-      textContent(messages[latestUserIndex]).trim() === OPENCODE_INCOMPLETE_TURN_CONTINUATION
+      textContent(messages[latestUserIndex]).trim() === OPENCODE_INCOMPLETE_TURN_CONTINUATION ||
+      budgetUnknown ||
+      automatic >= OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS.length
         ? "exhausted"
         : "continue",
+    reason: "incomplete",
     assistantMessageId: info.id,
-    ...turnExecutionSettings(messages[latestUserIndex], latestAssistant),
+    ...settings,
   };
+}
+
+/** The fixed continuation prompt for one detected recovery. */
+export function openCodeTurnRecoveryPrompt(recovery: OpenCodeIncompleteTurnRecovery): string {
+  return recovery.reason === "provider-error"
+    ? OPENCODE_PROVIDER_ERROR_CONTINUATION
+    : OPENCODE_INCOMPLETE_TURN_CONTINUATION;
 }
 
 /**

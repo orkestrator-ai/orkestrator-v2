@@ -1,6 +1,6 @@
 # 13 — Additional capture modes and client support
 
-Status: Not started. Depends on: 10–12. Milestone: C.
+Status: Implemented (2026-09-24); review gaps closed (2026-09-25); gate evidence partial. Depends on: 10–12. Milestone: C.
 
 ## Deliverable
 

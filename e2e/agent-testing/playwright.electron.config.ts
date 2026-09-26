@@ -7,7 +7,7 @@ const outputRoot = path.join(repositoryRoot, "output", "agent-testing", runId, "
 
 export default defineConfig({
   testDir: import.meta.dirname,
-  testMatch: "electron-main.spec.ts",
+  testMatch: ["electron-main.spec.ts", "web-annotations-electron.spec.ts"],
   workers: 1,
   timeout: 120_000,
   reporter: [["line"], ["json", { outputFile: path.join(outputRoot, "results.json") }]],

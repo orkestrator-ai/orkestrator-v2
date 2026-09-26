@@ -1,6 +1,6 @@
 # 01 — Preserve editing intent
 
-Status: Planned.  
+Status: Implemented (2026-09-24) — see the [implementation record](00-index.md#implementation-record).  
 Dependencies: none.  
 Findings: R1, R2.  
 Next: [02 — Operation contracts and durability](02-operation-contracts-and-durability.md).
@@ -118,3 +118,10 @@ assertions such as hoping an agent edit lands during a 100 ms sleep.
 This step may still surface more explicit conflicts during rapid editing than
 the final experience. That is acceptable until steps 02/03 add safe sequencing.
 It must not silently drop or redirect intent in order to hide those conflicts.
+
+## Implementation notes (2026-09-24)
+
+- Selector and geometry edits keep the revision (and structure identity) observed at gesture start; the mutation worker no longer substitutes the newest revision. The client rebases only across its own acknowledged commits (a proven chain); any other writer's change surfaces as a conflict with the draft retained (`design-controller.ts`).
+- The per-frame "latest request" queue was replaced by typed intents with gesture keys: unsent samples of one gesture collapse to the newest; distinct gestures and operation families stay ordered; a failure pauses only the edits already queued behind it; independent frames continue. `refresh()` resolves after a sync cycle that started after the call.
+- Regressions: `design-controller.test.ts` (stale selector conflict, move+resize behind a blocked frame, collapse, own-chain vs foreign edit, dependent pause, awaitable refresh), `e2e/DesignCanvas.spec.ts` (stale selector conflict with retained draft).
+- Benchmark fixtures: `scripts/benchmark-design.ts` (1/16/64 frames, small and near-limit documents, cold/warm Chromium). Baseline and after results are in the implementation record.

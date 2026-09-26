@@ -553,6 +553,239 @@ describe("background task reducer", () => {
     }
   });
 
+  test("keeps input open past a result the CLI wrote for another input", async () => {
+    const created = createSession("foreign result");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "what's the latest?");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    const firstInput = await input.next();
+    if (firstInput.done) throw new Error("Held prompt closed before sending its user message");
+    // The prompt carries the client uuid every result answering it echoes.
+    const promptUuid = firstInput.value.uuid;
+    expect(promptUuid).toBeString();
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    // A resumed CLI answers the replayed task notification first. Neither a
+    // result naming no prompt nor one naming another send ends this turn.
+    call.push({ type: "result", subtype: "success", result_index: 0, duration_ms: 19 });
+    call.push({
+      type: "result",
+      subtype: "success",
+      result_index: 1,
+      user_message_uuid: "another-send",
+      user_message_uuids: ["another-send"],
+    });
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-late",
+      description: "Launched by the real turn",
+    });
+    await waitFor(() => getSession(created.id)?.backgroundTasks?.["agent-late"] !== undefined);
+    expect(inputClosed).toBe(false);
+    expect(getSession(created.id)?.status).toBe("running");
+
+    // This turn's own result releases it to the task the real turn launched,
+    // and the task's continuation result — which names no prompt — ends it.
+    call.push({
+      type: "result",
+      subtype: "success",
+      result_index: 2,
+      user_message_uuid: promptUuid,
+      user_message_uuids: [promptUuid],
+    });
+    await waitFor(() => getSession(created.id)?.status === "idle");
+    expect(inputClosed).toBe(false);
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-late",
+      status: "completed",
+      summary: "done",
+    });
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-continuation",
+        role: "assistant",
+        content: [{ type: "text", text: "The agent finished." }],
+        stop_reason: "end_turn",
+      },
+      parent_tool_use_id: null,
+    });
+    await waitFor(() => getSession(created.id)?.status === "running");
+    call.push({ type: "result", subtype: "success", result_index: 3 });
+    await waitFor(() => inputClosed);
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+
+    call.finish();
+    await promptPromise;
+    expect(getSession(created.id)?.status).toBe("idle");
+  });
+
+  test("revives a finished agent resumed via SendMessage and holds input for it", async () => {
+    const created = createSession("resumed agent");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "resume the perf agent");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-perf",
+      tool_use_id: "agent-call",
+      description: "Perf pass",
+    });
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-perf",
+      tool_use_id: "agent-call",
+      status: "stopped",
+      summary: "didn't finish before the previous session ended",
+    });
+    await waitFor(
+      () => getSession(created.id)?.backgroundTasks?.["agent-perf"]?.status === "killed",
+    );
+    // A late edge of the finished run enriches it and cannot revive it.
+    call.push({
+      type: "system",
+      subtype: "task_progress",
+      task_id: "agent-perf",
+      tool_use_id: "agent-call",
+      description: "Late progress",
+    });
+    await waitFor(
+      () =>
+        getSession(created.id)?.backgroundTasks?.["agent-perf"]?.description === "Late progress",
+    );
+    expect(getSession(created.id)?.backgroundTasks?.["agent-perf"]?.status).toBe("killed");
+
+    // `SendMessage` re-runs the agent under its old task id, announced from
+    // the resuming call. That run is live and owned by this query.
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-perf",
+      tool_use_id: "send-message-call",
+      description: "Perf pass",
+    });
+    await waitFor(
+      () => getSession(created.id)?.backgroundTasks?.["agent-perf"]?.status === "running",
+    );
+    expect(getSession(created.id)?.backgroundTasks?.["agent-perf"]).toMatchObject({
+      toolUseId: "send-message-call",
+      endedAt: undefined,
+    });
+
+    // The turn's result must hand the turn to that agent, not close the CLI's
+    // input: a closed input is what made the CLI stop the agent later.
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => getSession(created.id)?.status === "idle");
+    expect(inputClosed).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-perf",
+      tool_use_id: "send-message-call",
+      status: "completed",
+      summary: "Perf pass complete",
+    });
+    await waitFor(
+      () => getSession(created.id)?.backgroundTasks?.["agent-perf"]?.status === "completed",
+    );
+    pushSuccessfulContinuationResult(call);
+    await waitFor(() => inputClosed);
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    call.finish();
+    await promptPromise;
+  });
+
+  test("reclaims a resumed turn from its first streamed partial, before any assistant record", async () => {
+    const created = createSession("long thinking continuation");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "delegate then write the plan");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-export",
+      description: "Inventory export pipeline",
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => created.status === "idle");
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-export",
+      status: "completed",
+    });
+    await waitFor(() => created.backgroundTasks?.["agent-export"]?.status === "completed");
+
+    // Neither a keep-alive ping nor a subagent's partial is the root loop
+    // resuming, so neither may take the foreground.
+    call.push({ type: "stream_event", parent_tool_use_id: null, event: { type: "ping" } });
+    call.push({
+      type: "stream_event",
+      parent_tool_use_id: "agent-tool-use",
+      event: { type: "message_start", message: { id: "subagent-partial" } },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(created.status).toBe("idle");
+
+    // The resumed root turn thinks for minutes: only partials and thinking
+    // estimates arrive, and its first complete assistant record is far away.
+    // Claude is working, so the session must say so from the first partial.
+    call.push({
+      type: "stream_event",
+      parent_tool_use_id: null,
+      event: { type: "message_start", message: { id: "assistant-plan", model: "claude-mock" } },
+    });
+    call.push({
+      type: "stream_event",
+      parent_tool_use_id: null,
+      event: { type: "content_block_start", index: 0, content_block: { type: "thinking" } },
+    });
+    call.push({ type: "system", subtype: "thinking_tokens", estimated_tokens: 1200 });
+    await waitFor(() => created.status === "running");
+    expect(created.turnStartedAt).toBeDefined();
+    expect(created.abortController).toBeDefined();
+    await waitFor(() => created.thinkingTokens === 1200);
+
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-plan",
+        role: "assistant",
+        content: [{ type: "text", text: "The plan is written." }],
+        stop_reason: "end_turn",
+      },
+      parent_tool_use_id: null,
+    });
+    call.push({ type: "result", subtype: "success" });
+    expect((await input.next()).done).toBe(true);
+    call.finish();
+    await promptPromise;
+    expect(created.status).toBe("idle");
+  });
+
   test("can release again when a resumed root turn launches another background task", async () => {
     const created = createSession("repeated background releases");
     track(created.id);

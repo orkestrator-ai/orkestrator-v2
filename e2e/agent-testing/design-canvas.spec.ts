@@ -55,21 +55,29 @@ test("real gateway saves a design and rehydrates another client's edits", async 
     await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
     await page.getByText(env.name, { exact: true }).first().click();
     await page.getByRole("button", { name: "New design workspace" }).click();
-    await page.getByRole("combobox", { name: "Open a saved canvas" }).click();
-    await page.getByRole("option", { name: "Gateway design", exact: true }).click();
+    await page.getByRole("tab", { name: "Open", exact: true }).click();
+    await page
+      .getByRole("list", { name: "Designs" })
+      .getByRole("button", { name: /Gateway design/ })
+      .click();
+    await page.getByRole("button", { name: /^Open (beside|\(current pane\))$/ }).click();
 
     const embedded = page.frameLocator('iframe[title="Screen"]');
     await expect(embedded.getByRole("heading")).toHaveText("Shared design");
-    await page.getByRole("button", { name: "Save design to repository" }).click();
-    await expect(
-      page.getByRole("status").filter({ hasText: "Saved Gateway-design.orkdes" }),
-    ).toBeVisible();
+    // Export (Save As) proposes a collision-safe name: sanitized name + canvas id prefix.
+    const exportPath = `Gateway-design-${canvas.id.replaceAll("-", "").slice(0, 8)}.orkdes`;
+    await page.getByRole("button", { name: "Export design to repository" }).click();
+    const exportDialog = page.getByRole("dialog", { name: "Export design to repository" });
+    await expect(exportDialog.getByText(`New file: ${exportPath} will be created.`)).toBeVisible();
+    await exportDialog.getByRole("button", { name: "Export revision 2" }).click();
+    await expect(exportDialog.getByText(`Exported revision 2 to ${exportPath}`)).toBeVisible();
+    await exportDialog.getByRole("button", { name: "Done" }).click();
     const environment = await invoke<{ worktreePath: string }>("get_environment", {
       environmentId: env.id,
     });
     const saved = await invoke<{ content: string }>("read_local_file", {
       worktreePath: environment.worktreePath,
-      filePath: "Gateway-design.orkdes",
+      filePath: exportPath,
     });
     expect(JSON.parse(saved.content)).toMatchObject({
       id: canvas.id,

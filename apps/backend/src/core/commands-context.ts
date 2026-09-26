@@ -24,6 +24,9 @@ export type CommandContext = {
   design?: import("./design-service.js").DesignService;
   previews?: import("./preview-runtime.js").PreviewRuntime;
   mcpManagement?: import("./mcp-management/service.js").McpManagementService;
+  webAnnotations?: import("./web-annotation-service.js").WebAnnotationService;
+  /** Backend rollout switch for web annotations (enabled / read-only / disabled). */
+  webAnnotationRollout?: import("./web-annotation-rollout.js").WebAnnotationRollout;
   storage: StorageService;
   emit: BackendEmit;
   appRoot: string;

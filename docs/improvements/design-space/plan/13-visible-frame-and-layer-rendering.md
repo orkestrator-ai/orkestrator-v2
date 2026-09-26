@@ -1,6 +1,6 @@
 # 13 — Visible-frame and layer rendering
 
-Status: Planned.  
+Status: Implemented (2026-09-24) — see the [implementation record](00-index.md#implementation-record).  
 Dependencies: [09](09-selection-and-inspector.md),
 [10](10-navigation-and-accessibility.md),
 [12](12-incremental-synchronization.md).  
@@ -106,3 +106,9 @@ cannot be met.
 Review slices: visibility decisions/placeholders; live-preview lifecycle;
 bounded hierarchy protocol; virtualized accessible tree; benchmark and leak
 qualification. Do not combine unproven caches with culling in one unreviewable PR.
+
+## Implementation notes (2026-09-24)
+
+- `design-visibility.ts`: ≤8 live iframes, ¼-viewport overscan, pinned gesture targets, placeholders at very low zoom; clicking a placeholder brings the frame into view before any hit testing.
+- `DesignLayerTree.tsx` / `design-layer-model.ts`: lazy expandable branches, ≤200 nodes/128 KiB pages with structure-bound cursors (runtime `hierarchyPage`, backend `design_hierarchy` for offscreen frames), bounded caches, fixed-row windowing, WAI-ARIA tree with roving focus, filter of loaded rows only.
+- Canvas actions are passed through stable refs so pans and snapshot updates do not re-render every frame; iframe bridges live exactly as long as their iframe.

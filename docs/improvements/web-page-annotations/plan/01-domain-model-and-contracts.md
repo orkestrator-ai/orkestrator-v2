@@ -1,6 +1,6 @@
 # 01 — Domain model, contracts, and state transitions
 
-Status: Not started. Depends on: none. Milestone: A.
+Status: Implemented (2026-09-24); review gaps closed (2026-09-25); gate evidence partial. Depends on: none. Milestone: A.
 
 ## Deliverable
 
@@ -66,17 +66,38 @@ reservation is acquired then, not while the user is reviewing a draft brief.
 
 | State | Entry condition | Permitted next state / action |
 | --- | --- | --- |
-| `prepared` | Frozen request and annotation reservation committed | `queued`; cancel before queue publication |
-| `queued` | Existing native queue contains the stable request ID | `dispatching`; cancel only through queue removal before its dispatch fence |
-| `dispatching` | Existing native dispatch boundary owns the request | `running`, `unconfirmed`, or `failed` with explicit rejection |
-| `unconfirmed` | Native dispatch outcome is unknown | Reconcile to `running`/terminal evidence; same-ID native recovery; explicit abandon |
-| `running` | Positive dispatch evidence, even if provider turn ID is not available yet | `needs-input`, `completed`, `awaiting-review`, `failed`, `cancelling` |
+| `prepared` | Frozen request and annotation reservation committed | `queued`; `failed`; cancel before queue publication |
+| `queued` | Existing native queue contains the stable request ID | `dispatching`; cancel only through queue removal before its dispatch fence; forward skips (1) |
+| `dispatching` | Existing native dispatch boundary owns the request | `running`, `unconfirmed`, or `failed` with explicit rejection; back to `queued` (2); forward skips (1) |
+| `unconfirmed` | Native dispatch outcome is unknown | Reconcile to `running`/`needs-input`/terminal evidence; same-ID native recovery (`dispatching`); explicit abandon |
+| `running` | Positive dispatch evidence, even if provider turn ID is not available yet | `needs-input`, `completed`, `awaiting-review`, `failed`, `cancelling`, `cancelled` (3) |
 | `needs-input` | Authoritative pending question/approval for this request | `running`, `cancelling`, or authoritative terminal outcome |
 | `cancelling` | Stop requested for the correlated current turn | Remain active until `cancelled`, `failed`, or completion is confirmed |
 | `completed` | A discussion turn has ended successfully | Terminal discussion record; no annotation resolution |
 | `awaiting-review` | An implementation turn ended and its response is available | Record human review; annotation stays open until accepted |
 | `failed` / `cancelled` | Authoritative failure/cancellation or safe pre-dispatch removal | New attempt has a new ID only after prior execution is known settled |
 | `abandoned-unconfirmed` | User discarded native recovery without proof of execution outcome | Preserve warning/history; release retry restrictions only after explicit handling of possible prior work |
+
+Transitions beyond the plain lifecycle, each needed by the dispatch adapter
+(`web-annotation-dispatch.ts` observes native state by polling, so states
+between two passes can go unobserved):
+
+1. **Forward skips.** From `queued`: `running`, `unconfirmed`, `needs-input`,
+   `completed`, `awaiting-review`, `failed`, `cancelled`; from `dispatching`:
+   `needs-input`, `completed`, `awaiting-review`, `cancelled`. A turn can be
+   claimed, dispatched, and even finished between passes; the session's
+   dispatched-request receipts are authoritative, and rejecting the skip
+   would leave the request stuck at the stale state forever.
+2. **`dispatching` → `queued`.** A queue claim released without dispatch
+   (claim rejected) leaves the stable ID back in the queue.
+3. **`running` → `cancelled`.** `cancelRequestedAt` is committed before the
+   stop is sent; the turn can end (idle session) before the `cancelling`
+   state is recorded.
+
+`prepared` never skips ahead: it leaves only through its own publication
+(`queued`, including a publication that finds the ID already consumed) or a
+pre-publication cancel/failure. `unconfirmed` → `completed`/`awaiting-review`
+is the plan's "terminal evidence" reconciliation, not an addition.
 
 `blockedReason` is orthogonal: queue held by an existing draft, stopped
 environment, unavailable destination, or capacity. A blocked queue is not

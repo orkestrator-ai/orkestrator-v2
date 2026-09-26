@@ -1510,6 +1510,13 @@ export async function deleteEnvironment(
       await storage.deleteFileDraftsByEnvironment(environmentId);
       await storage.deleteAgentHandoffsByEnvironment(environmentId);
       await context.design?.deleteEnvironment(environmentId);
+      // Stops annotation writes for this environment, then removes its store.
+      await context.webAnnotations?.deleteEnvironment(environmentId).catch((error: unknown) => {
+        console.warn(
+          `[backend] web annotation cleanup failed for ${environmentId}:`,
+          error instanceof Error ? error.name : "unknown",
+        );
+      });
       context.agentTools?.revokeEnvironment(environmentId);
       await storage.removeEnvironment(environmentId);
       await storage.deletePaneLayout(environmentId).catch(() => undefined);

@@ -1,7 +1,19 @@
 import { createSessionKey } from "@/lib/utils";
 import { create } from "zustand";
-import type { PaneNode, PaneLeaf, PaneSplit, TabInfo, EdgeDirection } from "@/types/paneLayout";
-import { getNativeAgentData, isPaneLeaf, MAX_SPLIT_DEPTH } from "@/types/paneLayout";
+import type {
+  BrowserAnnotationPanelState,
+  PaneNode,
+  PaneLeaf,
+  PaneSplit,
+  TabInfo,
+  EdgeDirection,
+} from "@/types/paneLayout";
+import {
+  getNativeAgentData,
+  isPaneLeaf,
+  MAX_SPLIT_DEPTH,
+  sanitizeBrowserAnnotationPanelState,
+} from "@/types/paneLayout";
 import {
   useTerminalSessionStore,
   // Distinct from the native `createSessionKey`: terminal keys also carry the
@@ -256,6 +268,12 @@ interface PaneLayoutState {
     environmentId?: string,
     history?: string[],
     historyIndex?: number,
+  ) => void;
+  /** Persist only web annotation panel view preferences for a browser tab. */
+  updateTabBrowserAnnotationPanel: (
+    tabId: string,
+    patch: Partial<BrowserAnnotationPanelState>,
+    environmentId?: string,
   ) => void;
 
   // Pane management
@@ -1345,6 +1363,32 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     environments.set(envId, { ...envState, root });
     set({ environments });
     return platform;
+  },
+
+  updateTabBrowserAnnotationPanel: (tabId, patch, environmentId) => {
+    const state = get();
+    const envId = environmentId ?? state.activeEnvironmentId;
+    if (!envId) return;
+    const envState = state.environments.get(envId);
+    if (!envState) return;
+    const paneWithTab = findPaneWithTab(envState.root, tabId);
+    const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
+    if (!paneWithTab || existingTab?.type !== "browser" || !existingTab.browserData) return;
+    const previous = existingTab.browserData.annotationPanel ?? { open: false };
+    const next = sanitizeBrowserAnnotationPanelState({ ...previous, ...patch });
+    if (!next || JSON.stringify(next) === JSON.stringify(existingTab.browserData.annotationPanel))
+      return;
+    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+      ...leaf,
+      tabs: leaf.tabs.map((tab) =>
+        tab.id === tabId && tab.type === "browser" && tab.browserData
+          ? { ...tab, browserData: { ...tab.browserData, annotationPanel: next } }
+          : tab,
+      ),
+    }));
+    const environments = new Map(state.environments);
+    environments.set(envId, { ...envState, root: newRoot });
+    set({ environments });
   },
 
   updateTabBrowserUrl: (tabId, url, environmentId, history, historyIndex) => {

@@ -123,6 +123,76 @@ export interface BrowserTabData {
    */
   history?: string[];
   historyIndex?: number;
+  /**
+   * Web annotation panel view preferences only. Annotation content, captures,
+   * and request state live in the backend and are never stored here.
+   */
+  annotationPanel?: BrowserAnnotationPanelState;
+}
+
+export type BrowserAnnotationScope = "page" | "all";
+export type BrowserAnnotationStateFilter = "open" | "resolved" | "all";
+
+export interface BrowserAnnotationPanelFilter {
+  scope: BrowserAnnotationScope;
+  state: BrowserAnnotationStateFilter;
+  destinationTabId?: string;
+  importedOnly?: boolean;
+  /** Also list archived (read-only) threads. */
+  includeArchived?: boolean;
+}
+
+export interface BrowserAnnotationPanelState {
+  open: boolean;
+  selectedAnnotationId?: string | null;
+  filter?: BrowserAnnotationPanelFilter;
+  /** Panel column width in CSS pixels. */
+  width?: number;
+}
+
+export const BROWSER_ANNOTATION_PANEL_WIDTH = Object.freeze({ min: 280, max: 640, initial: 360 });
+
+/** Bound untrusted persisted panel preferences; returns undefined when absent/invalid. */
+export function sanitizeBrowserAnnotationPanelState(
+  value: unknown,
+): BrowserAnnotationPanelState | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.open !== "boolean") return undefined;
+  const result: BrowserAnnotationPanelState = { open: record.open };
+  if (
+    typeof record.selectedAnnotationId === "string" &&
+    record.selectedAnnotationId.length > 0 &&
+    record.selectedAnnotationId.length <= 200
+  ) {
+    result.selectedAnnotationId = record.selectedAnnotationId;
+  }
+  if (typeof record.width === "number" && Number.isFinite(record.width)) {
+    result.width = Math.round(
+      Math.min(
+        BROWSER_ANNOTATION_PANEL_WIDTH.max,
+        Math.max(BROWSER_ANNOTATION_PANEL_WIDTH.min, record.width),
+      ),
+    );
+  }
+  const filter = record.filter;
+  if (filter && typeof filter === "object" && !Array.isArray(filter)) {
+    const raw = filter as Record<string, unknown>;
+    const scope = raw.scope === "all" ? "all" : "page";
+    const state = raw.state === "resolved" || raw.state === "all" ? raw.state : "open";
+    result.filter = {
+      scope,
+      state,
+      ...(typeof raw.destinationTabId === "string" &&
+      raw.destinationTabId.length > 0 &&
+      raw.destinationTabId.length <= 200
+        ? { destinationTabId: raw.destinationTabId }
+        : {}),
+      ...(raw.importedOnly === true ? { importedOnly: true } : {}),
+      ...(raw.includeArchived === true ? { includeArchived: true } : {}),
+    };
+  }
+  return result;
 }
 
 // Tab information stored in pane leaves

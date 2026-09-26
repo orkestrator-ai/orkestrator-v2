@@ -375,6 +375,12 @@ export interface ProviderTranscriptSnapshot {
   historyStartIndex?: number;
   /** Parts omitted from the first retained message by the provider's byte bound. */
   omittedParts?: number;
+  /**
+   * Whole messages the provider's byte bound dropped ahead of this window. Set
+   * only for a byte trim: one oversized turn can leave a short tail that is
+   * nonetheless missing real, pageable history.
+   */
+  byteOmittedMessages?: number;
   /** False when the provider supplied only a bounded retained tail. */
   complete?: boolean;
   title?: string;

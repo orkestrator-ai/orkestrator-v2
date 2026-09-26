@@ -7,7 +7,6 @@ import {
   Globe2,
   Link2,
   Loader2,
-  MessageSquarePlus,
   MoreHorizontal,
   Pencil,
   RefreshCw,
@@ -27,6 +26,7 @@ import {
   type PreviewServiceSnapshot,
   type PreviewTabTarget,
 } from "@orkestrator/protocol/preview-services";
+import type { WebAnnotationPageIdentity } from "@orkestrator/protocol/web-annotations";
 import { toast } from "sonner";
 
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
@@ -61,10 +61,13 @@ import {
 } from "@/lib/preview-service-display";
 import { cn } from "@/lib/utils";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
 import type { BrowserTabData } from "@/types/paneLayout";
-import { errorMessage, useBlockingOverlay, useBrowserPreviewAnnotation } from "./browser-tab-hooks";
+import { AnnotatedPreviewArea, AnnotationsButton } from "./annotations/BrowserAnnotationsLayout";
+import { currentPageForService } from "./annotations/format";
+import { useBrowserAnnotations } from "./annotations/useBrowserAnnotations";
+import { errorMessage, useBlockingOverlay } from "./browser-tab-hooks";
 import { PreviewDiagnostics } from "./PreviewDiagnostics";
 import { PreviewServiceDialog } from "./PreviewServiceDialog";
 import { PreviewServicePicker, ReadinessDot } from "./PreviewServicePicker";
@@ -142,6 +145,7 @@ function isCurrentService(
 function ServicePreview({
   tabId,
   environmentId,
+  data,
   isActive,
   refreshRequestId = 0,
   serviceRef,
@@ -150,14 +154,6 @@ function ServicePreview({
     useEnvironmentServices(serviceRef.environmentId, isActive);
   const retarget = useRetarget(tabId, environmentId);
   const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
-  const nativeSessionCount = usePaneLayoutStore((state) => {
-    const layout = state.environments.get(environmentId);
-    if (!layout) return 0;
-    return getAllLeaves(layout.root).reduce(
-      (count, leaf) => count + leaf.tabs.filter((tab) => tab.type === "agent-native").length,
-      0,
-    );
-  });
   const service =
     services.find((candidate) => candidate.definition.serviceId === serviceRef.serviceId) ?? null;
   const nativeBrowserPreview = hasNativeBrowserPreview();
@@ -176,13 +172,32 @@ function ServicePreview({
   const nativeAttachedRef = useRef(false);
   const previousRefresh = useRef(refreshRequestId);
   const hasBlockingOverlay = useBlockingOverlay(nativeBrowserPreview);
-  const { annotationMode, annotationSaving, toggleAnnotationMode, stopAnnotationForPageChange } =
-    useBrowserPreviewAnnotation({
-      tabId,
-      environmentId,
-      isActive,
-      nativeBrowserPreview,
-    });
+  const [nativeAttached, setNativeAttached] = useState(false);
+  const serviceLabel = service?.definition.label;
+  const currentPage = useMemo(
+    () => currentPageForService(serviceRef.serviceId, path, serviceLabel),
+    [path, serviceLabel, serviceRef.serviceId],
+  );
+  const navigateToPageRef = useRef<
+    (page: WebAnnotationPageIdentity) => {
+      ok: boolean;
+      message?: string;
+    }
+  >(() => ({ ok: false }));
+  const navigateToPage = useCallback(
+    (page: WebAnnotationPageIdentity) => navigateToPageRef.current(page),
+    [],
+  );
+  const annotations = useBrowserAnnotations({
+    tabId,
+    environmentId,
+    isActive,
+    data,
+    currentPage,
+    previewAttached: nativeBrowserPreview && nativeAttached,
+    navigateToPage,
+  });
+  const stopAnnotationForPageChange = annotations.stopSelection;
 
   const backendMismatch =
     capabilities !== null && capabilities.backendInstanceId !== serviceRef.backendInstanceId;
@@ -215,6 +230,38 @@ function ServicePreview({
     },
     [retarget, serviceRef],
   );
+
+  // Only ever invoked by an explicit user action in the annotations panel.
+  navigateToPageRef.current = (page: WebAnnotationPageIdentity) => {
+    if (page.requiresNavigation) {
+      return {
+        ok: false,
+        message:
+          "Private parts of this page's address were removed when it was saved. Navigate to it yourself, then reselect the target.",
+      };
+    }
+    if (page.service.kind !== "service") {
+      return {
+        ok: false,
+        message: "This note was taken on a manual address. Open that address in a browser tab.",
+      };
+    }
+    const targetServiceId = page.service.serviceId;
+    stopAnnotationForPageChange();
+    if (targetServiceId === serviceRef.serviceId) {
+      setPath(page.route);
+      persistPath(page.route);
+      if (mode === "compatibility") setIframeRevision((value) => value + 1);
+      return { ok: true };
+    }
+    if (!services.some((candidate) => candidate.definition.serviceId === targetServiceId)) {
+      return { ok: false, message: "That preview service is no longer registered here." };
+    }
+    retarget(
+      formatPreviewServiceUri({ ...serviceRef, serviceId: targetServiceId, path: page.route }),
+    );
+    return { ok: true };
+  };
 
   const applyNativeState = useCallback(
     (state: BrowserPreviewState | null) => {
@@ -285,7 +332,8 @@ function ServicePreview({
           width: rect.width,
           height: rect.height,
         };
-        const visible = isActive && !hasBlockingOverlay && dialog === null;
+        const visible =
+          isActive && !hasBlockingOverlay && dialog === null && !annotations.previewHidden;
         const attach =
           mode === "desktop-tunnel" && attachTarget
             ? attachBrowserPreview({ tabId, service: attachTarget, bounds, visible })
@@ -294,6 +342,7 @@ function ServicePreview({
           .then((state) => {
             if (disposed) return;
             nativeAttachedRef.current = true;
+            setNativeAttached(true);
             setAttachError(null);
             applyNativeState(state);
           })
@@ -325,6 +374,7 @@ function ServicePreview({
       hide();
     };
   }, [
+    annotations.previewHidden,
     applyNativeState,
     attachNonce,
     attachTarget?.serviceId,
@@ -579,27 +629,7 @@ function ServicePreview({
             Go
           </Button>
         </form>
-        {nativeBrowserPreview && (
-          <Button
-            type="button"
-            variant={annotationMode ? "secondary" : "ghost"}
-            size="sm"
-            className="h-8 shrink-0 gap-1.5 px-2.5"
-            aria-label={annotationMode ? "Stop annotating preview" : "Annotate preview"}
-            aria-pressed={annotationMode}
-            disabled={!canNavigate || nativeSessionCount === 0 || annotationSaving}
-            onClick={toggleAnnotationMode}
-          >
-            {annotationSaving ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <MessageSquarePlus className="h-4 w-4" />
-            )}
-            <span className="hidden @lg/browser:inline">
-              {annotationMode ? "Annotating" : "Annotate"}
-            </span>
-          </Button>
-        )}
+        <AnnotationsButton annotations={annotations} />
         {nativeBrowserPreview && (
           <Button
             type="button"
@@ -725,7 +755,7 @@ function ServicePreview({
         </div>
       )}
 
-      <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
+      <AnnotatedPreviewArea annotations={annotations}>
         {nativeBrowserPreview && (mode === "desktop-tunnel" || compatibilityUrl) ? (
           <div
             ref={previewHostRef}
@@ -766,7 +796,7 @@ function ServicePreview({
             </div>
           </div>
         )}
-      </div>
+      </AnnotatedPreviewArea>
 
       {dialog === "register" || dialog === "edit" ? (
         <PreviewServiceDialog

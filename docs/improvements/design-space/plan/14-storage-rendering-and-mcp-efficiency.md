@@ -1,6 +1,6 @@
 # 14 — Storage, rendering, and MCP efficiency
 
-Status: Planned; measurements select optional optimizations.  
+Status: Implemented (2026-09-24) — see the [implementation record](00-index.md#implementation-record).  
 Dependencies: [04](04-renderer-scheduling-and-recovery.md),
 [05](05-safe-saving-and-export.md), [07](07-history-and-document-lifecycle.md),
 [11](11-agent-context-and-handoff.md), [12](12-incremental-synchronization.md),
@@ -144,3 +144,11 @@ explicit versioned import/export plan and is outside this step's default scope.
 
 Review each required optimization separately. A performance regression or
 unproven cache must be independently removable without reverting safety fixes.
+
+## Implementation notes (2026-09-24)
+
+- A: exact geometry/HTML/inline-style no-ops return `no-op` receipts without a revision, history entry or content hint.
+- B: transactional same-canvas batches (≤16 ops, 512 KiB) with one commit, one history entry and per-operation outcomes.
+- C: derived library index (`design-library.ts`) persisted and repaired from records by file size/mtime; listing never parses frame bodies.
+- D: compact MCP responses, `get_canvas_summary`, idempotent `submit_operation`, `save_canvas` through the safe export path; launch guidance updated.
+- E/F deferred with measurements (see the implementation record).

@@ -1,6 +1,6 @@
 # 07 — History and document lifecycle
 
-Status: Planned.  
+Status: Implemented (2026-09-24) — see the [implementation record](00-index.md#implementation-record).  
 Dependencies: [02](02-operation-contracts-and-durability.md),
 [04](04-renderer-scheduling-and-recovery.md),
 [06](06-validation-deletion-and-recovery.md).  
@@ -121,3 +121,10 @@ The first release should be conservative and understandable:
 Review slices: lifecycle actions; checkpoint persistence/retention; conservative
 undo/redo; management/history UI; cross-environment copy and removal messaging.
 Do not make the optional transfer UI a prerequisite for shipping safe undo.
+
+## Implementation notes (2026-09-24)
+
+- Persistent bounded history (`design-history.ts`): immutable checkpoint files written before the record references them, 50 entries / 64 MiB per canvas, 512 MiB globally, 3 protected entries, gesture grouping, orphan collection.
+- Per-actor undo/redo, eligible only while affected targets keep the entry's result versions (chained undo/redo recognised); restore checkpoint creates a new revision.
+- Lifecycle actions through operations: rename/duplicate/delete/restore canvas, duplicate/delete frame. UI: `DesignHistoryPanel.tsx`, `DesignCheckpointPreview.tsx`, library lifecycle actions, and an environment-deletion notice (`DesignEnvironmentDeletionNotice.tsx`).
+- Deferred: cross-environment transfer UI (optional); copies are possible via recovery copy, download and import.

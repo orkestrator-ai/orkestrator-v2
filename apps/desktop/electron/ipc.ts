@@ -2,8 +2,22 @@ import type { BrowserWindow, OpenDialogOptions } from "electron";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import type { ConnectToRemoteInput, ConnectionList } from "@orkestrator/protocol/connections";
 import type {
-  BrowserPreviewAnnotationStatus,
+  BrowserPreviewAnchorResult,
+  BrowserPreviewCaptureAck,
+  BrowserPreviewCaptureCapabilities,
+  BrowserPreviewExpiredCaptureNotice,
+  BrowserPreviewPinSnapshot,
+  BrowserPreviewReplaceImageInput,
+  BrowserPreviewResponsiveSetInput,
+  BrowserPreviewResponsiveSetResult,
+  BrowserPreviewShowOnPageInput,
+  BrowserPreviewShowOnPageResult,
+  BrowserPreviewPendingCapture,
+  BrowserPreviewPendingCaptureDescriptor,
+  BrowserPreviewPinsInput,
+  BrowserPreviewSelectionStatus,
   BrowserPreviewServiceTarget,
+  BrowserPreviewStartCaptureInput,
   BrowserPreviewAttachInput,
   BrowserPreviewBounds,
   BrowserPreviewState,
@@ -15,6 +29,17 @@ import {
 } from "@orkestrator/protocol/macos-permissions";
 import { isTrustedRendererUrl } from "./window.js";
 import { macOsPrivacySettingsUrl } from "./macos-permissions.js";
+import {
+  captureAck,
+  captureId,
+  captureIdList,
+  captureTabId,
+  pinsInput,
+  replaceImageInput,
+  responsiveSetInput,
+  showOnPageInput,
+  startCaptureInput,
+} from "./browser-preview-capture-validation.js";
 
 type BackendInvoker = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
@@ -83,9 +108,31 @@ export type BrowserPreviewController = {
   goForward(tabId: string): BrowserPreviewState;
   reload(tabId: string): BrowserPreviewState;
   openDevTools(tabId: string): BrowserPreviewState;
-  startAnnotation(tabId: string): Promise<BrowserPreviewAnnotationStatus>;
-  getAnnotationStatus(tabId: string): Promise<BrowserPreviewAnnotationStatus>;
-  cancelAnnotation(tabId: string): Promise<void>;
+  startCapture(input: BrowserPreviewStartCaptureInput): Promise<BrowserPreviewSelectionStatus>;
+  getCaptureStatus(tabId: string): Promise<BrowserPreviewSelectionStatus>;
+  cancelCapture(tabId: string): Promise<void>;
+  listPendingCaptures(): Promise<BrowserPreviewPendingCaptureDescriptor[]>;
+  readPendingCapture(captureId: string): Promise<BrowserPreviewPendingCapture | null>;
+  replacePendingCaptureImage(
+    captureId: string,
+    input: BrowserPreviewReplaceImageInput,
+  ): Promise<BrowserPreviewPendingCaptureDescriptor>;
+  acknowledgePendingCapture(ack: BrowserPreviewCaptureAck): Promise<void>;
+  discardPendingCapture(captureId: string): Promise<void>;
+  showPins(input: BrowserPreviewPinsInput): Promise<BrowserPreviewAnchorResult[]>;
+  clearPins(tabId: string): Promise<void>;
+  // Capture contract version 2 (optional so older controllers still satisfy the type).
+  getCaptureCapabilities?(): BrowserPreviewCaptureCapabilities;
+  recordPendingCaptureReceipt?(
+    ack: BrowserPreviewCaptureAck,
+  ): Promise<BrowserPreviewPendingCaptureDescriptor | null>;
+  listExpiredCaptureNotices?(): Promise<BrowserPreviewExpiredCaptureNotice[]>;
+  dismissExpiredCaptureNotices?(captureIds?: string[]): Promise<void>;
+  getPinResults?(tabId: string): Promise<BrowserPreviewPinSnapshot | null>;
+  showOnPage?(input: BrowserPreviewShowOnPageInput): Promise<BrowserPreviewShowOnPageResult>;
+  captureResponsiveSet?(
+    input: BrowserPreviewResponsiveSetInput,
+  ): Promise<BrowserPreviewResponsiveSetResult>;
   destroy(tabId: string): void;
   /** Clear one service's partition (cookies, storage, cache). */
   resetServiceSiteData?(target: BrowserPreviewServiceTarget): Promise<void>;
@@ -440,15 +487,77 @@ export function registerMainIpc({
   handle("orkestrator:browser-preview:open-devtools", (event, tabId: unknown) =>
     previews(event).openDevTools(browserPreviewTabId(tabId)),
   );
-  handle("orkestrator:browser-preview:annotation-start", (event, tabId: unknown) =>
-    previews(event).startAnnotation(browserPreviewTabId(tabId)),
+  // Trusted capture. Page output never reaches these handlers directly; every
+  // renderer argument is validated here and again in the capture coordinator.
+  handle("orkestrator:browser-preview:capture-start", (event, input: unknown) =>
+    previews(event).startCapture(startCaptureInput(input)),
   );
-  handle("orkestrator:browser-preview:annotation-status", (event, tabId: unknown) =>
-    previews(event).getAnnotationStatus(browserPreviewTabId(tabId)),
+  handle("orkestrator:browser-preview:capture-status", (event, tabId: unknown) =>
+    previews(event).getCaptureStatus(captureTabId(tabId)),
   );
-  handle("orkestrator:browser-preview:annotation-cancel", (event, tabId: unknown) =>
-    previews(event).cancelAnnotation(browserPreviewTabId(tabId)),
+  handle("orkestrator:browser-preview:capture-cancel", (event, tabId: unknown) =>
+    previews(event).cancelCapture(captureTabId(tabId)),
   );
+  handle("orkestrator:browser-preview:capture-pending-list", (event) =>
+    previews(event).listPendingCaptures(),
+  );
+  handle("orkestrator:browser-preview:capture-pending-read", (event, id: unknown) =>
+    previews(event).readPendingCapture(captureId(id)),
+  );
+  handle(
+    "orkestrator:browser-preview:capture-pending-replace-image",
+    (event, id: unknown, input: unknown) =>
+      previews(event).replacePendingCaptureImage(captureId(id), replaceImageInput(input)),
+  );
+  handle("orkestrator:browser-preview:capture-pending-ack", (event, ack: unknown) =>
+    previews(event).acknowledgePendingCapture(captureAck(ack)),
+  );
+  handle("orkestrator:browser-preview:capture-pending-discard", (event, id: unknown) =>
+    previews(event).discardPendingCapture(captureId(id)),
+  );
+  handle("orkestrator:browser-preview:capture-pins-show", (event, input: unknown) =>
+    previews(event).showPins(pinsInput(input)),
+  );
+  handle("orkestrator:browser-preview:capture-pins-clear", (event, tabId: unknown) =>
+    previews(event).clearPins(captureTabId(tabId)),
+  );
+  // Contract version 2. Each handler checks the controller supports the operation.
+  const unavailable = () => new Error("This capture operation is unavailable");
+  handle("orkestrator:browser-preview:capture-capabilities", (event) => {
+    const controller = previews(event);
+    if (!controller.getCaptureCapabilities) throw unavailable();
+    return controller.getCaptureCapabilities();
+  });
+  handle("orkestrator:browser-preview:capture-pending-receipt", (event, ack: unknown) => {
+    const controller = previews(event);
+    if (!controller.recordPendingCaptureReceipt) throw unavailable();
+    return controller.recordPendingCaptureReceipt(captureAck(ack));
+  });
+  handle("orkestrator:browser-preview:capture-expired-list", (event) => {
+    const controller = previews(event);
+    if (!controller.listExpiredCaptureNotices) throw unavailable();
+    return controller.listExpiredCaptureNotices();
+  });
+  handle("orkestrator:browser-preview:capture-expired-dismiss", (event, ids: unknown) => {
+    const controller = previews(event);
+    if (!controller.dismissExpiredCaptureNotices) throw unavailable();
+    return controller.dismissExpiredCaptureNotices(captureIdList(ids));
+  });
+  handle("orkestrator:browser-preview:capture-pins-results", (event, tabId: unknown) => {
+    const controller = previews(event);
+    if (!controller.getPinResults) throw unavailable();
+    return controller.getPinResults(captureTabId(tabId));
+  });
+  handle("orkestrator:browser-preview:capture-show-on-page", (event, input: unknown) => {
+    const controller = previews(event);
+    if (!controller.showOnPage) throw unavailable();
+    return controller.showOnPage(showOnPageInput(input));
+  });
+  handle("orkestrator:browser-preview:capture-responsive-set", (event, input: unknown) => {
+    const controller = previews(event);
+    if (!controller.captureResponsiveSet) throw unavailable();
+    return controller.captureResponsiveSet(responsiveSetInput(input));
+  });
   handle("orkestrator:browser-preview:destroy", (event, tabId: unknown) =>
     previews(event).destroy(browserPreviewTabId(tabId)),
   );

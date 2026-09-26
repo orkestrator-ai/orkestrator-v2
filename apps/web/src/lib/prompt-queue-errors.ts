@@ -1,3 +1,5 @@
+import { WEB_ANNOTATION_QUEUE_ITEM_FROZEN } from "@orkestrator/protocol/web-annotations";
+
 /**
  * Queue failures the user can resolve themselves.
  *
@@ -42,4 +44,34 @@ export function composerOccupiedError(options?: ErrorOptions): PromptQueueAction
 /** The backend's refusal to overwrite a compose draft it did not create. */
 export function isComposeDraftOccupiedBackendError(error: unknown): boolean {
   return error instanceof Error && /compose draft already exists/i.test(error.message);
+}
+
+/**
+ * Shown instead of the backend's `WEB_ANNOTATION_QUEUE_ITEM_FROZEN` refusal.
+ * An annotation request in the queue is a frozen snapshot of the brief the
+ * user approved; its text is changed on the note, not in the chat queue.
+ */
+export const WEB_ANNOTATION_QUEUE_ITEM_FROZEN_MESSAGE =
+  "Web annotation requests can't be edited here. Open the note to change it, or remove it to cancel the request.";
+
+/** The backend's refusal to edit or move-to-draft a web annotation queue item. */
+export function isWebAnnotationQueueItemFrozenError(error: unknown): boolean {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
+  return message !== undefined && message.includes(WEB_ANNOTATION_QUEUE_ITEM_FROZEN);
+}
+
+export function webAnnotationQueueItemFrozenError(options?: ErrorOptions): PromptQueueActionError {
+  return new PromptQueueActionError(WEB_ANNOTATION_QUEUE_ITEM_FROZEN_MESSAGE, options);
+}
+
+/**
+ * User-facing text for a failed queue action: a refusal the user can act on
+ * carries its own instruction, a frozen annotation request gets the friendly
+ * explanation, and anything else is an unconfirmed update.
+ */
+export function describePromptQueueActionError(error: unknown): string {
+  if (isPromptQueueActionError(error)) return error.message;
+  if (isWebAnnotationQueueItemFrozenError(error)) return WEB_ANNOTATION_QUEUE_ITEM_FROZEN_MESSAGE;
+  return "Could not confirm the prompt queue update. Wait for the queue to refresh before retrying.";
 }

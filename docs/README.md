@@ -22,11 +22,12 @@ Refreshed 2026-09-17 against the current tree.
 | --- | --- | --- |
 | [agent-engines.md](architecture/agent-engines.md) | Living | Six-engine architecture. Coordinator tiers match `coordinator-providers.ts`. |
 | [coordinator.md](architecture/coordinator.md) | Living | Current Coordinator: ownership, tiers, async delegation, MCP actions. Remaining work is `todo/coordinator-to-implement.md`. |
-| [design-canvas.md](architecture/design-canvas.md) | Living | HTML/CSS canvas, revisions, design MCP and .orkdes files. |
+| [design-canvas.md](architecture/design-canvas.md) | Living | HTML/CSS canvas, recoverable operations, private records, history, sync, safe export, design MCP and .orkdes files. |
 | [control-mcp.md](architecture/control-mcp.md) | Living | Control MCP operator guide. |
 | [mcp-management.md](architecture/mcp-management.md) | Living | Per-provider MCP server management: sources, precedence, safe writes, secrets, apply states, evidence. |
 | [remote-gateway.md](architecture/remote-gateway.md) | Living | Standalone backend, Tailscale Serve, flags, troubleshooting. |
 | [event-snapshot-recovery.md](architecture/event-snapshot-recovery.md) | Living | Which sequence each consumer may compare, revisioned view snapshots/outcomes, bounded client hydration, best-effort PR notifications. |
+| [web-page-annotations.md](architecture/web-page-annotations.md) | Living | Preview notes, capture spool, backend threads, native dispatch, review, migration. Real-stack gates pending. |
 | [browser-previews.md](architecture/browser-previews.md) | Living | Service previews: registry, desktop tunnel, private HTTPS origins, relay, kill switch, rollback. |
 | [review-preparation.md](architecture/review-preparation.md) | Living | Multi-review pipeline; queue wait is 30 minutes. |
 | [native-agent-commands.md](architecture/native-agent-commands.md) | Living | Slash-command descriptors, bridge wire contract, intent resolution, collisions, catalogue lifecycle. |
@@ -65,13 +66,22 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 | Document | Status | Notes |
 | --- | --- | --- |
 | [sdk-coverage/00-index.md](plans/sdk-coverage/00-index.md) | Active | Living index. 01–03 Done; 04–10 and 14–15 Active; 11–13 code done, QA leftover. |
-| [Web page annotations](improvements/web-page-annotations/plan/00-index.md) | Active | Detailed implementation plan; all steps not started. Findings in [web-page-annotations.md](improvements/web-page-annotations.md). |
+| [design-space/plan/00-index.md](improvements/design-space/plan/00-index.md) | Active | Design canvas plan. Steps 01–14 implemented (recoverable operations, private records, history, safe export, deltas, library, inspector, navigation, agent handoff); step 15 partly qualified. The isolated real-stack run is blocked by a pre-existing Electron startup failure; live agents, Docker export and manual accessibility passes are outstanding. Findings: [design-space.md](improvements/design-space.md). |
+| [Web page annotations](improvements/web-page-annotations/plan/00-index.md) | Active | Steps 01–13 implemented with unit coverage; step 14 real-stack gates (native window, Docker, live agents) outstanding. Living guide: [web-page-annotations.md](architecture/web-page-annotations.md). |
 | [improvements/browser/plan/00-index.md](improvements/browser/plan/00-index.md) | Active | Browser preview plan. 01–13 implemented behind disabled-by-default capabilities; 14–15 partly evidenced. Browser, Safari/iOS, two-machine, and Docker Desktop runs are outstanding. |
 | [mcp/plan/00-index.md](improvements/mcp/plan/00-index.md) | Active | MCP server management plan. Steps 02–12 implemented; container-private writes (13) and live-probe/real-stack evidence (01, 14) outstanding. Findings: [mcp.md](improvements/mcp.md). |
 | [slash-commands/plan/00-index.md](improvements/slash-commands/plan/00-index.md) | Active | Slash-command correctness plan. Code landed; live provider probes and isolated browser QA are the open items. Findings: [slash-commands.md](improvements/slash-commands.md). |
 | [recurring-processes/plan/00-index.md](improvements/recurring-processes/plan/00-index.md) | Active | Recurring-process efficiency plan. Steps 01–11 implemented; step 12 qualified on Linux with a live isolated-profile A/B. Open: live-provider/GitHub/macOS/iOS evidence and the deferred data-saving preference. Findings: [recurring-processes.md](imrovements/recurring-processes.md); baseline artifacts in [baseline/](improvements/recurring-processes/baseline/README.md). |
 | [codex-duplicate-agent-cards.md](plans/codex-duplicate-agent-cards.md) | Done | Automated verification landed; isolated browser QA still pending. |
 | [sdk-coverage-2026-09-06.md](plans/sdk-coverage-2026-09-06.md) | Historical | Source review for the SDK plans. Do not pick work from this file. |
+
+## Improvements
+
+| Document | Status | Notes |
+| --- | --- | --- |
+| [CLI commands plan](improvements/cli-commands/plan/00-cli-commands-index.md) | Active | Fifteen planned steps for project/environment control, durable prompt runs, and targeted CLI testing; implementation has not started. Source: [CLI review](improvements/cli-commands.md). |
+| [Inconsistency remediation plan](improvements/inconsistencies/plan/00-index.md) | Active | Planned work in eleven numbered steps, based on the 2026-09-21 inconsistency review; implementation has not started. |
+| [Inconsistency review](improvements/incocnsistencies.md) | Historical | Nine findings against revision `88c2f9c`; the implementation plan tracks resolution. Original requested filename retained. |
 
 ## Todos
 

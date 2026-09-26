@@ -5,6 +5,7 @@ import {
   stripCoordinatorContext,
 } from "@orkestrator/protocol/coordinator";
 import type { MailboxPresence } from "@orkestrator/protocol/agent-mail";
+import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
 import {
   INTERACTION_MONITOR_DEFAULT_CONCURRENCY,
@@ -130,7 +131,10 @@ import { NativeAgentServiceProjection } from "./native-agent-service-projection.
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
-import type { NativeAgentCommandIntent } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentCapabilities,
+  type NativeAgentCommandIntent,
+} from "@orkestrator/protocol/native-agent";
 import { commandCatalogueKey } from "./native-agent-command-catalogue.js";
 import {
   commandDispatchNeedsCatalogue,
@@ -198,6 +202,192 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       presence: this.sessionActivitySnapshot(environmentId, agent, logicalSessionKey),
       ...(projection?.title ? { title: projection.title } : {}),
     };
+  }
+
+  /**
+   * The last projection this process built for one session, if any. Purely
+   * in-memory: never reads a provider or hydrates a transcript, so background
+   * observers may consult it freely. It can be stale or absent.
+   */
+  cachedProjectionSnapshot(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): NativeAgentSessionProjection | null {
+    const sessionKey = nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey);
+    return (
+      this.projectionCache.get(`${sessionKey}\0sync-v1`)?.projection ??
+      this.projectionCache.get(sessionKey)?.projection ??
+      null
+    );
+  }
+
+  /** Bounded retry bookkeeping for on-demand turn-outcome reads. */
+  protected readonly turnOutcomeAttempts = new Map<string, { attempts: number; retryAt: number }>();
+  /** Short-lived cache of on-demand pending-interaction reads, per session. */
+  protected readonly pendingInteractionReads = new Map<
+    string,
+    { at: number; requests: AgentInteractionRequest[] }
+  >();
+
+  /**
+   * How the turn started by `requestId` ended, without reading the transcript.
+   *
+   * A durable record (written by the queue drain's own status read, or by an
+   * earlier call) answers immediately. Otherwise, only while this request is
+   * still the session's latest dispatch and the turn looks finished, one
+   * provider status read settles it: a provider keeps a terminal turn error
+   * until the next turn, so `error` then is this turn's error. `pending` means
+   * "ask again later"; `unknown` means the outcome cannot be established.
+   */
+  async sessionTurnOutcome(
+    input: NativeAgentProjectionInput & { requestId: string },
+  ): Promise<{ outcome: "completed" | "failed" | "pending" | "unknown"; error?: string }> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const session = await this.storage.getNativeAgentSession(key);
+    if (!session) return { outcome: "unknown" };
+    const recorded = session.turnOutcomes?.find((entry) => entry.requestId === input.requestId);
+    if (recorded) {
+      return { outcome: recorded.outcome, ...(recorded.error ? { error: recorded.error } : {}) };
+    }
+    const ids = session.dispatchedRequestIds ?? [];
+    if (ids[ids.length - 1] !== input.requestId) return { outcome: "unknown" };
+    const activity = this.sessionTurnActivitySnapshot(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    if (activity === "working" || activity === "waiting") return { outcome: "pending" };
+    const attemptKey = `${key}\0${input.requestId}`;
+    const attempt = this.turnOutcomeAttempts.get(attemptKey);
+    if (attempt && attempt.retryAt > this.now()) return { outcome: "pending" };
+    const retry = (): { outcome: "pending" | "unknown" } => {
+      const attempts = (attempt?.attempts ?? 0) + 1;
+      if (attempts >= 3) {
+        this.turnOutcomeAttempts.delete(attemptKey);
+        return { outcome: "unknown" };
+      }
+      if (!attempt && this.turnOutcomeAttempts.size >= 256) {
+        const oldest = this.turnOutcomeAttempts.keys().next().value;
+        if (oldest !== undefined) this.turnOutcomeAttempts.delete(oldest);
+      }
+      this.turnOutcomeAttempts.set(attemptKey, {
+        attempts,
+        retryAt: this.now() + 5_000 * attempts,
+      });
+      return { outcome: "pending" };
+    };
+    let provider: NativeAgentRuntimeProvider | undefined;
+    let observation: Awaited<ReturnType<typeof readProviderStatus>>;
+    try {
+      provider = await this.observeProvider(input);
+      // No bridge is running: the turn is over, and its error state is gone.
+      if (!provider) return { outcome: "unknown" };
+      observation = await readProviderStatus(provider, session.providerSessionId);
+    } catch {
+      return retry();
+    }
+    if (observation.status === "running" || observation.status === "blocked") return retry();
+    if (observation.status !== "idle" && observation.status !== "error") {
+      this.turnOutcomeAttempts.delete(attemptKey);
+      return { outcome: "unknown" };
+    }
+    this.turnOutcomeAttempts.delete(attemptKey);
+    const outcome = observation.status === "error" ? ("failed" as const) : ("completed" as const);
+    const error = outcome === "failed" ? observation.error?.slice(0, 500) : undefined;
+    try {
+      await this.storage.recordNativeAgentTurnOutcome(key, session.providerSessionId, {
+        requestId: input.requestId,
+        outcome,
+        ...(error ? { error } : {}),
+        observedAt: new Date(this.now()).toISOString(),
+      });
+    } catch {
+      // The answer is still correct for this call; a later call re-reads.
+    }
+    return { outcome, ...(error ? { error } : {}) };
+  }
+
+  /**
+   * Record the latest dispatched turn's outcome from a status read the caller
+   * already made (the queue drain reads status before sending the next prompt).
+   * An `idle` read counts only when the turn is not visibly still running.
+   */
+  protected async recordObservedTurnOutcome(
+    session: PersistedNativeAgentSession,
+    status: string,
+    detail: string | undefined,
+  ): Promise<void> {
+    const requestId = session.dispatchedRequestIds?.at(-1);
+    if (!requestId || session.turnOutcomes?.some((entry) => entry.requestId === requestId)) return;
+    if (status !== "idle" && status !== "error") return;
+    if (status === "idle") {
+      const activity = this.sessionTurnActivitySnapshot(
+        session.environmentId,
+        session.agent,
+        session.logicalSessionKey,
+      );
+      if (activity === "working" || activity === "waiting") return;
+    }
+    try {
+      await this.storage.recordNativeAgentTurnOutcome(session.key, session.providerSessionId, {
+        requestId,
+        outcome: status === "error" ? "failed" : "completed",
+        ...(status === "error" && detail ? { error: detail.slice(0, 500) } : {}),
+        observedAt: new Date(this.now()).toISOString(),
+      });
+    } catch {
+      // Best-effort bookkeeping; it must never fault the caller's drain.
+    }
+  }
+
+  /**
+   * Pending interactions of one session, for linking to the request whose turn
+   * is waiting. Reads the provider's pending-interaction list at most once per
+   * ten seconds per session (callers ask only while a turn is `waiting`),
+   * falling back to the in-memory projection; `null` when neither is known.
+   */
+  async sessionPendingInteractions(
+    input: NativeAgentProjectionInput,
+  ): Promise<AgentInteractionRequest[] | null> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const live = (requests: readonly AgentInteractionRequest[]) =>
+      requests.filter((request) => request.state === "pending" || request.state === "answering");
+    const cached = this.pendingInteractionReads.get(key);
+    if (cached && cached.at > this.now() - 10_000) return live(cached.requests);
+    const fallback = () => {
+      const projection = this.cachedProjectionSnapshot(
+        input.environmentId,
+        input.agent,
+        input.logicalSessionKey,
+      );
+      return projection?.interactions ? live(projection.interactions) : null;
+    };
+    try {
+      const session = await this.storage.getNativeAgentSession(key);
+      if (!session) return null;
+      const provider = await this.observeProvider(input);
+      if (!provider?.interactions) return fallback();
+      const snapshot = await provider.interactions.listPendingInteractions(
+        session.providerSessionId,
+      );
+      if (!cached && this.pendingInteractionReads.size >= 128) {
+        const oldest = this.pendingInteractionReads.keys().next().value;
+        if (oldest !== undefined) this.pendingInteractionReads.delete(oldest);
+      }
+      this.pendingInteractionReads.set(key, { at: this.now(), requests: snapshot.requests });
+      return live(snapshot.requests);
+    } catch {
+      return fallback();
+    }
   }
 
   /** Read-only delivery gate used before agent mail claims a durable message. */
@@ -413,13 +603,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         durable: PersistedNativeAgentSession,
       ): Promise<{ url: string; token: string } | undefined> => {
         if (
-          !(
-            durable.agent === "claude" ||
-            durable.agent === "codex" ||
-            durable.agent === "pi" ||
-            durable.agent === "cursor" ||
-            durable.agent === "grok"
-          ) ||
+          nativeAgentCapabilities(durable.agent).agentTools !== true ||
           durable.owner?.kind !== "environment" ||
           !this.options.resolveAgentToolConnection
         ) {

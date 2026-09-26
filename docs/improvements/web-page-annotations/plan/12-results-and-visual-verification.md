@@ -1,6 +1,6 @@
 # 12 — Structured results and visual verification
 
-Status: Not started. Depends on: 08, 10, 11. Milestone: C.
+Status: Implemented (2026-09-24); review gaps closed (2026-09-25); gate evidence partial. Depends on: 08, 10, 11. Milestone: C.
 
 ## Deliverable
 

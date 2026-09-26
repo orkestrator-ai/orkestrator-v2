@@ -1,6 +1,6 @@
 # 08 — Entry, readiness, and design library
 
-Status: Planned.  
+Status: Implemented (2026-09-24) — see the [implementation record](00-index.md#implementation-record).  
 Dependencies: [03](03-client-controller-and-reconciliation.md),
 [05](05-safe-saving-and-export.md),
 [06](06-validation-deletion-and-recovery.md),
@@ -115,3 +115,9 @@ and authentication projections; toolchain setup belongs to existing workflows.
 
 Use the isolated application profile for final UI qualification. Thumbnail
 polish may follow the library's functional release; it must not gate reopening.
+
+## Implementation notes (2026-09-24)
+
+- `DesignLaunchButton.tsx` (always focusable), `DesignWorkspaceDialog.tsx` (New / Open / Import), `DesignReadinessPanel.tsx` (backend, storage, renderer and agent facts; probe on open and Retry), `DesignLibrary.tsx` (search, sort, live/deleted filter, pagination, rename/duplicate/trash/restore/purge), `design-open.ts` (focus an existing tab first; beside/here placement with fallback; MAX_TABS respected), `design-launch.ts` (staged create with rollback before the agent tab exists, recovery after).
+- Deviations: "agent available" means enabled in settings; thumbnails deferred (placeholders).
+- Tests: `design-open.test.ts`, `design-launch.test.ts`, `DesignLibrary.test.tsx`, `DesignReadinessPanel.test.tsx`, `DesignWorkspaceDialog.test.tsx`, `e2e/DesignLaunchDialog.spec.ts`.

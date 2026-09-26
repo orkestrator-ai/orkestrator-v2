@@ -20,6 +20,9 @@ import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { resetPreviewServiceSyncForTests } from "@/stores/previewServiceStore";
+import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
+import { FakeWebAnnotationBackend } from "@/test/web-annotation-fakes";
+import type { BrowserTabData } from "@/types/paneLayout";
 import { BrowserTab } from "./BrowserTab";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
@@ -57,18 +60,16 @@ function seedTab(url: string) {
 
 function renderTab() {
   const Harness = () => {
-    const url = usePaneLayoutStore((state) => {
+    const browserData = usePaneLayoutStore((state) => {
       const layout = state.environments.get(FIXTURE_ENVIRONMENT_ID);
-      return (
-        (layout?.root as { tabs: Array<{ browserData?: { url: string } }> } | undefined)?.tabs[0]
-          ?.browserData?.url ?? ""
-      );
+      return (layout?.root as { tabs: Array<{ browserData?: BrowserTabData }> } | undefined)
+        ?.tabs[0]?.browserData;
     });
     return (
       <BrowserTab
         tabId="browser-1"
         environmentId={FIXTURE_ENVIRONMENT_ID}
-        data={{ url }}
+        data={browserData ?? { url: "" }}
         isActive
       />
     );
@@ -147,7 +148,6 @@ function installBackend(backend: Backend, native = true) {
     setVisible: mock(async () => null),
     setBounds: mock(async () => null),
     reload: mock(async () => null),
-    cancelAnnotation: mock(async () => undefined),
     resetServiceSiteData: mock(async () => undefined),
   };
   window.orkestrator = {
@@ -187,6 +187,7 @@ describe("service browser tabs", () => {
   });
   beforeEach(() => {
     resetPreviewServiceSyncForTests();
+    resetWebAnnotationSyncForTests();
     useEnvironmentStore.setState({
       environments: [
         {
@@ -243,6 +244,48 @@ describe("service browser tabs", () => {
     await waitFor(() => expect(tabUrl()).toBe(serviceUri("/next?x=1")));
     // The runtime transport URL never reaches the persisted tab.
     expect(tabUrl()).not.toContain("127.0.0.1");
+  });
+
+  test("counts notes for the logical service route and opens a note's page only on request", async () => {
+    installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [fixturePreviewService()],
+    });
+    const annotations = new FakeWebAnnotationBackend(FIXTURE_ENVIRONMENT_ID);
+    const page = {
+      service: { kind: "service" as const, serviceId: FIXTURE_SERVICE_ID },
+      route: "/start",
+      displayUrl: "http://localhost:3000/start",
+      title: "Start",
+      requiresNavigation: false,
+    };
+    annotations.seed({ id: "annotation-here", title: "On this page", page });
+    annotations.seed({
+      id: "annotation-there",
+      title: "Elsewhere",
+      page: { ...page, route: "/billing", displayUrl: "http://localhost:3000/billing" },
+    });
+    const previewCommands = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown> = {}) =>
+      command.startsWith("web_annotation")
+        ? annotations.handle(command, args)
+        : previewCommands(command, args),
+    );
+    seedTab(serviceUri("/start"));
+    renderTab();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Annotations, 1 open on this page" }),
+    );
+    fireEvent.change(await screen.findByRole("combobox", { name: "Pages" }), {
+      target: { value: "all" },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Open note: Elsewhere" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show “Elsewhere” on the page" }));
+    const open = await screen.findByRole("button", { name: "Open that page" });
+    // Opening a thread never navigated the preview.
+    expect(tabUrl()).toBe(serviceUri("/start"));
+    fireEvent.click(open);
+    await waitFor(() => expect(tabUrl()).toBe(serviceUri("/billing")));
   });
 
   test("a late state from the previous service's view is not persisted for the new one", async () => {

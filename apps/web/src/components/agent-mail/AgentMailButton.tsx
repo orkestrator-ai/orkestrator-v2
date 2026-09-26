@@ -1,6 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Inbox, Loader2, RotateCcw, Send, Trash2 } from "lucide-react";
+import type { Components } from "react-markdown";
 import { toast } from "sonner";
+import {
+  MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS,
+  MarkdownLink,
+  MessageMarkdown,
+} from "@/components/chat/MessageMarkdown";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useConfigStore } from "@/stores/configStore";
 import * as backend from "@/lib/backend";
+import { parseLocalFileLinkTarget } from "@/lib/chat/file-url";
 import type {
   AgentMailMessage,
   AgentMailMessageSummary,
@@ -22,6 +29,37 @@ import type {
 import { AGENT_MAIL_DEFAULT_LIST_LIMIT } from "@orkestrator/protocol/agent-mail";
 
 const OPEN_EVENT = "orkestrator:open-agent-mail";
+
+// Mail can come from another environment or an external client. A file path
+// cannot safely use the active environment's file-tab callback, and an image
+// must not contact a sender-selected host merely because the reader expands it.
+const MAIL_MARKDOWN_COMPONENTS: Components = {
+  a: ({ href, children }) => {
+    if (!href) return <span>{children}</span>;
+    if (parseLocalFileLinkTarget(href)) {
+      return (
+        <span title="File path from the sender's workspace; copy it to open in that environment">
+          {children} <code>{href}</code>
+        </span>
+      );
+    }
+    return <MarkdownLink href={href}>{children}</MarkdownLink>;
+  },
+  img: ({ alt }) => <span>{alt ? `[Image: ${alt}]` : "[Image omitted]"}</span>,
+};
+
+function AgentMailBody({ body }: { body: string }): ReactNode {
+  if (body.length > MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS) {
+    return <p className="whitespace-pre-wrap break-words text-xs">{body}</p>;
+  }
+  return (
+    <MessageMarkdown
+      content={body}
+      components={MAIL_MARKDOWN_COMPONENTS}
+      className="break-words text-xs prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-pre:my-1 prose-pre:p-2 [&>:first-child]:mt-0 [&>:last-child]:mb-0"
+    />
+  );
+}
 
 export function openAgentMailForTab(
   environmentId: string,
@@ -717,9 +755,7 @@ export function AgentMailButton() {
                     </button>
                     {active && expanded && (
                       <div className="mt-2 rounded-md border border-zinc-800 bg-black/30 p-3">
-                        <p className="whitespace-pre-wrap text-xs leading-relaxed">
-                          {expanded.body}
-                        </p>
+                        <AgentMailBody body={expanded.body} />
                         <div className="mt-3 grid gap-1 text-[11px] text-muted-foreground">
                           <p>
                             Seen by you:{" "}

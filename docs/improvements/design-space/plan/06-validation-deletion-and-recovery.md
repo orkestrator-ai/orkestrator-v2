@@ -1,6 +1,6 @@
 # 06 — Validation, deletion, and error recovery
 
-Status: Planned.  
+Status: Implemented (2026-09-24) — see the [implementation record](00-index.md#implementation-record).  
 Dependencies: [02](02-operation-contracts-and-durability.md),
 [03](03-client-controller-and-reconciliation.md),
 [04](04-renderer-scheduling-and-recovery.md).  
@@ -111,3 +111,10 @@ Authorization failures must not reveal another environment's canvas existence.
 Review slices: diagnostic contract/shared validation; frame-specific UI;
 versioned deletion and fencing; inactive/restart recovery tests. Run actual
 Chromium sanitizer cases, not only a DOM emulator, for browser policy claims.
+
+## Implementation notes (2026-09-24)
+
+- Shared sanitizer/DOM budget with a `validate` report (removed scripts/handlers, blocked external references, element count incl. template contents). Raw HTML is validated before commit when the renderer is healthy; otherwise stored `renderer-unavailable`. Legacy frames validate lazily by content identity; stale results never overwrite newer content (`design-validation.ts`).
+- Tombstones on deletion, `deleted`/`missing`/`record-problem` snapshot states, environment deletion fencing, recycle bin retention (32 designs, 128 MiB, 7 days), explicit purge.
+- UI: per-frame repair overlay, blocked-content notice, deleted/missing/problem panel with Restore and Save recovery copy.
+- Tests: `design-lifecycle.test.ts`, `design-sync.test.ts`, `design-runtime.test.ts`.

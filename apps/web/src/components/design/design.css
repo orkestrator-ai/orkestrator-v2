@@ -13,15 +13,28 @@
   outline-offset: 2px;
 }
 
-@container (max-width: 600px) {
-  .design-hierarchy[data-inspecting="true"] {
-    display: none;
-  }
+/* A frame whose edit is still being saved keeps its optimistic position. */
+.design-frame[data-pending] {
+  cursor: progress;
+}
 
+/* Narrow panes: the Inspector is an explicit drawer over the canvas; Layers
+   stays inline and hides while the inspector drawer is open. */
+@container (max-width: 640px) {
   .design-inspector {
     position: absolute;
     inset: 0 0 0 auto;
-    width: min(288px, 100%);
+    width: min(300px, 100%);
     z-index: 30;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .design-workspace *,
+  .design-workspace *::before,
+  .design-workspace *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }

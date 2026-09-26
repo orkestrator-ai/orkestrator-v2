@@ -27,7 +27,7 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import type { EngineTurnConfig } from "../engine/types.js";
-import type { SessionTitleSource } from "./thread-registry.js";
+import type { RestartFailureNotice, SessionTitleSource } from "./thread-registry.js";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
   MAX_STRUCTURED_OUTPUT_TURNS,
@@ -51,6 +51,7 @@ export interface PersistedBridgeSession {
   structuredOutputRequestId?: string;
   structuredOutput?: StructuredOutputResult;
   structuredOutputTurns?: StructuredOutputTurnRecord[];
+  restartFailure?: RestartFailureNotice;
   /** Sparse turn -> model overlay for reroutes absent from Codex rollouts. */
   confirmedModelsByTurn?: Record<string, string>;
   /** Bounded content-free async-question attention index. */
@@ -171,6 +172,18 @@ function isPersistedBridgeSession(
           typeof record.accepted !== "boolean"
         );
       }))
+  ) {
+    return false;
+  }
+  if (
+    session.restartFailure !== undefined &&
+    (!session.restartFailure ||
+      typeof session.restartFailure !== "object" ||
+      Array.isArray(session.restartFailure) ||
+      Object.keys(session.restartFailure).length !== 1 ||
+      typeof (session.restartFailure as Record<string, unknown>).turnId !== "string" ||
+      (session.restartFailure as RestartFailureNotice).turnId.length === 0 ||
+      (session.restartFailure as RestartFailureNotice).turnId.length > 2_048)
   ) {
     return false;
   }
@@ -475,6 +488,7 @@ export class BridgeSessionStore {
     structuredOutputRequestId?: string;
     structuredOutput?: StructuredOutputResult;
     structuredOutputTurns?: StructuredOutputTurnRecord[];
+    restartFailure?: RestartFailureNotice;
     confirmedModelsByTurn?: Record<string, string>;
     asyncQuestionItemIds?: string[];
   }): PersistedBridgeSession {
@@ -490,6 +504,7 @@ export class BridgeSessionStore {
       structuredOutputRequestId: options.structuredOutputRequestId,
       structuredOutput: options.structuredOutput,
       structuredOutputTurns: options.structuredOutputTurns?.map((entry) => ({ ...entry })),
+      restartFailure: options.restartFailure ? { ...options.restartFailure } : undefined,
       confirmedModelsByTurn: options.confirmedModelsByTurn,
       asyncQuestionItemIds: options.asyncQuestionItemIds,
       lastAccessed: new Date(this.now()).toISOString(),

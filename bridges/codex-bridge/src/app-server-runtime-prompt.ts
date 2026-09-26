@@ -763,6 +763,15 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       });
       session.lastAcceptedRequestId = requestId;
       session.recoveredContextPending = false;
+      // A new accepted user turn supersedes the restart notice for every tab
+      // sharing this Codex thread, including tabs restored but not attached.
+      const clearedRestartNotices = this.registry
+        .boundSessionsForThread(context.threadId)
+        .filter((entry) => {
+          if (!entry.restartFailure) return false;
+          entry.restartFailure = undefined;
+          return true;
+        });
 
       // The user message is persisted now, so the thread has a rollout and can be
       // detached and resumed later.
@@ -771,7 +780,9 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         ? this.registry.recordStructuredOutputTurn(context.threadId, turn.turnId, false)
         : [];
       await Promise.all(
-        [...new Set([session, ...ledgerSessions])].map((entry) => this.persistSession(entry)),
+        [...new Set([session, ...ledgerSessions, ...clearedRestartNotices])].map((entry) =>
+          this.persistSession(entry),
+        ),
       );
 
       const accumulator = new TurnAccumulator({
@@ -1026,6 +1037,16 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     this.clearRecoveryBackstop(context.threadId);
     context.activeTurn = null;
     if (outcome.result === "terminal") {
+      if (outcome.status === "interrupted") {
+        // This unresolved record survived a bridge-process restart. A user
+        // cancellation would already have made its journal entry terminal.
+        context.activeTurn = accumulator;
+        accumulator.turnId = outcome.turnId ?? accumulator.turnId;
+        this.completeRecoveredTurn(accumulator, "interrupted");
+        await this.runFinalization(context, accumulator);
+        this.clearRecoveredContextPending(context);
+        return "terminal";
+      }
       await this.journal.markTerminal(requestId, outcome.status ?? "completed", {
         threadId: context.threadId,
         turnId: outcome.turnId,

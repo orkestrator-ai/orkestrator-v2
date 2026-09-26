@@ -133,6 +133,50 @@ ORKESTRATOR_PREVIEW_BENCH=1 mise run test:logged -- --name preview-bench -- \
 
 Record results in `docs/improvements/browser/plan/evidence.md`.
 
+### CLI scenarios
+
+The published client has targeted scenarios that start isolated backends
+through the packaged launcher (disposable data and worktree roots, no Electron
+or Vite), drive the packaged `orkestrator` executable with argv only, assert on
+JSON envelopes and authoritative state, and clean up what they created. The
+package suite already runs a subset (`packages/cli/tests/cli-client.test.ts`);
+the full matrix is a separate task:
+
+```bash
+# Credential-free: read-only, local-lifecycle, retry-and-retention,
+# setup-failure, client-exit, exec, wrong-profile
+mise run test:logged -- --name cli-scenarios -- mise run test:cli:scenarios
+
+# One scenario, keeping its root for inspection on failure
+mise run test:cli:scenarios -- --scenario exec --keep-on-failure
+
+# Opt-in, credentialed, real tokens: one bounded turn plus a follow-up
+ORKESTRATOR_SCENARIO_MODEL=gpt-5.6-sol \
+  mise run test:cli:scenarios -- --scenario live-session --provider codex
+
+# Container variants against this worktree's own image (never `latest`);
+# docker:build:dev prints the tag it built
+mise run docker:build:dev
+mise run test:cli:scenarios -- --environment-type container \
+  --docker-image orkestrator-v2:dev-<worktree hash>
+```
+
+`mise run test:agent:browser:isolated` includes `e2e/agent-testing/cli-ui.spec.ts`
+(CLI changes seen by an open and a reloaded renderer). Its live question test
+needs a profile started with Claude credentials:
+
+```bash
+mise run dev:test --profile qa-cli-live --fixture --credential-source claude --agent-platforms claude
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-cli-live ORKESTRATOR_AGENT_TEST_LIVE_CLI=1 \
+  mise run test:agent:browser -- e2e/agent-testing/cli-ui.spec.ts
+mise run dev:stop --profile qa-cli-live && mise run dev:reset --profile qa-cli-live
+```
+
+The run manifest (IDs, exit codes, stages — no prompts or tokens) is written to
+`output/cli-scenarios/<run>/manifest.json`. Record live results in
+`docs/improvements/cli-commands/plan/14-targeted-testing-and-qualification.md`.
+See [public-cli.md](../architecture/public-cli.md#targeted-scenarios).
+
 For an intentionally unlogged interactive invocation, use `mise exec -- bun`
 rather than an ambient Bun installation. Agent-operated validation should use
 the logged form above.

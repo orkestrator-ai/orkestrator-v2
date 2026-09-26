@@ -245,6 +245,9 @@
         "playwright-core": "1.63.0",
         "sharp": "0.35.4",
       },
+      "devDependencies": {
+        "@orkestrator/protocol": "workspace:*",
+      },
     },
     "packages/protocol": {
       "name": "@orkestrator/protocol",

@@ -1114,6 +1114,10 @@ app.get("/global/health", (c) => {
         codexVersion: health.codexVersion,
         restartCount: health.restartCount,
         circuitOpen: health.circuitOpen,
+        // How the previous child died, so an unexplained restart can be told
+        // apart after the fact (SIGKILL from outside vs. Codex exiting itself).
+        lastExitCode: health.lastExitCode ?? null,
+        lastExitSignal: health.lastExitSignal ?? null,
       },
       activeThreads: health.activeThreads,
       activeTurns: health.activeTurns,

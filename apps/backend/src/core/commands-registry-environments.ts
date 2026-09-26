@@ -50,6 +50,7 @@ import {
   scheduleMergeCleanupRecovery,
   logEnvironmentLifecycleFailure,
 } from "./commands-helpers.js";
+import { ControlRequestConflictError } from "./storage-projects.js";
 import { forkEnvironmentRecord } from "./commands-environment-fork.js";
 import type { CommandContext } from "./commands-context.js";
 import { cleanupLogStorage, getLogStorageStats } from "./log-storage.js";
@@ -169,6 +170,7 @@ export function registerEnvironmentCommands(
         initialFastMode,
         initialConversationMode,
         controlRequestId,
+        controlRequestFingerprint,
         delegationBaseBranch,
         delegationBaseCommit,
       },
@@ -178,6 +180,13 @@ export function registerEnvironmentCommands(
       const project = await storage.getProject(asString(projectId, "projectId"));
       if (!project) throw new Error(`Project not found: ${projectId}`);
       const externalRequestId = asOptionalString(controlRequestId)?.trim();
+      const requestFingerprint = asOptionalString(controlRequestFingerprint);
+      if (requestFingerprint !== undefined && !/^[0-9a-f]{64}$/.test(requestFingerprint)) {
+        throw new Error("controlRequestFingerprint must be a SHA-256 hex digest");
+      }
+      if (requestFingerprint !== undefined && !externalRequestId) {
+        throw new Error("controlRequestFingerprint requires controlRequestId");
+      }
       if (externalRequestId) {
         if (externalRequestId.length > 256) {
           throw new Error("controlRequestId must be at most 256 characters");
@@ -185,7 +194,16 @@ export function registerEnvironmentCommands(
         const existing = (await storage.getEnvironmentsByProject(project.id)).find(
           (candidate) => candidate.controlRequestId === externalRequestId,
         );
-        if (existing) return toClientEnvironment(existing);
+        if (existing) {
+          if (
+            existing.controlRequestFingerprint &&
+            requestFingerprint &&
+            existing.controlRequestFingerprint !== requestFingerprint
+          ) {
+            throw new ControlRequestConflictError(externalRequestId, existing.id);
+          }
+          return toClientEnvironment(existing);
+        }
       }
       const requestedEnvironmentType = asEnvironmentType(environmentType);
       if (requestedEnvironmentType === "local" && !project.localPath) {
@@ -225,6 +243,7 @@ export function registerEnvironmentCommands(
         remoteUrl: project.gitUrl,
       });
       env.controlRequestId = externalRequestId || undefined;
+      if (requestFingerprint) env.controlRequestFingerprint = requestFingerprint;
       if (delegationBaseBranch !== undefined || delegationBaseCommit !== undefined) {
         const baseBranch = asOptionalString(delegationBaseBranch)?.trim();
         const baseCommit = asOptionalString(delegationBaseCommit)?.trim();

@@ -1,7 +1,6 @@
 # 01 — Define the public command and compatibility contract
 
-Status: Planned.
-Depends on: None.
+Status: Verified — contract implemented in `@orkestrator/protocol/public-api`; see record.
 Index: [CLI commands plan](00-cli-commands-index.md).
 
 ## Target behavior
@@ -70,12 +69,29 @@ mutation requests and HTTP 200 plus rejected dispatch is not CLI success.
 
 ## Acceptance and handoff
 
-- [ ] A command matrix maps each public action to its backend owner and milestone.
-- [ ] JSON examples, exit codes, IDs, limits, and compatibility policy are fixed.
-- [ ] Receipt fields can express unknown and partial outcomes without losing IDs.
-- [ ] Public summaries exclude prompt/credential-bearing storage fields.
-- [ ] Steps 02–05 can implement the contract without inventing different shapes.
+- [x] A command matrix maps each public action to its backend owner and milestone.
+- [x] JSON examples, exit codes, IDs, limits, and compatibility policy are fixed.
+- [x] Receipt fields can express unknown and partial outcomes without losing IDs.
+- [x] Public summaries exclude prompt/credential-bearing storage fields.
+- [x] Steps 02–05 can implement the contract without inventing different shapes.
 
 Ship contracts with their first consumers rather than introducing a large unused
 framework. Keep new capabilities unavailable until their implementation is
 ready; reverting a consumer must not make old clients reinterpret an action.
+
+## Implementation record
+
+Revision: working tree on `a9337716`, 2026-09-26.
+
+- Contract: [`packages/protocol/src/public-api.ts`](../../../../packages/protocol/src/public-api.ts)
+  (action catalogue, envelope, receipt, error codes and exit classes, limits,
+  retention, canonical JSON, request-key rules) and
+  [`public-api-resources.ts`](../../../../packages/protocol/src/public-api-resources.ts)
+  (IDs, summaries, pages, settings descriptors, transcript/interaction/exec
+  shapes). One registry command, `public_action`, is the only public entry.
+- Examples: [`public-api-fixtures.ts`](../../../../packages/protocol/src/public-api-fixtures.ts);
+  tests: `packages/protocol/src/public-api.test.ts` (17, validators accept every
+  fixture and reject malformed/unknown shapes).
+- Command matrix, owners and milestones: [public-cli.md](../../../architecture/public-cli.md#command-surface).
+- Summaries are built from explicit fields (`public-api/summaries.ts`); prompt,
+  credential and fingerprint fields are never copied.

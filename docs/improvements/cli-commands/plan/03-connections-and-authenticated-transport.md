@@ -1,8 +1,6 @@
 # 03 — Discover connections and authenticate the client
 
-Status: Planned.
-Depends on: [01](01-public-command-and-compatibility-contract.md),
-[02](02-client-and-service-entrypoints.md).
+Status: Verified — see record.
 Index: [CLI commands plan](00-cli-commands-index.md).
 
 ## Target behavior
@@ -73,12 +71,27 @@ coverage instead of retesting its entire policy in the CLI suite.
 
 ## Acceptance and handoff
 
-- [ ] CLI can inspect both a managed dev profile and an explicitly configured instance.
-- [ ] Explicit selection failure produces no request to any fallback instance.
-- [ ] Credentials never appear in command output, URLs, or diagnostics.
-- [ ] A connection check verifies identity and capabilities before mutation.
-- [ ] Client exit releases HTTP resources without stopping the backend.
+- [x] CLI can inspect both a managed dev profile and an explicitly configured instance.
+- [x] Explicit selection failure produces no request to any fallback instance.
+- [x] Credentials never appear in command output, URLs, or diagnostics.
+- [x] A connection check verifies identity and capabilities before mutation.
+- [x] Client exit releases HTTP resources without stopping the backend.
 
 Descriptor additions must be additive to existing readiness consumers. Disabling
 client discovery leaves desktop/service startup intact; preserve stored
 connections and operation receipts across a client downgrade.
+
+## Implementation record
+
+Revision: working tree on `a9337716`, 2026-09-26.
+
+- Selection: `--profile` (dev status manifest → `backend-instance.json`) →
+  `--connection` → saved default; no fallback, no port scan
+  ([`client/targets.ts`](../../../../packages/cli/src/client/targets.ts)).
+  Descriptor published by the backend (`apps/backend/src/instance-descriptor.ts`,
+  mode 0600, no token).
+- Private config (`connections.json` 0600, `credentials/`), tokens from files
+  or stdin only, redirects refused, bounded responses, identity checked on
+  every response ([`client/transport.ts`](../../../../packages/cli/src/client/transport.ts)).
+- Tests: `client-connections.test.ts` (10), `client-transport.test.ts` (10);
+  scenarios `wrong-profile`, `client-exit`, `read-only`.

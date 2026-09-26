@@ -511,6 +511,23 @@ export async function addExistingProject(
   );
 }
 
+/**
+ * A scratch creation that failed after the remote step began. `ambiguous`
+ * means GitHub may or may not hold the repository; `created` means it does and
+ * registration did not finish. Both preserve the local repository. The message
+ * is the same one legacy callers always showed.
+ */
+export class ProjectCreationStageError extends Error {
+  constructor(
+    message: string,
+    readonly remoteState: "ambiguous" | "created",
+    readonly projectPath: string,
+  ) {
+    super(message);
+    this.name = "ProjectCreationStageError";
+  }
+}
+
 export async function createProjectFromScratch(
   requestedPath: string,
   storage: StorageService,
@@ -647,16 +664,20 @@ export async function createProjectFromScratch(
         await rollbackScratchRepository({ projectPath, createdRoot, attemptedGitInit, identity });
       }
       if (remote.state === "created") {
-        throw new Error(
+        throw new ProjectCreationStageError(
           "The local and private GitHub repositories were created, but Orkestrator could not finish setup. " +
             `Add the existing repository instead. ${conciseError(error)}`,
+          "created",
+          projectPath,
         );
       }
       if (remote.state === "ambiguous") {
-        throw new Error(
+        throw new ProjectCreationStageError(
           "The local Git repository was preserved because GitHub may have created the private repository. " +
             "Check GitHub, then retry the same path to resume from the local repository. " +
             `${conciseError(error)}`,
+          "ambiguous",
+          projectPath,
         );
       }
       throw error;

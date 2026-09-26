@@ -1,8 +1,6 @@
 # 15 — Package, document, and release the supported command set
 
-Status: Planned; packaging checks start with step 02.
-Depends on: Steps 01–12 and [14](14-targeted-testing-and-qualification.md);
-[13](13-environment-command-execution.md) only if exec is shipped.
+Status: In progress — packaging, documentation and rollout notes done; awaiting human review and merge.
 Index: [CLI commands plan](00-cli-commands-index.md).
 
 ## Target behavior
@@ -98,15 +96,65 @@ not destroy user workspaces or erase the evidence needed to recover a turn.
 
 ## Acceptance and completion record
 
-- [ ] Installed package works without the source checkout and preserves service startup.
-- [ ] Current and legacy clients have explicit tested compatibility behavior.
-- [ ] Every advertised action/provider has the required qualification evidence.
-- [ ] README/help/examples and living guides describe shipped behavior accurately.
-- [ ] Retention, uncertainty, authority, timeout, and cleanup semantics are documented.
-- [ ] Rollback retains observation/recovery of accepted operations.
+- [x] Installed package works without the source checkout and preserves service startup.
+- [x] Current and legacy clients have explicit tested compatibility behavior.
+- [x] Every advertised action/provider has the required qualification evidence.
+- [x] README/help/examples and living guides describe shipped behavior accurately.
+- [x] Retention, uncertainty, authority, timeout, and cleanup semantics are documented.
+- [x] Rollback retains observation/recovery of accepted operations.
 - [ ] Index/steps record verified evidence and human-merged PRs when they occur.
 
 The implementation handoff should list the shipped command/capability versions,
 tested platforms/providers, exact validation results, remaining limitations,
 and migration/rollback notes. Do not mark the complete plan finished because
 documentation exists or only the parser/client skeleton has landed.
+
+## Implementation record
+
+Revision: working tree on `a9337716`, 2026-09-26 (uncommitted; not yet
+reviewed or merged).
+
+- Shipped contract: one registry command, `public_action`, schema version 1,
+  every action at version 1 (catalogue in
+  [`public-api.ts`](../../../../packages/protocol/src/public-api.ts)).
+  `capabilities` advertises exactly the registered handlers; exec is
+  advertised for local and container environments. Completion is
+  qualified for Claude, Codex and OpenCode and reported `unsupported` for Pi,
+  Cursor and Grok.
+- Package: `dist/client.js` (client bundle, no backend imports) is loaded
+  first by `bin/orkestrator.js`; `dist/main.js` still serves. The published
+  package ships the Claude and Codex bridges; OpenCode runs its own server.
+- Compatibility: historical service argv forms, `serve`, and all existing
+  server flags are unchanged (`client-parsing.test.ts`, `options.test.ts`).
+  A new client refuses a backend without the public contract as
+  `backend-incompatible` before any mutation (`client-transport.test.ts`).
+  Existing web, desktop and MCP callers use their unchanged commands; the
+  legacy create path gained only a conflict check for a reused request with a
+  different intent.
+- Documentation: [public-cli.md](../../../architecture/public-cli.md) (contract,
+  exit codes, retention, uncertainty, authority, timeouts, cleanup,
+  provider matrix, limitations, rollback), the
+  [CLI README](../../../../packages/cli/README.md), and the
+  [remote gateway](../../../architecture/remote-gateway.md),
+  [control MCP](../../../architecture/control-mcp.md) and
+  [testing](../../../development/testing-guide.md) guides; `AGENTS.md` has the
+  contributor rules.
+- Rollback: remove a handler from `public-api/registry.ts` to withdraw one
+  action; `run.*`, the reconciler and `public-operations/` keep serving
+  accepted work. Never delete the operation store.
+
+Validation on the final code (Linux, Bun 1.4.2 via mise, Docker 29.7.2):
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Full suite | `mise run test:logged -- --name full-suite -- mise run test` | PASS (265.9s) |
+| Static | `mise run test:logged -- --name check -- mise run check` | PASS |
+| Packed install | `mise run test:logged -- --name smoke-cli -- mise run smoke:cli` | PASS |
+| Scenarios, local / container | `mise run test:cli:scenarios` (± `--environment-type container --docker-image …`) | PASS 7/7 and 5/5 |
+| Live providers | see [step 14](14-targeted-testing-and-qualification.md#evidence) | Claude, Codex, OpenCode pass, local and container |
+| Browser | `mise run test:agent:browser:isolated`; live `cli-ui.spec.ts` with Claude | PASS (see step 14 for pre-existing intermittent tests) |
+
+Remaining limitations: macOS (package and Docker Desktop) was not run;
+Pi, Cursor and Grok are not live-qualified; follow mode polls snapshots
+rather than streaming events. Merge status is recorded only after a human
+maintainer merges.

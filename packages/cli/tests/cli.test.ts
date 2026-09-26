@@ -19,6 +19,7 @@ jest.setTimeout(40_000);
 
 // Every artifact scripts/build.ts emits, relative to the package root.
 const ARTIFACTS = [
+  "dist/client.js",
   "dist/main.js",
   "resources/claude-bridge/dist/index.js",
   "resources/codex-bridge/dist/index.js",
@@ -192,6 +193,7 @@ describe("orkestrator CLI package", () => {
 
   test("stages a self-contained backend and both bridge entrypoints", async () => {
     await expect(Bun.file(path.join(packageRoot, "dist/main.js")).exists()).resolves.toBe(true);
+    await expect(Bun.file(path.join(packageRoot, "dist/client.js")).exists()).resolves.toBe(true);
     await expect(
       Bun.file(path.join(packageRoot, "resources/claude-bridge/dist/index.js")).exists(),
     ).resolves.toBe(true);
@@ -269,6 +271,7 @@ describe("orkestrator CLI package", () => {
     expect(files.sort()).toEqual([
       "README.md",
       "bin/orkestrator.js",
+      "dist/client.js",
       "dist/main.js",
       "package.json",
       "resources/claude-bridge/dist/index.js",

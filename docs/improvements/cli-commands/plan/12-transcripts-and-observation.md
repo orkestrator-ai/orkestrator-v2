@@ -1,8 +1,6 @@
 # 12 — Read bounded transcripts and resume observation
 
-Status: Planned.
-Depends on: [04](04-shared-actions-and-discovery.md),
-[09](09-sessions-and-prompt-dispatch.md), [10](10-run-completion-and-waiting.md).
+Status: Verified — snapshot pages and polling-based following; see record.
 Index: [CLI commands plan](00-cli-commands-index.md).
 
 ## Target behavior
@@ -73,11 +71,22 @@ memory/queues and that provider progress continues with no observer.
 
 ## Acceptance and handoff
 
-- [ ] Explicit transcript reads are ordered, bounded, and recoverable by cursor.
-- [ ] Empty, unavailable, truncated, and expired states are distinguishable.
-- [ ] Content never enters routine telemetry or accidental error dumps.
-- [ ] Snapshot-only operation is complete and independently usable.
-- [ ] If following ships, replay/gap/backpressure tests prove exact recovery.
+- [x] Explicit transcript reads are ordered, bounded, and recoverable by cursor.
+- [x] Empty, unavailable, truncated, and expired states are distinguishable.
+- [x] Content never enters routine telemetry or accidental error dumps.
+- [x] Snapshot-only operation is complete and independently usable.
+- [x] If following ships, replay/gap/backpressure tests prove exact recovery.
 
 Ship snapshot/paging first if event following needs more qualification. Rollback
 of follow support must keep snapshots and run receipts usable.
+
+## Implementation record
+
+Revision: working tree on `a9337716`, 2026-09-26.
+
+- [`actions-transcript.ts`](../../../../apps/backend/src/core/public-api/actions-transcript.ts):
+  ordered, byte/count-bounded pages with opaque cursors; `cursor-expired`,
+  empty, unavailable and truncated states are distinct.
+- `session transcript --follow --jsonl` polls snapshots by cursor (no SSE),
+  printing each message once and flagging gaps (`client-waits.test.ts`).
+- Content never enters logs (`routine logs never contain the prompt`).

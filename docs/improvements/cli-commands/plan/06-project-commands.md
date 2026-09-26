@@ -1,8 +1,6 @@
 # 06 — Create, register, edit, and remove projects
 
-Status: Planned.
-Depends on: [04](04-shared-actions-and-discovery.md),
-[05](05-operation-receipts-and-idempotency.md).
+Status: Verified — see record.
 Index: [CLI commands plan](00-cli-commands-index.md).
 
 ## Target behavior
@@ -66,11 +64,26 @@ remote qualification needs a separately authorized disposable repository.
 
 ## Acceptance and handoff
 
-- [ ] Registration, cloning, and remote creation have distinct documented effects.
-- [ ] Partial creation yields a durable receipt and actionable resource identities.
-- [ ] Metadata changes preserve project identity and reject stale revisions.
-- [ ] Removal cannot orphan a concurrently created environment.
-- [ ] CLI and UI observe the same updated project snapshot.
+- [x] Registration, cloning, and remote creation have distinct documented effects.
+- [x] Partial creation yields a durable receipt and actionable resource identities.
+- [x] Metadata changes preserve project identity and reject stale revisions.
+- [x] Removal cannot orphan a concurrently created environment.
+- [x] CLI and UI observe the same updated project snapshot.
 
 Keep local-only initialization and cascade removal deferred. Rollback leaves
 created repositories intact and preserves enough state for explicit adoption.
+
+## Implementation record
+
+Revision: working tree on `a9337716`, 2026-09-26.
+
+- `project list/get/add/create/update/remove/config` in
+  [`actions-projects.ts`](../../../../apps/backend/src/core/public-api/actions-projects.ts).
+  `create` requires `--github-private`; partial creation keeps a receipt with
+  the created remote (`ProjectCreationStageError`).
+- Removal fences the project (`project-removal-fences.json`) and
+  `addEnvironment` checks the fence under the environment lock, so a racing
+  create cannot attach (`public-api-projects.test.ts`).
+- CLI and UI: both read the same storage; a real browser shows the CLI-set PR
+  base branch in the open and the reloaded Repository Settings dialog
+  (`e2e/agent-testing/cli-ui.spec.ts`).

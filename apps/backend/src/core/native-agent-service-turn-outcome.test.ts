@@ -212,4 +212,77 @@ describe("native turn outcomes", () => {
       });
     });
   });
+
+  test("an idle status is not success when the request's turn recorded an error", async () => {
+    const stub = providerStub("opencode");
+    let terminal: () => Promise<string | null> = async () => {
+      throw new Error("transcript unavailable");
+    };
+    const turnTerminalError = mock((_session: string, _request: string) => terminal());
+    Object.assign(stub.provider, { turnTerminalError });
+    await withService(stub.provider, async ({ service }) => {
+      const session = await service.dispatchPrompt({
+        environmentId: "env-1",
+        agent: "opencode",
+        logicalSessionKey,
+        prompt: "first",
+        requestId: "r-1",
+      });
+      const input = { environmentId: "env-1", agent: "opencode" as const, logicalSessionKey };
+      markIdle(service, "opencode", session.providerSessionId);
+      // Unreadable evidence is never settled as completed.
+      expect(await service.sessionTurnOutcome({ ...input, requestId: "r-1" })).toEqual({
+        outcome: "pending",
+      });
+      terminal = async () => "Cannot connect to API";
+      (
+        service as unknown as { turnOutcomeAttempts: Map<string, unknown> }
+      ).turnOutcomeAttempts.clear();
+      expect(await service.sessionTurnOutcome({ ...input, requestId: "r-1" })).toEqual({
+        outcome: "failed",
+        error: "Cannot connect to API",
+      });
+      expect(turnTerminalError.mock.calls.at(-1)).toEqual([session.providerSessionId, "r-1"]);
+
+      await service.dispatchPrompt({
+        environmentId: "env-1",
+        agent: "opencode",
+        logicalSessionKey,
+        prompt: "second",
+        requestId: "r-2",
+      });
+      markIdle(service, "opencode", session.providerSessionId);
+      terminal = async () => null;
+      expect(await service.sessionTurnOutcome({ ...input, requestId: "r-2" })).toEqual({
+        outcome: "completed",
+      });
+    });
+  });
+
+  test("the drain records a transcript-held failure instead of a success", async () => {
+    const stub = providerStub("opencode");
+    Object.assign(stub.provider, { turnTerminalError: async () => "Cannot connect to API" });
+    await withService(stub.provider, async ({ service, storage }) => {
+      await service.dispatchPrompt({
+        environmentId: "env-1",
+        agent: "opencode",
+        logicalSessionKey,
+        prompt: "first",
+        requestId: "r-1",
+      });
+      const key = nativeAgentSessionStorageKey("env-1", "opencode", logicalSessionKey);
+      markIdle(service, "opencode", (await storage.getNativeAgentSession(key))!.providerSessionId);
+      const queueKey = `opencode\0${logicalSessionKey}`;
+      await storage.enqueuePromptQueueMessage(queueKey, "env-1", { id: "u-2", text: "next" });
+      service.notifyPromptQueueChanged(queueKey);
+      await waitForCondition(
+        async () => (await storage.getNativeAgentSession(key))?.turnOutcomes?.length === 1,
+      );
+      expect((await storage.getNativeAgentSession(key))?.turnOutcomes?.[0]).toMatchObject({
+        requestId: "r-1",
+        outcome: "failed",
+        error: "Cannot connect to API",
+      });
+    });
+  });
 });

@@ -1,8 +1,6 @@
 # 13 — Execute bounded commands inside an environment
 
-Status: Planned; second-stage feature, not a core CLI release prerequisite.
-Depends on: [05](05-operation-receipts-and-idempotency.md),
-[07](07-environment-lifecycle.md), [10](10-run-completion-and-waiting.md).
+Status: Verified — local and container exec qualified; see record.
 Index: [CLI commands plan](00-cli-commands-index.md).
 
 ## Target behavior
@@ -79,12 +77,28 @@ through the existing logged test/scheduler paths where applicable.
 
 ## Acceptance and handoff
 
-- [ ] Exec preserves argv/cwd and enforces environment ownership.
-- [ ] Exit code/signal and failure reasons are authoritative and persistent.
-- [ ] Client/backend disconnection never triggers automatic re-execution.
-- [ ] Output, runtime, concurrency, and process-tree cleanup are bounded.
-- [ ] Local and container execution are individually qualified.
+- [x] Exec preserves argv/cwd and enforces environment ownership.
+- [x] Exit code/signal and failure reasons are authoritative and persistent.
+- [x] Client/backend disconnection never triggers automatic re-execution.
+- [x] Output, runtime, concurrency, and process-tree cleanup are bounded.
+- [x] Local and container execution are individually qualified.
 
 Keep exec unavailable until both ownership and result semantics are proved.
 Withdrawing new exec admission must leave worker status/cancellation and cleanup
 available for already accepted operations.
+
+## Implementation record
+
+Revision: working tree on `a9337716`, 2026-09-26.
+
+- Worker: [`exec-worker.ts`](../../../../apps/backend/src/core/public-api/exec-worker.ts)
+  (detached, own process group, heartbeat state, bounded stdout/stderr files,
+  cancel file, descendant drain); control and reconciliation in
+  `exec-control.ts`/`actions-exec.ts`. Local artifacts under
+  `<data dir>/exec-runs/<op>`, container under `/tmp/orkestrator-exec/<op>`.
+- Tests: `public-api-exec.test.ts` (10: status, argv, cwd confinement incl.
+  symlinks, stdin/env, timeout, cancel drains descendants, output limit,
+  restart reconciled not re-run, stop cancels, concurrency bound).
+- Scenario `exec` in local and container environments: exit-code
+  passthrough, argv with shell metacharacters, cancel, and deletion during a
+  run drains it (no surviving process locally).

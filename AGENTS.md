@@ -429,6 +429,32 @@ The OpenCode server sends these event types:
 - Use the existing `CommandContext` and `StorageService` patterns instead of adding renderer-only state for Docker, tmux, terminal, or local server lifecycles.
 - Do not log secrets such as API keys, tokens, SSH keys, or credential file contents.
 
+### Public CLI contract
+
+The `orkestrator` client commands reach the backend only through the
+`public_action` registry command (`apps/backend/src/core/public-api/`); the
+contract lives in `packages/protocol/src/public-api*.ts` and the guide in
+[`docs/architecture/public-cli.md`](docs/architecture/public-cli.md). When
+touching it:
+
+- **Admit before acting.** A mutation's request key is reserved and its
+  operation record published (under the store lock) before any side effect.
+  Same key + same intent replays; different intent conflicts. Never mint a new
+  key to retry ambiguous work.
+- **Never treat missing history as "never ran".** Retired namespaces answer
+  `namespace-expired`/`history-expired`; a corrupted store refuses admission;
+  capacity refuses new work instead of evicting records.
+- **Completion is request-specific.** A run settles only on its own dispatch
+  journal, observed turn activity and turn-outcome record. An idle environment
+  or the agent's wording is not evidence; missing evidence stays `unknown`.
+  Only providers listed as qualified in `public-api/providers.ts` may report
+  completion.
+- **Client commands never start a backend** and the launcher decides service
+  versus client before importing `dist/main.js`. Keep `dist/client.js` free of
+  backend imports. Add every new service flag to `apps/backend/src/server-flags.ts`.
+- **Receipts and summaries are content-free.** No prompts, tokens, file
+  contents or provider session IDs in receipts, summaries, manifests or logs.
+
 ## Key Files Reference
 
 ### Frontend

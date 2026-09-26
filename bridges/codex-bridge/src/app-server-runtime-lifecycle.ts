@@ -63,6 +63,7 @@ import type {
   EngineRateLimitWindowUpdate,
   EngineThread,
   EngineTurnConfig,
+  EngineTurnStatus,
   EngineUsageSnapshot,
   EngineUserInput,
 } from "./engine/types.js";
@@ -71,6 +72,7 @@ import {
   ThreadRegistry,
   phaseToExternalStatus,
   type BridgeSession,
+  CODEX_RESTARTED_MID_TURN_MESSAGE,
   type PromptAttachmentInput,
   type SessionPhase,
   type SessionTitleSource,
@@ -134,6 +136,8 @@ import {
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
 
+export { CODEX_RESTARTED_MID_TURN_MESSAGE } from "./sessions/thread-registry.js";
+
 export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   /** Close admission fence shared with lazy thread reattachment. */
   protected readonly closingSessionIds = new Set<string>();
@@ -182,6 +186,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         structuredOutputRequestId: persisted.structuredOutputRequestId,
         structuredOutput: persisted.structuredOutput,
         structuredOutputTurns: persisted.structuredOutputTurns,
+        restartFailure: persisted.restartFailure,
         confirmedModelsByTurn: persisted.confirmedModelsByTurn,
         asyncQuestionItemIds: persisted.asyncQuestionItemIds ?? [],
         lastAccessed: Date.parse(persisted.lastAccessed),
@@ -1305,7 +1310,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
             turn.turnId,
           );
           if (reviewOutcome.result === "terminal") {
-            turn.complete(reviewOutcome.status);
+            this.completeRecoveredTurn(turn, reviewOutcome.status);
             await this.runFinalization(context, turn);
             continue;
           }
@@ -1332,7 +1337,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         );
 
         if (outcome.result === "terminal") {
-          turn.complete(outcome.status ?? "completed");
+          this.completeRecoveredTurn(turn, outcome.status ?? "completed");
           await this.runFinalization(context, turn);
           continue;
         }
@@ -1383,6 +1388,26 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     }
   }
 
+  /**
+   * Settles a turn the replacement child reports as already terminal.
+   *
+   * app-server persists a turn its dead predecessor never finished as
+   * `interrupted`. Unless the user asked for that, it was the restart that
+   * stopped the work, and finalizing it as an ordinary interruption settles the
+   * session to idle with no error: the transcript simply ends mid-task and reads
+   * as done. Surface it as a failure so the user knows to continue.
+   */
+  protected completeRecoveredTurn(turn: TurnAccumulator, status: EngineTurnStatus): void {
+    if (status === "interrupted" && !turn.cancelRequested) {
+      turn.complete("failed", {
+        message: CODEX_RESTARTED_MID_TURN_MESSAGE,
+        code: "app-server-restarted",
+      });
+      return;
+    }
+    turn.complete(status);
+  }
+
   protected async finalizeTurn(context: ThreadContext, turn: TurnAccumulator): Promise<void> {
     const state = this.stateFor(context.threadId);
     const structuredResult = turn.expectsStructuredOutput
@@ -1410,6 +1435,13 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
           structuredResult?.ok === true && turn.phase === "completed",
         )
       : [];
+    const restartNoticeSessions = this.registry
+      .boundSessionsForThread(context.threadId)
+      .filter((session) => {
+        if (turn.error?.code !== "app-server-restarted") return false;
+        session.restartFailure = { turnId: turn.turnId };
+        return true;
+      });
 
     // Journal the terminal state *before* rendering. The durable "this request
     // finished" record must not wait on diff computation: a duplicate arriving in
@@ -1434,9 +1466,13 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         session.structuredOutput = structuredResult;
       }
       await Promise.all(
-        [...new Set([...structuredSessions, ...structuredLedgerSessions])].map((session) =>
-          this.persistSession(session),
-        ),
+        [
+          ...new Set([
+            ...structuredSessions,
+            ...structuredLedgerSessions,
+            ...restartNoticeSessions,
+          ]),
+        ].map((session) => this.persistSession(session)),
       );
       for (const session of structuredSessions) {
         this.options.emit({
@@ -1445,6 +1481,9 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
           data: { structuredOutput: structuredResult },
         });
       }
+    }
+    if (!structuredResult) {
+      await Promise.all(restartNoticeSessions.map((session) => this.persistSession(session)));
     }
 
     context.activeTurn = null;

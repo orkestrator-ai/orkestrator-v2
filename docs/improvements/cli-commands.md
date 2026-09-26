@@ -1,11 +1,11 @@
 # CLI commands for composability and targeted testing
 
-Status: Proposed — code review and implementation recommendations; commands
-below are proposed unless explicitly described as existing.
+Status: Implemented (pending review and merge) — dated review of revision
+`06af4d86`; the findings below describe the code before implementation.
 
 Implementation plans: [CLI commands plan index](cli-commands/plan/00-cli-commands-index.md).
-The numbered plans track proposed work and verification; implementation has not
-started.
+The numbered plans record the implementation and its evidence; the shipped
+behavior is documented in [public-cli.md](../architecture/public-cli.md).
 
 Reviewed on 2026-09-26 against `06af4d86`. This was a source review of the CLI,
 gateway, project/environment commands, native-agent control, Control MCP, and

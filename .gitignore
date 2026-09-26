@@ -86,3 +86,4 @@ src-tauri
 
 .playwright-cli/
 .playwright-mcp/
+/output/cli-scenarios/

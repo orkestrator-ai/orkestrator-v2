@@ -17,6 +17,14 @@ await Promise.all([
 ]);
 
 const builds = await Promise.all([
+  // The client bundle must stay independent of the backend: the launcher
+  // imports it first to decide whether a service should start at all.
+  Bun.build({
+    entrypoints: [path.join(packageRoot, "src/client.ts")],
+    outdir: outputRoot,
+    target: "bun",
+    format: "esm",
+  }),
   Bun.build({
     entrypoints: [path.join(repositoryRoot, "apps/backend/src/main.ts")],
     outdir: outputRoot,

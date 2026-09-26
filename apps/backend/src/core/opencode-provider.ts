@@ -127,6 +127,7 @@ import {
 import { OpenCodeReviewSessionPermissions } from "./opencode-review-session-permissions.js";
 import { OpenCodeWorkflowResultBroker } from "./opencode-workflow-result-broker.js";
 import { readOpenCodeStructuredOutput } from "./opencode-structured-output.js";
+import { readOpenCodeTurnTerminalError } from "./opencode-turn-outcome.js";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 const defaultOpenCodeMessageIds = new OpenCodeMessageIdCoordinator();
@@ -901,6 +902,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       });
     }
   }
+
+  readonly turnTerminalError = (sessionId: string, requestId: string) =>
+    readOpenCodeTurnTerminalError(this.client, sessionId, requestId, this.requestOptions());
 
   async settleTurn(sessionId: string, requestId: string): Promise<boolean> {
     return this.workflowResults.settleCompleted(

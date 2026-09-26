@@ -188,6 +188,12 @@ export interface Environment {
   projectId: string;
   /** Idempotency key for an externally requested environment launch. */
   controlRequestId?: string;
+  /**
+   * SHA-256 of the canonical creation intent that first used
+   * `controlRequestId`. Absent on legacy records, which cannot detect a
+   * changed payload and converge as before.
+   */
+  controlRequestFingerprint?: string;
   /** Persisted association used to recover a build pipeline after renderer remount. */
   buildPipelineId?: string;
   /**
@@ -370,6 +376,7 @@ export type ClientEnvironment = Omit<
   | "pendingRenamePrompt"
   | "tabTeardownIntents"
   | "controlRequestId"
+  | "controlRequestFingerprint"
   | "branchRevision"
 > & {
   /**

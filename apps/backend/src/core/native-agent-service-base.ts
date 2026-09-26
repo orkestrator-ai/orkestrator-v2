@@ -274,6 +274,8 @@ export abstract class NativeAgentServiceBase {
   /** Resolves with how many environments still carry a launch intent. */
   protected abstract reconcilePendingLaunches(): Promise<number>;
   protected abstract drainPromptQueues(): Promise<void>;
+  /** Drop cached pending-interaction reads after one of them is answered. */
+  protected abstract forgetPendingInteractions(key: string): void;
   abstract reconcileAgentInteractions(): Promise<void>;
   protected abstract assertAcceptingWork(): void;
   protected abstract assertEnvironmentLive(environmentId: string): Promise<Environment>;

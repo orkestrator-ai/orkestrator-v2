@@ -437,6 +437,14 @@ export type ApplicationLoggingQuitHost = {
  * flush races the process exit and loses exactly the entries a user enabled
  * logging to capture. The wait is bounded so a stalled filesystem cannot make
  * the app unquittable.
+ *
+ * The follow-up quit must run on a later macrotask. Electron drains microtasks
+ * before `will-quit` dispatch returns, while it still considers itself
+ * quitting, and only afterwards applies the `preventDefault` by clearing that
+ * flag. When the log queue is already idle, `stop()` settles inside that drain;
+ * a quit issued there is ignored as a duplicate, and the process then lingers
+ * windowless with its backend stopped. macOS "Quit & Reopen" after a privacy
+ * grant waits on that exit and never reopens the app.
  */
 export function registerApplicationLoggingShutdown(
   app: ApplicationLoggingQuitHost,
@@ -456,7 +464,7 @@ export function registerApplicationLoggingShutdown(
     });
     void Promise.race([logging.stop().catch(() => {}), deadline]).finally(() => {
       if (timer) clearTimeout(timer);
-      app.quit();
+      setTimeout(() => app.quit(), 0);
     });
   });
 }

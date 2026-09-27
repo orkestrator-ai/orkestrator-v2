@@ -185,10 +185,27 @@ function renderPipeline(next: BuildPipeline) {
       isActive
     />,
   );
+  expandStageGroups();
 }
 
 function renderTab() {
   renderPipeline(pipeline);
+}
+
+/**
+ * Open every folded phase in the stage rail.
+ *
+ * Settled phases fold to a summary, which unmounts their stage tabs. Tests
+ * about a stage's transcript, badges or keyboard behaviour rather than the
+ * rail's folding open them all first. The headers are found in the DOM, not
+ * the accessibility tree, so this also works while a phone hides the rail.
+ */
+function expandStageGroups() {
+  for (const header of Array.from(
+    document.querySelectorAll<HTMLElement>('[data-stage-group][aria-expanded="false"]'),
+  )) {
+    fireEvent.click(header);
+  }
 }
 
 /** The mobile switcher, scoped so its tabs never collide with the stage tabs. */

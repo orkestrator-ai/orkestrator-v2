@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   BUILD_PIPELINE_AGENTS,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
@@ -249,15 +249,43 @@ function validationResult(
   };
 }
 
+/**
+ * Open every folded phase in the stage rail.
+ *
+ * Settled phases fold to a summary, which unmounts their stage tabs. Tests
+ * about a stage's transcript, badges or keyboard behaviour rather than the
+ * rail's folding open them all first. The headers are found in the DOM, not
+ * the accessibility tree, so this also works while a phone hides the rail.
+ */
+function expandStageGroups() {
+  for (const header of Array.from(
+    document.querySelectorAll<HTMLElement>('[data-stage-group][aria-expanded="false"]'),
+  )) {
+    fireEvent.click(header);
+  }
+}
+
 function testsTabIconClass(): string {
   const tab = screen.getByRole("tab", { name: /Tests/ });
   return tab.querySelector("svg")?.getAttribute("class") ?? "";
 }
 
+/**
+ * Each stage tab's own label.
+ *
+ * A row inside a phase group can show a shorter title than its stage, so the
+ * full label is the leading part of the tab's accessible name.
+ */
 function stageTabLabels(): string[] {
   return Array.from(
     screen.getByRole("tablist", { name: "Build stages" }).querySelectorAll('[role="tab"]'),
-  ).map((tab) => tab.querySelector("span > span")?.textContent ?? tab.textContent ?? "");
+  ).map((tab) => tab.getAttribute("aria-label")?.split(", ")[0] ?? "");
+}
+
+/** The stage tab whose own label is exactly `label`, whatever its badges add. */
+function stageTabNamed(label: string): HTMLElement {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return screen.getByRole("tab", { name: new RegExp(`^${escaped}(,|$)`) });
 }
 
 describe("BuildChatTab backend projection", () => {
@@ -293,6 +321,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     expect(screen.getByText("Backend-owned build")).toBeTruthy();
     expect(screen.getByText("All criteria pass")).toBeTruthy();
@@ -314,8 +343,9 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
-    fireEvent.contextMenu(screen.getByRole("tab", { name: "Build Session Iteration 1" }));
+    fireEvent.contextMenu(screen.getByRole("tab", { name: "Build Session, Iteration 1" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
 
     await waitFor(() => expect(restartStepMock).toHaveBeenCalledWith(pipeline.id, "build-session"));
@@ -338,6 +368,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     const testsTab = screen.getByRole("tab", { name: /^Tests,/ });
     fireEvent.pointerDown(testsTab, {
@@ -459,6 +490,7 @@ describe("BuildChatTab backend projection", () => {
         isActive
       />,
     );
+    expandStageGroups();
     try {
       fireEvent.click(screen.getByText("Tests"));
       expect(screen.getByText(/Validation: 6\.0s\./)).toBeTruthy();
@@ -547,6 +579,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     expect(stageTabLabels()).toEqual([
       "Build Session",
@@ -584,6 +617,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     expect(testsTabIconClass()).toContain("text-destructive");
     expect(testsTabIconClass()).not.toContain("text-success");
@@ -640,6 +674,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     expect(testsTabIconClass()).toContain("text-muted-foreground");
     expect(testsTabIconClass()).not.toContain("text-success");
@@ -665,6 +700,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     const tab = screen.getByRole("tab", { name: "Tests, HEAD moved during validation" });
     expect(tab.textContent).toContain("HEAD moved during validation");
@@ -690,6 +726,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     const tab = screen.getByRole("tab", { name: "Tests, Validation cancelled" });
     expect(tab.textContent).toContain("Validation cancelled");
@@ -715,6 +752,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     expect(testsTabIconClass()).toContain("text-success");
     expect(screen.getByText("1 check")).toBeTruthy();
@@ -746,6 +784,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     expect(stageTabLabels()).toEqual([
       "Build Session",
@@ -785,6 +824,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     expect(stageTabLabels()).toEqual(["Build Session", "Tests", "Review Iteration 1 (A)"]);
   });
@@ -823,6 +863,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     const selected = screen
       .getAllByRole("tab")
@@ -858,6 +899,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     fireEvent.click(screen.getByText("Tests"));
     expect(screen.getByLabelText("Review validation")).toBeTruthy();
@@ -906,6 +948,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     fireEvent.click(screen.getByText("Build Session"));
     fireEvent.click(screen.getByText("Tests"));
@@ -953,6 +996,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     expect(screen.getByText("Verification crashed")).toBeTruthy();
     expect(screen.getByText("No text transcript was produced for this stage.")).toBeTruthy();
@@ -1071,6 +1115,7 @@ describe("BuildChatTab backend projection", () => {
           }}
         />,
       );
+      expandStageGroups();
 
       fireEvent.click(screen.getByRole("button", { name: "Retry Verification Stage" }));
       await waitFor(() => expect(retryStageMock).toHaveBeenCalledWith(pipeline.id));
@@ -1096,6 +1141,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     const pause = screen.getByRole("button", { name: "Pause" }) as HTMLButtonElement;
     fireEvent.click(pause);
@@ -1124,6 +1170,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     const resume = screen.getByRole("button", { name: "Resume" }) as HTMLButtonElement;
     fireEvent.click(resume);
@@ -1153,6 +1200,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     const cancel = screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
     fireEvent.click(cancel);
@@ -1192,6 +1240,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     const pause = screen.getByRole("button", { name: "Pause" }) as HTMLButtonElement;
     fireEvent.click(pause);
@@ -1233,6 +1282,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     expect(screen.getByText(/GitHub completion comment failed/)).toBeTruthy();
     expect(
@@ -1265,6 +1315,7 @@ describe("BuildChatTab backend projection", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     expect(screen.getAllByText("Unexpected authorization")).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "Retry Review" }) === null).toBe(true);
@@ -1332,6 +1383,7 @@ describe("BuildChatTab presentation", () => {
         }}
       />,
     );
+    expandStageGroups();
   }
 
   /*
@@ -1542,8 +1594,8 @@ describe("BuildChatTab presentation", () => {
         currentSessionIndex: 3,
       });
 
-      expect(screen.getByText("Review Iteration 1 (A)")).toBeTruthy();
-      expect(screen.getByText("Review Iteration 1 (B)")).toBeTruthy();
+      expect(stageTabNamed("Review Iteration 1 (A)")).toBeTruthy();
+      expect(stageTabNamed("Review Iteration 1 (B)")).toBeTruthy();
       expect(screen.getAllByText("GPT 5.6 Sol")).toHaveLength(2);
       expect(
         screen.getByLabelText("Review Iteration 1 (A) runtime and token usage").textContent,
@@ -1606,6 +1658,7 @@ describe("BuildChatTab presentation", () => {
           isActive
         />,
       );
+      expandStageGroups();
       const runtime = screen.getByLabelText("Review Iteration 1 (A) runtime and token usage");
       expect(runtime.textContent).toBe("5s · Tokens pending");
 
@@ -1659,7 +1712,7 @@ describe("BuildChatTab presentation", () => {
         currentSessionIndex: 2,
       });
 
-      expect(screen.getByText("Review Iteration 1 (B)")).toBeTruthy();
+      expect(stageTabNamed("Review Iteration 1 (B)")).toBeTruthy();
       expect(screen.queryByText("Review Iteration 1 (A)") === null).toBe(true);
       expect(screen.getByText("GPT 5.6 Sol")).toBeTruthy();
       expect(screen.queryByText("Opus") === null).toBe(true);
@@ -1749,10 +1802,10 @@ describe("BuildChatTab presentation", () => {
         currentSessionIndex: 4,
       });
 
-      expect(screen.getByText("Review Iteration 1 (A)")).toBeTruthy();
-      expect(screen.getByText("Review Iteration 1 (B)")).toBeTruthy();
-      expect(screen.getByText("Review Iteration 1 (A) · previous")).toBeTruthy();
-      expect(screen.getByText("Review Iteration 1 (B) · previous")).toBeTruthy();
+      expect(stageTabNamed("Review Iteration 1 (A)")).toBeTruthy();
+      expect(stageTabNamed("Review Iteration 1 (B)")).toBeTruthy();
+      expect(stageTabNamed("Review Iteration 1 (A) · previous")).toBeTruthy();
+      expect(stageTabNamed("Review Iteration 1 (B) · previous")).toBeTruthy();
       expect(screen.getAllByText("GPT 5.6 Sol").length).toBeGreaterThan(0);
       expect(screen.getAllByText("Opus").length).toBeGreaterThan(0);
     } finally {
@@ -1789,7 +1842,7 @@ describe("BuildChatTab presentation", () => {
       currentSessionIndex: 2,
     });
 
-    expect(screen.getByText("Review Iteration 1 (A)")).toBeTruthy();
+    expect(stageTabNamed("Review Iteration 1 (A)")).toBeTruthy();
     expect(screen.getByText("Provider default")).toBeTruthy();
   });
 
@@ -1840,6 +1893,7 @@ describe("BuildChatTab presentation", () => {
           }}
         />,
       );
+      expandStageGroups();
       const runtime = () => screen.getByLabelText("Review Iteration 1 (A) runtime and token usage");
       expect(runtime().textContent).toBe("5s · 12k tokens");
       expect(tick).toBeUndefined();
@@ -2382,14 +2436,14 @@ describe("BuildChatTab presentation", () => {
       structuredReviewRequestId: "consolidation-request",
     });
 
-    fireEvent.click(screen.getByText("Review Iteration 1 (A)"));
+    fireEvent.click(stageTabNamed("Review Iteration 1 (A)"));
     expect(await screen.findByLabelText("Reviewer report")).toBeTruthy();
     expect(visibleTextContents()).not.toContain(reviewerOnePayload);
     expect(visibleToolInvocations()).toEqual(["git diff --stat"]);
     fireEvent.click(screen.getByRole("button", { name: "Review summary" }));
     expect(screen.getByText("Reviewer one found the dispatch race.")).toBeTruthy();
 
-    fireEvent.click(screen.getByText("Review Iteration 1 (B)"));
+    fireEvent.click(stageTabNamed("Review Iteration 1 (B)"));
     expect(await screen.findByLabelText("Reviewer report")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Review summary" }));
     expect(screen.getByText("Reviewer two found the recovery gap.")).toBeTruthy();
@@ -3499,6 +3553,7 @@ describe("BuildChatTab transcript wiring", () => {
         {...props}
       />,
     );
+    expandStageGroups();
   }
 
   test("keys each row on its message id so a re-render does not remount it", () => {
@@ -3696,6 +3751,7 @@ describe("BuildChatTab per-step harnesses", () => {
         }}
       />,
     );
+    expandStageGroups();
   }
 
   function partTypes(): string[] {
@@ -3810,6 +3866,7 @@ describe("BuildChatTab rehydration", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     expect(screen.getByText("Loading build pipeline…")).toBeTruthy();
     await waitFor(() => {
@@ -3829,6 +3886,7 @@ describe("BuildChatTab rehydration", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     await waitFor(() => expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(1));
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -3854,6 +3912,7 @@ describe("BuildChatTab rehydration", () => {
           }}
         />,
       );
+      expandStageGroups();
 
       await waitFor(() => {
         expect(warnMock).toHaveBeenCalledWith(
@@ -3898,6 +3957,7 @@ describe("BuildChatTab rehydration", () => {
         }}
       />,
     );
+    expandStageGroups();
 
     expect(screen.getByText("Backend-owned build")).toBeTruthy();
     expect(getBuildPipelineConditionalMock).not.toHaveBeenCalled();
@@ -3935,6 +3995,7 @@ describe("BuildChatTab stage following", () => {
         }}
       />,
     );
+    expandStageGroups();
     expect(screen.getByText("Implementation complete")).toBeTruthy();
 
     // The backend advances to the verification stage.
@@ -3957,6 +4018,7 @@ describe("BuildChatTab stage following", () => {
         }}
       />,
     );
+    expandStageGroups();
     await waitFor(() => expect(screen.getByText("All criteria pass")).toBeTruthy());
 
     fireEvent.click(screen.getByText("Build Session"));
@@ -3980,6 +4042,7 @@ describe("BuildChatTab stage following", () => {
         }}
       />,
     );
+    expandStageGroups();
     fireEvent.click(screen.getByText("Build Session"));
     await waitFor(() => expect(screen.getByText("Implementation complete")).toBeTruthy());
 
@@ -4022,6 +4085,7 @@ describe("BuildChatTab agent messaging", () => {
         }}
       />,
     );
+    expandStageGroups();
   }
 
   test("queues a message through the backend and clears the box", async () => {
@@ -4370,5 +4434,177 @@ describe("BuildChatTab agent messaging", () => {
     renderTab();
 
     expect(screen.queryByRole("button", { name: /Retry Review/ }) === null).toBe(true);
+  });
+});
+
+describe("BuildChatTab phase rail", () => {
+  const reviewSession: BuildPipeline["sessions"][number] = {
+    ...pipeline.sessions[0]!,
+    phase: "review",
+    sessionKey: "review-key",
+    sdkSessionId: "review-session",
+    startedAt: "2026-07-29T00:00:30.000Z",
+    label: "Review Session",
+    structuredRequestId: "review-request",
+    structuredResultStatus: "accepted",
+  };
+  const reviewed: BuildPipeline = {
+    ...pipeline,
+    sessions: [pipeline.sessions[0]!, reviewSession, pipeline.sessions[1]!],
+    currentSessionIndex: 2,
+    structuredReview: TEST_STRUCTURED_REVIEW_REPORT,
+    structuredReviewRequestId: "review-request",
+    backendRevision: 60,
+  };
+
+  /** Renders without opening any phase, unlike the other suites. */
+  function renderRail(next: BuildPipeline) {
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[next.id, next]]),
+      buildEnvironmentIds: new Set([next.environmentId]),
+      viewedSessionIds: new Map(),
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: next.id,
+          environmentId: next.environmentId,
+          taskId: next.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+  }
+
+  const phaseHeader = (name: string) =>
+    screen.getByRole("button", { name: new RegExp(`^${name}, `) });
+  const tabNames = () =>
+    screen.queryAllByRole("tab").map((tab) => tab.getAttribute("aria-label") ?? "");
+  const selectedTab = () =>
+    screen.getAllByRole("tab").find((tab) => tab.getAttribute("aria-selected") === "true");
+
+  beforeEach(() => {
+    cleanup();
+  });
+
+  test("folds settled phases to a summary and opens the one being read", () => {
+    renderRail(reviewed);
+
+    expect(phaseHeader("Build").getAttribute("aria-expanded")).toBe("false");
+    expect(phaseHeader("Review").getAttribute("aria-expanded")).toBe("false");
+    expect(phaseHeader("Verify").getAttribute("aria-expanded")).toBe("true");
+    expect(tabNames()).toEqual(["Verification Session, Iteration 1"]);
+    // A folded review still says what it found.
+    expect(within(phaseHeader("Review")).getByText("1 issue")).toBeTruthy();
+    expect(screen.getByText("4 of 4 phases")).toBeTruthy();
+  });
+
+  test("opens and folds a phase from its header without moving the selection", () => {
+    renderRail(reviewed);
+
+    fireEvent.click(phaseHeader("Build"));
+    expect(phaseHeader("Build").getAttribute("aria-expanded")).toBe("true");
+    const buildTab = screen.getByRole("tab", { name: "Build Session, Iteration 1" });
+    expect(phaseHeader("Build").getAttribute("aria-controls")).toBe(
+      buildTab.parentElement?.id ?? null,
+    );
+    expect(selectedTab()?.getAttribute("aria-label")).toBe("Verification Session, Iteration 1");
+
+    fireEvent.click(phaseHeader("Build"));
+    expect(screen.queryByRole("tab", { name: "Build Session, Iteration 1" }) === null).toBe(true);
+  });
+
+  test("opens the phase an arrow key moves into and focuses the stage there", async () => {
+    renderRail(reviewed);
+    const tablist = screen.getByRole("tablist", { name: "Build stages" });
+
+    fireEvent.keyDown(tablist, { key: "ArrowUp" });
+    await waitFor(() => expect(selectedTab()?.getAttribute("aria-label")).toContain("Review"));
+    expect(phaseHeader("Review").getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(selectedTab()!);
+
+    fireEvent.keyDown(tablist, { key: "Home" });
+    await waitFor(() =>
+      expect(selectedTab()?.getAttribute("aria-label")).toBe("Build Session, Iteration 1"),
+    );
+    expect(document.activeElement).toBe(selectedTab()!);
+    // The phase the selection left stays open rather than shifting the rows below it.
+    expect(phaseHeader("Review").getAttribute("aria-expanded")).toBe("true");
+
+    // A phase header is a disclosure button; arrow keys pressed on it are not stage moves.
+    fireEvent.keyDown(phaseHeader("Verify"), { key: "ArrowDown" });
+    expect(selectedTab()?.getAttribute("aria-label")).toBe("Build Session, Iteration 1");
+  });
+
+  test("reopens a phase the user folded when the report hint selects a stage in it", async () => {
+    renderRail(reviewed);
+    fireEvent.click(phaseHeader("Review"));
+    fireEvent.click(phaseHeader("Review"));
+    expect(phaseHeader("Review").getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(screen.getByRole("button", { name: /The review reported/ }));
+
+    await waitFor(() =>
+      expect(selectedTab()?.getAttribute("aria-label")).toMatch(/^Review Session, Iteration 1/),
+    );
+    expect(phaseHeader("Review").getAttribute("aria-expanded")).toBe("true");
+  });
+
+  test("keeps a tab stop on a visible stage when the selected phase is folded", () => {
+    renderRail(reviewed);
+    fireEvent.click(phaseHeader("Build"));
+    fireEvent.click(phaseHeader("Verify"));
+
+    expect(
+      screen
+        .getAllByRole("tab")
+        .filter((tab) => tab.getAttribute("tabindex") === "0")
+        .map((tab) => tab.getAttribute("aria-label")),
+    ).toEqual(["Build Session, Iteration 1"]);
+  });
+
+  test("lists the unselectable work still to come while the pipeline ships", () => {
+    renderRail({
+      ...pipeline,
+      phase: "creating-pr",
+      verificationResult: "pass",
+      sessions: [
+        ...pipeline.sessions,
+        {
+          ...pipeline.sessions[1]!,
+          phase: "pr",
+          sessionKey: "pr-key",
+          sdkSessionId: "pr-session",
+          label: "PR Creation Session",
+          status: "running",
+          startedAt: "2026-07-29T00:02:00.000Z",
+        },
+      ],
+      currentSessionIndex: 2,
+    });
+
+    expect(phaseHeader("Ship").getAttribute("aria-expanded")).toBe("true");
+    expect(tabNames()).toEqual(["PR Creation Session, Iteration 1, running"]);
+    expect(screen.getByText("Conflict check")).toBeTruthy();
+    expect(screen.getByText("if needed")).toBeTruthy();
+    expect(screen.getByText("Complete")).toBeTruthy();
+    expect(screen.getByText("Verdict: passed")).toBeTruthy();
+    expect(screen.getByText("4 of 4 phases")).toBeTruthy();
+  });
+
+  test("previews the phases a new pipeline has ahead of it", () => {
+    renderRail({
+      ...pipeline,
+      phase: "creating-environment",
+      sessions: [],
+      currentSessionIndex: 0,
+    });
+
+    expect(screen.getByText("The backend is preparing the first stage.")).toBeTruthy();
+    expect(screen.queryAllByRole("tab")).toEqual([]);
+    for (const name of ["Build", "Review", "Address", "Verify", "Ship"]) {
+      expect(screen.getByText(name)).toBeTruthy();
+    }
+    expect(screen.getByText("1 of 5 phases")).toBeTruthy();
   });
 });

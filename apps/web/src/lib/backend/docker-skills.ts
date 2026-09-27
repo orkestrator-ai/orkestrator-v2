@@ -6,6 +6,11 @@ import type {
   CleanupPreview,
 } from "@orkestrator/protocol/container-recovery";
 import type {
+  ContainerResourceLimits,
+  ContainerUsageSnapshot,
+  DockerCapacity,
+} from "@orkestrator/protocol/container-resources";
+import type {
   Environment,
   EnvironmentStatus,
   DomainTestResult,
@@ -70,6 +75,13 @@ export interface DockerSystemStats {
   containersTotal: number;
   /** Total number of images */
   imagesTotal: number;
+  /** When the usage figures were sampled; absent from older backends. */
+  sampledAt?: string | null;
+  stale?: boolean;
+  /** Cores in use by this installation's containers (unnormalized). */
+  cpuCoresUsed?: number | null;
+  memoryTotalKnown?: boolean;
+  diskKnown?: boolean;
 }
 
 /** Container info for display */
@@ -98,7 +110,11 @@ export interface ContainerInfo {
    * `null` means nothing claims it. Absent from older backends.
    */
   cleanupExclusion?: string | null;
-  /** CPU usage percentage (0-100), null if container is not running */
+  /** Memory in use, when measured. */
+  memoryBytes?: number | null;
+  /** The last exit was an out-of-memory kill, when known. */
+  oomKilled?: boolean | null;
+  /** CPU usage percentage (per core, may exceed 100), null if not measured */
   cpuPercent: number | null;
 }
 
@@ -570,6 +586,24 @@ export async function executeDockerCleanup(selection: {
   selectionToken: string;
   containerIds: string[];
   volumeNames: string[];
+  networkNames?: string[];
 }): Promise<CleanupExecuteResult> {
   return invoke<CleanupExecuteResult>("docker_cleanup_execute", selection);
+}
+
+/** The Docker daemon's capacity (on Docker Desktop, its VM) and disk use. */
+export async function getDockerCapacity(refresh = false): Promise<DockerCapacity> {
+  return invoke<DockerCapacity>("get_docker_capacity", { refresh });
+}
+
+/** One shared, bounded usage sample of this installation's containers. */
+export async function getContainerUsage(): Promise<ContainerUsageSnapshot> {
+  return invoke<ContainerUsageSnapshot>("get_container_usage");
+}
+
+/** Default budget for new containers; `null` means unrestricted. */
+export async function setContainerResourceLimits(
+  limits: ContainerResourceLimits | null,
+): Promise<{ limits: ContainerResourceLimits | null }> {
+  return invoke("set_container_resource_limits", { limits });
 }

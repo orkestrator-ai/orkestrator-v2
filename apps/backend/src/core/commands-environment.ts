@@ -2296,5 +2296,47 @@ export async function resolveContainerAgentToolConnection(
   );
   if (!environment) return undefined;
   await ensureContainerAgentToolsHost(containerId);
+  await ensureContainerHostServicePorts(containerId, context.agentTools.servicePort?.() ?? null);
   return context.agentTools.connection(environment.id, environment.projectId, "container");
+}
+
+/**
+ * A policy-2 container allows exactly the backend's service port toward the
+ * host. The port is fixed at creation, but a backend restart may listen on a
+ * different one; the durable in-container policy is updated to match before
+ * a tools URL is handed out. Legacy (policy 1) containers are left alone.
+ */
+export async function ensureContainerHostServicePorts(
+  containerId: string,
+  servicePort: number | null,
+): Promise<void> {
+  if (!servicePort) return;
+  const current = await runCommand(
+    "docker",
+    [
+      "exec",
+      containerId,
+      "sh",
+      "-c",
+      "[ -f /etc/orkestrator/network-policy ] && cat /etc/orkestrator/network-policy /etc/orkestrator/host-service-ports || true",
+    ],
+    { timeoutMs: 10_000 },
+  ).catch(() => null);
+  if (!current) return;
+  const [policy, ports = ""] = current.stdout.trim().split("\n");
+  if (policy?.trim() !== "2") return;
+  if (ports.split(",").includes(String(servicePort))) return;
+  await runCommand(
+    "docker",
+    [
+      "exec",
+      "--user",
+      "root",
+      containerId,
+      "/usr/local/bin/update-firewall.sh",
+      "--host-ports",
+      String(servicePort),
+    ],
+    { timeoutMs: 20_000 },
+  );
 }

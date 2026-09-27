@@ -2,15 +2,51 @@
 set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
 IFS=$'\n\t'       # Stricter word splitting
 
+# Network policy contract (docker/image-manifest.ts):
+# ORKESTRATOR_CAPABILITY network-policy=2
+#
+# Policy 2 runs on the environment's own Docker network. Host access is not
+# the gateway's /24 but exactly the host service ports the backend named, on
+# the gateway and host.docker.internal addresses; inbound connections are
+# accepted only on the container ports Docker publishes; IPv6 is disabled for
+# the container and dropped here as well. Policy 1 (no policy file) keeps the
+# earlier behaviour for containers created before it.
+#
+# This limits destinations. It does not stop data leaving through an allowed
+# service, and a workload running as root in full mode can change it.
+
 # The root entrypoint captures Docker's initial policy before dropping to node.
 # A caller's environment and PID 1 memory are both controlled by node.
 IFS= read -r NETWORK_MODE < /etc/orkestrator/network-mode
 IFS= read -r ALLOWED_DOMAINS < /etc/orkestrator/allowed-domains
+NETWORK_POLICY=1
+HOST_SERVICE_PORTS=""
+INGRESS_PORTS=""
+if [ -f /etc/orkestrator/network-policy ]; then
+    IFS= read -r NETWORK_POLICY < /etc/orkestrator/network-policy
+    IFS= read -r HOST_SERVICE_PORTS < /etc/orkestrator/host-service-ports || true
+    IFS= read -r INGRESS_PORTS < /etc/orkestrator/ingress-ports || true
+fi
+
+STATUS_DIR=/run/orkestrator
+STATUS_FILE="$STATUS_DIR/firewall.json"
+# Bounds on what one policy application resolves.
+MAX_DOMAINS=256
+MAX_ADDRESSES_PER_DOMAIN=32
+
+write_status() {
+    mkdir -p "$STATUS_DIR"
+    local tmp="$STATUS_FILE.tmp.$$"
+    printf '%s\n' "$1" > "$tmp"
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "$STATUS_FILE"
+}
 
 # Check network mode - if full, skip firewall entirely
 if [ "${NETWORK_MODE:-restricted}" = "full" ]; then
     echo "Network mode: FULL - skipping firewall configuration"
     echo "Container has unrestricted internet access"
+    write_status "{\"policy\":$NETWORK_POLICY,\"mode\":\"full\",\"appliedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
     exit 0
 fi
 
@@ -21,8 +57,27 @@ firewall_fail_closed() {
     iptables -P INPUT DROP 2>/dev/null || true
     iptables -P FORWARD DROP 2>/dev/null || true
     iptables -P OUTPUT DROP 2>/dev/null || true
+    ip6tables -P INPUT DROP 2>/dev/null || true
+    ip6tables -P FORWARD DROP 2>/dev/null || true
+    ip6tables -P OUTPUT DROP 2>/dev/null || true
+    write_status "{\"policy\":$NETWORK_POLICY,\"mode\":\"restricted\",\"state\":\"failed\",\"appliedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" 2>/dev/null || true
 }
 trap firewall_fail_closed ERR
+
+# IPv6 is not enforced by the rules below, so it is closed outright: only
+# loopback. A container that has a non-loopback IPv6 address and no working
+# ip6tables cannot be restricted, and the policy fails.
+IPV6_STATE=blocked
+if ip6tables -P INPUT DROP 2>/dev/null && ip6tables -P FORWARD DROP 2>/dev/null && ip6tables -P OUTPUT DROP 2>/dev/null; then
+    ip6tables -F
+    ip6tables -A INPUT -i lo -j ACCEPT
+    ip6tables -A OUTPUT -o lo -j ACCEPT
+elif awk '$6 != "lo" { found = 1 } END { exit !found }' /proc/net/if_inet6 2>/dev/null; then
+    echo "ERROR: IPv6 is configured but ip6tables is unavailable"
+    exit 1
+else
+    IPV6_STATE=disabled
+fi
 
 # 1. Extract Docker DNS info BEFORE any flushing
 DOCKER_DNS_RULES=$(iptables-save -t nat | grep "127\.0\.0\.11" || true)
@@ -67,6 +122,16 @@ while read -r resolver; do
     iptables -A OUTPUT -p udp -d "$resolver" --dport 53 -j ACCEPT
     iptables -A OUTPUT -p tcp -d "$resolver" --dport 53 -j ACCEPT
 done < <(awk '$1 == "nameserver" { print $2 }' /etc/resolv.conf)
+
+# On a user-defined network the nameserver is Docker's embedded resolver,
+# which forwards to its upstream servers from inside this namespace. Docker
+# names them in resolv.conf ("# ExtServers: [a b]"); an entry written as
+# host(...) is contacted from the host namespace and needs no rule.
+while read -r upstream; do
+    [[ "$upstream" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || continue
+    iptables -A OUTPUT -p udp -d "$upstream" --dport 53 -j ACCEPT
+    iptables -A OUTPUT -p tcp -d "$upstream" --dport 53 -j ACCEPT
+done < <(sed -n 's/^# ExtServers: \[\(.*\)\]$/\1/p' /etc/resolv.conf | tr ' ' '\n')
 
 # Create ipset with CIDR support
 ipset create allowed-domains hash:net
@@ -186,7 +251,13 @@ else
     )
 fi
 
-# Resolve and add allowed domains from configuration
+# Resolve and add allowed domains from configuration, within fixed bounds.
+if [ "${#DOMAIN_ARRAY[@]}" -gt "$MAX_DOMAINS" ]; then
+    echo "ERROR: ${#DOMAIN_ARRAY[@]} allowed domains exceed the limit of $MAX_DOMAINS"
+    exit 1
+fi
+RESOLVED_DOMAINS=0
+UNRESOLVED_DOMAINS=0
 for domain in "${DOMAIN_ARRAY[@]}"; do
     # Skip github.com domains (handled separately via GitHub API)
     if [[ "$domain" == *"github.com"* ]]; then
@@ -195,11 +266,13 @@ for domain in "${DOMAIN_ARRAY[@]}"; do
     fi
 
     echo "Resolving $domain..."
-    ips=$(dig +noall +answer A "$domain" | awk '$4 == "A" {print $5}')
+    ips=$(dig +time=3 +tries=1 +noall +answer A "$domain" | awk '$4 == "A" {print $5}' | head -n "$MAX_ADDRESSES_PER_DOMAIN")
     if [ -z "$ips" ]; then
         echo "WARNING: Failed to resolve $domain, skipping"
+        UNRESOLVED_DOMAINS=$((UNRESOLVED_DOMAINS + 1))
         continue
     fi
+    RESOLVED_DOMAINS=$((RESOLVED_DOMAINS + 1))
 
     while read -r ip; do
         if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
@@ -218,12 +291,38 @@ if [ -z "$HOST_IP" ]; then
     exit 1
 fi
 
-HOST_NETWORK=$(echo "$HOST_IP" | sed "s/\.[0-9]*$/.0\/24/")
-echo "Host network detected as: $HOST_NETWORK"
-
-# Set up remaining iptables rules
-iptables -A INPUT -s "$HOST_NETWORK" -j ACCEPT
-iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
+if [ "$NETWORK_POLICY" = "2" ]; then
+    # Host services: exactly the named ports, on the gateway and on whatever
+    # host.docker.internal resolves to (Docker Desktop answers with its own
+    # address). Kept in their own chain so update-firewall.sh can replace
+    # them atomically when the backend's port changes.
+    iptables -N ORK_HOST_SERVICES
+    HOST_ADDRESSES="$HOST_IP"
+    while read -r address; do
+        [ -n "$address" ] && HOST_ADDRESSES="$HOST_ADDRESSES"$'\n'"$address"
+    done < <(getent ahostsv4 host.docker.internal 2>/dev/null | awk '{print $1}' | sort -u)
+    OLDIFS="$IFS"; IFS=','; read -ra SERVICE_PORTS <<< "$HOST_SERVICE_PORTS"; IFS="$OLDIFS"
+    for address in $(printf '%s\n' "$HOST_ADDRESSES" | sort -u); do
+        for port in "${SERVICE_PORTS[@]}"; do
+            [ -n "$port" ] || continue
+            iptables -A ORK_HOST_SERVICES -p tcp -d "$address" --dport "$port" -j ACCEPT
+        done
+    done
+    iptables -A OUTPUT -j ORK_HOST_SERVICES
+    # Ingress: only new connections to the ports Docker publishes. The
+    # environment's network holds only this container and its gateway.
+    OLDIFS="$IFS"; IFS=','; read -ra PUBLISHED_PORTS <<< "$INGRESS_PORTS"; IFS="$OLDIFS"
+    for port in "${PUBLISHED_PORTS[@]}"; do
+        [ -n "$port" ] || continue
+        iptables -A INPUT -p tcp --dport "$port" -m state --state NEW -j ACCEPT
+    done
+    echo "Host services: ${HOST_SERVICE_PORTS:-none}; published ports: ${INGRESS_PORTS:-none}"
+else
+    HOST_NETWORK=$(echo "$HOST_IP" | sed "s/\.[0-9]*$/.0\/24/")
+    echo "Host network detected as: $HOST_NETWORK"
+    iptables -A INPUT -s "$HOST_NETWORK" -j ACCEPT
+    iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
+fi
 
 # Explicitly REJECT all other outbound traffic for immediate feedback
 iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
@@ -245,4 +344,5 @@ else
     echo "Firewall verification passed - able to reach https://api.github.com as expected"
 fi
 
+write_status "{\"policy\":$NETWORK_POLICY,\"mode\":\"restricted\",\"state\":\"applied\",\"appliedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"resolvedDomains\":$RESOLVED_DOMAINS,\"unresolvedDomains\":$UNRESOLVED_DOMAINS,\"allowedEntries\":$(ipset list allowed-domains | awk '/^Members:/ { members = 1; next } members && NF { count++ } END { print count + 0 }'),\"hostServicePorts\":\"$HOST_SERVICE_PORTS\",\"ipv6\":\"$IPV6_STATE\"}"
 trap - ERR

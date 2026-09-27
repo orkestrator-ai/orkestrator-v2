@@ -65,6 +65,9 @@ import type { DomainTestResult, Environment, PortMapping, PortProtocol } from "@
 import { EnvironmentPreviewServices } from "./EnvironmentPreviewServices";
 import { EnvironmentRebuildSection } from "./EnvironmentRebuildSection";
 import { EnvironmentRecoveryCopies } from "./EnvironmentRecoveryCopies";
+import { EnvironmentInputsSection } from "./EnvironmentInputsSection";
+import { EnvironmentResourcesSection } from "./EnvironmentResourcesSection";
+import { EnvironmentNetworkPolicyStatus } from "./EnvironmentNetworkPolicyStatus";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import {
   LEGACY_CONTAINER_DISCARD_WARNING,
@@ -971,6 +974,9 @@ export function EnvironmentSettingsDialog({
       case "network":
         return (
           <div className="max-w-2xl space-y-4">
+            {environment.environmentType !== "local" && environment.containerId ? (
+              <EnvironmentNetworkPolicyStatus environmentId={environment.id} />
+            ) : null}
             <div className="flex items-center gap-2 p-3 rounded-md bg-zinc-800 border border-zinc-700">
               {isFullAccess ? (
                 <>
@@ -1147,6 +1153,19 @@ export function EnvironmentSettingsDialog({
                 }}
                 onUpdate={onUpdate}
                 onClose={() => onOpenChange(false)}
+              />
+            )}
+            {environment.environmentType !== "local" && (
+              <EnvironmentResourcesSection
+                environmentId={environment.id}
+                containerId={environment.containerId ?? null}
+                dockerAvailable={dockerAvailable}
+              />
+            )}
+            {environment.environmentType !== "local" && (
+              <EnvironmentInputsSection
+                environmentId={environment.id}
+                dockerAvailable={dockerAvailable}
               />
             )}
             {environment.environmentType !== "local" && (

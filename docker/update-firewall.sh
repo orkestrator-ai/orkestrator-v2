@@ -6,6 +6,7 @@
 #   update-firewall.sh --add domain1,domain2,...
 #   update-firewall.sh --remove domain1,domain2,...
 #   update-firewall.sh --list
+#   update-firewall.sh --host-ports 41234,41235   (network policy 2 only)
 #
 # Must be run as root via `docker exec --user root`. The node sudoers file
 # no longer grants this script; runtime allowlist edits are an operator action.
@@ -190,6 +191,55 @@ list_entries() {
     ipset list allowed-domains
 }
 
+# Replace the host service ports of a policy-2 firewall. The new chain is
+# built beside the old one and swapped in before the old one is removed, so
+# there is no moment with neither; the policy file is updated too, so a
+# restart applies the same ports.
+set_host_ports() {
+    local ports_csv="$1"
+    case "$ports_csv" in
+        *[!0-9,]*) echo -e "${RED}ERROR: host ports must be comma-separated numbers${NC}" >&2; exit 1 ;;
+    esac
+    if [ ! -f /etc/orkestrator/network-policy ] || [ "$(cat /etc/orkestrator/network-policy)" != "2" ]; then
+        echo -e "${RED}ERROR: host service ports apply only to network policy 2${NC}" >&2
+        exit 1
+    fi
+    if [ "$(cat /etc/orkestrator/network-mode)" = "full" ]; then
+        printf '%s\n' "$ports_csv" > /etc/orkestrator/host-service-ports
+        return 0
+    fi
+    local gateway
+    gateway=$(ip route | awk '/^default/ { print $3; exit }')
+    [ -n "$gateway" ] || { echo -e "${RED}ERROR: no default route${NC}" >&2; exit 1; }
+    local addresses
+    addresses=$( { echo "$gateway"; getent ahostsv4 host.docker.internal 2>/dev/null | awk '{print $1}'; } | sort -u)
+    iptables -N ORK_HOST_SERVICES_NEXT 2>/dev/null || iptables -F ORK_HOST_SERVICES_NEXT
+    local port address
+    IFS=',' read -ra PORTS <<< "$ports_csv"
+    for port in "${PORTS[@]}"; do
+        [ -n "$port" ] || continue
+        if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+            echo -e "${RED}ERROR: invalid port $port${NC}" >&2
+            exit 1
+        fi
+        while read -r address; do
+            [ -n "$address" ] && iptables -A ORK_HOST_SERVICES_NEXT -p tcp -d "$address" --dport "$port" -j ACCEPT
+        done <<< "$addresses"
+    done
+    iptables -I OUTPUT 1 -j ORK_HOST_SERVICES_NEXT
+    if iptables -C OUTPUT -j ORK_HOST_SERVICES 2>/dev/null; then
+        iptables -D OUTPUT -j ORK_HOST_SERVICES
+    fi
+    iptables -F ORK_HOST_SERVICES 2>/dev/null || true
+    iptables -X ORK_HOST_SERVICES 2>/dev/null || true
+    iptables -E ORK_HOST_SERVICES_NEXT ORK_HOST_SERVICES
+    local tmp=/etc/orkestrator/.host-service-ports.tmp
+    printf '%s\n' "$ports_csv" > "$tmp"
+    chmod 0644 "$tmp"
+    mv -f "$tmp" /etc/orkestrator/host-service-ports
+    echo "Host service ports: ${ports_csv:-none}"
+}
+
 # Main
 if [ $# -lt 1 ]; then
     usage
@@ -212,6 +262,9 @@ case "$1" in
         ;;
     --list)
         list_entries
+        ;;
+    --host-ports)
+        set_host_ports "${2:-}"
         ;;
     *)
         echo -e "${RED}ERROR: Unknown option: $1${NC}" >&2

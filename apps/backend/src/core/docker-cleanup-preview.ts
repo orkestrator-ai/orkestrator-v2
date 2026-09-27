@@ -26,6 +26,7 @@ import {
 } from "./docker-cleanup-inventory.js";
 import { environmentLifecycleOperations, environmentStartTasks } from "./commands-runtime-state.js";
 import { inspectVolume } from "./container-storage.js";
+import { inspectNetwork } from "./container-network.js";
 
 /**
  * Reviewed cleanup: a preview enumerates this registry's containers and
@@ -46,6 +47,7 @@ interface PreviewGrant {
   expiresAt: number;
   containers: Map<string, { sizeBytes: number | null; state: string }>;
   volumes: Set<string>;
+  networks: Set<string>;
 }
 
 const grants = new Map<string, PreviewGrant>();
@@ -71,11 +73,11 @@ interface ListedVolume {
   labels: Record<string, string>;
 }
 
-async function listAppVolumes(): Promise<ListedVolume[]> {
+async function listAppResources(kind: "volume" | "network"): Promise<ListedVolume[]> {
   const { stdout } = await runCommand(
     "docker",
     [
-      "volume",
+      kind,
       "ls",
       "--filter",
       `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
@@ -130,19 +132,41 @@ export function classifyVolume(
   return "eligible";
 }
 
+/**
+ * An environment network is eligible only when this registry labelled it for
+ * an environment that no longer exists and no deletion still owes it. Attached
+ * containers are rechecked by Docker itself at removal (it refuses).
+ */
+export function classifyNetwork(
+  network: ListedVolume,
+  protection: ProtectionSnapshot,
+  owner: string,
+): CleanupClassification {
+  if (network.labels[DOCKER_LABEL_APP] !== DOCKER_LABEL_APP_VALUE) return "foreign-owner";
+  if (network.labels[DOCKER_LABEL_OWNER] !== owner) return "foreign-owner";
+  const environmentId = network.labels[DOCKER_LABEL_ENVIRONMENT_ID] ?? null;
+  if (!environmentId) return "identity-uncertain";
+  if (protection.deletionEnvironmentIds.has(environmentId)) return "deletion-pending";
+  if (protection.environmentIds.has(environmentId)) return "assigned";
+  if (operationInFlight(environmentId)) return "operation-in-flight";
+  return "eligible";
+}
+
 export async function previewDockerCleanup(context: CleanupContext): Promise<CleanupPreview> {
   const owner = dockerOwnerNamespace(context.storage.getDataDir());
   const [containers, volumes, protection] = await Promise.all([
     listContainerCleanupInventory(context, { includeRunning: false, measureSize: true }),
-    listAppVolumes(),
+    listAppResources("volume"),
     loadProtection(context),
   ]);
+  const networks = await listAppResources("network").catch(() => [] as ListedVolume[]);
   const rows: CleanupPreviewRow[] = [];
   const grant: PreviewGrant = {
     owner,
     expiresAt: Date.now() + TOKEN_TTL_MS,
     containers: new Map(),
     volumes: new Set(),
+    networks: new Set(),
   };
   for (const container of containers) {
     const classification: CleanupClassification = container.exclusion ?? "eligible";
@@ -178,6 +202,20 @@ export async function previewDockerCleanup(context: CleanupContext): Promise<Cle
     });
     if (classification === "eligible") grant.volumes.add(volume.name);
   }
+  for (const network of networks) {
+    const classification = classifyNetwork(network, protection, owner);
+    if (classification === "foreign-owner") continue;
+    rows.push({
+      kind: "network",
+      id: network.name,
+      name: network.name,
+      environmentId: network.labels[DOCKER_LABEL_ENVIRONMENT_ID] ?? null,
+      role: "network",
+      sizeBytes: null,
+      classification,
+    });
+    if (classification === "eligible") grant.networks.add(network.name);
+  }
   const now = Date.now();
   pruneGrants(now);
   const selectionToken = createHash("sha256")
@@ -191,7 +229,9 @@ export async function previewDockerCleanup(context: CleanupContext): Promise<Cle
     expiresAt: new Date(grant.expiresAt).toISOString(),
     rows,
     truncated:
-      containers.length >= MAX_CLEANUP_CANDIDATES || volumes.length >= MAX_CLEANUP_CANDIDATES,
+      containers.length >= MAX_CLEANUP_CANDIDATES ||
+      volumes.length >= MAX_CLEANUP_CANDIDATES ||
+      networks.length >= MAX_CLEANUP_CANDIDATES,
   };
 }
 
@@ -199,6 +239,7 @@ export interface CleanupSelection {
   selectionToken: string;
   containerIds: string[];
   volumeNames: string[];
+  networkNames?: string[];
 }
 
 function tally(outcomes: CleanupResourceOutcome[], reclaimedBytes: number): CleanupExecuteResult {
@@ -304,6 +345,47 @@ export async function executeDockerCleanup(
       } else {
         outcomes.push({ kind: "volume", id: name, outcome: "failed", reason: "removal-failed" });
       }
+    }
+  }
+  for (const name of new Set(selection.networkNames ?? [])) {
+    if (!grant.networks.has(name)) {
+      outcomes.push({ kind: "network", id: name, outcome: "conflict", reason: "not-in-preview" });
+      continue;
+    }
+    const probe = await inspectNetwork(name);
+    if (probe.kind === "missing") {
+      outcomes.push({ kind: "network", id: name, outcome: "already-absent" });
+      continue;
+    }
+    if (probe.kind === "unreachable") {
+      outcomes.push({ kind: "network", id: name, outcome: "failed", reason: "removal-failed" });
+      continue;
+    }
+    const classification = classifyNetwork(
+      { name, labels: probe.labels },
+      await loadProtection(context),
+      owner,
+    );
+    if (classification !== "eligible") {
+      outcomes.push({ kind: "network", id: name, outcome: "conflict", reason: classification });
+      continue;
+    }
+    if (probe.containers > 0) {
+      outcomes.push({ kind: "network", id: name, outcome: "skipped", reason: "in-use" });
+      continue;
+    }
+    try {
+      await runCommand("docker", ["network", "rm", name], { timeoutMs: 30_000 });
+      outcomes.push({ kind: "network", id: name, outcome: "removed" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      outcomes.push(
+        /not found|no such network/i.test(message)
+          ? { kind: "network", id: name, outcome: "already-absent" }
+          : /active endpoints|in use/i.test(message)
+            ? { kind: "network", id: name, outcome: "skipped", reason: "in-use" }
+            : { kind: "network", id: name, outcome: "failed", reason: "removal-failed" },
+      );
     }
   }
   return tally(outcomes, containerResult.reclaimedBytes);

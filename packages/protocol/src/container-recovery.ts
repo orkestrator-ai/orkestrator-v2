@@ -42,7 +42,7 @@ export interface RecoveryCopyList {
   limit: number;
 }
 
-export type CleanupResourceKind = "container" | "volume";
+export type CleanupResourceKind = "container" | "volume" | "network";
 
 export type CleanupClassification =
   | "eligible"
@@ -95,4 +95,75 @@ export interface CleanupExecuteResult {
   conflicts: number;
   failed: number;
   reclaimedBytes: number;
+}
+
+// ---------------------------------------------------------------------------
+// Portable inputs (step 08)
+// ---------------------------------------------------------------------------
+
+export type InputSkipReason =
+  | "symlink"
+  | "not-regular"
+  | "too-large"
+  | "too-many-entries"
+  | "aggregate-budget"
+  | "unreadable"
+  | "changed-while-reading";
+
+/** Counts only: skipped names are user file names and never leave the backend. */
+export interface ProviderInputSummary {
+  provider: string;
+  files: number;
+  bytes: number;
+  skipped: Partial<Record<InputSkipReason, number>>;
+}
+
+export interface EnvironmentInputStatus {
+  environmentId: string;
+  /**
+   * `staged`: only the allowlisted inputs of the listed providers were
+   * exposed. `host-mounts`: an older runtime still binds whole host agent
+   * homes read-only; rebuilding narrows them. `none`: no container.
+   */
+  mode: "staged" | "host-mounts" | "none" | "unknown";
+  revision: string | null;
+  stagedAt: string | null;
+  providers: ProviderInputSummary[];
+  /** Enabled now but not staged into this runtime: rebuild to include. */
+  missingProviders: string[];
+  /** Staged into this runtime but no longer enabled: revoke or rebuild. */
+  disabledProviders: string[];
+}
+
+export interface CredentialRevocationResult {
+  provider: string;
+  removed: boolean;
+  /** An immutable mount still exposes the provider's inputs; rebuild to finish. */
+  pendingRebuild: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Network policy (step 09)
+// ---------------------------------------------------------------------------
+
+/**
+ * Configured versus applied network policy. `effective` is what the
+ * container's firewall reported after its last application; it is absent
+ * when the container is stopped or predates the report.
+ */
+export interface EnvironmentNetworkPolicy {
+  environmentId: string;
+  configured: { mode: "full" | "restricted"; domains: number };
+  /** 1: shared bridge with the gateway /24 open; 2: own network, narrow host access. */
+  policyVersion: 1 | 2 | null;
+  effective: {
+    mode: "full" | "restricted";
+    state: "applied" | "failed" | null;
+    appliedAt: string | null;
+    resolvedDomains: number | null;
+    unresolvedDomains: number | null;
+    allowedEntries: number | null;
+    hostServicePorts: string | null;
+    ipv6: "blocked" | "disabled" | null;
+  } | null;
 }

@@ -4,7 +4,12 @@ import type {
   RebuildPreview,
   RecreateEnvironmentIntent,
 } from "@orkestrator/protocol/container-lifecycle";
-import type { RecoveryCopyList } from "@orkestrator/protocol/container-recovery";
+import type {
+  CredentialRevocationResult,
+  EnvironmentInputStatus,
+  EnvironmentNetworkPolicy,
+  RecoveryCopyList,
+} from "@orkestrator/protocol/container-recovery";
 import type {
   Project,
   Environment,
@@ -311,3 +316,48 @@ export async function getEnvironmentStatus(environmentId: string): Promise<Envir
 }
 
 // --- Terminal Commands ---
+
+/** Which agent inputs the environment's container was given, and whether they are current. */
+export async function getEnvironmentInputs(environmentId: string): Promise<EnvironmentInputStatus> {
+  return invoke<EnvironmentInputStatus>("get_environment_inputs", { environmentId });
+}
+
+/** Removes one provider's imported credentials from the environment's container. */
+export async function revokeProviderCredentials(
+  environmentId: string,
+  provider: string,
+): Promise<CredentialRevocationResult> {
+  return invoke<CredentialRevocationResult>("revoke_provider_credentials", {
+    environmentId,
+    provider,
+  });
+}
+
+/** The configured network policy and what the container's firewall applied. */
+export async function getEnvironmentNetworkPolicy(
+  environmentId: string,
+): Promise<EnvironmentNetworkPolicy> {
+  return invoke<EnvironmentNetworkPolicy>("get_environment_network_policy", { environmentId });
+}
+
+/** Requested budget, its source, and what Docker applied to the current runtime. */
+export async function getEnvironmentResources(
+  environmentId: string,
+): Promise<import("@orkestrator/protocol/container-resources").EnvironmentResourcePolicy> {
+  return invoke("get_environment_resources", { environmentId });
+}
+
+/**
+ * Sets (or with `null` clears) this environment's budget, optionally applying
+ * it to the running container now. The result reports what Docker applied.
+ */
+export async function updateEnvironmentResources(
+  environmentId: string,
+  options: {
+    limits: import("@orkestrator/protocol/container-resources").ContainerResourceLimits | null;
+    applyNow: boolean;
+    allowBelowUsage?: boolean;
+  },
+): Promise<import("@orkestrator/protocol/container-resources").EnvironmentResourcePolicy> {
+  return invoke("update_environment_resources", { environmentId, ...options });
+}

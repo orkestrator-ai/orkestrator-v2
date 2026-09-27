@@ -7,6 +7,13 @@ import {
 import { resolveNeedsAttentionOperation } from "./container-lifecycle-service.js";
 import { rebuildPreview, requestReplacementCancellation } from "./container-replacement.js";
 import { listRecoveryCopies } from "./recovery-copies.js";
+import { environmentNetworkPolicy } from "./container-network.js";
+import { environmentResourcePolicy, updateEnvironmentResources } from "./container-resources.js";
+import {
+  parseResourceLimits,
+  type ContainerResourceLimits,
+} from "@orkestrator/protocol/container-resources";
+import { environmentInputStatus, revokeProviderCredentials } from "./portable-input-status.js";
 import {
   isEmptyAgentSettings,
   normalizeAgentSettings,
@@ -518,6 +525,65 @@ export function registerEnvironmentCommands(
       (id) => extensionDiscoveryCache.invalidate(id),
     );
     return result ? toClientEnvironmentSetupStartResult(result) : undefined;
+  });
+  register("get_environment_resources", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId"], "arguments");
+    return environmentResourcePolicy(asString(args.environmentId, "environmentId"), context);
+  });
+  register("update_environment_resources", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "limits", "applyNow", "allowBelowUsage"], "arguments");
+    const environmentId = asString(args.environmentId, "environmentId");
+    let limits: ContainerResourceLimits | undefined;
+    if (args.limits !== null && args.limits !== undefined) {
+      const parsed = parseResourceLimits(args.limits);
+      if (!parsed.ok) throw new Error(`Invalid ${parsed.field}: ${parsed.reason}`);
+      limits = parsed.limits;
+    }
+    return enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
+      updateEnvironmentResources(
+        {
+          environmentId,
+          limits,
+          applyNow: args.applyNow === true,
+          allowBelowUsage: args.allowBelowUsage === true,
+        },
+        context,
+      ),
+    );
+  });
+  register("set_container_resource_limits", async (args, { storage }) => {
+    assertOnlyKeys(args, ["limits"], "arguments");
+    let limits: ContainerResourceLimits | undefined;
+    if (args.limits !== null && args.limits !== undefined) {
+      const parsed = parseResourceLimits(args.limits);
+      if (!parsed.ok) throw new Error(`Invalid ${parsed.field}: ${parsed.reason}`);
+      limits = parsed.limits;
+    }
+    // Applies to runtimes created from now on; existing ones keep theirs.
+    const current = await storage.loadConfig();
+    await storage.updateGlobalConfig(
+      { ...current.global, containerResourceLimits: limits },
+      { preserveCredentials: true },
+    );
+    return { limits: limits ?? null };
+  });
+  register("get_environment_network_policy", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId"], "arguments");
+    return environmentNetworkPolicy(asString(args.environmentId, "environmentId"), context);
+  });
+  register("get_environment_inputs", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId"], "arguments");
+    return environmentInputStatus(asString(args.environmentId, "environmentId"), context);
+  });
+  register("revoke_provider_credentials", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "provider"], "arguments");
+    const provider = args.provider;
+    if (!isAgentPlatform(provider)) throw new Error("Expected provider to be an agent platform");
+    return revokeProviderCredentials(
+      asString(args.environmentId, "environmentId"),
+      provider,
+      context,
+    );
   });
   register("cancel_container_operation", async (args, { storage }) => {
     assertOnlyKeys(args, ["environmentId", "operationId"], "arguments");

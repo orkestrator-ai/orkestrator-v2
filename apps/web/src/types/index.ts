@@ -490,7 +490,10 @@ export interface GlobalConfig {
   /** Internal marker for the one-time coordinator safety-default migration. */
   coordinatorProviderTierDefaultVersion?: number;
   favoriteModels?: Array<{ platform: AgentPlatform; modelId: string }>;
+  /** Legacy, never enforced; kept for older configurations. */
   containerResources: ContainerResources;
+  /** Enforced default budget for new containers; absent is unrestricted. */
+  containerResourceLimits?: import("@orkestrator/protocol/container-resources").ContainerResourceLimits;
   envFilePatterns: string[];
   /** Whether a write-only Anthropic API key is stored by the backend. */
   anthropicApiKeyConfigured?: boolean;

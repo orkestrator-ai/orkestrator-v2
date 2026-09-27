@@ -78,6 +78,7 @@ describe("docker cleanup review", () => {
       selectionToken: "token-1",
       containerIds: [],
       volumeNames: ["v-leftover"],
+      networkNames: [],
     });
     await screen.findByText("1 removed");
     expect(onFinished).toHaveBeenCalledTimes(1);

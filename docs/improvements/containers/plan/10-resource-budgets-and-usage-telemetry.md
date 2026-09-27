@@ -1,6 +1,6 @@
 # 10 — Resource budgets and usage telemetry
 
-Status: Not started. Dependencies:
+Status: Implemented on branch; awaiting review. Dependencies:
 [02](02-lifecycle-authority-and-durable-operations.md),
 [03](03-image-contracts-and-daemon-preflight.md),
 [04](04-runtime-readiness-and-graceful-shutdown.md).
@@ -106,3 +106,43 @@ Deliver truthful unknown-state UI before adding the sampler. Rollback disables
 sampling or new policy application without inventing zero usage or removing
 persisted requested limits. Exit when budgets are measured, applied values are
 verified and all displayed usage has an honest scope and freshness indicator.
+
+## Implementation record
+
+- **Contracts.** `packages/protocol/src/container-resources.ts`: limits with
+  explicit `null` for unrestricted and bounded validation, policy view
+  (requested, source, applied, unsupported), daemon capacity with support flags
+  and disk by kind, and installation-scoped usage samples with nullable values.
+- **Backend.** `container-resources.ts`: resolution (environment → global →
+  none), Docker arguments (swap pinned to memory), applied read-back, capacity
+  (`docker info`, `docker system df`), the shared bounded sampler (OOM and exit
+  status included) and live update through the lifecycle service.
+  `createDockerContainer` applies the resolved budget. Commands:
+  `get_environment_resources`, `update_environment_resources`,
+  `set_container_resource_limits`, `get_docker_capacity`, `get_container_usage`;
+  `get_docker_system_stats` and `get_orkestrator_containers` now report daemon
+  capacity, installation usage, real CPU/memory per container, OOM evidence and
+  creation time instead of host values and placeholders.
+- **UI.** Settings → Container replaces the never-applied sliders with an
+  opt-in "Limit resources of new containers" budget. Environment settings show
+  requested/applied/in-use side by side and set an override, applying now or at
+  the next rebuild. The Docker dialog labels scope and freshness, shows cores,
+  unknown disk, per-container memory and out-of-memory exits.
+- **Decisions.** No default budget ships: 2 cores / 4 GiB / 1,024 PIDs remain
+  experiment inputs until step 13 measures workloads. Shared memory stays at
+  the existing 1 GiB. A memory limit is not lowered on a live container close to
+  its current use without confirmation.
+- **Tests.** `tests/unit/electron/container-resources.test.ts` (validation,
+  resolution, arguments, applied read-back incl. `<nil>`, memory units,
+  unclamped multi-core CPU, unknown values, daemon capacity and rootless, disk
+  kinds, sampler deduplication, owner scoping and daemon-unavailable);
+  `EnvironmentResourcesSection.test.tsx`, updated `GlobalSettings.test.tsx`.
+  Live (Engine 29.7.2): C24 — limits applied and read back; PID exhaustion
+  refused new processes (including `docker exec`) and the container recovered
+  once they exited; an allocating process was OOM-killed while PID 1 kept
+  running; the sampler reported the memory limit and CPU; a live update was
+  applied and read back.
+- **Limitations.** Backend admission limits for concurrent expensive starts and
+  migrations are not added (the lifecycle queue serializes per environment
+  only). Two-environment contention under CPU stress and Docker Desktop/rootless
+  enforcement were not exercised on this host.

@@ -33,6 +33,12 @@ export const CLEANUP_REASONS: Record<Exclude<CleanupClassification, "eligible">,
   "in-use": "Mounted by a container",
 };
 
+const KIND_LABELS: Record<CleanupPreviewRow["kind"], string> = {
+  container: "Container",
+  volume: "Volume",
+  network: "Network",
+};
+
 function rowKey(row: Pick<CleanupPreviewRow, "kind" | "id">): string {
   return `${row.kind}:${row.id}`;
 }
@@ -125,6 +131,7 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
           selectionToken: preview.selectionToken,
           containerIds: chosen.filter((row) => row.kind === "container").map((row) => row.id),
           volumeNames: chosen.filter((row) => row.kind === "volume").map((row) => row.id),
+          networkNames: chosen.filter((row) => row.kind === "network").map((row) => row.id),
         }),
       );
       onFinished();
@@ -178,8 +185,7 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
                             disabled={working}
                           />
                           <span className="truncate">
-                            {row.kind === "volume" ? "Volume" : "Container"}{" "}
-                            {row.name || row.id.slice(0, 12)}
+                            {KIND_LABELS[row.kind]} {row.name || row.id.slice(0, 12)}
                             {row.sizeBytes !== null ? ` · ${formatBytes(row.sizeBytes)}` : ""}
                           </span>
                         </label>
@@ -194,8 +200,7 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
                   <ul className="mt-1 space-y-1 text-muted-foreground">
                     {kept.map((row) => (
                       <li key={rowKey(row)} className="truncate">
-                        {row.kind === "volume" ? "Volume" : "Container"}{" "}
-                        {row.name || row.id.slice(0, 12)} —{" "}
+                        {KIND_LABELS[row.kind]} {row.name || row.id.slice(0, 12)} —{" "}
                         {
                           CLEANUP_REASONS[
                             row.classification as Exclude<CleanupClassification, "eligible">

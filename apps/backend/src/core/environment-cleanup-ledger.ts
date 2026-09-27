@@ -9,6 +9,7 @@ import path from "node:path";
 export const ENVIRONMENT_CLEANUP_STEPS = [
   "container",
   "volumes",
+  "network",
   "worktree",
   "branch",
   "state-dirs",

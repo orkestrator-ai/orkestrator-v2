@@ -351,3 +351,140 @@ is a `conflict`, one outside the preview is `not-in-preview`, a volume still
 mounted is `skipped` (`in-use`), never forced. Every resource gets its own
 outcome. The older `docker_system_prune` / `cleanup_orphaned_containers`
 commands stay for earlier renderers and remain container-only.
+
+## Portable inputs (`staged-inputs`)
+
+A container created from an image that declares `staged-inputs` no longer
+binds whole host agent homes. `portable-inputs.ts` copies the entrypoint's own
+allowlist — for enabled providers only (narrowed to authorized credential
+sources in agent-test profiles), plus Git identity — into a private revision
+under `<data>/portable-inputs/<environment key>/`, and binds each staged
+subtree read-only at the mount point the entrypoint already reads. The two
+allowlists must stay in step; a unit test checks every staged target and file
+name appears in `entrypoint.sh`.
+
+- Reading: the host home entry itself is resolved (a dotfiles manager may link
+  it, and the bind mount it replaces followed that link); nothing below it is
+  followed. Every file is opened `O_NOFOLLOW` and re-checked against the
+  inode it was listed as. Sockets, devices and FIFOs are never inputs.
+- Bounds, enforced while copying: 10 MiB per file, 5,000 entries and 256 MiB
+  per directory unit, 20,000 entries and 512 MiB per revision. A skipped entry
+  is counted by reason (`symlink`, `too-large`, `aggregate-budget`, …); names
+  never leave the backend.
+- Publication: a revision is written as `.<rev>.partial` and renamed into
+  place, mode `0700`/`0600`. Binds use `--mount`, which fails on a missing
+  source instead of creating a host directory. The container carries
+  `orkestrator-inputs-revision`; after a successful create, revisions no
+  container of the environment still binds are removed (recovery copies keep
+  theirs), and the whole root goes with the environment's state directories.
+- The Cursor key is no longer in a staged-inputs container's creation
+  environment; the bridge reads the synced owner-only file. The Anthropic API
+  key (when used instead of OAuth) still is, because Claude Code in terminals
+  reads it from the process environment: it is visible to same-user processes
+  and in `docker inspect`.
+- Older images keep the read-only home mounts their entrypoint expects, and a
+  running legacy container keeps them until it is rebuilt; `get_environment_inputs`
+  reports that as `host-mounts`, never as narrowed.
+- Enabling a provider later is a rebuild, reported as `missingProviders`.
+  `revoke_provider_credentials` removes a provider's imported credential files
+  from the running container and reports `pendingRebuild` while an immutable
+  mount still exposes them. It never touches the host's credentials or revokes
+  an account-wide key.
+
+## Environment networks (`network-policy=2`)
+
+A capable image's runtime joins its own bridge network
+(`container-network.ts`): `ork-<owner>-<digest>-net`, labelled with owner,
+environment and role, created before the container and adopted only with
+exactly those labels. A creation failure is an explicit error (`resource-exhausted`
+when Docker's address pools are full) and never falls back to the shared
+bridge. The container is created with `net.ipv6.conf.all.disable_ipv6=1` and
+three policy inputs the root bootstrap captures once, root-owned:
+
+| File | Meaning |
+| --- | --- |
+| `/etc/orkestrator/network-policy` | `2` (absent means the legacy policy) |
+| `/etc/orkestrator/host-service-ports` | Host TCP ports the workload may call (the agent-tools port) |
+| `/etc/orkestrator/ingress-ports` | Container ports Docker publishes (bridges, entry and mapped ports) |
+
+In restricted mode `init-firewall.sh` then allows the host only on those ports
+(gateway and `host.docker.internal` addresses) instead of the gateway `/24`,
+accepts new inbound connections only on the published ports, drops IPv6 except
+loopback (and fails when a non-loopback IPv6 address exists without working
+`ip6tables`), allows DNS to the upstreams Docker's embedded resolver lists in
+`resolv.conf`, and bounds resolution (256 domains, 32 addresses each, 3 s per
+query). It writes `/run/orkestrator/firewall.json` with the applied state,
+counts and IPv6 state; `get_environment_network_policy` reports it beside the
+configured mode, and the settings dialog shows both.
+
+The agent-tools port can change across backend restarts. Before handing out a
+tools URL the backend compares it with the container's durable
+`host-service-ports` and, when they differ, runs `update-firewall.sh
+--host-ports` as root: the new chain is attached before the old one is
+removed, and the policy file is rewritten so a restart applies the same port.
+
+The network is removed by the deletion ledger's `network` step after the
+environment's containers (never while one is attached), and reviewed cleanup
+offers networks of environments that no longer exist.
+
+## Resource budgets and usage (`container-resources.ts`)
+
+Budgets are opt-in. `global.containerResourceLimits` (Settings → Container)
+sets a default for new runtimes and `environment.containerResourceLimits`
+overrides it; with neither, a runtime is unrestricted as before, because
+defaults must come from measurements (step 13), not guesses. The older
+`global.containerResources` slider value was never applied and is no longer
+shown or read.
+
+| Axis | Docker | Bounds |
+| --- | --- | --- |
+| `cpus` | `--cpus` | 0.25–512 |
+| `memoryMiB` | `--memory` and `--memory-swap` equal (no swap) | 512 MiB–4 TiB |
+| `pids` | `--pids-limit` | 256–4,194,304 |
+
+The applied value is always read back from `docker inspect`
+(`HostConfig.NanoCpus`, `Memory`, `PidsLimit`) and reported separately from the
+request, with axes the daemon says it cannot enforce. `update_environment_resources`
+stores an override and, when asked, applies it to the running container with
+`docker update` as an `update-resources` lifecycle operation; it refuses a
+limit above the daemon's capacity and a memory limit within 10% of current use
+unless explicitly allowed. Docker cannot lift a memory limit from an existing
+container; that applies on the next runtime and the read-back says so.
+
+One sampler serves every caller: owner-filtered `docker ps`, one `docker
+stats --no-stream` over running containers and one `docker inspect` for OOM and
+exit status, deduplicated within 5 s, stale after 15 s, capped at 128
+containers. CPU is cores (Docker's per-core percentage ÷ 100, not clamped).
+An unreachable daemon yields `null`, never zero. Capacity is `docker info`
+(the daemon — on Docker Desktop, its VM — never `os.totalmem()`), cached 60 s;
+disk is `docker system df` by kind (images counted once), cached 5 minutes and
+unknown when Docker will not say. `get_docker_system_stats` keeps its numeric
+shape for older renderers and adds scoped fields (`cpuCoresUsed`, `sampledAt`,
+`stale`, `diskKnown`).
+
+## Bounded logs (`bounded-logs=1`)
+
+| Resource | Bound | Where |
+| --- | --- | --- |
+| Container stdout/stderr | `local` driver, 10 MiB × 3 (new runtimes, when the daemon offers `local`) | `logDriverArguments` |
+| Bridge/server output | 5 MiB × 3 per file, lines cut at the file size | `orkestrator-log-writer` |
+| Startup failure tail | 64 KiB and 200 lines | `boundedTailCommand` / `boundDiagnosticTail` |
+| `get_container_logs` | ≤ 2,000 lines and 512 KiB | registry |
+| Follow record | 16 KiB, UTF-8 decoded incrementally | `ContainerLogService` |
+| Replay ring | 1 MiB and 2,000 records per source | `ContainerLogService` |
+| Followers | one per container, 16 per backend, 5 s idle grace, 60 s lease | `ContainerLogService` |
+
+Bridges and the OpenCode server start through `boundedBackgroundLaunch`: when
+the image ships the writer, `setsid sh -c '<cmd> 2>&1 | orkestrator-log-writer
+<file>'`, otherwise the plain redirect. The writer owns the open file, so
+rotation cannot lose writes behind a still-writing process; it only writes a
+local file and drains its input to end of file, so it never blocks or
+SIGPIPEs its producer.
+
+`open_container_logs` / `read_container_logs` / `close_container_logs` share
+one `docker logs -f` per container among subscribers; a read renews the lease,
+a cursor older than the ring or from another source returns an explicit `gap`,
+and a replaced runtime is a new source id. Closing releases only the observer.
+The legacy `stream_container_logs` is an adapter onto the same service whose
+lease lapses, so an old client that never closes cannot leave an immortal
+follower. Backend shutdown stops every follower.

@@ -22,6 +22,17 @@ BOOT_PID1_START="$(awk '{print $22}' /proc/1/stat)"
 BOOT_PHASE=""
 BOOT_FAILURE_CODE=""
 
+# Portable input contract (docker/image-manifest.ts):
+# ORKESTRATOR_CAPABILITY staged-inputs=1
+#
+# Agent configuration and credentials arrive only at the read-only mount
+# points below (/claude-config, /codex-home, /opencode-*, /grok-*, /pi-config,
+# /claude-config.json, /tmp/gitconfig), and this script copies a bounded
+# allowlist from each. A backend that sees this capability stages exactly that
+# allowlist for enabled providers and binds the staged copies instead of whole
+# host agent homes (apps/backend/src/core/portable-inputs.ts); the two lists
+# must stay in step.
+
 # Atomic: a reader sees the previous record or this one, never a partial one.
 write_boot_status() {
     BOOT_PHASE="$1"

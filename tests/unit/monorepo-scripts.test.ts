@@ -96,35 +96,42 @@ describe("monorepo orchestration scripts", () => {
     expect(source).toContain('name.startsWith("claude-agent-sdk-")');
   });
 
-  test("Docker builds both bridges with their shared protocol workspace dependency", () => {
+  test("Docker builds the bridges in a separate stage with a frozen filtered install", () => {
     const source = read("docker/Dockerfile");
-    const install = "RUN bun install --filter claude-bridge --filter codex-bridge";
-    const installIndex = source.indexOf(install);
-
-    expect(installIndex).toBeGreaterThan(-1);
-    expect(
-      source.indexOf("COPY --chown=node:node package.json bun.lock /opt/bridge-build/"),
-    ).toBeLessThan(installIndex);
-    expect(source.indexOf("COPY --chown=node:node patches /opt/bridge-build/patches")).toBeLessThan(
-      installIndex,
+    const builder = source.search(/^FROM oven\/bun:\S+ AS bridge-build$/m);
+    const runtime = source.indexOf("\nFROM oven/bun:", builder + 1);
+    const install = source.indexOf(
+      "RUN bun install --frozen-lockfile --filter claude-bridge --filter codex-bridge",
     );
-    expect(
-      source.indexOf(
-        "COPY --chown=node:node packages/protocol /opt/bridge-build/packages/protocol",
-      ),
-    ).toBeLessThan(installIndex);
-    expect(
-      source.indexOf(
-        "COPY --chown=node:node bridges/claude-bridge /opt/bridge-build/bridges/claude-bridge",
-      ),
-    ).toBeLessThan(installIndex);
-    expect(
-      source.indexOf(
-        "COPY --chown=node:node bridges/codex-bridge /opt/bridge-build/bridges/codex-bridge",
-      ),
-    ).toBeLessThan(installIndex);
-    expect(source).toContain("mv /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge");
-    expect(source).toContain("mv /opt/bridge-build/bridges/codex-bridge /opt/codex-bridge");
+    expect(builder).toBeGreaterThan(-1);
+    expect(runtime).toBeGreaterThan(install);
+    // Manifests, the lockfile and patches come before the install; sources after.
+    for (const manifest of [
+      "COPY package.json bun.lock ./",
+      "COPY patches ./patches",
+      "COPY packages/protocol/package.json packages/protocol/package.json",
+      "COPY bridges/claude-bridge/package.json bridges/claude-bridge/package.json",
+    ]) {
+      const index = source.indexOf(manifest);
+      expect(index).toBeGreaterThan(builder);
+      expect(index).toBeLessThan(install);
+    }
+    for (const tree of [
+      "COPY packages/protocol packages/protocol",
+      "COPY bridges/claude-bridge bridges/claude-bridge",
+      "COPY bridges/codex-bridge bridges/codex-bridge",
+    ]) {
+      expect(source.indexOf(tree)).toBeGreaterThan(install);
+    }
+    // The delivered image receives only each bridge's output, never the
+    // builder workspace or its dependencies.
+    for (const bridge of ["claude", "codex", "acp", "pi", "cursor"]) {
+      expect(source).toContain(
+        `COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/${bridge}-bridge /opt/${bridge}-bridge`,
+      );
+    }
+    expect(source.slice(runtime)).not.toContain("bun install");
+    expect(source.slice(runtime)).not.toContain("/opt/bridge-build/node_modules");
   });
 
   test("CLI build cache includes every source tree bundled from outside its workspace", () => {

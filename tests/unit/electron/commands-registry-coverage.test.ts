@@ -246,9 +246,9 @@ describe("direct backend command registry coverage", () => {
       spaceReclaimed: 768_000_000 * 2,
     });
     await expect(invoke("get_docker_system_stats", {}, context)).resolves.toMatchObject({
-      containersRunning: 1,
       containersTotal: 2,
       imagesTotal: 2,
+      scope: { capacity: "docker-daemon", usage: "installation", disk: "docker-daemon" },
     });
     await expect(invoke("get_orkestrator_containers", {}, context)).resolves.toEqual([
       {
@@ -263,6 +263,8 @@ describe("direct backend command registry coverage", () => {
         isAssigned: true,
         cleanupExclusion: "assigned",
         cpuPercent: null,
+        memoryBytes: null,
+        oomKilled: null,
       },
       {
         id: "orphan-container",
@@ -276,6 +278,8 @@ describe("direct backend command registry coverage", () => {
         isAssigned: false,
         cleanupExclusion: null,
         cpuPercent: null,
+        memoryBytes: null,
+        oomKilled: null,
       },
       {
         id: "legacy-container",
@@ -289,6 +293,8 @@ describe("direct backend command registry coverage", () => {
         isAssigned: false,
         cleanupExclusion: null,
         cpuPercent: null,
+        memoryBytes: null,
+        oomKilled: null,
       },
     ]);
     await expect(invoke("cleanup_orphaned_containers", {}, context)).resolves.toEqual({

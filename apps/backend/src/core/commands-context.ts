@@ -53,6 +53,8 @@ export type CommandContext = {
     ): AgentToolConnection;
     revokeEnvironment(environmentId: string): void;
     revokeTab?(environmentId: string, tabId: string): void;
+    /** Port containers call back to; the network policy allows exactly it. */
+    servicePort?(): number | null;
   };
   buildPipelines?: BuildPipelineService;
   nativeAgents?: NativeAgentService;

@@ -157,7 +157,10 @@ describe("environment cleanup entry", () => {
       { localPath: "/project" },
       dataDir,
     );
-    expect(container).toMatchObject({ branch: null, pending: ["container", "state-dirs"] });
+    expect(container).toMatchObject({
+      branch: null,
+      pending: ["container", "network", "state-dirs"],
+    });
   });
 
   test("redacts failures to codes and exit statuses", () => {

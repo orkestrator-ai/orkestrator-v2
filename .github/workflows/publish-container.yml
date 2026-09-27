@@ -207,3 +207,29 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
+
+      # The resolved digest is what a backend pins; a moving tag is never the
+      # identity of a release. Recorded for the run and kept as an artifact.
+      - name: Record release digest
+        env:
+          IMAGE_DIGEST: ${{ steps.manifest.outputs.digest }}
+        run: |
+          jq -n \
+            --arg image "${REGISTRY}/${IMAGE_NAME}" \
+            --arg digest "$IMAGE_DIGEST" \
+            --arg ref "$GITHUB_REF_NAME" \
+            --arg commit "$GITHUB_SHA" \
+            '{image: $image, digest: $digest, ref: $ref, commit: $commit, platforms: ["linux/amd64", "linux/arm64"]}' \
+            > "${RUNNER_TEMP}/image-release.json"
+          {
+            echo "### Container image"
+            echo
+            echo "\`${REGISTRY}/${IMAGE_NAME}@${IMAGE_DIGEST}\` (linux/amd64, linux/arm64)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release record
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-release
+          path: ${{ runner.temp }}/image-release.json
+          if-no-files-found: error

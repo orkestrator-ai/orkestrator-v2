@@ -1,5 +1,6 @@
 import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { openRegistryWriter } from "./registry-writer-lease.js";
+import { shutdownContainerLogService } from "./container-log-service.js";
 import { reconcileContainerOperations } from "./container-lifecycle-service.js";
 import { DesignService } from "./design-service.js";
 import { PreviewRuntime } from "./preview-runtime.js";
@@ -153,7 +154,7 @@ export class OrkestratorBackend {
     AgentToolsServer,
     "connection" | "revokeEnvironment" | "start" | "stop"
   > &
-    Partial<Pick<AgentToolsServer, "revokeTab" | "workflowResultConnection">>;
+    Partial<Pick<AgentToolsServer, "revokeTab" | "workflowResultConnection" | "servicePort">>;
   private readonly controlMcp: Pick<
     ControlMcpServer,
     | "getInfo"
@@ -1333,6 +1334,8 @@ export class OrkestratorBackend {
     }
     this.hostSuspendDetector?.stop();
     this.hostSuspendDetector = null;
+    // Log followers are observers; stopping them never touches containers.
+    shutdownContainerLogService();
     if (this.nativeActivitySweep) {
       clearInterval(this.nativeActivitySweep);
       this.nativeActivitySweep = null;

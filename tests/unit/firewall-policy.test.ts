@@ -9,7 +9,12 @@ const policyPath = "/etc/orkestrator";
 
 function fixtureScript(dir: string, name: string): string {
   const script = join(dir, name);
-  writeFileSync(script, read(`docker/${name}`).replaceAll(policyPath, join(dir, "policy")));
+  writeFileSync(
+    script,
+    read(`docker/${name}`)
+      .replaceAll(policyPath, join(dir, "policy"))
+      .replaceAll("/run/orkestrator", join(dir, "run")),
+  );
   return script;
 }
 
@@ -40,9 +45,13 @@ describe("container firewall policy", () => {
       .filter((line) => line && !line.startsWith("#"));
     const dnsRules = activeLines.filter((line) => line.includes("--dport 53"));
 
+    // resolv.conf nameservers, plus the embedded resolver's upstreams that
+    // Docker names in resolv.conf on a user-defined network.
     expect(dnsRules).toEqual([
       'iptables -A OUTPUT -p udp -d "$resolver" --dport 53 -j ACCEPT',
       'iptables -A OUTPUT -p tcp -d "$resolver" --dport 53 -j ACCEPT',
+      'iptables -A OUTPUT -p udp -d "$upstream" --dport 53 -j ACCEPT',
+      'iptables -A OUTPUT -p tcp -d "$upstream" --dport 53 -j ACCEPT',
     ]);
     expect(activeLines.some((line) => line.includes("--dport 22"))).toBe(false);
   });
@@ -211,6 +220,8 @@ describe("container firewall policy", () => {
       writeFileSync(join(policy, "allowed-domains"), "example.org\n");
       writeStub(bin, "iptables", 'printf "iptables %s\\n" "$*" >> "$CALL_LOG"');
       writeStub(bin, "iptables-save", "exit 0");
+      writeStub(bin, "ip6tables", 'printf "ip6tables %s\\n" "$*" >> "$CALL_LOG"');
+      writeStub(bin, "getent", "exit 2");
       writeStub(
         bin,
         "ipset",
@@ -281,6 +292,102 @@ esac`,
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("policy 2 narrows host access to named ports and records what it applied", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ork-firewall-v2-"));
+    try {
+      const script = fixtureScript(dir, "init-firewall.sh");
+      const policy = join(dir, "policy");
+      const bin = join(dir, "bin");
+      mkdirSync(policy);
+      mkdirSync(bin);
+      writeFileSync(join(policy, "network-mode"), "restricted\n");
+      writeFileSync(join(policy, "allowed-domains"), "example.org\n");
+      writeFileSync(join(policy, "network-policy"), "2\n");
+      writeFileSync(join(policy, "host-service-ports"), "41234\n");
+      writeFileSync(join(policy, "ingress-ports"), "4096,5173\n");
+      writeStub(bin, "iptables", 'printf "iptables %s\\n" "$*" >> "$CALL_LOG"');
+      writeStub(bin, "ip6tables", 'printf "ip6tables %s\\n" "$*" >> "$CALL_LOG"');
+      writeStub(bin, "iptables-save", "exit 0");
+      writeStub(
+        bin,
+        "ipset",
+        'printf "ipset %s\\n" "$*" >> "$CALL_LOG"; [ "$1" = list ] && printf "Members:\\n192.0.2.10\\n"; exit 0',
+      );
+      writeStub(
+        bin,
+        "dig",
+        "if [ \"$1\" = +short ]; then printf '192.0.2.10\\n'; exit; fi\nprintf 'example.org. 60 IN A 192.0.2.11\\n'",
+      );
+      writeStub(
+        bin,
+        "curl",
+        `case "$*" in *api.github.com/meta*) printf '{}\\n' ;; *example.com*) exit 22 ;; *) exit 0 ;; esac`,
+      );
+      writeStub(
+        bin,
+        "jq",
+        "cat >/dev/null; case \"$*\" in *'.web and'*) exit 0 ;; *) printf '192.0.2.10/32\\n' ;; esac",
+      );
+      writeStub(bin, "aggregate", "cat");
+      writeStub(bin, "ip", "printf 'default via 172.20.0.1 dev eth0\\n'");
+      writeStub(bin, "getent", "printf '172.17.0.1 STREAM host.docker.internal\\n'");
+      const result = Bun.spawnSync({
+        cmd: ["bash", script],
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          CALL_LOG: join(dir, "calls"),
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+      const calls = readFileSync(join(dir, "calls"), "utf8");
+      expect(calls).not.toContain("/24");
+      expect(calls).toContain(
+        "iptables -A ORK_HOST_SERVICES -p tcp -d 172.20.0.1 --dport 41234 -j ACCEPT",
+      );
+      expect(calls).toContain(
+        "iptables -A ORK_HOST_SERVICES -p tcp -d 172.17.0.1 --dport 41234 -j ACCEPT",
+      );
+      expect(calls).toContain(
+        "iptables -A INPUT -p tcp --dport 4096 -m state --state NEW -j ACCEPT",
+      );
+      expect(calls).toContain(
+        "iptables -A INPUT -p tcp --dport 5173 -m state --state NEW -j ACCEPT",
+      );
+      expect(calls).not.toMatch(/iptables -A INPUT -s /);
+      expect(calls).toContain("ip6tables -P OUTPUT DROP");
+      const status = JSON.parse(readFileSync(join(dir, "run", "firewall.json"), "utf8"));
+      expect(status).toMatchObject({
+        policy: 2,
+        mode: "restricted",
+        state: "applied",
+        hostServicePorts: "41234",
+        ipv6: "blocked",
+        allowedEntries: 1,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("policy capture validates port lists and keeps the legacy two-file policy readable", () => {
+    const bootstrap = read("docker/network-policy-entrypoint.sh");
+    expect(bootstrap).toContain("ORKESTRATOR_NETWORK_POLICY");
+    expect(bootstrap).toContain('*[!0-9,]*) echo "Invalid network policy port list"');
+    expect(bootstrap).toContain("if [ ! -e /etc/orkestrator/network-policy ]; then");
+    const dockerfile = read("docker/Dockerfile");
+    expect(dockerfile).toContain(
+      'env_keep += "NETWORK_MODE ALLOWED_DOMAINS ORKESTRATOR_NETWORK_POLICY ORKESTRATOR_HOST_SERVICE_PORTS ORKESTRATOR_INGRESS_PORTS"',
+    );
+    const update = read("docker/update-firewall.sh");
+    // The replacement chain is attached before the old one is removed.
+    expect(update.indexOf("iptables -I OUTPUT 1 -j ORK_HOST_SERVICES_NEXT")).toBeLessThan(
+      update.indexOf("iptables -D OUTPUT -j ORK_HOST_SERVICES"),
+    );
   });
 
   test("workspace setup treats a failed root step as fatal", () => {

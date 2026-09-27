@@ -1,6 +1,6 @@
 # 09 — Environment networks and egress policy
 
-Status: Not started. Dependencies:
+Status: Implemented on branch; awaiting review. Dependencies:
 [02](02-lifecycle-authority-and-durable-operations.md),
 [03](03-image-contracts-and-daemon-preflight.md),
 [04](04-runtime-readiness-and-graceful-shutdown.md).
@@ -115,3 +115,46 @@ update. Restart/rebuild must preserve the configured and effective distinction.
 Exit when current managed networks have a tested narrow policy and cleanup
 cannot remove a network still referenced by an operation. External egress
 enforcement may remain explicitly deferred with its prototype results.
+
+## Implementation record
+
+- **Image.** `init-firewall.sh` declares `network-policy=2`: host services by
+  exact port on the gateway and `host.docker.internal` addresses (no `/24`),
+  ingress only to published ports, IPv6 dropped (fail if configured without
+  `ip6tables`), DNS to the embedded resolver's `ExtServers`, fixed resolution
+  bounds, and a `/run/orkestrator/firewall.json` report written on success,
+  failure and full mode. `network-policy-entrypoint.sh` captures the policy
+  version and validated port lists once, root-owned; sudoers keeps exactly
+  those variables. `update-firewall.sh --host-ports` replaces the host chain
+  atomically and durably.
+- **Backend.** `container-network.ts`: per-environment labelled network
+  (exact-label adoption, ambiguous-create resolution, pool exhaustion as
+  `resource-exhausted`, removal only when unattached), ingress port derivation,
+  effective policy report. `createDockerContainer` attaches capable runtimes
+  with IPv6 disabled and the policy inputs (opt-out
+  `ORKESTRATOR_NETWORK_POLICY=1`); the agent-tools server exposes its port and
+  `resolveContainerAgentToolConnection` reconciles it. The deletion ledger has a
+  `network` step; reviewed cleanup lists networks; deletion now also runs the
+  container step for recovery copies when there is no current runtime.
+- **UI.** The network section shows what the container applied next to what is
+  configured, including failure, legacy shared-network containers and a saved
+  mode that awaits a rebuild.
+- **Docs.** AGENTS.md no longer claims a blanket SSH or host-network exception;
+  it states the policy versions and threat model.
+- **Tests.** `tests/unit/firewall-policy.test.ts` (policy-2 rules, no `/24`,
+  IPv6 drop, status report, bootstrap validation, sudoers scope, atomic
+  replacement order); cleanup entry now schedules the network. Live (Engine
+  29.7.2, `container-live-network.test.ts`): C22 — own labelled network, IPv6
+  disabled, applied restricted policy reported; the service port leaves the
+  container while every other host port and a sibling's service are rejected
+  by the container firewall; example.com blocked; host-to-container ingress
+  through a published port works; a host-port change is applied atomically,
+  written durably and survives a container restart; the network is kept while
+  attached and removed afterwards.
+- **Limitations.** On the qualification host, ufw drops container-to-host
+  traffic on every Docker network, so the service port was verified to leave
+  the container rather than to be answered. Docker Desktop and arm64 were not
+  available. DNS TTL expiry and live revocation of removed domains are not
+  implemented: a domain edit applies through `update-firewall.sh` or a rebuild,
+  and established connections are not torn down. External egress enforcement
+  (proxy/gateway outside the workload) remains deferred.

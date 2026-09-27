@@ -351,3 +351,116 @@ describe("C12 backend-created runtime on persistent storage", () => {
     LIVE_TIMEOUT_MS,
   );
 });
+
+describe("C20 staged portable inputs", () => {
+  live(
+    "a staged-inputs runtime can read only the allowlist of enabled providers",
+    async () => {
+      const { memoryLifecycleContext, lifecycleEnvironment } =
+        await import("./container-lifecycle-fixtures");
+      const { createDockerContainer } =
+        await import("../../../apps/backend/src/core/commands-containers");
+      const { resolveDockerImage } = await import("../../../apps/backend/src/core/docker-image");
+      const fixtureHome = path.join(dataDir, "fixture-home");
+      const SENTINEL = `ORKSENTINEL${RUN}`;
+      const write = async (file: string, content: string) => {
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, content);
+      };
+      await write(path.join(fixtureHome, ".claude", ".credentials.json"), '{"claudeAiOauth":{}}');
+      await write(path.join(fixtureHome, ".claude", "CLAUDE.md"), "fixture memory");
+      await write(path.join(fixtureHome, ".claude", "history.jsonl"), `${SENTINEL}-HISTORY`);
+      await write(path.join(fixtureHome, ".claude", "projects", "p", "s.jsonl"), `${SENTINEL}-T`);
+      await write(path.join(fixtureHome, ".codex", "auth.json"), '{"fixture":true}');
+      await write(path.join(fixtureHome, ".codex", "sessions", "r.jsonl"), `${SENTINEL}-CODEX`);
+      await write(path.join(fixtureHome, ".pi", "agent", "auth.json"), `${SENTINEL}-DISABLED-PI`);
+      const saved = {
+        claude: process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR,
+        codex: process.env.CODEX_HOME,
+        host: process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME,
+      };
+      process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = path.join(fixtureHome, ".claude");
+      process.env.CODEX_HOME = path.join(fixtureHome, ".codex");
+      process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = fixtureHome;
+      try {
+        const environment = lifecycleEnvironment({
+          id: `env-${RUN}-inputs`,
+          networkAccessMode: "full",
+        });
+        const { context } = memoryLifecycleContext([environment], dataDir);
+        Object.assign(context, {
+          runtimeFlavor: "agent-test",
+          credentialSources: new Set(["claude", "codex", "pi"]),
+        });
+        Object.assign(context.storage, {
+          getProject: async () => ({
+            id: "project-1",
+            name: "Project",
+            gitUrl: "https://example.invalid/none.git",
+            localPath: null,
+            addedAt: new Date(0).toISOString(),
+            order: 0,
+          }),
+          loadConfig: async () => ({
+            version: "1.0.0",
+            // Pi is authorized by the profile but not enabled: not staged.
+            global: { allowedDomains: [], enabledAgentPlatforms: ["claude", "codex"] },
+            repositories: {},
+          }),
+        });
+        const resolved = await resolveDockerImage(IMAGE);
+        if (resolved.kind !== "present") throw new Error("qualification image missing");
+        const containerId = await createDockerContainer(environment, context, {
+          imageId: resolved.imageId,
+          runtimeGeneration: 1,
+        });
+        // Every bind source is inside this environment's staged revision.
+        const mounts = JSON.parse(
+          await docker(["inspect", "-f", "{{json .Mounts}}", containerId]),
+        ) as Array<{ Type: string; Source: string; Destination: string; RW: boolean }>;
+        const binds = mounts.filter((mount) => mount.Type === "bind");
+        expect(binds.length).toBeGreaterThan(0);
+        for (const bind of binds) {
+          expect(bind.Source.startsWith(path.join(dataDir, "portable-inputs"))).toBe(true);
+          expect(bind.RW).toBe(false);
+        }
+        expect(binds.map((bind) => bind.Destination).sort()).toEqual([
+          "/claude-config",
+          "/codex-home",
+        ]);
+        await docker(["start", containerId]);
+        await waitForContainerBoot(containerId);
+        const sentinelScan = await docker([
+          "exec",
+          containerId,
+          "sh",
+          "-c",
+          `grep -rl ${SENTINEL} /claude-config /codex-home /pi-config /home/node /tmp /run 2>/dev/null | head -5; true`,
+        ]);
+        expect(sentinelScan).toBe("");
+        expect(
+          await docker([
+            "exec",
+            "-u",
+            "node",
+            containerId,
+            "sh",
+            "-c",
+            "cat /home/node/.codex/auth.json; test -f /home/node/.claude/CLAUDE.md && echo claude-md",
+          ]),
+        ).toBe('{"fixture":true}claude-md');
+        await docker(["rm", "-f", containerId]);
+      } finally {
+        for (const [key, value] of [
+          ["ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR", saved.claude],
+          ["CODEX_HOME", saved.codex],
+          ["ORKESTRATOR_AGENT_TEST_HOST_HOME", saved.host],
+        ] as const) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      }
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});

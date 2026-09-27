@@ -495,7 +495,9 @@ exit 0
           "setsid bun /opt/cursor-bridge/dist/index.js",
           scriptStart,
         );
-        const scriptEnd = detachedExec.indexOf("2>&1 &", setsidLine) + "2>&1 &".length;
+        // The launch is an if/else choosing the rotating log writer; parse through
+        // its closing fi.
+        const scriptEnd = detachedExec.indexOf("\nfi", setsidLine) + "\nfi".length;
         expect(setsidLine).toBeGreaterThan(scriptStart);
         const parsed = Bun.spawnSync([
           "bash",
@@ -666,7 +668,9 @@ exit 0
           `setsid bun /opt/acp-bridge/dist/index.js --provider=${provider}`,
           scriptStart,
         );
-        const scriptEnd = detachedExec.indexOf("2>&1 &", setsidLine) + "2>&1 &".length;
+        // The launch is an if/else choosing the rotating log writer; parse through
+        // its closing fi.
+        const scriptEnd = detachedExec.indexOf("\nfi", setsidLine) + "\nfi".length;
         expect(setsidLine).toBeGreaterThan(scriptStart);
         const launchScript = detachedExec.slice(scriptStart, scriptEnd);
         const parsed = Bun.spawnSync(["bash", "-n", "-c", launchScript]);

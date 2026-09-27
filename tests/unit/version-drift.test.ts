@@ -153,11 +153,17 @@ function getMiseToolVersion(tool: string): string {
 
 function getDockerfileBaseImageTag(): string {
   const dockerfile = read("docker/Dockerfile");
-  const match = dockerfile.match(/^FROM\s+oven\/bun:(\S+)/m);
+  const match = dockerfile.match(/^FROM\s+oven\/bun:([^@\s]+)/m);
   if (!match) {
     throw new Error("Expected `FROM oven/bun:<tag>` in docker/Dockerfile");
   }
   return match[1];
+}
+
+/** Every `FROM oven/bun` line, as `tag@digest`. */
+function getDockerfileBaseImagePins(): string[] {
+  const dockerfile = read("docker/Dockerfile");
+  return [...dockerfile.matchAll(/^FROM\s+oven\/bun:(\S+)/gm)].map((match) => match[1]!);
 }
 
 interface ArtifactIntegrityValues {
@@ -390,6 +396,13 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
     expect(hostPin).toBe(misePin);
     expect(baseImageTag).toBe(`${misePin}-debian`);
+    // Builder and runtime stages share one digest-pinned base.
+    const pins = getDockerfileBaseImagePins();
+    expect(pins.length).toBe(2);
+    expect(new Set(pins).size).toBe(1);
+    expect(pins[0]).toMatch(
+      new RegExp(`^${misePin.replaceAll(".", "\\.")}-debian@sha256:[0-9a-f]{64}$`),
+    );
     expect(dockerfile).toContain(`mise install --system bun@${misePin}`);
     expect(dockerfile).toContain(`mise where bun@${misePin}`);
     expect(dockerfile).toContain(`mise exec bun@${misePin} -- bun --version`);

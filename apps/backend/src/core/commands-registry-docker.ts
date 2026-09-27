@@ -10,6 +10,11 @@ import {
   removeUnclaimedContainer,
 } from "./docker-cleanup-inventory.js";
 import { executeDockerCleanup, previewDockerCleanup } from "./docker-cleanup-preview.js";
+import { dockerCapacity, sampleContainerUsage } from "./container-resources.js";
+import { containerLogService } from "./container-log-service.js";
+
+/** Largest `get_container_logs` answer, in characters. */
+const CONTAINER_LOG_TAIL_MAX_CHARS = 512 * 1024;
 import {
   createOperationId,
   emptyContainerLifecycle,
@@ -29,7 +34,6 @@ import type {
 } from "@orkestrator/protocol/docker-availability";
 import {
   CommandFailedError,
-  os,
   DOCKER_IMAGE,
   DOCKER_LABEL_APP,
   DOCKER_LABEL_APP_VALUE,
@@ -40,7 +44,6 @@ import {
   createEnvironment,
   commandExists,
   runCommand,
-  spawnCommand,
 } from "./commands-dependencies.js";
 import {
   asString,
@@ -307,18 +310,39 @@ export function registerDockerCommands(
       (await runCommand("docker", ["logs", "--tail", tail, containerId], { timeoutMs: 30_000 }))
         .stdout,
   });
-  register("get_container_logs", ({ containerId, tail }) =>
-    readContainerLogs(asString(containerId, "containerId"), asOptionalString(tail) ?? "200"),
+  register("get_container_logs", async ({ containerId, tail }) => {
+    // Bounded at the source (line count) and again on the result (bytes), so
+    // one enormous line cannot defeat a line-only limit.
+    const requested = Number.parseInt(asOptionalString(tail) ?? "200", 10);
+    const lines = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 2_000) : 200;
+    const output = await readContainerLogs(asString(containerId, "containerId"), String(lines));
+    return output.length > CONTAINER_LOG_TAIL_MAX_CHARS
+      ? output.slice(output.length - CONTAINER_LOG_TAIL_MAX_CHARS)
+      : output;
+  });
+  // Follow subscriptions: one shared `docker logs -f` per container, a bounded
+  // replay ring, leases and an explicit gap when a client falls behind.
+  register("open_container_logs", ({ containerId }, { emit }) =>
+    containerLogService(emit).open(asString(containerId, "containerId")),
   );
+  register("read_container_logs", ({ subscriptionId, sourceId, cursor }, { emit }) =>
+    containerLogService(emit).read(
+      asString(subscriptionId, "subscriptionId"),
+      asString(sourceId, "sourceId"),
+      asNumber(cursor, "cursor"),
+    ),
+  );
+  register("close_container_logs", ({ subscriptionId }, { emit }) => {
+    // Releases the observer only; the container and its processes continue.
+    containerLogService(emit).close(asString(subscriptionId, "subscriptionId"));
+  });
+  // Legacy adapter: an older client that never closes gets a lease that
+  // lapses, so its follower stops instead of living forever.
   register("stream_container_logs", ({ containerId }, { emit }) => {
-    const id = asString(containerId, "containerId");
-    const child = spawnCommand("docker", ["logs", "-f", id]);
-    child.stdout.on("data", (data) =>
-      emit("container-log", { containerId: id, line: data.toString() }),
+    const { subscriptionId, sourceId } = containerLogService(emit).open(
+      asString(containerId, "containerId"),
     );
-    child.stderr.on("data", (data) =>
-      emit("container-log", { containerId: id, line: data.toString() }),
-    );
+    return { subscriptionId, sourceId };
   });
   register("docker_system_prune", async ({ pruneVolumes }, context) => {
     // Ordinary cleanup removes only stopped containers that nothing claims:
@@ -350,24 +374,14 @@ export function registerDockerCommands(
     };
   });
   register("get_docker_system_stats", async (_args, context) => {
-    const ownerFilter = context.strictDockerOwner
-      ? [
-          "--filter",
-          `label=${DOCKER_LABEL_OWNER}=${dockerOwnerNamespace(context.storage.getDataDir())}`,
-        ]
-      : [];
-    const containers = await runCommand("docker", ["ps", "-a", "-q", ...ownerFilter], {
-      timeoutMs: 10_000,
-    }).then(
-      (r) => r.stdout.split("\n").filter(Boolean).length,
-      () => 0,
-    );
-    const running = await runCommand("docker", ["ps", "-q", ...ownerFilter], {
-      timeoutMs: 10_000,
-    }).then(
-      (r) => r.stdout.split("\n").filter(Boolean).length,
-      () => 0,
-    );
+    // Capacity is the daemon's (on Docker Desktop, its VM), usage is the sum
+    // over this installation's containers, and anything Docker would not say
+    // is reported unknown — not as the backend host's values or zero.
+    const [capacity, usage] = await Promise.all([dockerCapacity(), sampleContainerUsage(context)]);
+    const running = usage.containers.filter((sample) => sample.state === "running");
+    const measured = running.filter((sample) => sample.cpuCores !== null);
+    const cpuCoresUsed = measured.reduce((sum, sample) => sum + (sample.cpuCores ?? 0), 0);
+    const memoryUsed = running.reduce((sum, sample) => sum + (sample.memoryBytes ?? 0), 0);
     const images = await runCommand(
       "docker",
       ["images", "-q", ...(context.strictDockerOwner ? [context.dockerImage ?? DOCKER_IMAGE] : [])],
@@ -376,18 +390,41 @@ export function registerDockerCommands(
       (r) => new Set(r.stdout.split("\n").filter(Boolean)).size,
       () => 0,
     );
+    const diskParts = [
+      capacity.disk.imagesBytes,
+      capacity.disk.containersBytes,
+      capacity.disk.volumesBytes,
+      capacity.disk.buildCacheBytes,
+    ];
     return {
-      memoryUsed: 0,
-      memoryTotal: os.totalmem(),
-      cpus: os.cpus().length,
-      cpuUsagePercent: 0,
-      diskUsed: 0,
+      memoryUsed,
+      memoryTotal: capacity.memoryBytes ?? 0,
+      cpus: capacity.cpus ?? 0,
+      // Normalized to the daemon's CPUs so the existing 0–100 gauge is right;
+      // `cpuCoresUsed` carries the unnormalized figure.
+      cpuUsagePercent:
+        capacity.cpus && measured.length > 0
+          ? Math.round((cpuCoresUsed / capacity.cpus) * 1000) / 10
+          : 0,
+      diskUsed: diskParts.some((part) => part === null)
+        ? 0
+        : diskParts.reduce<number>((sum, part) => sum + (part ?? 0), 0),
       diskTotal: 0,
-      containersRunning: running,
-      containersTotal: containers,
+      containersRunning: running.length,
+      containersTotal: usage.containers.length,
       imagesTotal: images,
+      // Additive, scoped fields. Older renderers ignore them.
+      scope: { capacity: "docker-daemon", usage: "installation", disk: "docker-daemon" },
+      sampledAt: usage.sampledAt,
+      stale: usage.stale,
+      cpuCoresUsed: measured.length > 0 ? Math.round(cpuCoresUsed * 100) / 100 : null,
+      memoryTotalKnown: capacity.memoryBytes !== null,
+      diskKnown: !diskParts.some((part) => part === null),
+      diskBreakdown: capacity.disk,
     };
   });
+  register("get_docker_capacity", ({ refresh }) => dockerCapacity({ refresh: refresh === true }));
+  register("get_container_usage", (_args, context) => sampleContainerUsage(context));
   register("get_orkestrator_containers", async (_args, context) => {
     const { storage } = context;
     const protection = await loadProtection(context);
@@ -407,55 +444,83 @@ export function registerDockerCommands(
       { timeoutMs: 20_000 },
     );
     const environmentsById = new Map(environments.map((entry) => [entry.id, entry]));
-    return stdout
-      .split("\n")
-      .filter(Boolean)
-      .flatMap((line) => {
-        const row = JSON.parse(line) as Record<string, unknown>;
-        const id = typeof row.ID === "string" ? row.ID : "";
-        const env = findEnvironmentByContainerId(environments, id);
-        if (!dockerOwnerMatches(row.Labels, dockerOwner, context.strictDockerOwner)) {
-          return [];
-        }
-        const labelledEnvironmentId = dockerLabelValue(row.Labels, DOCKER_LABEL_ENVIRONMENT_ID);
-        return [
-          {
-            id,
-            // Docker cannot relabel a running container, so the name label is the
-            // name at creation time and goes stale on rename. Resolve through the
-            // environment id first — that survives both a rename and a container id
-            // that drifted from the record — and fall back to the label only for a
-            // true orphan, whose environment no longer exists to ask.
-            name:
-              env?.name ??
-              (labelledEnvironmentId
-                ? environmentsById.get(labelledEnvironmentId)?.name
-                : undefined) ??
-              dockerLabelValue(row.Labels, DOCKER_LABEL_ENVIRONMENT_NAME) ??
-              (typeof row.Names === "string" ? row.Names : ""),
-            status: typeof row.Status === "string" ? row.Status : "",
-            state: typeof row.State === "string" ? row.State : "",
-            image: typeof row.Image === "string" ? row.Image : "",
-            created: 0,
-            environmentId: env?.id ?? null,
-            projectId: env?.projectId ?? null,
-            isAssigned: !!env,
-            // The same classification cleanup applies, so the listing never
-            // offers to delete a container cleanup would refuse.
-            cleanupExclusion: classify(
-              {
-                id,
-                state: typeof row.State === "string" ? row.State.toLowerCase() : "",
-                labels: parseLabels(row.Labels),
-              },
-              protection,
-              dockerOwner,
-              { includeRunning: true, strictDockerOwner: Boolean(context.strictDockerOwner) },
-            ),
-            cpuPercent: null,
-          },
-        ];
-      });
+    // One shared sample; unknown stays null rather than zero.
+    const usage = await sampleContainerUsage(context).catch(() => null);
+    const usageById = new Map(
+      (usage?.containers ?? []).map((sample) => [sample.containerId, sample]),
+    );
+    const lines = stdout.split("\n").filter(Boolean);
+    const createdById = new Map<string, number>();
+    const ids = lines
+      .map((line) => (JSON.parse(line) as Record<string, unknown>).ID)
+      .filter((id): id is string => typeof id === "string" && id.length > 0)
+      .slice(0, 200);
+    if (ids.length > 0) {
+      await runCommand("docker", ["inspect", "-f", "{{.Id}}\t{{.Created}}", ...ids], {
+        timeoutMs: 15_000,
+      }).then(
+        (result) => {
+          for (const entry of result.stdout.split("\n")) {
+            const [id = "", created = ""] = entry.trim().split("\t");
+            const at = Date.parse(created);
+            if (id && Number.isFinite(at)) createdById.set(id, Math.floor(at / 1000));
+          }
+        },
+        () => undefined,
+      );
+    }
+    return lines.flatMap((line) => {
+      const row = JSON.parse(line) as Record<string, unknown>;
+      const id = typeof row.ID === "string" ? row.ID : "";
+      const env = findEnvironmentByContainerId(environments, id);
+      if (!dockerOwnerMatches(row.Labels, dockerOwner, context.strictDockerOwner)) {
+        return [];
+      }
+      const labelledEnvironmentId = dockerLabelValue(row.Labels, DOCKER_LABEL_ENVIRONMENT_ID);
+      return [
+        {
+          id,
+          // Docker cannot relabel a running container, so the name label is the
+          // name at creation time and goes stale on rename. Resolve through the
+          // environment id first — that survives both a rename and a container id
+          // that drifted from the record — and fall back to the label only for a
+          // true orphan, whose environment no longer exists to ask.
+          name:
+            env?.name ??
+            (labelledEnvironmentId
+              ? environmentsById.get(labelledEnvironmentId)?.name
+              : undefined) ??
+            dockerLabelValue(row.Labels, DOCKER_LABEL_ENVIRONMENT_NAME) ??
+            (typeof row.Names === "string" ? row.Names : ""),
+          status: typeof row.Status === "string" ? row.Status : "",
+          state: typeof row.State === "string" ? row.State : "",
+          image: typeof row.Image === "string" ? row.Image : "",
+          created: createdById.get(id) ?? 0,
+          environmentId: env?.id ?? null,
+          projectId: env?.projectId ?? null,
+          isAssigned: !!env,
+          // The same classification cleanup applies, so the listing never
+          // offers to delete a container cleanup would refuse.
+          cleanupExclusion: classify(
+            {
+              id,
+              state: typeof row.State === "string" ? row.State.toLowerCase() : "",
+              labels: parseLabels(row.Labels),
+            },
+            protection,
+            dockerOwner,
+            { includeRunning: true, strictDockerOwner: Boolean(context.strictDockerOwner) },
+          ),
+          // Docker's per-core percentage (can exceed 100); null when unknown.
+          cpuPercent:
+            usageById.get(id)?.cpuCores != null
+              ? Math.round(usageById.get(id)!.cpuCores! * 1000) / 10
+              : null,
+          memoryBytes: usageById.get(id)?.memoryBytes ?? null,
+          oomKilled: usageById.get(id)?.oomKilled ?? null,
+        },
+      ];
+    });
   });
   register("docker_cleanup_preview", (_args, context) => previewDockerCleanup(context));
   register("docker_cleanup_execute", async (args, context) => {
@@ -472,6 +537,7 @@ export function registerDockerCommands(
         selectionToken: asString(args.selectionToken, "selectionToken"),
         containerIds: strings(args.containerIds, "containerIds"),
         volumeNames: strings(args.volumeNames, "volumeNames"),
+        networkNames: strings(args.networkNames, "networkNames"),
       },
       context,
     );

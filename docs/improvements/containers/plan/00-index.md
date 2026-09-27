@@ -33,11 +33,11 @@ combine the whole row into one large change.
 | 05 | [Persistent workspace and agent state](05-persistent-workspace-and-agent-state.md) | 02, 03, 04 | Implemented, in review | Versioned, owner-labeled storage for new environments |
 | 06 | [Migration and transactional replacement](06-migration-and-transactional-replacement.md) | 04, 05 | Implemented, in review | Verified migration, replacement commit point and rollback rules |
 | 07 | [Recovery, deletion and cleanup UX](07-recovery-deletion-and-cleanup-ux.md) | 02, 05, 06 | Implemented, in review | Exact cleanup inventory and resumable, intentional data deletion |
-| 08 | [Portable inputs and credential lifecycle](08-portable-inputs-and-credential-lifecycle.md) | 02, 03, 04 | Not started | Bounded staging, provider scope and refresh/revocation behavior |
-| 09 | [Environment networks and egress policy](09-environment-networks-and-egress-policy.md) | 02, 03, 04 | Not started | Separate networks, narrow host access and tested effective policy |
-| 10 | [Resource budgets and usage telemetry](10-resource-budgets-and-usage-telemetry.md) | 02, 03, 04 | Not started | Configurable limits and truthful bounded usage snapshots |
-| 11 | [Bounded logs and diagnostic subscriptions](11-bounded-logs-and-diagnostic-subscriptions.md) | 02, 04 | Not started | Rotated logs, bounded tails and owned log followers |
-| 12 | [Image build and release delivery](12-image-build-and-release-delivery.md) | 03 | Not started | Multi-stage builds, reproducible artifacts and compatibility checks |
+| 08 | [Portable inputs and credential lifecycle](08-portable-inputs-and-credential-lifecycle.md) | 02, 03, 04 | Implemented, in review | Bounded staging, provider scope and refresh/revocation behavior |
+| 09 | [Environment networks and egress policy](09-environment-networks-and-egress-policy.md) | 02, 03, 04 | Implemented, in review | Separate networks, narrow host access and tested effective policy |
+| 10 | [Resource budgets and usage telemetry](10-resource-budgets-and-usage-telemetry.md) | 02, 03, 04 | Implemented, in review | Configurable limits and truthful bounded usage snapshots |
+| 11 | [Bounded logs and diagnostic subscriptions](11-bounded-logs-and-diagnostic-subscriptions.md) | 02, 04 | Implemented, in review | Rotated logs, bounded tails and owned log followers |
+| 12 | [Image build and release delivery](12-image-build-and-release-delivery.md) | 03 | Implemented, in review | Multi-stage builds, reproducible artifacts and compatibility checks |
 | 13 | [Performance baselines and targeted optimization](13-performance-baselines-and-targeted-optimization.md) | 06, 08–12 | Not started | Comparable measurements and evidence-based optimization decisions |
 | 14 | [Integrated qualification and rollout](14-integrated-qualification-and-rollout.md) | 01–13 | Not started | Cross-platform failure matrix, staged adoption and release evidence |
 

@@ -224,6 +224,11 @@ export interface Environment {
    * because a newer backend may have written a version this one cannot read.
    */
   containerLifecycle?: EnvironmentContainerLifecycle;
+  /**
+   * Per-environment resource budget; overrides the global default. Absent
+   * inherits; a `null` field is explicitly unrestricted.
+   */
+  containerResourceLimits?: import("@orkestrator/protocol/container-resources").ContainerResourceLimits;
   /** Backend-owned long-running operation currently affecting this environment. */
   lifecycleOperation?: EnvironmentLifecycleOperation;
   lifecycleOperationStartedAt?: string;
@@ -762,6 +767,12 @@ export interface AppConfig {
   version: string;
   desktopConnections?: import("@orkestrator/protocol/connections").StoredDesktopConnections;
   global: {
+    /**
+     * Default resource budget enforced on new container runtimes. Absent means
+     * unrestricted: defaults are chosen from measurements, not guessed. (The
+     * older `containerResources` value was never applied and is not read.)
+     */
+    containerResourceLimits?: import("@orkestrator/protocol/container-resources").ContainerResourceLimits;
     /** Agent systems installed and exposed in launch/review surfaces. */
     enabledAgentPlatforms?: AgentPlatform[];
     /**

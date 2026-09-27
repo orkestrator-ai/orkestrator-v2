@@ -363,7 +363,15 @@ exit 0
         // Ownership is decided from the returned labels. Filtering it in the
         // daemon query would hide unlabelled pre-upgrade containers for good.
         expect(dockerCalls).toContain("label=app=orkestrator-v2");
-        expect(dockerCalls).not.toContain(`label=orkestrator-owner=${currentOwner}`);
+        // The listing itself is unfiltered; only the usage sample (which is
+        // installation-scoped by definition) filters by owner.
+        const listingCalls = dockerCalls
+          .split("\n")
+          .filter((call) => call.startsWith("ps") && call.includes("{{json .}}"));
+        expect(listingCalls.length).toBeGreaterThan(0);
+        for (const call of listingCalls) {
+          expect(call).not.toContain(`label=orkestrator-owner=${currentOwner}`);
+        }
       },
     );
   });

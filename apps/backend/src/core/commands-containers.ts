@@ -1,4 +1,8 @@
-import { boundedTailCommand, boundDiagnosticTail } from "./container-log-bounds.js";
+import {
+  boundedBackgroundLaunch,
+  boundedTailCommand,
+  boundDiagnosticTail,
+} from "./container-log-bounds.js";
 import { persistentStateExports } from "./container-state-layout.js";
 import {
   os,
@@ -15,6 +19,8 @@ import {
   DOCKER_LABEL_OWNER,
   DOCKER_LABEL_PROJECT_ID,
   DOCKER_LABEL_OPERATION_ID,
+  DOCKER_LABEL_INPUTS_REVISION,
+  DOCKER_LABEL_NETWORK_POLICY,
   DOCKER_LABEL_RUNTIME_GENERATION,
   GROK_ACP_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
@@ -80,6 +86,19 @@ import type { CommandContext } from "./commands-context.js";
 import { ContainerLifecycleError, findOperationContainers } from "./container-lifecycle-service.js";
 import { detectDockerTopology, imageCapabilities } from "./docker-image.js";
 import { storageMountArguments } from "./container-storage.js";
+import { ensureEnvironmentNetwork, ingressPorts } from "./container-network.js";
+import {
+  dockerCapacity,
+  logDriverArguments,
+  resolveResourceLimits,
+  resourceArguments,
+} from "./container-resources.js";
+import {
+  defaultInputSourceRoots,
+  stagePortableInputs,
+  stagedInputMountArguments,
+} from "./portable-inputs.js";
+import { pruneEnvironmentInputRevisions, selectedInputProviders } from "./portable-input-status.js";
 import type { ContainerStorageIdentity } from "@orkestrator/protocol/container-lifecycle";
 import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
 
@@ -220,6 +239,12 @@ export async function createDockerContainer(
     // IPC namespace and weakens the container boundary.
     "--shm-size",
     "1g",
+    // Opt-in budget (environment override, else global default); none means
+    // unrestricted, as before. Read back from inspect, never assumed.
+    ...resourceArguments(resolveResourceLimits(environment, config.global).limits),
+    // Bounded container stdout/stderr (10 MiB × 3) where the daemon offers
+    // the local driver.
+    ...logDriverArguments((await dockerCapacity()).logDrivers),
     ...(agentTestLocalGitRemote
       ? ["-v", `${agentTestLocalGitRemote}:${AGENT_TEST_LOCAL_GIT_REMOTE_PATH}`]
       : []),
@@ -248,6 +273,12 @@ export async function createDockerContainer(
     "TERM=xterm-256color",
   ];
 
+  // A staged-inputs image never needs the Cursor key in its immutable
+  // creation environment: the bridge launch reads the owner-only file the
+  // backend syncs, and nothing else in the container uses it.
+  const stagedInputCapable = Boolean(
+    identity.imageId && (await imageCapabilities(identity.imageId, context))?.["staged-inputs"],
+  );
   const dockerEnvironment: NodeJS.ProcessEnv = { ...process.env };
   const redactValues: string[] = [];
   const allowClaudeCredentials =
@@ -268,7 +299,7 @@ export async function createDockerContainer(
     context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("cursor")
       ? { apiKey: undefined }
       : resolveCursorApiKey(config.global);
-  if (cursorApiKey) {
+  if (cursorApiKey && !stagedInputCapable) {
     dockerEnvironment.CURSOR_API_KEY = cursorApiKey;
     redactValues.push(cursorApiKey);
     args.push("-e", "CURSOR_API_KEY");
@@ -290,73 +321,96 @@ export async function createDockerContainer(
     args.push("-e", "NETWORK_MODE=restricted", "-e", `ALLOWED_DOMAINS=${domains.join(",")}`);
   }
 
-  const home = os.homedir();
-  const agentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
   const bindIfExists = async (source: string, target: string, readonly = true) => {
     if (await pathExists(source)) args.push("-v", `${source}:${target}${readonly ? ":ro" : ""}`);
   };
-  if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude")) {
-    const claudeConfigDir =
-      context.runtimeFlavor === "agent-test"
-        ? process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim()
-        : path.join(home, ".claude");
-    const claudeConfigFile =
-      context.runtimeFlavor === "agent-test" && agentTestHostHome
-        ? path.join(agentTestHostHome, ".claude.json")
-        : path.join(home, ".claude.json");
-    if (claudeConfigDir) await bindIfExists(claudeConfigDir, "/claude-config");
-    await bindIfExists(claudeConfigFile, "/claude-config.json");
-  }
-  if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("codex")) {
-    const codexHome =
-      context.runtimeFlavor === "agent-test"
-        ? process.env.CODEX_HOME?.trim()
-        : path.join(home, ".codex");
-    if (codexHome) await bindIfExists(codexHome, "/codex-home");
-  }
-  // Grok writes session databases during startup, so its host directory cannot
-  // replace the writable container home. Mount portable inputs separately;
-  // entrypoint.sh copies a bounded allowlist.
-  if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("grok")) {
-    const grokHome =
-      context.runtimeFlavor === "agent-test" && agentTestHostHome ? agentTestHostHome : home;
-    await bindIfExists(path.join(grokHome, ".grok"), "/grok-home");
-    await bindIfExists(path.join(grokHome, ".config", "grok"), "/grok-config");
-  }
-  // Pi has no vendor account: its credentials are the user's own provider keys
-  // in `~/.pi/agent/auth.json`, alongside the model cache and settings. The
-  // whole directory is mounted as a portable input rather than over the home,
-  // because the bridge writes session transcripts back into it — entrypoint.sh
-  // copies the bounded allowlist, exactly as it does for Cursor and Grok.
-  if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("pi")) {
-    const piHome =
-      context.runtimeFlavor === "agent-test" && agentTestHostHome ? agentTestHostHome : home;
-    await bindIfExists(path.join(piHome, ".pi"), "/pi-config");
-  }
-  if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("opencode")) {
-    const configHome =
-      context.runtimeFlavor === "agent-test"
-        ? process.env.XDG_CONFIG_HOME?.trim()
-        : path.join(home, ".config");
-    const dataHome =
-      context.runtimeFlavor === "agent-test"
-        ? process.env.XDG_DATA_HOME?.trim()
-        : path.join(home, ".local", "share");
-    const stateHome =
-      context.runtimeFlavor === "agent-test"
-        ? process.env.XDG_STATE_HOME?.trim()
-        : path.join(home, ".local", "state");
-    if (configHome) await bindIfExists(path.join(configHome, "opencode"), "/opencode-config");
-    if (dataHome) await bindIfExists(path.join(dataHome, "opencode"), "/opencode-data");
-    if (stateHome) {
-      await bindIfExists(
-        path.join(stateHome, "opencode", "model.json"),
-        "/opencode-state/model.json",
-      );
+  // Portable agent inputs. A staged-inputs image gets only the allowlisted
+  // files of enabled providers, copied into a private per-environment
+  // revision; older images keep the read-only home mounts their entrypoint
+  // expects. A running legacy container keeps its mounts until it is rebuilt.
+  const stagedInputs =
+    identity.imageId &&
+    process.env.ORKESTRATOR_PORTABLE_INPUTS !== "host-mounts" &&
+    (await imageCapabilities(identity.imageId, context))?.["staged-inputs"]
+      ? await stagePortableInputs(
+          context.storage.getDataDir(),
+          environment.id,
+          selectedInputProviders(context, config.global.enabledAgentPlatforms),
+          defaultInputSourceRoots(context.runtimeFlavor, AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV),
+        )
+      : null;
+  if (stagedInputs) {
+    args.push(
+      ...stagedInputMountArguments(stagedInputs),
+      "--label",
+      `${DOCKER_LABEL_INPUTS_REVISION}=${stagedInputs.revision}`,
+    );
+  } else {
+    const home = os.homedir();
+    const agentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
+    if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude")) {
+      const claudeConfigDir =
+        context.runtimeFlavor === "agent-test"
+          ? process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim()
+          : path.join(home, ".claude");
+      const claudeConfigFile =
+        context.runtimeFlavor === "agent-test" && agentTestHostHome
+          ? path.join(agentTestHostHome, ".claude.json")
+          : path.join(home, ".claude.json");
+      if (claudeConfigDir) await bindIfExists(claudeConfigDir, "/claude-config");
+      await bindIfExists(claudeConfigFile, "/claude-config.json");
     }
-  }
-  if (context.runtimeFlavor !== "agent-test") {
-    await bindIfExists(path.join(home, ".gitconfig"), "/tmp/gitconfig");
+    if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("codex")) {
+      const codexHome =
+        context.runtimeFlavor === "agent-test"
+          ? process.env.CODEX_HOME?.trim()
+          : path.join(home, ".codex");
+      if (codexHome) await bindIfExists(codexHome, "/codex-home");
+    }
+    // Grok writes session databases during startup, so its host directory cannot
+    // replace the writable container home. Mount portable inputs separately;
+    // entrypoint.sh copies a bounded allowlist.
+    if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("grok")) {
+      const grokHome =
+        context.runtimeFlavor === "agent-test" && agentTestHostHome ? agentTestHostHome : home;
+      await bindIfExists(path.join(grokHome, ".grok"), "/grok-home");
+      await bindIfExists(path.join(grokHome, ".config", "grok"), "/grok-config");
+    }
+    // Pi has no vendor account: its credentials are the user's own provider keys
+    // in `~/.pi/agent/auth.json`, alongside the model cache and settings. The
+    // whole directory is mounted as a portable input rather than over the home,
+    // because the bridge writes session transcripts back into it — entrypoint.sh
+    // copies the bounded allowlist, exactly as it does for Cursor and Grok.
+    if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("pi")) {
+      const piHome =
+        context.runtimeFlavor === "agent-test" && agentTestHostHome ? agentTestHostHome : home;
+      await bindIfExists(path.join(piHome, ".pi"), "/pi-config");
+    }
+    if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("opencode")) {
+      const configHome =
+        context.runtimeFlavor === "agent-test"
+          ? process.env.XDG_CONFIG_HOME?.trim()
+          : path.join(home, ".config");
+      const dataHome =
+        context.runtimeFlavor === "agent-test"
+          ? process.env.XDG_DATA_HOME?.trim()
+          : path.join(home, ".local", "share");
+      const stateHome =
+        context.runtimeFlavor === "agent-test"
+          ? process.env.XDG_STATE_HOME?.trim()
+          : path.join(home, ".local", "state");
+      if (configHome) await bindIfExists(path.join(configHome, "opencode"), "/opencode-config");
+      if (dataHome) await bindIfExists(path.join(dataHome, "opencode"), "/opencode-data");
+      if (stateHome) {
+        await bindIfExists(
+          path.join(stateHome, "opencode", "model.json"),
+          "/opencode-state/model.json",
+        );
+      }
+    }
+    if (context.runtimeFlavor !== "agent-test") {
+      await bindIfExists(path.join(home, ".gitconfig"), "/tmp/gitconfig");
+    }
   }
 
   if (project.localPath) {
@@ -365,6 +419,7 @@ export async function createDockerContainer(
     await bindIfExists(path.join(project.localPath, "opencode.json"), "/opencode-project-json");
   }
 
+  const publishStart = args.length;
   args.push(...publishedPortArguments(environment.portMappings ?? [], repoConfig.entryPort));
   args.push("-p", `127.0.0.1::${OPENCODE_SERVER_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${CLAUDE_BRIDGE_PORT}/tcp`);
@@ -372,6 +427,32 @@ export async function createDockerContainer(
   args.push("-p", `127.0.0.1::${CURSOR_BRIDGE_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${GROK_ACP_BRIDGE_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${PI_BRIDGE_PORT}/tcp`);
+  // Network policy 2: the environment's own network, IPv6 disabled, and a
+  // firewall that allows the host only on the backend's service port and
+  // inbound connections only on the published ports. Never the shared
+  // default bridge when the environment network cannot be created.
+  if (
+    identity.imageId &&
+    process.env.ORKESTRATOR_NETWORK_POLICY !== "1" &&
+    ((await imageCapabilities(identity.imageId, context))?.["network-policy"] ?? 0) >= 2
+  ) {
+    const network = await ensureEnvironmentNetwork(context, environment.id);
+    const servicePort = context.agentTools?.servicePort?.() ?? null;
+    args.push(
+      "--network",
+      network,
+      "--sysctl",
+      "net.ipv6.conf.all.disable_ipv6=1",
+      "--label",
+      `${DOCKER_LABEL_NETWORK_POLICY}=2`,
+      "-e",
+      "ORKESTRATOR_NETWORK_POLICY=2",
+      "-e",
+      `ORKESTRATOR_HOST_SERVICE_PORTS=${servicePort ? String(servicePort) : ""}`,
+      "-e",
+      `ORKESTRATOR_INGRESS_PORTS=${ingressPorts(args.slice(publishStart)).join(",")}`,
+    );
+  }
   args.push(identity.imageId ?? context.dockerImage ?? DOCKER_IMAGE);
 
   let containerId: string;
@@ -405,6 +486,12 @@ export async function createDockerContainer(
     }
   }
   invalidateDockerContainerStateCache();
+  if (stagedInputs) {
+    // Earlier revisions no container binds any more (recovery copies keep
+    // theirs) are removed. Best effort: a failure only leaves a revision for
+    // the next creation or the environment's deletion to remove.
+    void pruneEnvironmentInputRevisions(environment.id, context).catch(() => undefined);
+  }
   try {
     if (project.localPath) {
       await stageConfiguredProjectFilesForContainer(
@@ -549,7 +636,7 @@ export async function startContainerOpenCodeServer(
     export OPENCODE_SERVER_USERNAME=opencode
     export OPENCODE_SERVER_PASSWORD=${quoteShell(authToken)}
     ${persistentStateExports("opencode")}
-    setsid opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0 > /tmp/opencode-serve.log 2>&1 &
+    ${boundedBackgroundLaunch(`opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0`, "/tmp/opencode-serve.log")}
   `,
     [authToken],
   );
@@ -646,7 +733,7 @@ export async function startContainerClaudeServer(
       export ${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}=${quoteShell(agentToolConnection.token)}`
           : ""
       }
-      setsid bun /opt/claude-bridge/dist/index.js > /tmp/claude-bridge.log 2>&1 &
+      ${boundedBackgroundLaunch("bun /opt/claude-bridge/dist/index.js", "/tmp/claude-bridge.log")}
     `,
       [authToken, agentToolConnection?.token],
     );

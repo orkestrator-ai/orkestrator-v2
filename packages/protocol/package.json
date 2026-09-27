@@ -20,6 +20,7 @@
     "./connections": "./src/connections.ts",
     "./container-lifecycle": "./src/container-lifecycle.ts",
     "./container-recovery": "./src/container-recovery.ts",
+    "./container-resources": "./src/container-resources.ts",
     "./coordinator": "./src/coordinator.ts",
     "./codex-background-task": "./src/codex-background-task.ts",
     "./cursor-plan-usage": "./src/cursor-plan-usage.ts",

@@ -1501,10 +1501,18 @@ export async function deleteEnvironment(
           });
         }
       }
-      // Persistent storage goes after its container; a failure stays pending
-      // in the ledger and is retried by the reconciler.
+      // Recovery copies are owed even when no current runtime exists.
+      if (!environment?.containerId && cleanup?.pending.includes("container")) {
+        await runEnvironmentCleanupStep(cleanup, "container", context);
+      }
+      // Persistent storage and the environment's network go after its
+      // containers; a failure stays pending in the ledger and is retried by
+      // the reconciler.
       if (cleanup?.pending.includes("volumes")) {
         await runEnvironmentCleanupStep(cleanup, "volumes", context);
+      }
+      if (cleanup?.pending.includes("network")) {
+        await runEnvironmentCleanupStep(cleanup, "network", context);
       }
       await stopLocalServersForEnvironmentUnlocked(environmentId, context);
       if (cleanup?.worktreePath) {

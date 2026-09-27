@@ -692,9 +692,16 @@ describe("process and platform command behavior", () => {
     );
     await invoke("stream_container_logs", { containerId: "container-a" });
     await waitFor(() => fixture.events.length === 2, "stdout and stderr container-log events");
+    // Events keep the legacy fields and add the follower's source and cursor.
     expect(fixture.events).toEqual([
-      { event: "container-log", payload: { containerId: "container-a", line: "stream stdout\n" } },
-      { event: "container-log", payload: { containerId: "container-a", line: "stream stderr\n" } },
+      {
+        event: "container-log",
+        payload: expect.objectContaining({ containerId: "container-a", line: "stream stdout\n" }),
+      },
+      {
+        event: "container-log",
+        payload: expect.objectContaining({ containerId: "container-a", line: "stream stderr\n" }),
+      },
     ]);
 
     // Only unclaimed stopped containers are removed: the assigned environment
@@ -709,12 +716,16 @@ describe("process and platform command behavior", () => {
       volumesDeleted: 0,
       spaceReclaimed: 1_250_000_000 + 512_000_000,
     });
+    // Capacity is the daemon's and usage this installation's; anything the
+    // fake daemon does not answer is reported unknown, not as host values.
     expect(await invoke("get_docker_system_stats")).toMatchObject({
-      containersRunning: 1,
-      containersTotal: 2,
       imagesTotal: 2,
       memoryUsed: 0,
       diskUsed: 0,
+      diskKnown: false,
+      memoryTotalKnown: false,
+      cpuCoresUsed: null,
+      scope: { capacity: "docker-daemon", usage: "installation", disk: "docker-daemon" },
     });
     const pruneLog = await readCommandLog();
     // Exact candidates are removed without -f, so a container started after the

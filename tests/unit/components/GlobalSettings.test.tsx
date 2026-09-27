@@ -1080,7 +1080,7 @@ describe("GlobalSettings", () => {
     rerender(<GlobalSettings activeSection="network" />);
     expect(screen.getByText("Network Whitelist")).toBeTruthy();
     rerender(<GlobalSettings activeSection="container" />);
-    expect(screen.getByText("CPU Cores")).toBeTruthy();
+    expect(screen.getByText("Limit resources of new containers")).toBeTruthy();
     rerender(<GlobalSettings activeSection="experimental" />);
     expect(screen.getByText("Codex Raw Event Logging")).toBeTruthy();
     rerender(<GlobalSettings activeSection="debug" />);
@@ -1440,21 +1440,24 @@ describe("GlobalSettings", () => {
     }
   });
 
-  test("saves container CPU and memory slider changes", async () => {
+  test("saves an enforced default budget only when limits are switched on", async () => {
+    const { invoke } = await import("../../../apps/web/src/lib/native/backend");
+    const invokeMock = invoke as unknown as ReturnType<typeof mock>;
+    invokeMock.mockClear();
     render(<GlobalSettings activeSection="container" />);
-    const [cpuSlider, memorySlider] = screen.getAllByRole("slider");
-
-    fireEvent.keyDown(cpuSlider!, { key: "ArrowRight" });
-    fireEvent.keyDown(memorySlider!, { key: "ArrowRight" });
-    await flushAutoSave();
-
+    const cpu = screen.getByLabelText("CPU cores") as HTMLInputElement;
+    // Off by default: no limits, fields disabled.
+    expect(cpu.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("switch", { name: "Limit resources of new containers" }));
+    fireEvent.change(screen.getByLabelText("CPU cores"), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText("Memory (GB)"), { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save limits" }));
     await waitFor(() =>
-      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          containerResources: { cpuCores: 3, memoryGb: 5 },
-        }),
-      ),
+      expect(invokeMock).toHaveBeenCalledWith("set_container_resource_limits", {
+        limits: { cpus: 2, memoryMiB: 4096, pids: null },
+      }),
     );
+    invokeMock.mockImplementation(() => Promise.resolve());
   });
 
   test("preserves the selected terminal font family while saving a size change", async () => {

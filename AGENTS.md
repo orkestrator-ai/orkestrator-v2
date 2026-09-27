@@ -979,10 +979,19 @@ views stay sandboxed.
 
 ## Docker Base Image
 
-The image is built from `oven/bun:1.4.2-debian`, matching the Bun version
-managed in `mise.toml` for development and CI. Every agent CLI version below
-is pinned by an `ARG` in `docker/Dockerfile`, which is its container source of
-truth.
+The image is built from `oven/bun:1.4.2-debian`, pinned by its multi-architecture
+index digest on both stages, matching the Bun version managed in `mise.toml`
+for development and CI. Refresh the digest deliberately (`docker buildx
+imagetools inspect oven/bun:<tag>`) for a Bun bump or a base security update;
+`tests/unit/version-drift.test.ts` requires both `FROM` lines to agree. Every
+agent CLI version below is pinned by an `ARG` in `docker/Dockerfile`, which is
+its container source of truth.
+
+The bridges are built in a separate `bridge-build` stage (manifests and
+patches first, then a `--frozen-lockfile` filtered install, then sources), and
+the delivered image receives only each bridge's runtime directory. Do not move
+bridge builds back into the final stage: the workspace install and build
+layers would ship in the image's history even when deleted later.
 
 Runtimes:
 - Bun, installed in mise's shared system tool directory. The matching base-image
@@ -1097,7 +1106,19 @@ else is rejected outright. `full` mode skips the firewall entirely.
   to match, but `tests/unit/version-drift.test.ts` does require the hosts the
   image itself depends on to appear in all three, so a new one cannot be added to
   only one list.
-- DNS, localhost, outbound SSH, and the host network are always allowed.
+- DNS (to Docker's resolvers and the upstreams its embedded resolver names)
+  and localhost are always allowed. There is no general outbound SSH
+  exception: SSH reaches only hosts whose addresses are allowlisted (GitHub's
+  published ranges, allowed domains).
+- Host access depends on the container's network policy. A container created
+  from an image with `network-policy=2` runs on its own labelled Docker
+  network with IPv6 disabled; it may reach the host only on the backend's
+  agent-tools port (kept current by `update-firewall.sh --host-ports`) and
+  accepts inbound connections only on its published ports. Older containers
+  (policy 1, default bridge) still allow the whole gateway `/24`, which
+  includes sibling containers, until they are rebuilt.
+- The firewall limits destinations. It does not stop data leaving through an
+  allowed service, and a workload with root in full mode can change it.
 
 ## Configuration Storage
 

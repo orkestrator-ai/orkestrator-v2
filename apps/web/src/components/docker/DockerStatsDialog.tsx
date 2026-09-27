@@ -225,9 +225,11 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
                 <div className="text-xs text-muted-foreground uppercase tracking-wide">CPU</div>
                 <div className="text-lg font-semibold mt-1">
-                  {stats.cpuUsagePercent}%{" "}
+                  {stats.cpuCoresUsed != null
+                    ? `${stats.cpuCoresUsed} cores`
+                    : `${stats.cpuUsagePercent}%`}{" "}
                   <span className="text-xs font-normal text-muted-foreground">
-                    ({stats.cpus} cores)
+                    of {stats.cpus || "?"} Docker CPUs
                   </span>
                 </div>
                 <Progress value={Math.min(stats.cpuUsagePercent, 100)} className="mt-2 h-1" />
@@ -235,7 +237,8 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
                 <div className="text-xs text-muted-foreground uppercase tracking-wide">MEMORY</div>
                 <div className="text-lg font-semibold mt-1">
-                  {formatBytes(stats.memoryUsed)} / {formatBytes(stats.memoryTotal)}
+                  {formatBytes(stats.memoryUsed)} /{" "}
+                  {stats.memoryTotalKnown === false ? "unknown" : formatBytes(stats.memoryTotal)}
                 </div>
                 <Progress
                   value={stats.memoryTotal > 0 ? (stats.memoryUsed / stats.memoryTotal) * 100 : 0}
@@ -243,11 +246,15 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                 />
               </div>
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
-                <div className="text-xs text-muted-foreground uppercase tracking-wide">DISK</div>
+                <div className="text-xs text-muted-foreground uppercase tracking-wide">
+                  DISK (ALL OF DOCKER)
+                </div>
                 <div className="text-lg font-semibold mt-1">
-                  {stats.diskTotal > 0
-                    ? `${formatBytes(stats.diskUsed)} / ${formatBytes(stats.diskTotal)}`
-                    : formatBytes(stats.diskUsed)}
+                  {stats.diskKnown === false
+                    ? "unknown"
+                    : stats.diskTotal > 0
+                      ? `${formatBytes(stats.diskUsed)} / ${formatBytes(stats.diskTotal)}`
+                      : formatBytes(stats.diskUsed)}
                 </div>
                 <Progress
                   value={stats.diskTotal > 0 ? (stats.diskUsed / stats.diskTotal) * 100 : 0}
@@ -255,6 +262,13 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                 />
               </div>
             </div>
+            <p className="text-xs text-muted-foreground">
+              CPU and memory in use are this installation&apos;s containers; totals are what Docker
+              reports (on Docker Desktop, its virtual machine).
+              {stats.sampledAt
+                ? ` Measured ${new Date(stats.sampledAt).toLocaleTimeString()}${stats.stale ? " (stale)" : ""}.`
+                : ""}
+            </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
                 <div className="text-lg font-semibold">{stats.containersRunning}</div>
@@ -336,8 +350,14 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                       {isRunning && container.cpuPercent !== null && (
                         <span className="text-xs text-muted-foreground">
                           CPU: {container.cpuPercent}%
+                          {container.memoryBytes != null
+                            ? ` · ${formatBytes(container.memoryBytes)}`
+                            : ""}
                         </span>
                       )}
+                      {!isRunning && container.oomKilled ? (
+                        <span className="text-xs text-destructive">Out of memory</span>
+                      ) : null}
                       <div className="flex items-center gap-1">
                         {isRunning ? (
                           <CheckCircle2 className="h-4 w-4 text-green-500" />

@@ -577,6 +577,11 @@ export class AgentToolsServer {
     await start;
   }
 
+  /** The port containers call back to, or null before the server listens. */
+  servicePort(): number | null {
+    return this.port ?? null;
+  }
+
   connection(
     environmentId: string,
     projectId: string,

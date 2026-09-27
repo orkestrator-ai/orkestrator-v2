@@ -14,6 +14,7 @@ import {
   type EnvironmentCleanupStep,
 } from "./environment-cleanup-ledger.js";
 import { environmentStateDirectories } from "./environment-state-paths.js";
+import { removeEnvironmentNetwork } from "./container-network.js";
 import type { Environment, Project } from "./models.js";
 import { removeConfinedDirectory } from "./path-safety.js";
 import { CommandFailedError, pathExists, runCommand } from "./shell.js";
@@ -69,6 +70,8 @@ export function buildEnvironmentCleanupEntry(
   if (environment.containerId || retainedContainers.length > 0) pending.push("container");
   const volumes = storageVolumeNames(environment);
   if (volumes.length > 0) pending.push("volumes");
+  // The environment's own Docker network (policy 2); absent is success.
+  if (environment.environmentType === "containerized") pending.push("network");
   if (worktreePath) pending.push("worktree");
   if (ownsBranch) pending.push("branch");
   pending.push("state-dirs");
@@ -476,6 +479,14 @@ export async function runEnvironmentCleanupStep(
         throw new CleanupRefusedError("container removal is still pending");
       }
       await cleanupVolumes(entry, context, run);
+    } else if (step === "network") {
+      const current = await ledger.get(entry.environmentId);
+      if ((current ?? entry).pending.includes("container")) {
+        throw new CleanupRefusedError("container removal is still pending");
+      }
+      const result = await removeEnvironmentNetwork(context, entry.environmentId);
+      if (result === "in-use") throw new CleanupRefusedError("network still has containers");
+      if (result === "unreachable") throw new CleanupRefusedError("docker unreachable");
     } else if (step === "worktree") await cleanupWorktree(entry, context, run);
     else if (step === "branch") {
       const outcome = await cleanupEnvironmentBranch(entry, run);

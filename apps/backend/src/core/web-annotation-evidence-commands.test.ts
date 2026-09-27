@@ -63,7 +63,14 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-const context = {} as CommandContext;
+// Container commands verify ownership first; an environment that references
+// the container exactly is this registry's persisted association.
+const context = {
+  storage: {
+    getDataDir: () => path.join(tmpdir(), "ork-wa-owner"),
+    loadEnvironments: async () => [{ id: "env-1", containerId: "container-1" }],
+  },
+} as unknown as CommandContext;
 const RELATIVE = ".orkestrator/annotations/req-1-0123456789abcdef.png";
 const png = makePng(4, 3, 11);
 const digest = createHash("sha256").update(png).digest("hex");

@@ -34,3 +34,28 @@ export function boundDiagnosticTail(text: string): string {
   }
   return truncated ? `[earlier output truncated]\n${bounded}` : bounded;
 }
+
+/** In-image rotating writer (`bounded-logs=1`). */
+export const CONTAINER_LOG_WRITER = "/usr/local/bin/orkestrator-log-writer";
+
+/**
+ * Shell that starts `command` detached with its output in `logFile`. Where the
+ * image ships the rotating writer, output goes through it (5 MiB, 3 files);
+ * an older image keeps the plain redirect it always had. The whole pipeline
+ * is `setsid`, so the writer outlives the exec session exactly like the
+ * process it drains.
+ */
+export function boundedBackgroundLaunch(command: string, logFile: string): string {
+  const pipeline = `${command} 2>&1 | ${CONTAINER_LOG_WRITER} ${logFile}`;
+  return [
+    `if [ -x ${CONTAINER_LOG_WRITER} ]; then`,
+    `  setsid sh -c ${shellQuote(pipeline)} >/dev/null 2>&1 &`,
+    "else",
+    `  setsid ${command} > ${logFile} 2>&1 &`,
+    "fi",
+  ].join("\n");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}

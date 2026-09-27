@@ -12,6 +12,10 @@ export const DOCKER_LABEL_PROJECT_ID = "project-id";
 export const DOCKER_LABEL_OPERATION_ID = "orkestrator-operation-id";
 /** Runtime generation of a container; changes whenever the runtime is replaced. */
 export const DOCKER_LABEL_RUNTIME_GENERATION = "orkestrator-runtime-generation";
+/** Network policy version a container was created with (step 09). */
+export const DOCKER_LABEL_NETWORK_POLICY = "orkestrator-network-policy";
+/** Staged portable-input revision a container binds (step 08). */
+export const DOCKER_LABEL_INPUTS_REVISION = "orkestrator-inputs-revision";
 /** Role of an owned volume/network/helper (workspace, state, network, helper…). */
 export const DOCKER_LABEL_RESOURCE_ROLE = "orkestrator-resource-role";
 

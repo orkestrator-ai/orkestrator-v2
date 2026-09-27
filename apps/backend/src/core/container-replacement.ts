@@ -808,6 +808,9 @@ export async function rebuildPreview(
       provider,
       level: entry.level,
       limitations: entry.limitations,
+      // No provider has been exercised resuming a preserved session against
+      // its real CLI/SDK after a rebuild yet (qualification C13).
+      resumeQualified: false,
     })),
     retainedCopies,
     retainedCopyLimit: MAX_RETAINED_STORAGE_SETS,

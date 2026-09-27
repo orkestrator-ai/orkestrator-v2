@@ -761,6 +761,7 @@ export function EnvironmentSettingsDialog({
       ? [
           { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },
           { id: "ports", label: "Ports", icon: <Network className="h-4 w-4" /> },
+          { id: "container", label: "Container", icon: <Server className="h-4 w-4" /> },
         ]
       : []),
     { id: "previews", label: "Preview services", icon: <Globe2 className="h-4 w-4" /> },
@@ -1077,6 +1078,72 @@ export function EnvironmentSettingsDialog({
             )}
           </div>
         );
+      case "container":
+        return (
+          <div className="max-w-2xl space-y-4">
+            {!environment.containerId ? (
+              <p className="text-sm text-muted-foreground">
+                This environment has no container yet. Start it to create one.
+              </p>
+            ) : null}
+            {environment.containerId && onRestart && (
+              <EnvironmentRebuildSection
+                environment={environment}
+                dockerAvailable={dockerAvailable}
+                onRestart={onRestart}
+                beforeRebuild={async () => {
+                  if (portMappingsChanged) {
+                    await backend.updatePortMappings(environment.id, portMappings);
+                  }
+                }}
+                onUpdate={onUpdate}
+                onClose={() => onOpenChange(false)}
+              />
+            )}
+            {environment.environmentType !== "local" && (
+              <EnvironmentResourcesSection
+                environmentId={environment.id}
+                containerId={environment.containerId ?? null}
+                dockerAvailable={dockerAvailable}
+              />
+            )}
+            {environment.environmentType !== "local" && (
+              <EnvironmentInputsSection
+                environmentId={environment.id}
+                dockerAvailable={dockerAvailable}
+              />
+            )}
+            {environment.environmentType !== "local" && (
+              <EnvironmentRecoveryCopies
+                environment={environment}
+                dockerAvailable={dockerAvailable}
+                onUpdate={onUpdate}
+                onClose={() => onOpenChange(false)}
+              />
+            )}
+            {environment.containerId && onRestart && (
+              <div className="flex flex-col gap-2 rounded-md border border-destructive/40 p-3">
+                <p className="text-sm font-medium">Reset container</p>
+                <p className="text-sm text-muted-foreground">
+                  Starts over with a fresh clone in a new container. The current container and files
+                  are kept as a recovery copy unless you choose to delete them.
+                </p>
+                <div>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    onClick={openResetConfirm}
+                    disabled={!dockerAvailable || isResetting}
+                    title={!dockerAvailable ? "Start Docker to reset this container" : undefined}
+                  >
+                    Reset container…
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
       case "ports":
         return (
           <div className="max-w-2xl space-y-4">
@@ -1139,62 +1206,6 @@ export function EnvironmentSettingsDialog({
                   Saved port changes apply when this container is rebuilt. The current container
                   keeps its ports until then.
                 </span>
-              </div>
-            )}
-            {environment.containerId && onRestart && (
-              <EnvironmentRebuildSection
-                environment={environment}
-                dockerAvailable={dockerAvailable}
-                onRestart={onRestart}
-                beforeRebuild={async () => {
-                  if (portMappingsChanged) {
-                    await backend.updatePortMappings(environment.id, portMappings);
-                  }
-                }}
-                onUpdate={onUpdate}
-                onClose={() => onOpenChange(false)}
-              />
-            )}
-            {environment.environmentType !== "local" && (
-              <EnvironmentResourcesSection
-                environmentId={environment.id}
-                containerId={environment.containerId ?? null}
-                dockerAvailable={dockerAvailable}
-              />
-            )}
-            {environment.environmentType !== "local" && (
-              <EnvironmentInputsSection
-                environmentId={environment.id}
-                dockerAvailable={dockerAvailable}
-              />
-            )}
-            {environment.environmentType !== "local" && (
-              <EnvironmentRecoveryCopies
-                environment={environment}
-                dockerAvailable={dockerAvailable}
-                onUpdate={onUpdate}
-                onClose={() => onOpenChange(false)}
-              />
-            )}
-            {environment.containerId && onRestart && (
-              <div className="flex flex-col gap-2 rounded-md border border-destructive/40 p-3">
-                <p className="text-sm font-medium">Reset container</p>
-                <p className="text-sm text-muted-foreground">
-                  Starts over with a fresh clone in a new container. The current container and files
-                  are kept as a recovery copy unless you choose to delete them.
-                </p>
-                <div>
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    size="sm"
-                    onClick={openResetConfirm}
-                    disabled={!dockerAvailable || isResetting}
-                    title={!dockerAvailable ? "Start Docker to reset this container" : undefined}
-                  >
-                    Reset container…
-                  </Button>
-                </div>
               </div>
             )}
             {showAddPortForm && (

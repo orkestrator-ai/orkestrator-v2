@@ -1,6 +1,9 @@
 # Container improvements — implementation plan
 
-Status: Active plan; all implementation steps are **not started**.
+Status: All fourteen steps implemented on branch `implement-containers-50431d61c9b0-r1`,
+awaiting human review. Evidence: [qualification](../qualification.md) and
+[benchmarks](../benchmarks.md); each step file ends with its implementation
+record and remaining limitations.
 
 Prepared: 2026-09-21 against `88c2f9cc`.
 Source: [container investigation](../../containers.md).
@@ -13,8 +16,8 @@ survive renderer inactivity and recover from backend crashes. Host inputs,
 network access, resource consumption and diagnostic output must have explicit
 boundaries. An image upgrade must be identifiable, compatible and recoverable.
 
-This directory is an implementation specification, not evidence that these
-features exist. Proposed filenames, types and commands are marked as such.
+This directory began as an implementation specification; the implementation
+records at the end of each step describe what was actually built. Proposed filenames, types and commands are marked as such.
 Existing source links identify integration points, not APIs to replace blindly.
 Recheck those points when beginning a step because the repository can change.
 
@@ -39,7 +42,7 @@ combine the whole row into one large change.
 | 11 | [Bounded logs and diagnostic subscriptions](11-bounded-logs-and-diagnostic-subscriptions.md) | 02, 04 | Implemented, in review | Rotated logs, bounded tails and owned log followers |
 | 12 | [Image build and release delivery](12-image-build-and-release-delivery.md) | 03 | Implemented, in review | Multi-stage builds, reproducible artifacts and compatibility checks |
 | 13 | [Performance baselines and targeted optimization](13-performance-baselines-and-targeted-optimization.md) | 06, 08–12 | Implemented, in review | Comparable measurements and evidence-based optimization decisions |
-| 14 | [Integrated qualification and rollout](14-integrated-qualification-and-rollout.md) | 01–13 | Not started | Cross-platform failure matrix, staged adoption and release evidence |
+| 14 | [Integrated qualification and rollout](14-integrated-qualification-and-rollout.md) | 01–13 | Implemented, in review | Cross-platform failure matrix, staged adoption and release evidence |
 
 Step 12 can introduce the build structure after step 03; its final image must
 include and qualify the contracts added by subsequent steps. Step 13 completes

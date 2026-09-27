@@ -49,8 +49,13 @@ function preview(overrides: Partial<RebuildPreview> = {}): RebuildPreview {
     preservedPaths: ["/workspace — tracked, untracked and ignored files"],
     notPreserved: ["Running processes"],
     providers: [
-      { provider: "claude", level: "full", limitations: null },
-      { provider: "opencode", level: "partial", limitations: "Revert snapshots are not kept." },
+      { provider: "claude", level: "full", limitations: null, resumeQualified: false },
+      {
+        provider: "opencode",
+        level: "partial",
+        limitations: "Revert snapshots are not kept.",
+        resumeQualified: false,
+      },
     ],
     retainedCopies: 0,
     retainedCopyLimit: 16,
@@ -86,6 +91,7 @@ describe("environment rebuild section", () => {
     await screen.findByText("Rebuild container and keep its files?");
     expect(screen.getByText(/partly: Revert snapshots are not kept/)).toBeTruthy();
     expect(screen.getByText("Running processes")).toBeTruthy();
+    expect(screen.getByText(/resuming those sessions after a rebuild/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
     await waitFor(() => expect(onRestart).toHaveBeenCalledTimes(1));
     expect(beforeRebuild).toHaveBeenCalledTimes(1);

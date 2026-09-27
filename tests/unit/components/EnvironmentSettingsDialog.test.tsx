@@ -287,6 +287,7 @@ describe("EnvironmentSettingsDialog", () => {
       "opencode",
       "network",
       "ports",
+      "container",
       "previews",
       "extensions",
     ]);
@@ -963,7 +964,7 @@ describe("EnvironmentSettingsDialog", () => {
     mockSection = "ports";
     const onRestart = mock(async () => undefined);
     const onOpenChange = mock(() => undefined);
-    render(
+    const dialog = () => (
       <DockerAvailabilityProvider available={false}>
         <EnvironmentSettingsDialog
           open={true}
@@ -972,10 +973,13 @@ describe("EnvironmentSettingsDialog", () => {
           onUpdate={() => undefined}
           onRestart={onRestart}
         />
-      </DockerAvailabilityProvider>,
+      </DockerAvailabilityProvider>
     );
+    const { rerender } = render(dialog());
 
     addHostPort("3001");
+    mockSection = "container";
+    rerender(dialog());
     const reset = screen.getByRole("button", { name: "Reset container…" }) as HTMLButtonElement;
     expect(reset.disabled).toBe(true);
     expect(reset.getAttribute("title")).toBe("Start Docker to reset this container");
@@ -990,7 +994,7 @@ describe("EnvironmentSettingsDialog", () => {
     mockSection = "ports";
     const onRestart = mock(async () => undefined);
     const environment = makeEnvironment({ status: "running", containerId: "container-reviewed" });
-    render(
+    const dialog = () => (
       <DockerAvailabilityProvider available={true}>
         <EnvironmentSettingsDialog
           open={true}
@@ -999,10 +1003,15 @@ describe("EnvironmentSettingsDialog", () => {
           onUpdate={() => undefined}
           onRestart={onRestart}
         />
-      </DockerAvailabilityProvider>,
+      </DockerAvailabilityProvider>
     );
+    const { rerender } = render(dialog());
 
     addHostPort("3001");
+    // The reset lives in the Container section; an unsaved port edit made in
+    // Ports is still applied by it.
+    mockSection = "container";
+    rerender(dialog());
     fireEvent.click(screen.getByRole("button", { name: "Reset container…" }));
     // Keeping a recovery copy is the default; opting out is the destructive path.
     fireEvent.click(
@@ -1035,7 +1044,7 @@ describe("EnvironmentSettingsDialog", () => {
   });
 
   test("a reset keeps a recovery copy by default without the destructive acknowledgement", async () => {
-    mockSection = "ports";
+    mockSection = "container";
     const onRestart = mock(async () => undefined);
     render(
       <DockerAvailabilityProvider available={true}>
@@ -1063,7 +1072,7 @@ describe("EnvironmentSettingsDialog", () => {
   });
 
   test("reports a container that changed before the reset", async () => {
-    mockSection = "ports";
+    mockSection = "container";
     const onRestart = mock(async () => {
       throw new Error(
         "ContainerLifecycleError:runtime-changed: The container changed after it was reviewed.",

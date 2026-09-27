@@ -1,0 +1,103 @@
+# Container qualification (step 14)
+
+Evidence for the [scenario matrix](plan/14-integrated-qualification-and-rollout.md#required-scenario-matrix)
+on branch `implement-containers-50431d61c9b0-r1`. Platform: Linux x86_64,
+Docker Engine 29.7.2 (containerd store), Bun 1.4.2. Image: the branch's
+`docker/Dockerfile`, tagged `orkestrator-v2:containers-plan-check` for live
+suites and built as the profile's workspace-specific development image for
+the real-stack runs; `orkestrator-v2:latest` was never used or retagged.
+
+How to reproduce:
+
+| Suite | Command |
+| --- | --- |
+| Unit and integration (complete) | `mise run test` |
+| Live Docker scenarios | `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test tests/unit/electron/container-live-qualification.test.ts tests/unit/electron/container-live-replacement.test.ts tests/unit/electron/container-live-network.test.ts` |
+| Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test tests/unit/electron/container-benchmarks.test.ts` |
+| Real stack, local | `mise run test:agent:browser:isolated` |
+| Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` |
+
+Live suites label every resource with a private owner namespace and remove
+exactly those; the real-stack profile was stopped and reset afterwards
+(`dev:reset` now also removes the profile's volumes and networks).
+
+## Matrix
+
+"Unit" means fake-daemon tests in `mise run test`; "Live" means the real
+Engine; "Real stack" means the Vite renderer, real backend and Electron main
+process of an isolated `dev:test` profile.
+
+| ID | Result | Evidence |
+| --- | --- | --- |
+| C01 | Pass | Unit: `commands-registry-environments.test.ts` (implicit and preserve recreates without a reviewed id refused, discard requires the id), `EnvironmentSettingsDialog.test.tsx` (saving ports never recreates) |
+| C02 | Pass | Unit: `commands-registry-docker.test.ts` (keeps assigned, linked and racing containers; raw removal refuses an environment's container), `recovery-copies.test.ts` (volumes by reference). Live: C18 |
+| C03 | Pass | Unit: `commands-registry-environments.test.ts` (failed removal keeps the reference, `removal-failed`) |
+| C04 | Pass | Unit: `container-lifecycle-service.test.ts` (labels decide ownership in every profile), `docker-ownership.test.ts`. Real stack: "Docker fixture rejects containers owned by another profile" |
+| C05 | Pass | Unit: `container-lifecycle-service.test.ts` (one writer per data directory, lease reclaim, dedupe of a repeated operation id, stale revision conflict) |
+| C06 | Pass | Unit: `container-lifecycle-service.test.ts` (a create that succeeded before the crash is adopted, not repeated; a crash after the pointer write keeps one runtime) |
+| C07 | Pass | Unit: `docker-image.test.ts` (a create uses the id resolved at admission after the tag moves) |
+| C08 | Pass | Unit: `docker-image.test.ts` (remote daemon refused before anything is created; legacy image classified), `container-replacement.test.ts` (image without the storage contract refused before the source stops) |
+| C09 | Pass | Live: `container-live-qualification.test.ts` C09 (a restarted container never reports a previous boot's readiness) |
+| C10 | Pass (unit) | Unit: `container-readiness.test.ts` (a legacy-layer completion does not survive a runtime replacement; failed boot and timeout are typed), setup completion bound to runtime generation |
+| C11 | Pass | Live: C11 (bounded drain under `--init`, forced stop recorded) |
+| C12 | Pass | Live: C12 (tracked/untracked/ignored/binary files, modes, symlinks, branches, unpushed commit survive stop/start and runtime replacement; all state paths node-owned) |
+| C13 | Partial — gated | Live C14 copies Claude and Codex transcripts, relocated Codex SQLite with WAL and the OpenCode DB. Resuming a preserved session in the real provider CLI/SDK was **not** run; the rebuild preview says session files are copied but resume is not yet verified (`resumeQualified: false`), and Codex/OpenCode/Grok are declared partial |
+| C14 | Pass | Live: legacy migration and volume rebuild (Git refs/status, bytes, modes, symlinks, relocations; config and snapshots not copied). Real stack: `orkestrator environment recreate` on the fixture container kept an untracked file on a new `-g2` runtime |
+| C15 | Pass | Live: cancellation during copy, changed-runtime refusal. Unit: restart reconciliation of `migrate`/`rebuild`/`restore` at every phase removes only the candidate; the commit is one write |
+| C16 | Pass (partial) | Live: a symlinked session root fails verification and rolls back. Unit: capacity verdicts refuse measured shortfall and unknown capacity unless accepted. Disk/inode exhaustion was not injected on a real daemon |
+| C17 | Pass | Live: restore the legacy copy after newer work, restore the newer copy back (new work retained), discard. Post-commit reconciliation never reverts pointers (no unresolved operation) |
+| C18 | Pass | Unit: execution refuses a resource that became assigned and one outside the preview; tokens are consumed. Live: only the reviewed leftover volume removed |
+| C19 | Pass | Live: deletion stopped after the container step, the reconciler later removed volumes, the recovery copy and the network, and cleared the ledger |
+| C20 | Pass | Live: only enabled providers' allowlisted files mounted read-only; unique sentinels in histories, transcripts and a disabled provider's credentials unreachable anywhere in the container |
+| C21 | Partial | Unit: atomic revision publication, private modes, manifest without names; UI reports removal and pending rebuild. An interrupted revoke/refresh against a live provider was not exercised |
+| C22 | Pass | Live: own network, IPv6 disabled, service port leaves the container while other host ports and a sibling are rejected, example.com blocked, ingress via published port, durable atomic host-port update across restart |
+| C23 | Partial | Unit: fail-closed firewall on failure, status report, GitHub ranges seed → live → cache → fail order. DNS TTL refresh and removal of an allowed domain from a running container are not implemented (edits apply via `update-firewall.sh` or a rebuild) |
+| C24 | Pass | Live: limits applied and read back; PID exhaustion contained and recovered; OOM killed the allocating process, not PID 1; live update read back. Two-environment contention not measured |
+| C25 | Pass | Unit: unreachable daemon → unknown, not zero; stale marking; UI shows unknown disk/memory and stale samples |
+| C26 | Pass | Live: `local` driver 10 MiB × 3; 40 MB through the bridge launch path stays within 15 MiB; real followers shared and stopped. Unit: huge lines, split UTF-8, ring gaps, leases, caps |
+| C27 | Partial | Live, amd64: all five bridges answer `/global/health`; the full live set passes on the final image; real stack: Chromium launches for `node` and uid 0. arm64 not built here (CI builds both natively and refuses a one-architecture release) |
+| C28 | Pass | [benchmarks.md](benchmarks.md) (5 fresh, 10 warm, 5 + 3 rebuilds, sampler, churn), incomplete runs recorded |
+| C29 | Partial | Real stack: Container and Network sections show backend state at desktop and narrow widths and after a reload; a rebuild run by the CLI with no UI open appears as a recovery copy. Unit: an in-flight rebuild rehydrates from the lifecycle snapshot with a working cancel. Switching environments during a live rebuild was not driven in the browser |
+| C30 | Pass | Real stack: `mise run test:agent:browser:isolated` (local worktree create, terminal, reload rehydration, diff state) |
+
+## Rollout stage status
+
+1. Safety patch — implemented (step 01): guarded recreate, protected cleanup.
+2. Additive readers and image — implemented: lifecycle record, schema floor,
+   writer lease, capability manifest.
+3. New environments — implemented: new runtimes of a capable image get
+   persistent storage, staged inputs, their own network and bounded logs.
+4. Explicit migration — implemented: "Rebuild (keeps files)" and `recreate`
+   without `--discard`; nothing migrates on startup or tab open.
+5. Default safe rebuild — implemented for recreate; port edits are saved and
+   applied by an explicit rebuild.
+6. Legacy retirement — not started (by design: needs an export path and a
+   decision outside this change).
+
+## Rollback and release gates
+
+- Minimum-writer marker: a backend older than the marker's writer version
+  opens read-only and refuses destructive work (`registry-writer-lease.ts`,
+  unit-tested). Binaries that predate the marker cannot honour it; downgrading
+  below this branch is not safe for environments migrated to `volume-v1`.
+- Prior image digests remain available; a runtime keeps its pinned image id,
+  and an incompatible provider database is recovered from a retained copy, not
+  by mounting newer state into an old runtime.
+- Rebuild/migration admission can be refused while recovery readers and
+  existing operations continue; the old prune and implicit discard are gone.
+- Resource inventory after qualification: all live-suite and profile
+  resources removed by exact owner label; nothing else touched.
+- Human review of the pull request is required; nothing here merges or changes
+  a production installation.
+
+## Known limitations and follow-ups
+
+- Mobile: opening an environment's Settings from the narrow sidebar's
+  "Environment actions" menu leaves the projects drawer (a modal dialog) open
+  underneath, which blocks all interaction with the settings view. This is
+  pre-existing and unrelated to the container sections; Tools → Environment
+  settings works. Fixing it means moving the dialog's state out of the sidebar
+  row.
+- Provider session resume after a rebuild (C13) and credential refresh against
+  live providers (C21) need authorized real-provider runs.
+- Docker Desktop, rootless Engine and arm64 were not available on this host.

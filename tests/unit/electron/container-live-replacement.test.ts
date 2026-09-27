@@ -519,3 +519,64 @@ describe("C17/C18 recovery copies and reviewed cleanup", () => {
     LIVE_TIMEOUT_MS,
   );
 });
+
+describe("C19 deletion interrupted between runtime and volume removal", () => {
+  live(
+    "the ledger resumes and removes volumes, recovery copies and the network exactly once",
+    async () => {
+      const { replaceRuntimePreservingState } =
+        await import("../../../apps/backend/src/core/container-replacement");
+      const { buildEnvironmentCleanupEntry, runEnvironmentCleanupStep } =
+        await import("../../../apps/backend/src/core/environment-cleanup");
+      const { environmentCleanupLedger } =
+        await import("../../../apps/backend/src/core/environment-cleanup-ledger");
+      const { reconcileEnvironmentCleanup } =
+        await import("../../../apps/backend/src/core/environment-cleanup-reconciler");
+      const { fixture, environmentId, containerId } = await createLegacyEnvironment("c19");
+      const migrated = await replaceRuntimePreservingState(
+        { environmentId, expectedContainerId: containerId },
+        fixture.context,
+      );
+      const environment = (await fixture.context.storage.getEnvironment(environmentId))!;
+      const entry = buildEnvironmentCleanupEntry(environment, null, dataDir);
+      // Current runtime, the legacy recovery copy, the storage set, the network.
+      expect(entry.containerId).toBe(migrated!.containerId);
+      expect(entry.retainedContainers).toEqual([containerId]);
+      expect(entry.volumes.length).toBe(2);
+      expect(entry.pending).toEqual(["container", "volumes", "network", "state-dirs"]);
+      const ledger = environmentCleanupLedger(dataDir);
+      await ledger.record(entry);
+      await fixture.context.storage.removeEnvironment(environmentId);
+
+      // The deletion removes the containers, then the backend "dies".
+      expect(await runEnvironmentCleanupStep(entry, "container", fixture.context)).toBe(true);
+      expect(await docker(["ps", "-aq", "--filter", `label=environment-id=${environmentId}`])).toBe(
+        "",
+      );
+      expect(
+        (await docker(["volume", "ls", "-q", "--filter", `label=environment-id=${environmentId}`]))
+          .split("\n")
+          .filter(Boolean),
+      ).toHaveLength(2);
+      expect((await ledger.get(environmentId))?.pending).toEqual([
+        "volumes",
+        "network",
+        "state-dirs",
+      ]);
+
+      // A later start's reconciler finishes exactly what is owed.
+      const result = await reconcileEnvironmentCleanup(fixture.context, {
+        now: () => new Date(Date.now() + 60 * 60_000),
+      });
+      expect(result.attempted).toBe(1);
+      expect(await ledger.get(environmentId)).toBeNull();
+      expect(
+        await docker(["volume", "ls", "-q", "--filter", `label=environment-id=${environmentId}`]),
+      ).toBe("");
+      expect(
+        await docker(["network", "ls", "-q", "--filter", `label=environment-id=${environmentId}`]),
+      ).toBe("");
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});

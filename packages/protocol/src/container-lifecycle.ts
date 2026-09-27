@@ -844,6 +844,11 @@ export interface RebuildProviderPreservation {
   level: "full" | "partial";
   /** Plain-language description of what is not preserved, if anything. */
   limitations: string | null;
+  /**
+   * Resuming a preserved session in the real provider after a rebuild has
+   * been qualified. Until then only the files are claimed, not the resume.
+   */
+  resumeQualified: boolean;
 }
 
 /**

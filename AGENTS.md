@@ -1084,6 +1084,20 @@ Branded Google Chrome (`channel: "chrome"`) is deliberately absent: Google
 publishes no linux/arm64 package, so installing it would break the image build
 on Apple Silicon.
 
+### Environment storage and lifecycle
+
+New runtimes of a capable image keep `/workspace` and the provider session
+paths in `PROVIDER_STATE_LAYOUT` on two owner-labelled volumes; credentials and
+configuration stay in the container layer, staged per environment from the
+entrypoint's allowlist. Every container mutation is a durable lifecycle
+operation (`container-lifecycle-service.ts`). A preserving rebuild copies and
+verifies into a new storage set before one commit write; earlier runtimes and
+sets become recovery copies that only the user or environment deletion
+removes. Never add a code path that removes an environment's container or
+volumes outside those operations, and never prune by owner, age or state.
+The living reference is
+[`docs/architecture/container-lifecycle.md`](docs/architecture/container-lifecycle.md).
+
 ### Network Isolation
 
 Containers in `restricted` mode (the default) reach only an allowlist; anything

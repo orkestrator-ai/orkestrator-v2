@@ -33,7 +33,7 @@ Refreshed 2026-09-17 against the current tree.
 | [review-preparation.md](architecture/review-preparation.md) | Living | Multi-review pipeline; queue wait is 30 minutes. |
 | [native-agent-commands.md](architecture/native-agent-commands.md) | Living | Slash-command descriptors, bridge wire contract, intent resolution, collisions, catalogue lifecycle. |
 | [bridge-diagnostics.md](architecture/bridge-diagnostics.md) | Living | Shared bridge debug logging. |
-| [container-lifecycle.md](architecture/container-lifecycle.md) | Living | Container authority: durable operations, ownership, writer lease, schema floor, recovery table. |
+| [container-lifecycle.md](architecture/container-lifecycle.md) | Living | Container authority: durable operations, ownership, writer lease, schema floor, recovery; images and readiness; persistent storage, preserving rebuilds, recovery copies and reviewed cleanup; staged inputs, networks, budgets and bounded logs. |
 | [cursor-usage.md](architecture/cursor-usage.md) | Living | Cursor usage mapping. |
 | [cursor-diagnostics.md](architecture/cursor-diagnostics.md) | Historical | September 9 and 14 stall investigations. Current logging is in `bridge-diagnostics.md`. |
 | [platform-inconsistencies.md](architecture/platform-inconsistencies.md) | Historical | 2026-08-16 inventory plus a 2026-09-11 current-state note. Not a backlog. |
@@ -69,7 +69,9 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 | Document | Status | Notes |
 | --- | --- | --- |
 | [containers.md](improvements/containers.md) | Historical | 2026-09-21 investigation: container lifecycle, data retention, isolation, resources and image delivery; prioritized proposals, not implemented changes. |
-| [Container implementation plan](improvements/containers/plan/00-index.md) | Active | Index and 14 numbered steps covering data protection, durable lifecycle, storage migration, isolation, resources, images and rollout. Implementation not started. |
+| [Container implementation plan](improvements/containers/plan/00-index.md) | Active | Index and 14 numbered steps covering data protection, durable lifecycle, storage migration, isolation, resources, images and rollout. All steps implemented on a branch awaiting review; evidence in [qualification](improvements/containers/qualification.md) and [benchmarks](improvements/containers/benchmarks.md). |
+| [Container qualification](improvements/containers/qualification.md) | Active | C01–C30 evidence (unit, live Docker, real-stack browser/CLI), rollout stage status, rollback gates and known limitations. |
+| [Container benchmarks](improvements/containers/benchmarks.md) | Active | Step 13 baselines, dominant costs and the optimization decision table. |
 | [efficiency/README.md](improvements/efficiency/README.md) | Active | 2026-09-20–21 source review: 14 prioritized findings on transcripts, storage, rendering, polling, and workflow consumers. Includes synthetic probes; implementation not started. |
 | [efficiency/plan/00-index.md](improvements/efficiency/plan/00-index.md) | Active | Detailed 19-step implementation plan with dependencies, compatibility, migrations, tests, and rollout gates. All implementation steps not started. |
 

@@ -241,6 +241,12 @@ export function EnvironmentRebuildSection({
                         ))}
                       </ul>
                     </div>
+                    {preview.providers.some((provider) => !provider.resumeQualified) ? (
+                      <p className="text-xs">
+                        Agent session files are copied, but resuming those sessions after a rebuild
+                        has not yet been verified for every agent.
+                      </p>
+                    ) : null}
                     <div>
                       <p className="font-medium">Not kept</p>
                       <ul className="list-disc pl-5">

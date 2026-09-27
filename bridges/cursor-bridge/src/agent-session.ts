@@ -41,7 +41,7 @@ import {
   hasUnusedInitialRun,
   prewarmCursorWorkspace,
 } from "./sdk-runtime.js";
-import { boundTranscript, chargeTranscript } from "./transcript.js";
+import { boundTranscript, boundTranscriptDuringStreaming, chargeTranscript } from "./transcript.js";
 import { applyInteractionUpdate } from "./translate.js";
 import {
   assertSessionOpen,
@@ -811,6 +811,7 @@ async function rewindOwned(state: SessionState, messageId: string): Promise<void
   state.messages.splice(transcriptIndex);
   state.openTextParts.clear();
   state.currentAssistantMessageId = undefined;
+  state.transcriptEpoch = (state.transcriptEpoch ?? 0) + 1;
   state.error = undefined;
   state.revision += 1;
   boundTranscript(state);
@@ -1089,7 +1090,12 @@ async function hydrateHistory(
     if (options?.skipRunning && run.status === "running") continue;
     if (!run.supports("conversation")) continue;
     const turns = await run.conversation().catch(() => []);
-    for (const turn of turns) appendHistoricTurn(state, turn, run.id);
+    for (const turn of turns) {
+      appendHistoricTurn(state, turn, run.id);
+      // A long history is rebuilt across many awaits; bound it as it grows
+      // rather than holding every run in memory until the end.
+      boundTranscriptDuringStreaming(state);
+    }
   }
   boundTranscript(state);
   state.revision += 1;
@@ -1143,8 +1149,14 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
         applyRecoveredStreamEvent(state, event);
       }
       await active.wait();
+      // The whole transcript is rebuilt from the SDK's record, so everything
+      // positional about the old one — open blocks, the assistant message the
+      // turn was writing into, readers' absolute offsets — goes with it.
       state.messages = [];
       state.uncheckedTranscriptBytes = 0;
+      state.openTextParts.clear();
+      state.currentAssistantMessageId = undefined;
+      state.transcriptEpoch = (state.transcriptEpoch ?? 0) + 1;
       await hydrateHistory(state);
       state.status = active.status === "error" ? "error" : "idle";
       state.error = active.error?.message;

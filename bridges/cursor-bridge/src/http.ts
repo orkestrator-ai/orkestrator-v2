@@ -421,7 +421,11 @@ async function routeSession(
       bridgeTranscriptUpdate(state.messages, {
         sessionIdentity: state.id,
         generation: TRANSCRIPT_GENERATION,
-        contentEpoch: state.droppedMessages,
+        // Front trimming and wholesale replacement both move absolute
+        // positions, so either one starts a new epoch.
+        contentEpoch: state.transcriptEpoch
+          ? `${state.transcriptEpoch}:${state.droppedMessages}`
+          : state.droppedMessages,
         revision: state.revision,
         limit: Number(url.searchParams.get("limit")),
         targetBytes: Number(url.searchParams.get("targetBytes")),

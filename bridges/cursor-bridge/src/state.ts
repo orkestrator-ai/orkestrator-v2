@@ -359,8 +359,18 @@ export interface SessionState {
    * fails the lookup and starts a new block.
    */
   openTextParts: Map<string, string>;
-  /** Bytes appended since the transcript was last measured against its budget. */
+  /**
+   * Upper bound on encoded bytes appended since the transcript was last
+   * measured against its budget.
+   */
   uncheckedTranscriptBytes: number;
+  /**
+   * Bumped whenever retained history is replaced or rewritten rather than
+   * appended to (rewind, run recovery). Part of the transcript read's
+   * `contentEpoch`, so a reader's absolute positions cannot survive a rewrite.
+   * Process-local: a new bridge process already has a new generation.
+   */
+  transcriptEpoch?: number;
   /** Accumulates the assistant text of a structured-output turn. */
   currentTurnOutput: string | null;
   usage?: PersistedUsage;

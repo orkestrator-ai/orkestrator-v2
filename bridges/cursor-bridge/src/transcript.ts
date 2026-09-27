@@ -14,6 +14,10 @@ import {
   MAX_TRANSCRIPT_BYTES,
 } from "./config.js";
 import {
+  boundTranscriptInPlace,
+  type TranscriptLimits,
+} from "@orkestrator/protocol/transcript-budget";
+import {
   saturatedText,
   type BridgeMessage,
   type BridgeMessagePart,
@@ -21,6 +25,14 @@ import {
 } from "./state.js";
 
 const TRUNCATION_NOTICE = "\n\n[output truncated]";
+/** Maximum charged growth between exact measurements while streaming. */
+export const STREAM_BOUND_INTERVAL_BYTES = Math.min(MAX_TRANSCRIPT_BYTES, 1024 * 1024);
+
+const TRANSCRIPT_LIMITS: TranscriptLimits = {
+  maxMessages: MAX_MESSAGES,
+  maxPartsPerMessage: MAX_PARTS_PER_MESSAGE,
+  maxTranscriptBytes: MAX_TRANSCRIPT_BYTES,
+};
 
 /**
  * Append to a byte-capped buffer, returning the value to store.
@@ -72,62 +84,12 @@ export function sliceToBytes(value: string, limit: number): string {
  * Bring the transcript back inside its budget.
  *
  * Runs the cheap structural bounds first (message count, parts per message)
- * and only then measures, because measuring means serializing the whole
- * transcript. Returns true when anything was dropped, so the caller can bump
- * the revision the renderer watches.
+ * and then measures each retained message exactly once — never the shrinking
+ * transcript again per dropped entry. Returns true when anything was dropped,
+ * so the caller can bump the revision the renderer watches.
  */
 export function boundTranscript(state: SessionState): boolean {
-  let changed = false;
-
-  if (state.messages.length > MAX_MESSAGES) {
-    const removed = state.messages.length - MAX_MESSAGES;
-    const dropped = state.messages.splice(0, removed);
-    state.droppedMessages += removed;
-    state.droppedParts += dropped.reduce((total, message) => total + message.parts.length, 0);
-    state.transcriptTruncated = true;
-    changed = true;
-  }
-
-  for (const message of state.messages) {
-    if (message.parts.length <= MAX_PARTS_PER_MESSAGE) continue;
-    const removed = message.parts.length - MAX_PARTS_PER_MESSAGE;
-    message.parts.splice(0, removed);
-    state.droppedParts += removed;
-    state.transcriptTruncated = true;
-    changed = true;
-  }
-
-  // The write path's dirty counter. Zero means these exact messages were
-  // already measured, and re-measuring cannot change them, so a poll of a
-  // large idle session does not pay a second full serialization.
-  state.uncheckedTranscriptBytes = 0;
-
-  while (state.messages.length > 1 && transcriptBytes(state) > MAX_TRANSCRIPT_BYTES) {
-    const dropped = state.messages.shift()!;
-    state.droppedMessages += 1;
-    state.droppedParts += dropped.parts.length;
-    state.transcriptTruncated = true;
-    changed = true;
-  }
-
-  // A single message can exceed the whole budget on its own. Shed its parts
-  // from the front rather than dropping the message, so the turn the user is
-  // watching keeps its most recent output.
-  const only = state.messages[0];
-  if (only && state.messages.length === 1 && transcriptBytes(state) > MAX_TRANSCRIPT_BYTES) {
-    while (only.parts.length > 1 && transcriptBytes(state) > MAX_TRANSCRIPT_BYTES) {
-      only.parts.shift();
-      state.droppedParts += 1;
-      state.transcriptTruncated = true;
-      changed = true;
-    }
-  }
-
-  return changed;
-}
-
-function transcriptBytes(state: SessionState): number {
-  return Buffer.byteLength(JSON.stringify(state.messages));
+  return boundTranscriptInPlace(state, TRANSCRIPT_LIMITS);
 }
 
 /**
@@ -140,7 +102,39 @@ export function boundTranscriptForRead(state: SessionState): void {
   if (boundTranscript(state)) state.revision += 1;
 }
 
-/** Charge appended bytes so the next read knows the budget may have moved. */
+/**
+ * Enforce the budget from the SDK's synchronous update callback.
+ *
+ * A tab can stay inactive for an entire long turn, and `/activity` is
+ * deliberately a no-hydration read, so read-time and turn-boundary trimming
+ * alone let an unobserved session grow without limit. Structural limits are
+ * checked on every update because they cost nothing; the byte measurement is
+ * amortized over {@link STREAM_BOUND_INTERVAL_BYTES} of charged growth so
+ * streaming never serializes the transcript per token.
+ *
+ * The retained transcript therefore never exceeds `MAX_TRANSCRIPT_BYTES`
+ * plus `STREAM_BOUND_INTERVAL_BYTES` plus one admitted update — and a single
+ * update is itself capped by the per-field text, argument, output and diff
+ * limits in `config.ts`.
+ */
+export function boundTranscriptDuringStreaming(state: SessionState): void {
+  const newest = state.messages.at(-1);
+  if (
+    state.messages.length <= MAX_MESSAGES &&
+    (newest?.parts.length ?? 0) <= MAX_PARTS_PER_MESSAGE &&
+    state.uncheckedTranscriptBytes < STREAM_BOUND_INTERVAL_BYTES
+  ) {
+    return;
+  }
+  if (boundTranscript(state)) state.revision += 1;
+}
+
+/**
+ * Charge appended bytes so the next bound knows the budget may have moved.
+ *
+ * Charges must be upper bounds on encoded growth — see
+ * {@link jsonStringContentBytes} — or the streaming bound can fall behind.
+ */
 export function chargeTranscript(state: SessionState, bytes: number): void {
   if (bytes > 0) state.uncheckedTranscriptBytes += bytes;
 }

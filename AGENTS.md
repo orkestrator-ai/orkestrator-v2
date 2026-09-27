@@ -763,7 +763,11 @@ When touching the SDK bridge:
   Cursor-specific shape stops there; nothing downstream should learn a new
   field to render a Cursor turn.
 - `applyInteractionUpdate` never awaits. It runs on the SDK's own callback, so
-  an await there would let a large transcript back-pressure a live run.
+  an await there would let a large transcript back-pressure a live run. It also
+  enforces the display budget itself (`boundTranscriptDuringStreaming`) after
+  every top-level update — an inactive tab issues no reads, so a bound that
+  waited for one would never run. Charge appended bytes as encoded upper bounds
+  and name new parts with `nextPartOrdinal`, never `parts.length`.
 - A tool variant the SDK adds must degrade to a plain card, never throw. The
   SDK is a fast-moving dependency and these branches run mid-turn.
 - Sign-in runs the bridge's own `--login` mode as a short-lived child. Keeping

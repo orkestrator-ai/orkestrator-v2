@@ -1,6 +1,6 @@
 # 02 — Make transcript size accounting and trimming linear
 
-Status: Not started. Prerequisite: 01. Findings: E09; supports E01/E05.
+Status: Complete. Prerequisite: 01. Findings: E09; supports E01/E05.
 
 ## Outcome
 
@@ -67,3 +67,51 @@ entries does not multiply full-history serialization. Unchanged reads remain
 cheap. Preserve all current ceilings. Ship the shared primitive and adapters in
 small PRs if needed, with each adapter retaining its existing response contract.
 This step provides the safe producer-side enforcement used by step 03.
+
+## Execution record
+
+```text
+Status: Complete
+Implementation commit / PR: branch 20260927-125815-7f0993836777 (perf(transcripts): linear trim accounting and producer-side Cursor bounds)
+Protocol or storage decisions:
+  - New packages/protocol/src/transcript-budget.ts: planOldestFirstTrim measures
+    each candidate message once (and, only when one message is left over
+    budget, each of its parts once), subtracts sizes, and returns a plan with
+    the exact retained encoded size (UTF-8 JSON bytes incl. escapes, commas,
+    brackets). boundTranscriptInPlace applies Cursor/Pi structural + byte
+    bounds with one splice per array.
+  - ACP keeps its notice-aware trimPartsTo: the planner sizes the notice part
+    exactly (leadingReplacement), reproduces "each pass strictly shortens
+    parts" semantics, and ACP applies the plan with one trimPartsTo call.
+  - transcript-window.ts part shedding now advances an index and slices once
+    instead of repeated shift().
+  - jsonStringContentBytes gives an exact escaped-byte charge for appended
+    text; Cursor and Pi producers now charge UTF-8/escape-aware upper bounds
+    (both the part and the mirrored message body) instead of UTF-16 length.
+  - transcript-part-ids.ts nextPartOrdinal: per-message monotonic part
+    ordinals (WeakMap, scans restored messages once) replace
+    `parts.length`-derived ids in Cursor and Pi, so trimmed fronts cannot
+    make a new part reuse a retained part's id.
+Tests and isolated profiles:
+  - packages/protocol/src/transcript-budget.test.ts: 60 seeded transcripts x 7
+    ceilings with multibyte/astral/quote/backslash/control text compared with
+    the old quadratic loops (with and without the ACP notice); reported bytes
+    equal actual serialized bytes; empty/exact/one-byte/overflow cases;
+    operation counts (validation probe: 100 x 8 KiB at 256 KiB -> 31 kept,
+    100 serializations; previously 4,585); one visit per part for a
+    5,000-part message; concatenation charge is an upper bound.
+  - transcript-part-ids.test.ts: ordinals never reissued after front trims,
+    restored messages continue past the largest suffix.
+  - Pi translate.test.ts: UTF-8 charge; unique ids after front trimming.
+  - Full suites: bun test ./bridges/{cursor,pi,acp}-bridge/src (pass),
+    packages/protocol ./src (pass); protocol/bridge typechecks; format, lint.
+Before/after measurements: validation probe serialization visits 4,585 -> 100
+  (Cursor trim, same 31 retained messages). Deterministic counts only; no
+  wall-clock claims.
+Compatibility/migration result: no wire or persisted-schema change. Part ids
+  for new parts keep the `${messageId}:<n>` / `summary:<n>` / `retry:<n>` shapes.
+Remaining limitations: per-message sizes are recomputed once per bound pass
+  (no cross-pass size cache): the plan's step 6 cache requires a mutation
+  audit that tool-card patching makes risky; one pass is linear and runs only
+  after 1 MiB of charged growth or a structural overflow.
+```

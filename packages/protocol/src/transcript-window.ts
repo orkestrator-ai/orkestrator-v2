@@ -135,17 +135,21 @@ export function boundTranscriptResponse<TMessage extends BoundableMessage>(
     // Re-measuring the whole message per shift is quadratic, and this path only
     // ever runs when that message is already multi-megabyte — a message built
     // from many small parts would otherwise cost thousands of full passes.
-    const parts = [...oldestRetained.parts];
-    const partSizes = parts.map((part) => Buffer.byteLength(JSON.stringify(part)));
-    while (parts.length > 0 && bytes > maximumBytes) {
-      parts.shift();
-      const shed = partSizes.shift()!;
-      // A removed part takes its separating comma with it, except the last one.
-      bytes -= shed + (parts.length > 0 ? 1 : 0);
+    // Advancing an index rather than `shift()`ing keeps the loop linear too:
+    // each shift moves every remaining element, and this can shed thousands.
+    const partSizes = oldestRetained.parts.map((part) => Buffer.byteLength(JSON.stringify(part)));
+    const partCount = partSizes.length;
+    while (omittedParts < partCount && bytes > maximumBytes) {
+      const shed = partSizes[omittedParts]!;
       omittedParts += 1;
+      // A removed part takes its separating comma with it, except the last one.
+      bytes -= shed + (omittedParts < partCount ? 1 : 0);
     }
     if (omittedParts > 0) {
-      selected[start] = { ...oldestRetained, parts } as TMessage;
+      selected[start] = {
+        ...oldestRetained,
+        parts: oldestRetained.parts.slice(omittedParts),
+      } as TMessage;
     }
     if (bytes > maximumBytes && contentFallbackBytes !== null) {
       selected[start] = {

@@ -726,3 +726,32 @@ describe("tool result images", () => {
     expect(state.messages.at(-1)!.parts.some((part) => part.type === "image")).toBe(false);
   });
 });
+
+describe("transcript accounting while streaming", () => {
+  function thinkingEnd() {
+    return { type: "message_update", assistantMessageEvent: { type: "thinking_end" } };
+  }
+
+  test("charges encoded UTF-8 bytes, not UTF-16 length", () => {
+    const state = newSessionState();
+    state.status = "running";
+    applySessionEvent(state, textDelta("a"));
+    const before = state.uncheckedTranscriptBytes;
+    applySessionEvent(state, textDelta('中"\n'));
+    // Part and message body both grow, each by 3 + 2 + 2 encoded bytes.
+    expect(state.uncheckedTranscriptBytes - before).toBe(14);
+  });
+
+  test("part ids stay unique after the front of a message is shed", () => {
+    const state = newSessionState();
+    state.status = "running";
+    for (let index = 0; index < MAX_PARTS_PER_MESSAGE + 40; index += 1) {
+      applySessionEvent(state, thinkingDelta(`step ${index}`));
+      applySessionEvent(state, thinkingEnd());
+    }
+    const parts = state.messages.at(-1)!.parts;
+    expect(parts.length).toBeLessThanOrEqual(MAX_PARTS_PER_MESSAGE);
+    const ids = parts.map((part) => part.sourcePartId);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});

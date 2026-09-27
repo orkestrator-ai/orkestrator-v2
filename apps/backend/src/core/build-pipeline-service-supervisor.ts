@@ -85,6 +85,7 @@ import {
   executionModeOverrideForPhase,
   DEFAULT_STALL_WARNING_MS,
   withUnattendedPolicy,
+  normalizeTranscriptFingerprint,
   transcriptFingerprint,
   attachBeforeDispatch,
   elapsedSince,
@@ -901,9 +902,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       : await provider.messages(session.sdkSessionId);
     const fingerprint = transcriptFingerprint(messages);
     // A snapshot restored before fingerprints existed has none, so fall back to
-    // recomputing it from the stored transcript exactly once.
+    // recomputing it from the stored transcript exactly once. One written
+    // before the digest form carries the raw key, which normalizes exactly.
     const previous =
-      session.messagesFingerprint ??
+      normalizeTranscriptFingerprint(session.messagesFingerprint) ??
       (session.messages === undefined ? undefined : transcriptFingerprint(session.messages));
     if (previous === fingerprint) return false;
     session.messages = messages;

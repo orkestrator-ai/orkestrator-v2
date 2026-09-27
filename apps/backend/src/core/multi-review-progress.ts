@@ -33,7 +33,7 @@
  * candidates for idle detaching or transcript eviction in the first place.
  */
 import { createHash } from "node:crypto";
-import { transcriptFingerprint } from "./build-pipeline-service-helpers.js";
+import { legacyTranscriptFingerprint } from "./build-pipeline-service-helpers.js";
 
 /** How often one running session's transcript is re-read for progress. */
 export const DEFAULT_PROGRESS_PROBE_INTERVAL_MS = 60_000;
@@ -88,7 +88,9 @@ function changedFrom(baseline: string | undefined, fingerprint: string): boolean
  * none of that content should be retained merely to compare the next probe.
  */
 export function progressFingerprint(messages: unknown[]): string {
-  return createHash("sha256").update(transcriptFingerprint(messages)).digest("hex");
+  // Digests of the legacy key are already persisted as progress baselines;
+  // hashing the same input keeps them comparable across this upgrade.
+  return createHash("sha256").update(legacyTranscriptFingerprint(messages)).digest("hex");
 }
 
 /**

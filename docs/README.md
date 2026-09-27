@@ -67,6 +67,8 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 
 | Document | Status | Notes |
 | --- | --- | --- |
+| [containers.md](improvements/containers.md) | Historical | 2026-09-21 investigation: container lifecycle, data retention, isolation, resources and image delivery; prioritized proposals, not implemented changes. |
+| [Container implementation plan](improvements/containers/plan/00-index.md) | Active | Index and 14 numbered steps covering data protection, durable lifecycle, storage migration, isolation, resources, images and rollout. Implementation not started. |
 | [efficiency/README.md](improvements/efficiency/README.md) | Active | 2026-09-20–21 source review: 14 prioritized findings on transcripts, storage, rendering, polling, and workflow consumers. Includes synthetic probes; implementation not started. |
 | [efficiency/plan/00-index.md](improvements/efficiency/plan/00-index.md) | Active | Detailed 19-step implementation plan with dependencies, compatibility, migrations, tests, and rollout gates. All implementation steps not started. |
 

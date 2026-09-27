@@ -55,7 +55,7 @@ credentials this host does not have — named explicitly).
 | --- | --- | --- | --- |
 | 34 | 06/C16 | ENOSPC and inode exhaustion on a real daemon (size-capped tmpfs volumes) | Done — live: tmpfs candidate volumes out of inodes and out of bytes mid-copy roll back, original intact (test-only volume-option seam) |
 | 35 | 06 | Corrupt archive / malformed link / occupied name / failed setup injection; kill around commit | Done — truncated archive and escaping hard link refused (unit); occupied candidate name (live); reconciliation at every pre-commit phase and just after the commit write (unit). A failed candidate boot follows the same rollback as the port conflict |
-| 36 | 07/C29 | Real-browser cycle for rebuild, recovery copies and cleanup review, including switch-away during a rebuild | Open |
+| 36 | 07/C29 | Real-browser cycle for rebuild, recovery copies and cleanup review, including switch-away during a rebuild | Done — `container-rebuild-cycle.spec.ts` (real stack): rebuild, switch environments mid-rebuild, return to backend progress, one new copy, reload, reviewed cleanup; it exposed and fixed a recovery-copy list that did not refresh when a rebuild committed while open |
 | 37 | 08/C21 | Interrupted revoke and restart during staging (fixture credentials) | Done — an interrupted revoke stays recorded and gates syncs; a staging interrupted by a restart is never read and is pruned after the grace |
 | 38 | 10 | `DockerStatsDialog` tests; parser edge cases | Done — `DockerStatsDialog.test.tsx`; watcher and shared-memory tests |
 | 39 | 09 | Sibling access through the environment gateway IP and a sibling's published port | Done — C22 also rejects the environment gateway address and a sibling's published host port |

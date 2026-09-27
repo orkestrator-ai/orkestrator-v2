@@ -163,4 +163,34 @@ describe("environment recovery copies", () => {
       cleanup();
     }
   });
+
+  test("a copy produced while the list is open appears when the record changes", async () => {
+    let revision = 12;
+    let copies: RecoveryCopyList = { ...list, copies: [] };
+    install({
+      list_recovery_copies: () => copies,
+      get_container_lifecycle_snapshot: () => ({ revision }),
+    });
+    render(
+      <EnvironmentRecoveryCopies
+        environment={environment}
+        dockerAvailable
+        onUpdate={() => undefined}
+        onClose={() => undefined}
+      />,
+    );
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "get_container_lifecycle_snapshot",
+        expect.anything(),
+      ),
+    );
+    expect(screen.queryAllByText("Recovery copies")).toHaveLength(0);
+    // A rebuild elsewhere commits: a new revision and a new copy.
+    copies = list;
+    revision = 13;
+    await screen.findByText("Container before moving to persistent storage", undefined, {
+      timeout: 5_000,
+    });
+  });
 });

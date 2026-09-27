@@ -1,6 +1,7 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { loadAppWithDevRetry } from "./dev-startup-retry";
 
 /**
  * Container lifecycle settings against a real profile started with
@@ -20,7 +21,7 @@ function profileStatus(): { status: string; testProject?: string } {
   return JSON.parse(command.stdout) as { status: string; testProject?: string };
 }
 
-async function login(page: Page) {
+async function login(page: Page, testInfo: TestInfo) {
   // The one-shot login URL is parsed in memory and never copied into output.
   const command = spawnSync("mise", ["run", "dev:login", "--profile", profile, "--json"], {
     cwd: repositoryRoot,
@@ -29,7 +30,9 @@ async function login(page: Page) {
   if (command.status !== 0) throw new Error(command.stderr || "dev:login failed");
   const { loginUrl } = JSON.parse(command.stdout) as { loginUrl?: unknown };
   if (typeof loginUrl !== "string") throw new Error("dev:login returned no login URL");
-  await page.goto(loginUrl, { waitUntil: "domcontentloaded" });
+  await loadAppWithDevRetry(page, testInfo, () =>
+    page.goto(loginUrl, { waitUntil: "domcontentloaded" }),
+  );
 }
 
 async function openContainerSettings(page: Page, narrow: boolean) {
@@ -75,10 +78,10 @@ for (const viewport of [
 ]) {
   test(`Docker fixture container settings show backend state and rehydrate (${viewport.name})`, async ({
     page,
-  }) => {
+  }, testInfo) => {
     expect(profileStatus().status).toBe("ready");
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await login(page);
+    await login(page, testInfo);
 
     for (const pass of ["first", "after reload"]) {
       await openContainerSettings(page, viewport.name === "narrow");

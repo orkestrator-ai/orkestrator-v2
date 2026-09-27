@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { parseContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
@@ -44,6 +44,9 @@ function describePresence(copy: RecoveryCopy): string | null {
   }
 }
 
+/** How often an open list checks whether the lifecycle record changed. */
+const RECORD_CHECK_MS = 3_000;
+
 type PendingAction = { kind: "restore" | "discard"; copy: RecoveryCopy } | null;
 
 interface EnvironmentRecoveryCopiesProps {
@@ -83,6 +86,32 @@ export function EnvironmentRecoveryCopies({
   useEffect(() => {
     void load();
   }, [load]);
+
+  // A rebuild, restore or reset finishing while this is open (started here,
+  // from another window or from the CLI) changes the lifecycle record's
+  // revision; only then is the list, which asks Docker, read again.
+  const seenRevision = useRef<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const snapshot = await backend.getContainerLifecycleSnapshot(environment.id);
+        if (cancelled) return;
+        if (seenRevision.current !== null && snapshot.revision !== seenRevision.current) {
+          void load();
+        }
+        seenRevision.current = snapshot.revision;
+      } catch {
+        // The next check tries again.
+      }
+    };
+    void check();
+    const timer = setInterval(() => void check(), RECORD_CHECK_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [environment.id, load]);
 
   if (!list || list.copies.length === 0) {
     return loading ? (

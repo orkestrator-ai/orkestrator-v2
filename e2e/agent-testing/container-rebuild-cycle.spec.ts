@@ -1,6 +1,7 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { loadAppWithDevRetry } from "./dev-startup-retry";
 
 /**
  * A preserving rebuild driven from the real renderer against a profile started
@@ -14,7 +15,7 @@ import path from "node:path";
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 
-async function login(page: Page) {
+async function login(page: Page, testInfo: TestInfo) {
   // The one-shot login URL is parsed in memory and never copied into output.
   const command = spawnSync("mise", ["run", "dev:login", "--profile", profile, "--json"], {
     cwd: repositoryRoot,
@@ -23,7 +24,9 @@ async function login(page: Page) {
   if (command.status !== 0) throw new Error(command.stderr || "dev:login failed");
   const { loginUrl } = JSON.parse(command.stdout) as { loginUrl?: unknown };
   if (typeof loginUrl !== "string") throw new Error("dev:login returned no login URL");
-  await page.goto(loginUrl, { waitUntil: "domcontentloaded" });
+  await loadAppWithDevRetry(page, testInfo, () =>
+    page.goto(loginUrl, { waitUntil: "domcontentloaded" }),
+  );
 }
 
 async function environmentItem(page: Page, name: string) {
@@ -51,14 +54,17 @@ async function openContainerSection(page: Page) {
 
 test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "Docker fixture profile required");
 
-test("a rebuild keeps running while another environment is open and rehydrates", async ({
+test("Docker fixture rebuild keeps running while another environment is open and rehydrates", async ({
   page,
-}) => {
+}, testInfo) => {
   test.setTimeout(8 * 60_000);
   await page.setViewportSize({ width: 1280, height: 860 });
-  await login(page);
+  await login(page, testInfo);
 
   await openContainerSection(page);
+  // Earlier runs may have left copies; this rebuild must add exactly one.
+  await page.waitForTimeout(2_000);
+  const copiesBefore = await page.getByText("Before a rebuild").count();
   await page.getByRole("button", { name: "Rebuild (keeps files)…" }).click();
   await expect(page.getByText("Rebuild container and keep its files?")).toBeVisible({
     timeout: 30_000,
@@ -73,11 +79,12 @@ test("a rebuild keeps running while another environment is open and rehydrates",
   // Back: the section reads progress (or the finished result) from the
   // backend's record, not from the view that started it.
   await openContainerSection(page);
-  await expect(page.getByText("Recovery copies", { exact: true })).toBeVisible({
-    timeout: 5 * 60_000,
+  await expect(page.getByText("Before a rebuild")).toHaveCount(copiesBefore + 1, {
+    timeout: 4 * 60_000,
   });
-  await expect(page.getByText("Before a rebuild").first()).toBeVisible();
-  await expect(page.getByText(/Rebuilding…|Copying and verifying files…/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Rebuild (keeps files)…" })).toBeVisible({
+    timeout: 60_000,
+  });
 
   // A reload rehydrates the same state from the backend.
   await page.reload({ waitUntil: "domcontentloaded" });

@@ -1112,7 +1112,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                     variant="outline"
                     onClick={() => {
                       close();
-                      openAgentMailForTab(activeSession.environmentId, activeTab.id, "compose");
+                      openAgentMailForTab(
+                        activeSession.environmentId,
+                        activeTab.id,
+                        "compose",
+                        triggerRef.current,
+                      );
                     }}
                   >
                     Message this tab…
@@ -1122,7 +1127,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                     variant="ghost"
                     onClick={() => {
                       close();
-                      openAgentMailForTab(activeSession.environmentId, activeTab.id, "settings");
+                      openAgentMailForTab(
+                        activeSession.environmentId,
+                        activeTab.id,
+                        "settings",
+                        triggerRef.current,
+                      );
                     }}
                   >
                     Inbox settings…

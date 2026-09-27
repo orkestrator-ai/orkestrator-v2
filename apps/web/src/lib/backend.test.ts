@@ -2194,6 +2194,26 @@ describe("backend command wrapper coverage", () => {
     });
   });
 
+  test("stops one validation command by environment, run snapshot, and result identity", async () => {
+    const run = {
+      id: "validation-1",
+      status: "running" as const,
+      startedAt: "2026-09-27T10:00:00.000Z",
+      plan: { headRef: "a".repeat(40), commands: [], limitations: ["none"] },
+      results: [],
+    };
+    invokeMock.mockResolvedValueOnce(run);
+
+    await expect(
+      backendWrappers.stopReviewValidationCommand("env-1", run, "typecheck"),
+    ).resolves.toEqual(run);
+    expect(invokeMock).toHaveBeenLastCalledWith("stop_review_validation_command", {
+      environmentId: "env-1",
+      run,
+      resultId: "typecheck",
+    });
+  });
+
   test("forwards backend-owned merge and cleanup intent as one command", async () => {
     const result = {
       outcome: "pending" as const,

@@ -10,7 +10,7 @@ import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { knownValidationOutput, mergeValidationOutput } from "./validation-output-merge";
 import { Copy, Loader2, RefreshCw, Square, SquareTerminal } from "lucide-react";
 import { toast } from "sonner";
-import { getReviewValidationOutput } from "@/lib/backend";
+import { getReviewValidationOutput, stopReviewValidationCommand } from "@/lib/backend";
 import { stripAnsi } from "@/lib/terminal-utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -296,12 +296,19 @@ function ValidationOutputModal({
   );
 }
 
+const UNSETTLED_RESULT_STATUSES: ReadonlySet<ReviewValidationResult["status"]> = new Set([
+  "pending",
+  "queued",
+  "running",
+]);
+
 /** Snapshot projection plus an on-demand bounded log reader; lifecycle remains backend-owned. */
 export function ReviewValidationStatus({
   environmentId,
   run,
   now = Date.now(),
   loadOutput = getReviewValidationOutput,
+  stopCommand = stopReviewValidationCommand,
   onStop,
   stopping = false,
 }: {
@@ -310,6 +317,11 @@ export function ReviewValidationStatus({
   /** Parent-owned live clock, so every running row advances on the same tick. */
   now?: number;
   loadOutput?: typeof getReviewValidationOutput;
+  /**
+   * Stops one unsettled command; the rest of the run continues. Pass `null` to
+   * hide per-command stop controls.
+   */
+  stopCommand?: typeof stopReviewValidationCommand | null;
   /** Optional owner action that stops active commands while retaining partial evidence. */
   onStop?: () => void;
   stopping?: boolean;
@@ -318,6 +330,40 @@ export function ReviewValidationStatus({
   const notes = run.plan.limitations;
   const [selectedResultId, setSelectedResultId] = useState<string | null>(null);
   const selectedResult = run.results.find((result) => result.id === selectedResultId);
+  const runActive = run.status === "planned" || run.status === "running";
+  // Requested stops stay visible until the authoritative snapshot settles them.
+  const [stoppingResultIds, setStoppingResultIds] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    setStoppingResultIds((current) => {
+      if (current.size === 0) return current;
+      const next = new Set(
+        Array.from(current).filter((id) => {
+          const status = run.results.find((result) => result.id === id)?.status;
+          return runActive && status !== undefined && UNSETTLED_RESULT_STATUSES.has(status);
+        }),
+      );
+      return next.size === current.size ? current : next;
+    });
+  }, [run.results, runActive]);
+  const requestStopCommand = useCallback(
+    async (result: ReviewValidationResult) => {
+      if (!stopCommand) return;
+      setStoppingResultIds((current) => new Set(current).add(result.id));
+      try {
+        await stopCommand(environmentId, run, result.id);
+      } catch (reason) {
+        setStoppingResultIds((current) => {
+          const next = new Set(current);
+          next.delete(result.id);
+          return next;
+        });
+        toast.error(
+          `Failed to stop ${result.command}: ${reason instanceof Error ? reason.message : String(reason)}`,
+        );
+      }
+    },
+    [environmentId, run, stopCommand],
+  );
 
   return (
     <section
@@ -394,6 +440,12 @@ export function ReviewValidationStatus({
             {run.results.map((result) => {
               const resultElapsedMs = reviewValidationResultElapsedMs(result, now);
               const queuedMs = result.queuedMs ?? 0;
+              const stoppingResult = stoppingResultIds.has(result.id);
+              const canStopResult =
+                stopCommand !== null &&
+                runActive &&
+                !stopping &&
+                UNSETTLED_RESULT_STATUSES.has(result.status);
               return (
                 <tr
                   key={result.id}
@@ -432,7 +484,41 @@ export function ReviewValidationStatus({
                     data-slot="validation-status"
                     className="whitespace-nowrap px-2 py-2 align-top text-muted-foreground"
                   >
-                    {result.status === "queued" ? "waiting for capacity" : result.status}
+                    <div className="flex items-start justify-between gap-1">
+                      <span>
+                        {stoppingResult && canStopResult
+                          ? "stopping"
+                          : result.status === "queued"
+                            ? "waiting for capacity"
+                            : result.status}
+                      </span>
+                      {canStopResult && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="-my-1 size-6 shrink-0 text-muted-foreground hover:text-destructive"
+                          aria-label={`Stop ${result.command}`}
+                          title={
+                            result.status === "running"
+                              ? "Stop this command; the remaining commands continue"
+                              : "Skip this command; the remaining commands continue"
+                          }
+                          disabled={stoppingResult}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void requestStopCommand(result);
+                          }}
+                          onKeyDown={(event) => event.stopPropagation()}
+                        >
+                          {stoppingResult ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <Square className="size-3" />
+                          )}
+                        </Button>
+                      )}
+                    </div>
                   </td>
                   <td
                     data-slot="validation-elapsed"

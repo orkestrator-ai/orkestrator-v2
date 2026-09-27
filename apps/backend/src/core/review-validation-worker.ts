@@ -23,6 +23,13 @@ const input = JSON.parse(Buffer.from(process.argv[1], "base64").toString());
 const { root, directory, run } = input;
 const statePath = path.join(directory, "state.json");
 const cancelPath = path.join(directory, "cancel");
+// Per-command tombstones written by the "stop-command" control action. Plan IDs
+// are restricted to [A-Za-z0-9_-], so they are safe file-name suffixes.
+const commandCancelPath = id => path.join(directory, "cancel-command-" + id);
+const STOPPED_BY_USER = "Stopped by the user before it completed; validation is incomplete";
+const STOPPED_BEFORE_START = "Stopped by the user before it started; validation is incomplete";
+// Commands the user stopped individually. The rest of the run continues.
+const stoppedCommands = new Set();
 const lockPath = path.join(path.dirname(directory), ".validation-lock");
 const active = new Map();
 const createScheduler = (${HOST_TEST_SCHEDULER_SOURCE});
@@ -58,6 +65,14 @@ function killTree(child, signal) {
 function stop(reason) {
   stopping = true;
   for (const job of active.values()) job.stop(reason);
+}
+function stopRequestedCommands() {
+  for (const result of run.results) {
+    if (stoppedCommands.has(result.id) || !fs.existsSync(commandCancelPath(result.id))) continue;
+    stoppedCommands.add(result.id);
+    // A queued command has no process yet; its admission loop observes the set.
+    active.get(result.id)?.stop(STOPPED_BY_USER);
+  }
 }
 // Use the shared guard; evidence stores the failure without leaking the rejected
 // value (which could contain command output) into application diagnostics.
@@ -160,12 +175,14 @@ async function execute(cmd, index) {
         if (status.state === "running") break;
         result.queuedMs = Date.now() - queuedAt;
         if (stopping) throw new Error("Validation was cancelled while queued");
+        if (stoppedCommands.has(cmd.id)) throw new Error(STOPPED_BEFORE_START);
         if (result.queuedMs >= QUEUE_TIMEOUT_MS) throw new Error("Host capacity wait expired; command did not run");
         await delay(100);
       }
     }
     result.queuedMs = Date.now() - queuedAt;
     if (stopping) throw new Error("Validation was cancelled before execution");
+    if (stoppedCommands.has(cmd.id)) throw new Error(STOPPED_BEFORE_START);
     if (!headMatches()) {
       run.error = "Repository HEAD changed while validation was queued; rediscover against the current snapshot";
       stop(run.error);
@@ -347,6 +364,7 @@ async function main() {
   const heartbeat = setInterval(() => {
     try {
       if (fs.existsSync(cancelPath)) stop("Validation was cancelled");
+      stopRequestedCommands();
       persist();
     } catch { stop("Validation state could not be persisted"); }
   }, 500);
@@ -420,6 +438,13 @@ async function main() {
     while ((pending.size || tasks.size) && !stopping) {
       for (const index of Array.from(pending)) {
         const cmd = commands[index];
+        if (stoppedCommands.has(cmd.id)) {
+          // Dependents observe a prerequisite that did not pass and are skipped.
+          Object.assign(run.results[index], { status: "incomplete", limitation: STOPPED_BEFORE_START });
+          pending.delete(index);
+          persist();
+          continue;
+        }
         const coveringIndex = coveredBy.get(index);
         if (coveringIndex !== undefined) {
           const covering = run.results[coveringIndex];
@@ -511,8 +536,29 @@ function read() {
   }
   return state.run;
 }
+const UNSETTLED = ["pending", "queued", "running"];
 async function main() {
   confinedDirectory(directory);
+  if (input.action === "stop-command") {
+    // Stops one command and lets the rest of the run continue. The tombstone is
+    // environment-owned, so the request survives backend restarts; the worker
+    // records the command as incomplete with its partial output.
+    const id = input.resultId;
+    if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(id) || !input.run.plan.commands.some(cmd => cmd.id === id)) throw new Error("Validation command is unavailable");
+    if (!fs.existsSync(statePath)) throw new Error("Validation state is missing");
+    const settled = run => !["planned", "running"].includes(run.status) || !UNSETTLED.includes(run.results.find(result => result.id === id)?.status);
+    let current = read();
+    if (!settled(current)) {
+      fs.writeFileSync(path.join(directory, "cancel-command-" + id), "", { mode: 0o600, flag: "a" });
+      const deadline = Date.now() + 5000;
+      while (!settled(current) && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        current = read();
+      }
+    }
+    process.stdout.write(JSON.stringify(current));
+    return;
+  }
   if (input.action === "cancel") {
     // Persistent tombstone also prevents a delayed launcher from starting work.
     fs.writeFileSync(path.join(directory, "cancel"), "", { mode: 0o600, flag: "a" });

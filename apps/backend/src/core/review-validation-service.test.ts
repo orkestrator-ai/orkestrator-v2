@@ -272,3 +272,75 @@ test("real backend runner seals hashed evidence and refuses a moved head or repl
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("stop-command stops one command through the backend runner and rejects foreign IDs", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "validation-service-stop-"));
+  const git = (...args: string[]) =>
+    execFileSync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  git("init", "-b", "main");
+  git("config", "user.name", "Test");
+  git("config", "user.email", "test@example.invalid");
+  await writeFile(path.join(root, "source"), "fixture");
+  git("add", ".");
+  git("commit", "-m", "fixture");
+  const context = {
+    storage: {
+      getEnvironment: async () => ({
+        id: "env",
+        status: "running",
+        environmentType: "local",
+        worktreePath: root,
+      }),
+    },
+    appRoot: root,
+    resourceRoot: root,
+    toolchainBinDir: path.dirname(process.execPath),
+  } as unknown as CommandContext;
+  const step = (id: string, command: string) => ({
+    id,
+    command,
+    cwd: ".",
+    dependsOn: [],
+    resources: [],
+    weight: 1 as const,
+    timeoutMs: 30000,
+  });
+  const initial = newReviewValidationRun("review-validation-stop-one", {
+    headRef: git("rev-parse", "HEAD"),
+    commands: [step("slow", "sleep 20"), step("quick", "printf quick")],
+    limitations: [],
+  });
+  const previousScheduler = process.env.ORKESTRATOR_TEST_SCHEDULER_DIR;
+  process.env.ORKESTRATOR_TEST_SCHEDULER_DIR = path.join(root, ".orkestrator", "test-scheduler");
+  try {
+    await expect(
+      controlReviewValidation("env", initial, "stop-command", context, "../slow"),
+    ).rejects.toThrow("Invalid review validation result ID");
+    await expect(
+      controlReviewValidation("env", initial, "stop-command", context, "other"),
+    ).rejects.toThrow("Review validation command is unavailable");
+    let run = await controlReviewValidation("env", initial, "start", context);
+    const deadline = Date.now() + 10000;
+    while (run.results[0]!.status !== "running" && Date.now() < deadline) {
+      await Bun.sleep(50);
+      run = await controlReviewValidation("env", run, "status", context);
+    }
+    run = await controlReviewValidation("env", run, "stop-command", context, "slow");
+    expect(run.results[0]).toMatchObject({ status: "incomplete" });
+    while (["planned", "running"].includes(run.status) && Date.now() < deadline) {
+      await Bun.sleep(50);
+      run = await controlReviewValidation("env", run, "status", context);
+    }
+    expect(run.status).toBe("completed");
+    expect(run.results.map((result) => result.status)).toEqual(["incomplete", "passed"]);
+  } finally {
+    await controlReviewValidation("env", initial, "cancel", context).catch(() => {});
+    if (previousScheduler === undefined) delete process.env.ORKESTRATOR_TEST_SCHEDULER_DIR;
+    else process.env.ORKESTRATOR_TEST_SCHEDULER_DIR = previousScheduler;
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -42,6 +42,15 @@ export function registerReviewWorkflowCommands(
       ),
     );
   }
+  register("stop_review_validation_command", ({ environmentId, run, resultId }, context) =>
+    controlReviewValidation(
+      asNonBlankString(environmentId, "environmentId"),
+      run,
+      "stop-command",
+      context,
+      asNonBlankString(resultId, "resultId"),
+    ),
+  );
   register("get_review_validation_output", ({ environmentId, runId, resultId, known }, context) =>
     readReviewValidationOutput(
       asNonBlankString(environmentId, "environmentId"),

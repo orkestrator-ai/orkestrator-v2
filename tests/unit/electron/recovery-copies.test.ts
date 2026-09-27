@@ -389,3 +389,21 @@ exit 0
     );
   });
 });
+
+describe("recovery copy sizes", () => {
+  test("volume sizes come from one system df and unparseable answers stay unknown", async () => {
+    const { parseVolumeSizes } = await import("../../../apps/backend/src/core/recovery-copies");
+    const sizes = parseVolumeSizes(
+      JSON.stringify([
+        { Name: "ork-a-workspace", Size: "1.5GB" },
+        { Name: "ork-a-state", Size: "12kB" },
+        { Name: "odd", Size: "N/A" },
+      ]),
+    );
+    expect(sizes?.get("ork-a-workspace")).toBe(1_500_000_000);
+    expect(sizes?.get("ork-a-state")).toBe(12_000);
+    expect(sizes?.has("odd")).toBe(false);
+    expect(parseVolumeSizes("not json")).toBeNull();
+    expect(parseVolumeSizes('{"Name":"x"}')).toBeNull();
+  });
+});

@@ -103,7 +103,12 @@ export function EnvironmentRecoveryCopies({
           copy.copyId,
           list.revision,
         );
-        if (result && !result.discarded) {
+        if (!result) {
+          // A repeated request: the first one already settled it.
+          toast.info("That recovery copy was already handled", {
+            description: "The list below shows what remains.",
+          });
+        } else if (!result.discarded) {
           toast.warning("Part of the copy could not be removed", {
             description: "What remains is still listed so it can be retried.",
           });
@@ -119,9 +124,16 @@ export function EnvironmentRecoveryCopies({
           list.revision,
         );
         onUpdate(await backend.syncEnvironmentStatus(environment.id));
-        toast.success("Recovery copy restored", {
-          description: "The previous state is kept as another recovery copy.",
-        });
+        const after = await backend.getContainerLifecycleSnapshot(environment.id).catch(() => null);
+        if (after?.lastOutcome?.kind === "restore" && after.lastOutcome.status === "succeeded") {
+          toast.success("Recovery copy restored", {
+            description: "The previous state is kept as another recovery copy.",
+          });
+        } else {
+          toast.warning("The restore's result could not be confirmed", {
+            description: "Open Container settings to see which container is current.",
+          });
+        }
       }
     } catch (err) {
       const lifecycle = parseContainerLifecycleError(err);

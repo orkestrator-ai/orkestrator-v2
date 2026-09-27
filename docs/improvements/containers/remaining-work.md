@@ -36,8 +36,8 @@ credentials this host does not have — named explicitly).
 | 19 | 10 | No automatic refresh of usage; staleness only means "daemon unavailable" | Done — the dialog refreshes every 5 s while open; samples older than 15 s read as stale |
 | 20 | 10 | Rootless flag computed but unused; memory vs `--shm-size` not validated; below-usage update cannot be confirmed from the UI | Done — `--shm-size` capped at half the memory limit; rootless named in the policy; "Apply anyway" sends `allowBelowUsage` after a `confirmation-required` refusal |
 | 21 | 10 | Child-process OOM (PID 1 survives) invisible | Done — `container-oom-events.ts` follows Docker `oom` events (replaying gaps) and the dialog shows kills of running containers |
-| 22 | 07 | Success toasts ignore the final snapshot; failures have no actions | Open |
-| 23 | 07 | Recovery copies on volumes report no size | Open |
+| 22 | 07 | Success toasts ignore the final snapshot; failures have no actions | Done — rebuild and restore toasts read the lifecycle record; a replayed discard says so; a failed rebuild offers "Review again" |
+| 23 | 07 | Recovery copies on volumes report no size | Done — storage-set copies sum their volumes from one `docker system df -v` |
 | 24 | 06 | Port conflict on the candidate rolls back instead of a recoverable result | Open |
 | 25 | 06 | Queued work for the old runtime generation is not cancelled or rebound after commit | Open |
 | 26 | 11 | `get_container_logs` cuts by characters with no truncation marker | Done — byte-bounded with a truncation marker (`boundContainerLogTail`) |

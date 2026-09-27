@@ -139,13 +139,34 @@ export function EnvironmentRebuildSection({
       void refreshSnapshot();
       await pending;
       onUpdate(await backend.syncEnvironmentStatus(environment.id));
-      toast.success("Container rebuilt", {
-        description: "Files and agent sessions were kept. The previous container is kept stopped.",
-      });
+      // Reported from the backend's record, not from the call returning.
+      const after = await backend.getContainerLifecycleSnapshot(environment.id).catch(() => null);
+      const outcome = after?.lastOutcome;
+      if (after?.operation) {
+        toast.info("The rebuild is still running", {
+          description: "Its progress is shown in the environment's Container settings.",
+        });
+      } else if (
+        outcome &&
+        (outcome.kind === "rebuild" || outcome.kind === "migrate") &&
+        outcome.status === "succeeded"
+      ) {
+        toast.success("Container rebuilt", {
+          description:
+            "Files and agent sessions were kept. The previous container is kept stopped.",
+        });
+      } else {
+        toast.warning("The rebuild's result could not be confirmed", {
+          description:
+            "Open Container settings to see the environment's current container and any recovery copies.",
+        });
+      }
     } catch (err) {
       const lifecycle = parseContainerLifecycleError(err);
       toast.error("Rebuild did not complete", {
         description: `${lifecycle?.message ?? (err instanceof Error ? err.message : String(err))} The original container was kept.`,
+        // Everything is re-checked against the container as it is now.
+        action: { label: "Review again", onClick: () => void openConfirm() },
       });
       try {
         onUpdate(await backend.syncEnvironmentStatus(environment.id));

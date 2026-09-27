@@ -5,6 +5,11 @@ import type { RecoveryCopyList } from "@orkestrator/protocol/container-recovery"
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import type { Environment } from "@/types";
 import { EnvironmentRecoveryCopies } from "./EnvironmentRecoveryCopies";
+import {
+  mockToastSuccess,
+  mockToastWarning,
+  resetSonnerMocks,
+} from "../../../../../tests/mocks/sonner";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
@@ -118,5 +123,44 @@ describe("environment recovery copies", () => {
       copyId: "failed",
       expectedRevision: 12,
     });
+  });
+
+  test("a restore is reported from the backend's record, not from the call returning", async () => {
+    const snapshot = (status: string) => ({
+      revision: 13,
+      supported: true,
+      runtimeGeneration: 3,
+      imageId: null,
+      storageFormat: "volume-v1",
+      workspaceGeneration: 1,
+      operation: null,
+      lastOutcome: { operationId: "op", kind: "restore", status, finishedAt: "x" },
+      bootPhase: null,
+    });
+    for (const [status, expected] of [
+      ["succeeded", mockToastSuccess],
+      ["failed", mockToastWarning],
+    ] as const) {
+      resetSonnerMocks();
+      install({
+        list_recovery_copies: () => list,
+        restore_recovery_copy: () => undefined,
+        sync_environment_status: () => environment,
+        get_container_lifecycle_snapshot: () => snapshot(status),
+      });
+      render(
+        <EnvironmentRecoveryCopies
+          environment={environment}
+          dockerAvailable
+          onUpdate={() => undefined}
+          onClose={() => undefined}
+        />,
+      );
+      await screen.findByText("Container before moving to persistent storage");
+      fireEvent.click(screen.getAllByRole("button", { name: "Restore…" })[0]!);
+      fireEvent.click(await screen.findByRole("button", { name: "Restore" }));
+      await waitFor(() => expect(expected).toHaveBeenCalledTimes(1));
+      cleanup();
+    }
   });
 });

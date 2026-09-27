@@ -35,6 +35,7 @@ import {
 } from "./container-storage.js";
 import { configuredImageRef, resolveDockerImage } from "./docker-image.js";
 import { createDockerContainer } from "./commands-containers.js";
+import { parseMemorySize } from "./container-resources.js";
 import { quiesceRuntime, rollbackCandidate } from "./container-replacement.js";
 import {
   groupRecoveryCopies,
@@ -100,9 +101,47 @@ async function containerSize(containerId: string): Promise<number | null> {
   }
 }
 
+/**
+ * Sizes of this daemon's volumes by name, from one `docker system df -v`
+ * (it walks every volume, so it is asked once per listing). Null when Docker
+ * would not say.
+ */
+export async function volumeSizes(): Promise<Map<string, number> | null> {
+  try {
+    const { stdout } = await runCommand(
+      "docker",
+      ["system", "df", "-v", "--format", "{{json .Volumes}}"],
+      { timeoutMs: 120_000 },
+    );
+    return parseVolumeSizes(stdout);
+  } catch {
+    return null;
+  }
+}
+
+export function parseVolumeSizes(text: string): Map<string, number> | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.trim() || "null");
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const sizes = new Map<string, number>();
+  for (const entry of parsed.slice(0, 10_000)) {
+    if (!entry || typeof entry !== "object") continue;
+    const { Name, Size } = entry as { Name?: unknown; Size?: unknown };
+    if (typeof Name !== "string" || typeof Size !== "string") continue;
+    const bytes = parseMemorySize(Size);
+    if (bytes !== null) sizes.set(Name, bytes);
+  }
+  return sizes;
+}
+
 async function observeCopy(
   group: RecoveryCopyGroup,
   measureSize: boolean,
+  volumes: Map<string, number> | null = null,
 ): Promise<Pick<RecoveryCopy, "presence" | "sizeBytes" | "restorable">> {
   const observations: Array<"present" | "missing" | "unknown"> = [];
   if (group.runtime) {
@@ -135,17 +174,20 @@ async function observeCopy(
         presence !== "unknown" &&
         // A storage copy needs every volume; its runtime is optional.
         observations.slice(group.runtime ? 1 : 0).every((entry) => entry === "present"));
-  return {
-    presence,
-    sizeBytes:
-      measureSize &&
-      group.kind === "legacy-runtime" &&
-      group.runtime &&
-      observations[0] === "present"
+  let sizeBytes: number | null = null;
+  if (measureSize && group.kind === "legacy-runtime") {
+    sizeBytes =
+      group.runtime && observations[0] === "present"
         ? await containerSize(group.runtime.containerId)
-        : null,
-    restorable,
-  };
+        : null;
+  } else if (measureSize && volumes && group.storage?.volumes.length) {
+    // A storage copy's size is its volumes'; unknown if any is unmeasured.
+    const measured = group.storage.volumes.map((volume) => volumes.get(volume.name));
+    sizeBytes = measured.every((bytes) => bytes !== undefined)
+      ? measured.reduce<number>((sum, bytes) => sum + (bytes ?? 0), 0)
+      : null;
+  }
+  return { presence, sizeBytes, restorable };
 }
 
 export async function listRecoveryCopies(
@@ -156,10 +198,15 @@ export async function listRecoveryCopies(
   const environment = await requireEnvironment(context, environmentId);
   const record = readRecord(environment);
   const copies: RecoveryCopy[] = [];
-  for (const group of groupRecoveryCopies(record)) {
+  const groups = groupRecoveryCopies(record);
+  const volumes =
+    options.measureSize && groups.some((group) => group.kind !== "legacy-runtime")
+      ? await volumeSizes()
+      : null;
+  for (const group of groups) {
     copies.push({
       ...describeRecoveryCopy(group),
-      ...(await observeCopy(group, options.measureSize ?? false)),
+      ...(await observeCopy(group, options.measureSize ?? false, volumes)),
     });
   }
   return { environmentId, revision: record.revision, copies, limit: MAX_RETAINED_STORAGE_SETS };

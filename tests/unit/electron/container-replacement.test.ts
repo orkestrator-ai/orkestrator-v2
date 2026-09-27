@@ -4,6 +4,7 @@ import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecyc
 import {
   capacityVerdict,
   parseCopyOutput,
+  candidateStartError,
   rebuildPreview,
   replaceRuntimePreservingState,
   replacementCopyPlan,
@@ -333,5 +334,18 @@ exit 0
         operationId: OPERATION_ID,
       }),
     ]);
+  });
+});
+
+describe("candidate start failures", () => {
+  test("a published port held elsewhere is a typed, actionable failure", () => {
+    const conflict = candidateStartError(
+      new Error(
+        "Error response from daemon: driver failed programming external connectivity: Bind for 127.0.0.1:3000 failed: port is already allocated",
+      ),
+    );
+    expect(String(conflict)).toContain("ContainerLifecycleError:port-conflict");
+    const other = new Error("something else");
+    expect(candidateStartError(other)).toBe(other);
   });
 });

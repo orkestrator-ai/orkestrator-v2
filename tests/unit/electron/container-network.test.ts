@@ -230,6 +230,7 @@ function allowlistDocker(options: {
   return `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
+  network) printf '172.30.0.0/16\\t172.30.0.1\\n' ;;
   inspect) printf '2\\t${IMAGE_ID}\\t${options.running === false ? "false" : "true"}\\n' ;;
   create) printf 'probe-container\\n' ;;
   cp) cat '${options.tarPath}' ;;
@@ -292,6 +293,11 @@ describe("allowlist edits in place", () => {
         expect(result.kind).toBe("applied");
         expect(result.policy.domains).toBe("applied");
         expect(result.policy.configured.domainsRevision).toBe(configured);
+        // The environment's network, as Docker reports it.
+        expect(result.policy.network).toMatchObject({
+          subnet: "172.30.0.0/16",
+          gateway: "172.30.0.1",
+        });
         expect(await log.read()).toContain(
           "exec --user root container-1 /usr/local/bin/update-firewall.sh --set-domains one.example,two.example",
         );

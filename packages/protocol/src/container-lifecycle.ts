@@ -41,6 +41,8 @@ export const CONTAINER_LIFECYCLE_ERROR_CODES = [
   "invalid-request",
   /** The request could harm running work; repeat it with explicit confirmation. */
   "confirmation-required",
+  /** A host port the runtime publishes is held by another program. */
+  "port-conflict",
   /** A bounded resource (retained copies, followers, admission) is full. */
   "resource-exhausted",
   /** The requested operation id is unknown or its record has expired. */

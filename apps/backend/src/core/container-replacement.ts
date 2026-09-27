@@ -514,6 +514,22 @@ export async function quiesceRuntime(
   };
 }
 
+/**
+ * A candidate that cannot bind a published host port says so: the original
+ * is restored by the rollback, and the user frees the port or changes the
+ * mapping before rebuilding again.
+ */
+export function candidateStartError(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/port is already allocated|address already in use|bind for .* failed/i.test(message)) {
+    return lifecycleError(
+      "port-conflict",
+      "A host port this environment publishes is in use by another program. The original container was kept; free the port or change the environment's port mappings, then rebuild again.",
+    );
+  }
+  return error;
+}
+
 export interface ReplacementOutcome {
   kind: ReplacementKind;
   containerId: string;
@@ -719,7 +735,11 @@ async function replaceRuntimePreservingStateUnfenced(
 
     // Health without dispatch: current-boot readiness and a mounted workspace.
     // No setup, agent launch or queued prompt runs before the commit.
-    await runCommand("docker", ["start", candidateId], { timeoutMs: 60_000 });
+    await runCommand("docker", ["start", candidateId], { timeoutMs: 60_000 }).catch(
+      (error: unknown) => {
+        throw candidateStartError(error);
+      },
+    );
     const bootId = await waitForContainerBoot(candidateId);
     await runCommand("docker", ["exec", candidateId, "sh", "-c", "mountpoint -q /workspace"], {
       timeoutMs: 30_000,

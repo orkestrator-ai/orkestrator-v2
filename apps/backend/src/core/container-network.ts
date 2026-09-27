@@ -278,6 +278,34 @@ export function parseFirewallStatus(text: string): EnvironmentNetworkPolicy["eff
 const FIREWALL_STATUS_READ =
   "head -c 4096 /run/orkestrator-firewall/firewall.json 2>/dev/null || head -c 4096 /run/orkestrator/firewall.json";
 
+/** Subnet and gateway Docker assigned to a network; null when it cannot say. */
+async function networkIdentity(
+  name: string,
+): Promise<{ name: string; subnet: string | null; gateway: string | null } | null> {
+  try {
+    const { stdout } = await runCommand(
+      "docker",
+      [
+        "network",
+        "inspect",
+        "-f",
+        "{{range .IPAM.Config}}{{.Subnet}}\t{{.Gateway}}\n{{end}}",
+        name,
+      ],
+      { timeoutMs: 10_000 },
+    );
+    const [subnet = "", gateway = ""] = (stdout.split("\n")[0] ?? "").trim().split("\t");
+    const address = /^[0-9a-f.:]+(?:\/\d{1,3})?$/i;
+    return {
+      name,
+      subnet: address.test(subnet) ? subnet : null,
+      gateway: address.test(gateway) ? gateway : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 interface ContainerNetworkFacts {
   policyVersion: 1 | 2;
   liveUpdates: boolean;
@@ -346,6 +374,11 @@ export async function environmentNetworkPolicy(
   const facts = await containerNetworkFacts(environment.containerId, context);
   if (!facts) return result;
   result.policyVersion = facts.policyVersion;
+  if (facts.policyVersion === 2) {
+    result.network = await networkIdentity(
+      environmentNetworkName(dockerOwnerNamespace(context.storage.getDataDir()), environmentId),
+    );
+  }
   try {
     const { stdout } = await runCommand(
       "docker",

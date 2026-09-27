@@ -155,6 +155,13 @@ export function EnvironmentNetworkPolicyStatus({ environmentId }: { environmentI
         applying={applying}
         outcome={outcome}
       />
+      {policy.network ? (
+        <div>
+          Network {policy.network.name}
+          {policy.network.subnet ? ` · ${policy.network.subnet}` : ""}
+          {policy.network.gateway ? ` · gateway ${policy.network.gateway}` : ""}
+        </div>
+      ) : null}
       {policy.policyVersion === 1 ? (
         <div>
           This container shares Docker&apos;s default network, and its firewall allows the whole

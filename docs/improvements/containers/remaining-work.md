@@ -38,10 +38,10 @@ credentials this host does not have — named explicitly).
 | 21 | 10 | Child-process OOM (PID 1 survives) invisible | Done — `container-oom-events.ts` follows Docker `oom` events (replaying gaps) and the dialog shows kills of running containers |
 | 22 | 07 | Success toasts ignore the final snapshot; failures have no actions | Done — rebuild and restore toasts read the lifecycle record; a replayed discard says so; a failed rebuild offers "Review again" |
 | 23 | 07 | Recovery copies on volumes report no size | Done — storage-set copies sum their volumes from one `docker system df -v` |
-| 24 | 06 | Port conflict on the candidate rolls back instead of a recoverable result | Open |
-| 25 | 06 | Queued work for the old runtime generation is not cancelled or rebound after commit | Open |
+| 24 | 06 | Port conflict on the candidate rolls back instead of a recoverable result | Done — a candidate that cannot bind a published port fails `port-conflict` with a remedy; the rollback keeps the original (the candidate held only a copy) |
+| 25 | 06 | Queued work for the old runtime generation is not cancelled or rebound after commit | Done — no dispatch reaches a runtime under replacement (#9); after commit the replaced container's state polling and fetch policy are retired, and environment-keyed work (sessions, parked dispatches, queued prompts) resolves the new runtime on next use |
 | 26 | 11 | `get_container_logs` cuts by characters with no truncation marker | Done — byte-bounded with a truncation marker (`boundContainerLogTail`) |
-| 27 | 09 | Effective network report lacks gateway/subnet/DNS identity from Docker | Open |
+| 27 | 09 | Effective network report lacks gateway/subnet/DNS identity from Docker | Done — the policy report carries the network name, subnet and gateway from `docker network inspect` |
 | 28 | 09 | AGENTS.md: sudo grant count, root-terminal `NET_ADMIN` in restricted mode, GitHub range source; all-ports allowlist and shared-IP caveat | Done — AGENTS.md corrected |
 | 29 | 12 | Manifest agent versions come from build args, not the installed binaries; bridges listed by directory presence | Open |
 | 30 | 12 | CI never runs the built image (bridge `/global/health`, CLI versions, dynamic assets) | Open |

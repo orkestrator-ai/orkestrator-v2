@@ -1894,6 +1894,11 @@ async function recreateEnvironmentOnceUnfenced(
     }
     invalidateDiscovery(environment.id);
     cancelOpenCodeAgentToolsConfiguration(`container:${environment.containerId}`);
+    // Per-runtime watchers of the replaced container are retired; everything
+    // keyed by environment (sessions, parked dispatches, queued prompts)
+    // resolves the new runtime on its next use.
+    shutdownClaudeStatePolling(environment.containerId);
+    containerGitFetchPolicy.forgetContainer(environment.containerId);
     cleanupEnvironmentSetupState(environment.id);
     // Setup belongs to a runtime: the new one runs it again (the preserved
     // checkout is kept, so the clone step is skipped). The workspace itself,

@@ -167,6 +167,8 @@ export interface EnvironmentNetworkPolicy {
   };
   /** 1: shared bridge with the gateway /24 open; 2: own network, narrow host access. */
   policyVersion: 1 | 2 | null;
+  /** The environment's own network as Docker reports it (policy 2). */
+  network?: { name: string; subnet: string | null; gateway: string | null } | null;
   /**
    * Whether the saved allowlist is the one the container enforces:
    * `applied`; `pending` (saved, not yet applied — it can be applied in

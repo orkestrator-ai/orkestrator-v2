@@ -1,4 +1,5 @@
 import { DESIGN_MAX_DOCUMENT_BYTES, type DesignCanvas } from "@orkestrator/protocol/design-canvas";
+import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import type {
   DesignCapabilities,
   DesignLibraryPage,
@@ -58,17 +59,23 @@ export const DESIGN_BRIEF_EXAMPLES = [
 export const DESIGN_CONTENT_EXPLANATION =
   "Designs are static HTML/CSS with embedded resources (inline CSS, data-URL images and fonts). Authored scripts and remote resources are blocked.";
 
+/**
+ * The canvas guidance is provider-only, so it travels in a system-instructions
+ * frame: the agent receives it, while the transcript shows only the brief.
+ */
 export function buildDesignAgentPrompt(canvasId: string, brief: string): string {
-  return [
-    `Use the orkestrator-design MCP server for this design workspace. Canvas ID: ${canvasId}.`,
-    "Start with get_canvas_summary, then get_frame for the frames you need; avoid get_canvas on large designs because it returns every frame's HTML.",
-    "Review the current repository, then build HTML/CSS mockups in this canvas. Designs must be self-contained, with embedded CSS and data-URL images/fonts; authored scripts and remote resources are blocked.",
-    'Pass response:"compact" on mutations so they do not echo HTML. Edit with the frame revision you last read; on a revision conflict, re-read the frame and reapply your change rather than retrying blindly.',
-    "Use capture_frame to review your work visually.",
-    "To save the design into the repository, use save_canvas (not export_canvas plus file tools). Never overwrite an existing file unless you pass the replaceFingerprint reported for it; otherwise choose a new file path.",
-    "",
-    brief.trim() || "Review this repository and propose an initial design mockup.",
-  ].join("\n");
+  const guidance = wrapSystemInstructions(
+    [
+      `Use the orkestrator-design MCP server for this design workspace. Canvas ID: ${canvasId}.`,
+      "Start with get_canvas_summary, then get_frame for the frames you need; avoid get_canvas on large designs because it returns every frame's HTML.",
+      "Review the current repository, then build HTML/CSS mockups in this canvas. Designs must be self-contained, with embedded CSS and data-URL images/fonts; authored scripts and remote resources are blocked.",
+      'Pass response:"compact" on mutations so they do not echo HTML. Edit with the frame revision you last read; on a revision conflict, re-read the frame and reapply your change rather than retrying blindly.',
+      "Use capture_frame to review your work visually.",
+      "To save the design into the repository, use save_canvas (not export_canvas plus file tools). Never overwrite an existing file unless you pass the replaceFingerprint reported for it; otherwise choose a new file path.",
+    ].join("\n"),
+  );
+  const request = brief.trim() || "Review this repository and propose an initial design mockup.";
+  return `${guidance}\n\n${request}`;
 }
 
 function initialFrameHtml(): string {

@@ -5,6 +5,8 @@ import type {
   DesignOperationStatus,
   DesignReadiness,
 } from "@orkestrator/protocol/design-operations";
+import { SYSTEM_INSTRUCTIONS_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
+import { userPromptDisplayText } from "@/lib/chat/user-prompt-display";
 import { DesignClientError } from "./design-client";
 import {
   buildDesignAgentPrompt,
@@ -97,6 +99,10 @@ describe("design workspace launch transaction", () => {
       "link-session",
       "done",
     ]);
+    const initialPrompt = (options.createAgentTab as ReturnType<typeof mock>).mock.calls[0]?.[2];
+    expect(initialPrompt).toStartWith(SYSTEM_INSTRUCTIONS_FRAME_OPEN);
+    expect(initialPrompt).toContain(`Canvas ID: ${canvas.id}`);
+    expect(userPromptDisplayText(initialPrompt)).toBe("Build it");
   });
 
   test("a blank canvas creates no agent tab and no session link", async () => {
@@ -213,6 +219,17 @@ describe("design inputs", () => {
       "propose an initial design mockup",
     ])
       expect(prompt).toContain(expected);
+  });
+
+  test("frames the canvas guidance so the transcript shows only the brief", () => {
+    const prompt = buildDesignAgentPrompt("canvas-1", "  Mock up the sidebar  ");
+    expect(prompt.startsWith(SYSTEM_INSTRUCTIONS_FRAME_OPEN)).toBe(true);
+    expect(prompt).toContain("Canvas ID: canvas-1");
+    expect(prompt.endsWith("\n\nMock up the sidebar")).toBe(true);
+    expect(userPromptDisplayText(prompt)).toBe("Mock up the sidebar");
+    expect(userPromptDisplayText(buildDesignAgentPrompt("canvas-1", ""))).toBe(
+      "Review this repository and propose an initial design mockup.",
+    );
   });
 });
 

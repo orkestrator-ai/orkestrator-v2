@@ -128,6 +128,7 @@ import {
   type PersistedSessionTitleSource,
 } from "./session-titles.js";
 import { stripCoordinatorContext } from "@orkestrator/protocol/coordinator";
+import { stripSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
 import type { BridgeModel } from "./models-cache.js";
 import {
@@ -1232,10 +1233,9 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
    */
   protected applyPromptTitle(session: BridgeSession, context: ThreadContext, prompt: string): void {
     // Both title paths name the user's request, so neither may see the injected
-    // coordinator preamble: it would dominate the generated title and hand the
-    // project id, coordinator id, branch, and head commit to the separate
-    // `codex exec` the generator spawns.
-    const titleSource = stripCoordinatorContext(prompt);
+    // coordinator preamble or framed provider guidance: either would dominate
+    // the generated title and leak internal context to the separate `codex exec`.
+    const titleSource = stripSystemInstructions(stripCoordinatorContext(prompt));
     if (!session.title) {
       const fallback = buildFallbackSessionTitle(titleSource);
       for (const id of context.bridgeSessionIds) {

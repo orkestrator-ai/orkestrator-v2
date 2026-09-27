@@ -23,7 +23,10 @@ import {
   type NativeAgentContextUsage,
   type NativeAgentNotice,
 } from "@orkestrator/protocol/native-agent";
-import { parseCoordinatorDelegatedPrompt } from "@orkestrator/protocol/review-evidence-frames";
+import {
+  parseCoordinatorDelegatedPrompt,
+  stripSystemInstructions,
+} from "@orkestrator/protocol/review-evidence-frames";
 import {
   coordinatorIdFromRuntimeId,
   stripCoordinatorContext,
@@ -3734,7 +3737,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       const fallbackTitle = transcript.messages.flatMap((candidate) => {
         const message = candidate as { role?: unknown; content?: unknown };
         if (message.role !== "user" || typeof message.content !== "string") return [];
-        const normalized = message.content.replace(/\s+/g, " ").trim();
+        // Name the session after the user's own words, not provider-only guidance.
+        const normalized = stripSystemInstructions(message.content).replace(/\s+/g, " ").trim();
         return normalized ? [normalized.slice(0, 80)] : [];
       })[0];
       const snapshotTitle = snapshot.title?.trim();

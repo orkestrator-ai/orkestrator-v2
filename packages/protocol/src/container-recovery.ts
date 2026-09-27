@@ -153,9 +153,21 @@ export interface CredentialRevocationResult {
  */
 export interface EnvironmentNetworkPolicy {
   environmentId: string;
-  configured: { mode: "full" | "restricted"; domains: number };
+  configured: {
+    mode: "full" | "restricted";
+    domains: number;
+    /** Digest of the allowlist the backend would hand this container. */
+    domainsRevision: string;
+  };
   /** 1: shared bridge with the gateway /24 open; 2: own network, narrow host access. */
   policyVersion: 1 | 2 | null;
+  /**
+   * Whether the saved allowlist is the one the container enforces:
+   * `applied`; `pending` (saved, not yet applied — it can be applied in
+   * place); `rebuild-required` (the container's image cannot change its
+   * allowlist in place, or the network mode changed); `null` when unknown.
+   */
+  domains: "applied" | "pending" | "rebuild-required" | null;
   effective: {
     mode: "full" | "restricted";
     state: "applied" | "failed" | null;
@@ -167,5 +179,17 @@ export interface EnvironmentNetworkPolicy {
     ipv6: "blocked" | "disabled" | null;
     /** Where GitHub's ranges came from: backend seed, live fetch or cache. */
     githubRanges: "seed" | "live" | "seed-stale" | "cached" | null;
+    /** Digest of the domain list the container enforces (refreshing images). */
+    domainsRevision: string | null;
+    refreshedAt: string | null;
+    nextRefreshAt: string | null;
+    /** Domains that did not resolve and still use addresses from an earlier resolution. */
+    carriedDomains: number | null;
+    /** When the earliest carried address stops being trusted. */
+    carriedUntil: string | null;
+    refreshFailures: number | null;
+    /** Entries removed from the allowlist by the last change, with their connections. */
+    revokedEntries: number | null;
+    revocation: "conntrack" | "unavailable" | null;
   } | null;
 }

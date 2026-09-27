@@ -12,7 +12,7 @@ How to reproduce:
 | Suite | Command |
 | --- | --- |
 | Unit and integration (complete) | `mise run test` |
-| Live Docker scenarios | `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test tests/unit/electron/container-live-qualification.test.ts tests/unit/electron/container-live-replacement.test.ts tests/unit/electron/container-live-network.test.ts` |
+| Live Docker scenarios | `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test tests/unit/electron/container-live-qualification.test.ts tests/unit/electron/container-live-replacement.test.ts tests/unit/electron/container-live-network.test.ts tests/unit/electron/container-live-firewall.test.ts` |
 | Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test tests/unit/electron/container-benchmarks.test.ts` |
 | Real stack, local | `mise run test:agent:browser:isolated` |
 | Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` |
@@ -51,7 +51,7 @@ process of an isolated `dev:test` profile.
 | C20 | Pass | Live: only enabled providers' allowlisted files mounted read-only; unique sentinels in histories, transcripts and a disabled provider's credentials unreachable anywhere in the container |
 | C21 | Partial | Unit: atomic revision publication, private modes, manifest without names; UI reports removal and pending rebuild. An interrupted revoke/refresh against a live provider was not exercised |
 | C22 | Pass | Live: own network, IPv6 disabled, service port leaves the container while other host ports and a sibling are rejected, example.com blocked, ingress via published port, durable atomic host-port update across restart |
-| C23 | Partial | Unit: fail-closed firewall on failure, status report, GitHub ranges seed → live → cache → fail order. DNS TTL refresh and removal of an allowed domain from a running container are not implemented (edits apply via `update-firewall.sh` or a rebuild) |
+| C23 | Pass | Live: `container-live-firewall.test.ts` — a saved list is reported pending, then applied in place; an open keep-alive connection survives an edit that keeps its domain and is cut when the domain is removed (conntrack revocation); one root refresher that node can neither signal nor duplicate; malformed lists refused unchanged; the applied list survives a restart; a list saved while stopped stays pending until applied. Unit: atomic swap order, expiry-bounded carry-over, rotation keeps earlier addresses, fail-closed firewall, GitHub seed → live → cache order |
 | C24 | Pass | Live: limits applied and read back; PID exhaustion contained and recovered; OOM killed the allocating process, not PID 1; live update read back. Two-environment contention not measured |
 | C25 | Pass | Unit: unreachable daemon → unknown, not zero; stale marking; UI shows unknown disk/memory and stale samples |
 | C26 | Pass | Live: `local` driver 10 MiB × 3; 40 MB through the bridge launch path stays within 15 MiB; real followers shared and stopped. Unit: huge lines, split UTF-8, ring gaps, leases, caps |
@@ -91,6 +91,10 @@ process of an isolated `dev:test` profile.
   a production installation.
 
 ## Known limitations and follow-ups
+
+An item-by-item audit of steps 06–14 after this record was written found
+further gaps; they are tracked to closure in
+[remaining-work.md](remaining-work.md).
 
 - Mobile: opening an environment's Settings from the narrow sidebar's
   "Environment actions" menu leaves the projects drawer (a modal dialog) open

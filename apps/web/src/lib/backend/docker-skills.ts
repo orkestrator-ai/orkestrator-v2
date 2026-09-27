@@ -190,7 +190,10 @@ export async function getContainerLogs(containerId: string, tail?: string): Prom
   return invoke<string>("get_container_logs", { containerId, tail });
 }
 
-/** Start streaming container logs to the frontend via "container-log" events */
+/**
+ * Legacy: opens a leased log subscription. Log lines are not pushed as events;
+ * read them with `readContainerLogs`.
+ */
 export async function streamContainerLogs(containerId: string): Promise<void> {
   return invoke("stream_container_logs", { containerId });
 }

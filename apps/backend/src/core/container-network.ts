@@ -12,6 +12,9 @@ import {
 import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentNetworkPolicy } from "@orkestrator/protocol/container-recovery";
 import { ContainerLifecycleError } from "./container-lifecycle-service.js";
+import { requiredAgentNetworkDomains } from "./constants.js";
+import { imageCapabilities } from "./docker-image.js";
+import type { AppConfig, Environment } from "./models.js";
 
 /**
  * One Docker bridge network per environment (network policy 2).
@@ -172,6 +175,33 @@ function boundedNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
+function boundedTimestamp(value: unknown): string | null {
+  return typeof value === "string" && value.length <= 64 ? value : null;
+}
+
+/**
+ * The allowlist a restricted container receives: the environment's own list
+ * or the global one, plus the hosts the enabled agent platforms require. The
+ * same list goes into `ALLOWED_DOMAINS` at creation and into a live update,
+ * so its revision identifies it on both sides.
+ */
+export function configuredAllowedDomains(
+  environment: Pick<Environment, "allowedDomains">,
+  config: Pick<AppConfig, "global">,
+): string[] {
+  return [
+    ...new Set([
+      ...(environment.allowedDomains ?? config.global.allowedDomains ?? []),
+      ...requiredAgentNetworkDomains(config.global.enabledAgentPlatforms),
+    ]),
+  ];
+}
+
+/** Same digest as `ork_domains_revision` in docker/firewall-domains.sh. */
+export function allowedDomainsRevision(domains: readonly string[]): string {
+  return createHash("sha256").update(domains.join(",")).digest("hex").slice(0, 16);
+}
+
 /** Parses the firewall's status report; anything unexpected reads as absent. */
 export function parseFirewallStatus(text: string): EnvironmentNetworkPolicy["effective"] {
   if (!text.trim() || text.length > 4096) return null;
@@ -185,7 +215,7 @@ export function parseFirewallStatus(text: string): EnvironmentNetworkPolicy["eff
   return {
     mode: value.mode,
     state: value.state === "applied" || value.state === "failed" ? value.state : null,
-    appliedAt: typeof value.appliedAt === "string" ? value.appliedAt.slice(0, 64) : null,
+    appliedAt: boundedTimestamp(value.appliedAt),
     resolvedDomains: boundedNumber(value.resolvedDomains),
     unresolvedDomains: boundedNumber(value.unresolvedDomains),
     allowedEntries: boundedNumber(value.allowedEntries),
@@ -201,7 +231,71 @@ export function parseFirewallStatus(text: string): EnvironmentNetworkPolicy["eff
       value.githubRanges === "cached"
         ? value.githubRanges
         : null,
+    domainsRevision:
+      typeof value.domainsRevision === "string" && /^[0-9a-f]{16}$/.test(value.domainsRevision)
+        ? value.domainsRevision
+        : null,
+    refreshedAt: boundedTimestamp(value.refreshedAt),
+    nextRefreshAt: boundedTimestamp(value.nextRefreshAt),
+    carriedDomains: boundedNumber(value.carriedDomains),
+    carriedUntil: boundedTimestamp(value.carriedUntil),
+    refreshFailures: boundedNumber(value.refreshFailures),
+    revokedEntries: boundedNumber(value.revokedEntries),
+    revocation:
+      value.revocation === "conntrack" || value.revocation === "unavailable"
+        ? value.revocation
+        : null,
   };
+}
+
+// Refreshing images keep the report in a root-only directory; earlier images
+// wrote it where node could replace it.
+const FIREWALL_STATUS_READ =
+  "head -c 4096 /run/orkestrator-firewall/firewall.json 2>/dev/null || head -c 4096 /run/orkestrator/firewall.json";
+
+interface ContainerNetworkFacts {
+  policyVersion: 1 | 2;
+  liveUpdates: boolean;
+  running: boolean;
+}
+
+async function containerNetworkFacts(
+  containerId: string,
+  context: Pick<CommandContext, "storage">,
+): Promise<ContainerNetworkFacts | null> {
+  try {
+    const { stdout } = await runCommand(
+      "docker",
+      [
+        "inspect",
+        "-f",
+        `{{ index .Config.Labels "${DOCKER_LABEL_NETWORK_POLICY}" }}\t{{ .Image }}\t{{ .State.Running }}`,
+        containerId,
+      ],
+      { timeoutMs: 10_000 },
+    );
+    const [policy = "", imageId = "", running = ""] = stdout.trim().split("\t");
+    const capabilities = await imageCapabilities(imageId || undefined, context).catch(() => null);
+    return {
+      policyVersion: policy === "2" ? 2 : 1,
+      liveUpdates: (capabilities?.["network-refresh"] ?? 0) >= 1,
+      running: running === "true",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function domainsState(
+  configured: EnvironmentNetworkPolicy["configured"],
+  effective: EnvironmentNetworkPolicy["effective"],
+  liveUpdates: boolean,
+): EnvironmentNetworkPolicy["domains"] {
+  if (!effective || effective.state !== "applied") return null;
+  if (effective.mode !== configured.mode) return "rebuild-required";
+  if (configured.mode === "full") return "applied";
+  if (effective.domainsRevision === configured.domainsRevision) return "applied";
+  return liveUpdates ? "pending" : "rebuild-required";
 }
 
 export async function environmentNetworkPolicy(
@@ -217,35 +311,106 @@ export async function environmentNetworkPolicy(
     configured: {
       mode: environment.networkAccessMode === "full" ? "full" : "restricted",
       domains: domains.length,
+      domainsRevision: allowedDomainsRevision(configuredAllowedDomains(environment, config)),
     },
     policyVersion: null,
+    domains: null,
     effective: null,
   };
   if (!environment.containerId || environment.environmentType !== "containerized") return result;
+  const facts = await containerNetworkFacts(environment.containerId, context);
+  if (!facts) return result;
+  result.policyVersion = facts.policyVersion;
   try {
     const { stdout } = await runCommand(
       "docker",
-      [
-        "inspect",
-        "-f",
-        `{{ index .Config.Labels "${DOCKER_LABEL_NETWORK_POLICY}" }}`,
-        environment.containerId,
-      ],
-      { timeoutMs: 10_000 },
-    );
-    result.policyVersion = stdout.trim() === "2" ? 2 : 1;
-  } catch {
-    return result;
-  }
-  try {
-    const { stdout } = await runCommand(
-      "docker",
-      ["exec", environment.containerId, "head", "-c", "4096", "/run/orkestrator/firewall.json"],
+      ["exec", environment.containerId, "sh", "-c", FIREWALL_STATUS_READ],
       { timeoutMs: 10_000 },
     );
     result.effective = parseFirewallStatus(stdout);
   } catch {
     result.effective = null;
   }
+  result.domains = domainsState(result.configured, result.effective, facts.liveUpdates);
   return result;
+}
+
+export type AllowedDomainsApplyResult =
+  | { kind: "applied"; policy: EnvironmentNetworkPolicy }
+  | {
+      kind: "not-applicable" | "rebuild-required" | "not-running" | "failed";
+      policy: EnvironmentNetworkPolicy;
+    };
+
+/**
+ * Applies the saved allowlist to the environment's running container in
+ * place, when its image supports it and the modes agree. The container
+ * rebuilds its set beside the live one, swaps it in, revokes removed
+ * addresses and stores the list so a restart keeps it. Anything else leaves
+ * the container as it is and says why; nothing here recreates a container.
+ */
+export function applyEnvironmentAllowedDomains(
+  environmentId: string,
+  context: Pick<CommandContext, "storage">,
+): Promise<AllowedDomainsApplyResult> {
+  // One apply per environment at a time, each reading the list saved when it
+  // starts: two quick edits cannot land in the container in the wrong order.
+  const previous = applyQueue.get(environmentId) ?? Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(() => applyAllowedDomainsNow(environmentId, context));
+  const settled = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  applyQueue.set(environmentId, settled);
+  void settled.then(() => {
+    if (applyQueue.get(environmentId) === settled) applyQueue.delete(environmentId);
+  });
+  return next;
+}
+
+const applyQueue = new Map<string, Promise<void>>();
+
+async function applyAllowedDomainsNow(
+  environmentId: string,
+  context: Pick<CommandContext, "storage">,
+): Promise<AllowedDomainsApplyResult> {
+  const before = await environmentNetworkPolicy(environmentId, context);
+  if (before.domains === "applied") return { kind: "applied", policy: before };
+  const environment = await context.storage.getEnvironment(environmentId);
+  if (!environment?.containerId || environment.environmentType !== "containerized") {
+    return { kind: "not-applicable", policy: before };
+  }
+  if (before.domains === "rebuild-required") return { kind: "rebuild-required", policy: before };
+  const facts = await containerNetworkFacts(environment.containerId, context);
+  if (!facts?.running) return { kind: "not-running", policy: before };
+  if (!facts.liveUpdates) return { kind: "rebuild-required", policy: before };
+  if (before.configured.mode !== "restricted") return { kind: "rebuild-required", policy: before };
+  const config = await context.storage.loadConfig();
+  const domains = configuredAllowedDomains(environment, config);
+  try {
+    await runCommand(
+      "docker",
+      [
+        "exec",
+        "--user",
+        "root",
+        environment.containerId,
+        "/usr/local/bin/update-firewall.sh",
+        "--set-domains",
+        domains.join(","),
+      ],
+      { timeoutMs: 180_000 },
+    );
+  } catch {
+    // The script leaves the previous allowlist active on failure; the report
+    // below states which revision is enforced.
+    return {
+      kind: "failed",
+      policy: await environmentNetworkPolicy(environmentId, context),
+    };
+  }
+  const after = await environmentNetworkPolicy(environmentId, context);
+  return { kind: after.domains === "applied" ? "applied" : "failed", policy: after };
 }

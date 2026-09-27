@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   ContainerLogService,
   LOG_LIMITS,
+  recordCut,
 } from "../../../apps/backend/src/core/container-log-service";
 import { boundedBackgroundLaunch } from "../../../apps/backend/src/core/container-log-bounds";
 
@@ -27,10 +28,8 @@ class FakeChild extends EventEmitter {
 
 function harness() {
   const children: FakeChild[] = [];
-  const events: Array<{ event: string; payload: Record<string, unknown> }> = [];
   let now = 1_000_000;
   const service = new ContainerLogService(
-    (event, payload) => events.push({ event, payload: payload as Record<string, unknown> }),
     (() => {
       const child = new FakeChild();
       children.push(child);
@@ -41,7 +40,6 @@ function harness() {
   return {
     service,
     children,
-    events,
     advance: (ms: number) => {
       now += ms;
     },
@@ -106,6 +104,61 @@ describe("container log service", () => {
     expect(service.read(subscriptionId, "another-source", 60)).toMatchObject({ kind: "gap" });
     const recent = service.read(subscriptionId, sourceId, LOG_LIMITS.ringRecords + 40);
     expect(recent).toMatchObject({ kind: "records" });
+  });
+
+  test("records are bounded in bytes, not characters, and never split a surrogate pair", async () => {
+    const { service, children } = harness();
+    services.push(service);
+    const { subscriptionId, sourceId, cursor } = service.open("container-1");
+    // Three-byte characters: a character count at the byte limit would triple it.
+    const wide = "€".repeat(LOG_LIMITS.recordBytes) + "\n";
+    children[0]!.stdout.write(wide);
+    children[0]!.stdout.write("😀".repeat(LOG_LIMITS.recordBytes) + "\n");
+    await tick();
+    const read = service.read(subscriptionId, sourceId, cursor);
+    if (read.kind !== "records") throw new Error("expected records");
+    let all = read.records;
+    let next = read.cursor;
+    while (true) {
+      const more = service.read(subscriptionId, sourceId, next);
+      if (more.kind !== "records" || more.records.length === 0) break;
+      all = all.concat(more.records);
+      next = more.cursor;
+    }
+    for (const record of all) {
+      expect(Buffer.byteLength(record.text)).toBeLessThanOrEqual(LOG_LIMITS.recordBytes);
+      expect(record.text).not.toContain("\uFFFD");
+      const last = record.text.charCodeAt(record.text.length - 1);
+      expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+    }
+    expect(all.map((record) => record.text).join("")).toBe(
+      wide + "😀".repeat(LOG_LIMITS.recordBytes) + "\n",
+    );
+    expect(recordCut("ab😀", 4)).toBe(2);
+  });
+
+  test("a gap carries the newest bounded tail; a stopped container's restart is a new source", async () => {
+    const { service, children } = harness();
+    services.push(service);
+    const first = service.open("container-1");
+    for (let index = 0; index < LOG_LIMITS.ringRecords + 10; index += 1) {
+      children[0]!.stdout.write(`line ${index}\n`);
+    }
+    await tick();
+    const gap = service.read(first.subscriptionId, first.sourceId, 0);
+    if (gap.kind !== "gap") throw new Error("expected a gap");
+    expect(gap.records.length).toBeGreaterThan(0);
+    expect(gap.records.at(-1)!.text).toBe(`line ${LOG_LIMITS.ringRecords + 9}\n`);
+    expect(gap.cursor).toBe(gap.records.at(-1)!.seq);
+    // The container stops: the follower ends while a subscriber is still open.
+    children[0]!.emit("close", 0);
+    const reopened = service.open("container-1");
+    expect(children).toHaveLength(2);
+    expect(reopened.sourceId).not.toBe(first.sourceId);
+    // The earlier subscriber still sees its own source as ended.
+    expect(service.read(first.subscriptionId, first.sourceId, gap.cursor)).toMatchObject({
+      ended: true,
+    });
   });
 
   test("a lapsed lease releases the subscription; limits refuse excess followers", async () => {

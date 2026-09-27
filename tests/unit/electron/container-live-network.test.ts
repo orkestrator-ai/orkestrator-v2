@@ -422,8 +422,7 @@ describe("C26 bounded logs", () => {
 
       // Real followers: open, read, close; the `docker logs -f` child is gone
       // after the idle grace.
-      const events: unknown[] = [];
-      const service = new ContainerLogService((_event, payload) => events.push(payload));
+      const service = new ContainerLogService();
       const first = service.open(containerId);
       const second = service.open(containerId);
       expect(service.followerCount()).toBe(1);

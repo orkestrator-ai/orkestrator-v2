@@ -137,6 +137,13 @@ limits are enforced independently and missing diagnostic output is explicit.
   `local` 10 MiB × 3; 40 MB of output through the bridge launch path ends as
   three files within 15 MiB; real `docker logs -f` followers are shared and gone
   after the idle grace.
+- **Audit fixes.** Log lines are no longer emitted as gateway events: those
+  reach every client and share the replay ring that lifecycle and approval
+  events depend on, so a busy container could push them out. Readers poll
+  `read_container_logs` with their cursor. Records are bounded in UTF-8 bytes
+  (a line of three-byte characters used to produce 48 KiB records) and a cut
+  never splits a surrogate pair; a gap returns the newest bounded tail; a
+  restarted container gets a new source instead of reusing the ended one.
 - **Limitations.** There is no renderer log viewer yet that uses the
   subscription API (the initialization view keeps its bounded polled tail), so
   the source-ended/disconnected/truncated UI states are exposed by the API but

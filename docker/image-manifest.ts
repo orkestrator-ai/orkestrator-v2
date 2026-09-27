@@ -34,6 +34,10 @@ export const CONTRACT_FILES: ReadonlyArray<{ installed: string; source: string }
   { installed: "/usr/local/bin/workspace-setup.sh", source: "docker/workspace-setup.sh" },
   { installed: "/usr/local/bin/entrypoint.sh", source: "docker/entrypoint.sh" },
   { installed: "/usr/local/bin/init-firewall.sh", source: "docker/init-firewall.sh" },
+  {
+    installed: "/usr/local/lib/orkestrator/firewall-domains.sh",
+    source: "docker/firewall-domains.sh",
+  },
   { installed: "/usr/local/bin/orkestrator-drain.sh", source: "docker/orkestrator-drain.sh" },
   { installed: "/usr/local/bin/orkestrator-storage.sh", source: "docker/orkestrator-storage.sh" },
   { installed: "/usr/local/bin/orkestrator-migrate.sh", source: "docker/orkestrator-migrate.sh" },

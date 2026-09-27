@@ -322,24 +322,24 @@ export function registerDockerCommands(
   });
   // Follow subscriptions: one shared `docker logs -f` per container, a bounded
   // replay ring, leases and an explicit gap when a client falls behind.
-  register("open_container_logs", ({ containerId }, { emit }) =>
-    containerLogService(emit).open(asString(containerId, "containerId")),
+  register("open_container_logs", ({ containerId }) =>
+    containerLogService().open(asString(containerId, "containerId")),
   );
-  register("read_container_logs", ({ subscriptionId, sourceId, cursor }, { emit }) =>
-    containerLogService(emit).read(
+  register("read_container_logs", ({ subscriptionId, sourceId, cursor }) =>
+    containerLogService().read(
       asString(subscriptionId, "subscriptionId"),
       asString(sourceId, "sourceId"),
       asNumber(cursor, "cursor"),
     ),
   );
-  register("close_container_logs", ({ subscriptionId }, { emit }) => {
+  register("close_container_logs", ({ subscriptionId }) => {
     // Releases the observer only; the container and its processes continue.
-    containerLogService(emit).close(asString(subscriptionId, "subscriptionId"));
+    containerLogService().close(asString(subscriptionId, "subscriptionId"));
   });
   // Legacy adapter: an older client that never closes gets a lease that
   // lapses, so its follower stops instead of living forever.
-  register("stream_container_logs", ({ containerId }, { emit }) => {
-    const { subscriptionId, sourceId } = containerLogService(emit).open(
+  register("stream_container_logs", ({ containerId }) => {
+    const { subscriptionId, sourceId } = containerLogService().open(
       asString(containerId, "containerId"),
     );
     return { subscriptionId, sourceId };

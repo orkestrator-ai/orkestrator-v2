@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 import { spawnCommand } from "./commands-dependencies.js";
-import type { BackendEmit } from "./commands-context.js";
 
 /**
  * Backend-owned container log followers.
@@ -15,9 +14,12 @@ import type { BackendEmit } from "./commands-context.js";
  * cursor from another source generation, receives an explicit gap and reads a
  * bounded tail instead. Diagnostic gaps never license dropping authoritative
  * lifecycle, approval or transcript events, which do not travel here.
+ *
+ * Log content is never broadcast. Gateway events reach every connected client
+ * and fill the shared replay ring that lifecycle and approval events depend
+ * on; a busy container would push those out. Readers poll `read` with their
+ * cursor instead, which only the subscriber sees.
  */
-
-export const CONTAINER_LOG_EVENT = "container-log";
 
 export const LOG_LIMITS = {
   /** Largest single record; longer lines are split. */
@@ -52,8 +54,12 @@ export type LogReadResult =
       /** The follower exited (container stopped or removed). */
       ended: boolean;
     }
-  /** The cursor is older than the ring or belongs to another source. */
-  | { kind: "gap"; sourceId: string; cursor: number; ended: boolean };
+  /**
+   * The cursor is older than the ring or belongs to another source. `records`
+   * is the newest retained tail (bounded like a read); output before it was
+   * not kept.
+   */
+  | { kind: "gap"; sourceId: string; records: LogRecord[]; cursor: number; ended: boolean };
 
 interface LogSource {
   sourceId: string;
@@ -82,7 +88,6 @@ export class ContainerLogService {
   private closed = false;
 
   constructor(
-    private readonly emit: BackendEmit,
     private readonly spawn: Spawn = spawnCommand,
     private readonly now: () => number = Date.now,
   ) {
@@ -105,6 +110,12 @@ export class ContainerLogService {
   open(containerId: string): { subscriptionId: string; sourceId: string; cursor: number } {
     if (this.closed) throw this.exhausted("Log following is shutting down.");
     let source = this.sources.get(containerId);
+    // A follower that ended (the container stopped) is not reused: a restart
+    // is a new source with its own id, so no cursor spans two boots.
+    if (source?.ended) {
+      this.forget(source);
+      source = undefined;
+    }
     if (!source) {
       if (this.followerCount() >= LOG_LIMITS.maxFollowers) {
         throw this.exhausted("Too many container logs are being followed. Close one and retry.");
@@ -137,10 +148,12 @@ export class ContainerLogService {
     const { source } = subscription;
     const oldest = source.ring[0]?.seq ?? source.nextSeq;
     if (sourceId !== source.sourceId || cursor < oldest - 1 || cursor >= source.nextSeq) {
+      const tail = boundedTail(source.ring);
       return {
         kind: "gap",
         sourceId: source.sourceId,
-        cursor: source.nextSeq - 1,
+        records: tail,
+        cursor: tail.at(-1)?.seq ?? source.nextSeq - 1,
         ended: source.ended,
       };
     }
@@ -224,15 +237,18 @@ export class ContainerLogService {
     let rest = text;
     while (true) {
       const newline = rest.indexOf("\n");
-      if (newline >= 0 && newline < LOG_LIMITS.recordBytes) {
+      if (
+        newline >= 0 &&
+        newline < LOG_LIMITS.recordBytes &&
+        Buffer.byteLength(rest.slice(0, newline + 1)) <= LOG_LIMITS.recordBytes
+      ) {
         this.append(source, rest.slice(0, newline + 1));
         rest = rest.slice(newline + 1);
         continue;
       }
       if (Buffer.byteLength(rest) >= LOG_LIMITS.recordBytes) {
-        // One enormous line: emit it in bounded pieces rather than buffering it.
-        let cut = LOG_LIMITS.recordBytes;
-        while (Buffer.byteLength(rest.slice(0, cut)) > LOG_LIMITS.recordBytes) cut -= 1;
+        // One enormous line: keep it in bounded pieces rather than buffering it.
+        const cut = recordCut(rest, LOG_LIMITS.recordBytes);
         this.append(source, rest.slice(0, cut));
         rest = rest.slice(cut);
         continue;
@@ -256,13 +272,6 @@ export class ContainerLogService {
       if (!dropped) break;
       source.ringBytes -= Buffer.byteLength(dropped.text);
     }
-    // A hint for live observers; a missed event is recovered through `read`.
-    this.emit(CONTAINER_LOG_EVENT, {
-      containerId: source.containerId,
-      sourceId: source.sourceId,
-      seq: record.seq,
-      line: text,
-    });
   }
 
   private endSource(source: LogSource): void {
@@ -306,6 +315,36 @@ export class ContainerLogService {
   }
 }
 
+/**
+ * The longest prefix of `text` within `limit` UTF-8 bytes that does not end
+ * inside a surrogate pair (never empty, so progress is guaranteed).
+ */
+export function recordCut(text: string, limit: number): number {
+  let low = 1;
+  let high = Math.min(text.length, limit);
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(text.slice(0, middle)) <= limit) low = middle;
+    else high = middle - 1;
+  }
+  const code = text.charCodeAt(low - 1);
+  return code >= 0xd800 && code <= 0xdbff && low > 1 ? low - 1 : low;
+}
+
+/** The newest records of a ring within one read's bounds, oldest first. */
+function boundedTail(ring: readonly LogRecord[]): LogRecord[] {
+  const tail: LogRecord[] = [];
+  let bytes = 0;
+  for (let index = ring.length - 1; index >= 0; index -= 1) {
+    const record = ring[index]!;
+    if (tail.length >= LOG_LIMITS.readRecords) break;
+    bytes += Buffer.byteLength(record.text);
+    if (bytes > LOG_LIMITS.readBytes && tail.length > 0) break;
+    tail.push(record);
+  }
+  return tail.reverse();
+}
+
 // ---------------------------------------------------------------------------
 // Backend-lifetime instance
 // ---------------------------------------------------------------------------
@@ -313,8 +352,8 @@ export class ContainerLogService {
 let instance: ContainerLogService | null = null;
 
 /** The backend's one log service; created on first use. */
-export function containerLogService(emit: BackendEmit): ContainerLogService {
-  instance ??= new ContainerLogService(emit);
+export function containerLogService(): ContainerLogService {
+  instance ??= new ContainerLogService();
   return instance;
 }
 

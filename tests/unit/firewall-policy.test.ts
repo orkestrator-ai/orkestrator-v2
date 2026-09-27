@@ -1,30 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-
-const root = resolve(import.meta.dir, "../..");
-const read = (path: string) => readFileSync(resolve(root, path), "utf8");
-const policyPath = "/etc/orkestrator";
-
-function fixtureScript(dir: string, name: string): string {
-  const script = join(dir, name);
-  writeFileSync(
-    script,
-    read(`docker/${name}`)
-      .replaceAll("/etc/orkestrator-seed", join(dir, "seed"))
-      .replaceAll(policyPath, join(dir, "policy"))
-      .replaceAll("/run/orkestrator", join(dir, "run"))
-      .replaceAll("/var/lib/orkestrator", join(dir, "var")),
-  );
-  return script;
-}
-
-function writeStub(bin: string, name: string, body: string): void {
-  const file = join(bin, name);
-  writeFileSync(file, `#!/bin/bash\n${body}\n`);
-  chmodSync(file, 0o755);
-}
+import { join } from "node:path";
+import { fixtureScript, policyPath, read, statusFile, writeStub } from "./firewall-test-support";
 
 describe("container firewall policy", () => {
   test("installs fail-closed policies before mutating firewall state", () => {
@@ -146,7 +124,10 @@ describe("container firewall policy", () => {
     expect(script).toContain(`${policyPath}/network-mode`);
     expect(script).toContain(`${policyPath}/allowed-domains`);
     expect(script).toContain("dig +short A api.github.com");
-    expect(script).toContain("ipset create allowed-domains hash:net");
+    expect(script).toContain("ork_create_set allowed-domains");
+    expect(read("docker/firewall-domains.sh")).toContain(
+      'ipset create "$1" hash:net timeout 0 maxelem "$ORK_MAX_ENTRIES"',
+    );
     expect(script).toContain("iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT");
   });
 
@@ -287,8 +268,11 @@ esac`,
       });
       expect(result.exitCode).toBe(0);
       const calls = readFileSync(join(dir, "calls"), "utf8");
-      expect(calls).toContain("ipset add -exist allowed-domains 192.0.2.10/32");
-      expect(result.stdout.toString()).toContain("Resolving example.org");
+      expect(calls).toContain("ipset add -exist allowed-domains 192.0.2.10/32 timeout 0");
+      // The stored domain resolves into an expiring entry; the caller's
+      // environment is ignored.
+      expect(calls).toContain("ipset add -exist allowed-domains 192.0.2.11 timeout 21600");
+      expect(calls).not.toContain("forged.example");
       expect(result.stdout.toString()).not.toContain("forged.example");
       expect(calls).toContain("iptables -P OUTPUT DROP");
     } finally {
@@ -362,7 +346,7 @@ esac`,
       );
       expect(calls).not.toMatch(/iptables -A INPUT -s /);
       expect(calls).toContain("ip6tables -P OUTPUT DROP");
-      const status = JSON.parse(readFileSync(join(dir, "run", "firewall.json"), "utf8"));
+      const status = JSON.parse(readFileSync(statusFile(dir), "utf8"));
       expect(status).toMatchObject({
         policy: 2,
         mode: "restricted",
@@ -371,6 +355,54 @@ esac`,
         ipv6: "blocked",
         allowedEntries: 1,
       });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an allowlist that names example.com does not fail the blocked-host check", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ork-firewall-probe-"));
+    try {
+      const script = fixtureScript(dir, "init-firewall.sh");
+      const policy = join(dir, "policy");
+      const bin = join(dir, "bin");
+      mkdirSync(policy);
+      mkdirSync(bin);
+      writeFileSync(join(policy, "network-mode"), "restricted\n");
+      writeFileSync(join(policy, "allowed-domains"), "example.org,example.com\n");
+      writeStub(bin, "iptables", 'printf "iptables %s\\n" "$*" >> "$CALL_LOG"');
+      writeStub(bin, "ip6tables", "exit 0");
+      writeStub(bin, "iptables-save", "exit 0");
+      writeStub(bin, "ipset", "exit 0");
+      writeStub(
+        bin,
+        "dig",
+        "if [ \"$1\" = +short ]; then printf '192.0.2.10\\n'; exit; fi\nprintf 'x. 60 IN A 192.0.2.11\\n'",
+      );
+      // example.com and example.org are allowed and reachable; example.net is not.
+      writeStub(
+        bin,
+        "curl",
+        `printf 'curl %s\\n' "$*" >> "$CALL_LOG"; case "$*" in *api.github.com/meta*) printf '{}\\n' ;; *example.net*) exit 7 ;; *) exit 0 ;; esac`,
+      );
+      writeStub(
+        bin,
+        "jq",
+        "cat >/dev/null; case \"$*\" in *'.web and'*) exit 0 ;; *) printf '192.0.2.10/32\\n' ;; esac",
+      );
+      writeStub(bin, "aggregate", "cat");
+      writeStub(bin, "ip", "printf 'default via 172.20.0.1 dev eth0\\n'");
+      writeStub(bin, "getent", "exit 2");
+      const result = Bun.spawnSync({
+        cmd: ["bash", script],
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CALL_LOG: join(dir, "calls") },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+      const calls = readFileSync(join(dir, "calls"), "utf8");
+      expect(calls).toContain("curl --connect-timeout 5 https://example.net");
+      expect(calls).not.toContain("curl --connect-timeout 5 https://example.com");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -436,10 +468,8 @@ esac`,
       let run1 = run();
       expect(run1.result.exitCode).toBe(0);
       expect(run1.calls).not.toContain("api.github.com/meta");
-      expect(run1.calls).toContain("ipset add -exist allowed-domains 203.0.113.0/24");
-      expect(JSON.parse(readFileSync(join(dir, "run", "firewall.json"), "utf8")).githubRanges).toBe(
-        "seed",
-      );
+      expect(run1.calls).toContain("ipset add -exist allowed-domains 203.0.113.0/24 timeout 0");
+      expect(JSON.parse(readFileSync(statusFile(dir), "utf8")).githubRanges).toBe("seed");
 
       // A day-old seed: fetch live and cache it in the container.
       writeFileSync(
@@ -454,9 +484,7 @@ esac`,
       // GitHub unreachable: the stale-but-usable seed still applies.
       run1 = run({ GITHUB_DOWN: "1" });
       expect(run1.result.exitCode).toBe(0);
-      expect(JSON.parse(readFileSync(join(dir, "run", "firewall.json"), "utf8")).githubRanges).toBe(
-        "seed-stale",
-      );
+      expect(JSON.parse(readFileSync(statusFile(dir), "utf8")).githubRanges).toBe("seed-stale");
 
       // Nothing usable: fail closed.
       rmSync(join(dir, "seed", "github-ranges"));

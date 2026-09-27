@@ -7,7 +7,7 @@ import {
 import { resolveNeedsAttentionOperation } from "./container-lifecycle-service.js";
 import { rebuildPreview, requestReplacementCancellation } from "./container-replacement.js";
 import { listRecoveryCopies } from "./recovery-copies.js";
-import { environmentNetworkPolicy } from "./container-network.js";
+import { applyEnvironmentAllowedDomains, environmentNetworkPolicy } from "./container-network.js";
 import { environmentResourcePolicy, updateEnvironmentResources } from "./container-resources.js";
 import {
   parseResourceLimits,
@@ -571,6 +571,10 @@ export function registerEnvironmentCommands(
     assertOnlyKeys(args, ["environmentId"], "arguments");
     return environmentNetworkPolicy(asString(args.environmentId, "environmentId"), context);
   });
+  register("apply_environment_allowed_domains", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId"], "arguments");
+    return applyEnvironmentAllowedDomains(asString(args.environmentId, "environmentId"), context);
+  });
   register("get_environment_inputs", async (args, context) => {
     assertOnlyKeys(args, ["environmentId"], "arguments");
     return environmentInputStatus(asString(args.environmentId, "environmentId"), context);
@@ -904,28 +908,40 @@ export function registerEnvironmentCommands(
       { refresh: refresh === true },
     );
   });
-  register("update_environment_allowed_domains", ({ environmentId, domains }, { storage }) =>
-    storage
-      .updateEnvironment(asString(environmentId, "environmentId"), {
-        allowedDomains: asStringArray(domains),
-      })
-      .then(toClientEnvironment),
-  );
-  register("add_environment_domains", async ({ environmentId, domains }, { storage }) => {
-    const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
+  // A saved allowlist is applied to the running container in place when its
+  // image supports it. The save stands either way; the network section
+  // reports whether the container enforces it yet.
+  const applySaved = (environmentId: string, context: CommandContext) =>
+    applyEnvironmentAllowedDomains(environmentId, context).catch(() => undefined);
+  register("update_environment_allowed_domains", async ({ environmentId, domains }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const environment = await context.storage.updateEnvironment(id, {
+      allowedDomains: asStringArray(domains),
+    });
+    await applySaved(id, context);
+    return toClientEnvironment(environment);
+  });
+  register("add_environment_domains", async ({ environmentId, domains }, context) => {
+    const environment = await context.storage.getEnvironment(
+      asString(environmentId, "environmentId"),
+    );
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     const updated = Array.from(
       new Set([...(environment.allowedDomains ?? []), ...asStringArray(domains)]),
     );
-    await storage.updateEnvironment(environment.id, { allowedDomains: updated });
+    await context.storage.updateEnvironment(environment.id, { allowedDomains: updated });
+    await applySaved(environment.id, context);
     return updated.join(",");
   });
-  register("remove_environment_domains", async ({ environmentId, domains }, { storage }) => {
-    const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
+  register("remove_environment_domains", async ({ environmentId, domains }, context) => {
+    const environment = await context.storage.getEnvironment(
+      asString(environmentId, "environmentId"),
+    );
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     const remove = new Set(asStringArray(domains));
     const updated = (environment.allowedDomains ?? []).filter((domain) => !remove.has(domain));
-    await storage.updateEnvironment(environment.id, { allowedDomains: updated });
+    await context.storage.updateEnvironment(environment.id, { allowedDomains: updated });
+    await applySaved(environment.id, context);
     return updated.join(",");
   });
 }

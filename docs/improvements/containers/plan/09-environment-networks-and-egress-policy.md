@@ -74,18 +74,18 @@ explicit environment membership; this step does not introduce a sidecar UI.
 - [ ] Choose explicit IPv6 behavior for the initial release: disable external
   IPv6 on managed restricted networks unless equivalent IPv6 enforcement is
   implemented and tested. Verify actual behavior, not just a config flag.
-- [ ] Resolve with bounded concurrency, query deadlines and maximum domains,
+- [x] Resolve with bounded concurrency, query deadlines and maximum domains,
   addresses and CIDRs. Validate addresses and distinguish required-host failure
   from optional-host failure. Proposed caps must be fixed in code and tested.
-- [ ] Build a new policy/set off to the side and atomically activate it. Keep
+- [x] Build a new policy/set off to the side and atomically activate it. Keep
   DROP defaults during setup; no temporary allow-all window during refresh.
-- [ ] Track TTL/expiry and use bounded retry/backoff. A transient refresh may
+- [x] Track TTL/expiry and use bounded retry/backoff. A transient refresh may
   retain the last valid set only until its documented expiry; expired required
   entries cannot silently become permanently trusted.
-- [ ] Apply removals as actual revocations: consider established connections
+- [x] Apply removals as actual revocations: consider established connections
   and conntrack state. If immediate revocation cannot be supported safely,
   stop/rebuild the affected runtime and report the effective revision accurately.
-- [ ] Make edits durable and reconcile them after restart. Do not let a runtime
+- [x] Make edits durable and reconcile them after restart. Do not let a runtime
   allowlist edit revert invisibly to old container environment variables.
 - [ ] Correct AGENTS.md's blanket SSH claim and document the actual threat model.
 
@@ -151,10 +151,33 @@ enforcement may remain explicitly deferred with its prototype results.
   through a published port works; a host-port change is applied atomically,
   written durably and survives a container restart; the network is kept while
   attached and removed afterwards.
+- **Refresh, edits and revocation (`network-refresh=1`).** A shared root
+  library (`docker/firewall-domains.sh`) builds the allowlist for the boot and
+  every change: resolved addresses carry a six-hour kernel timeout from the
+  last answer that contained them; a root refresher in its own session
+  re-resolves on the shortest TTL (5–30 minutes, backoff from one minute
+  while a domain fails); a domain keeps its earlier unexpired addresses, so a
+  rotating CDN answer does not drop open connections, and an unresolvable one
+  keeps them only until expiry. Every change builds the next set beside the
+  live one and swaps it in, then deletes the conntrack entries of removed
+  entries. `update-firewall.sh --set-domains` applies and then stores the
+  list, so it survives a restart; `--add`/`--remove` use the same path.
+  Firewall state moved to root-only `/run/orkestrator-firewall/` (node owns
+  `/run/orkestrator`). The backend reports the configured and enforced list
+  revisions (`applied`/`pending`/`rebuild-required`), applies a saved list in
+  place on save and at start, and the Network section offers "Apply now".
+  Tests: `tests/unit/firewall-refresh.test.ts` (swap order, revocation, carry
+  until expiry, rotation, durable edits, refused input, defaults, root-only
+  paths), `container-network.test.ts` (revision parity, in-place apply,
+  legacy and stopped containers). Live C23
+  (`container-live-firewall.test.ts`): pending then applied in place, an open
+  keep-alive connection survives an edit that keeps its domain and is cut by
+  one that removes it, one unkillable refresher that a node re-run of the
+  firewall does not duplicate, refused input, the applied list survives a
+  restart, and a list saved while stopped is pending until applied.
 - **Limitations.** On the qualification host, ufw drops container-to-host
   traffic on every Docker network, so the service port was verified to leave
   the container rather than to be answered. Docker Desktop and arm64 were not
-  available. DNS TTL expiry and live revocation of removed domains are not
-  implemented: a domain edit applies through `update-firewall.sh` or a rebuild,
-  and established connections are not torn down. External egress enforcement
-  (proxy/gateway outside the workload) remains deferred.
+  available. Mode changes (restricted ↔ full) still apply through a rebuild.
+  External egress enforcement (proxy/gateway outside the workload) remains
+  deferred.

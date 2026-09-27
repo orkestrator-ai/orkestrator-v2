@@ -1131,6 +1131,13 @@ else is rejected outright. `full` mode skips the firewall entirely.
   accepts inbound connections only on its published ports. Older containers
   (policy 1, default bridge) still allow the whole gateway `/24`, which
   includes sibling containers, until they are rebuilt.
+- Images with `network-refresh=1` keep the allowlist current in place:
+  resolved addresses expire six hours after their domain last returned them,
+  a root refresher re-resolves on the record TTL, and saving an environment's
+  domains applies them to the running container (`update-firewall.sh
+  --set-domains`), swapping the set atomically, revoking open connections to
+  removed addresses and storing the list for the next boot. Keep that state in
+  root-only `/run/orkestrator-firewall/`; node owns `/run/orkestrator`.
 - The firewall limits destinations. It does not stop data leaving through an
   allowed service, and a workload with root in full mode can change it.
 

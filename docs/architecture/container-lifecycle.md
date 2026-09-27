@@ -419,10 +419,51 @@ In restricted mode `init-firewall.sh` then allows the host only on those ports
 accepts new inbound connections only on the published ports, drops IPv6 except
 loopback (and fails when a non-loopback IPv6 address exists without working
 `ip6tables`), allows DNS to the upstreams Docker's embedded resolver lists in
-`resolv.conf`, and bounds resolution (256 domains, 32 addresses each, 3 s per
-query). It writes `/run/orkestrator/firewall.json` with the applied state,
-counts and IPv6 state; `get_environment_network_policy` reports it beside the
-configured mode, and the settings dialog shows both.
+`resolv.conf`, and bounds resolution (256 domains, 32 addresses each, eight
+parallel lookups, 3 s per query). It writes `firewall.json` with the applied
+state, counts and IPv6 state — in `/run/orkestrator-firewall/`, which only
+root can create, on images with `network-refresh=1` (earlier images wrote it
+to node's `/run/orkestrator/`); `get_environment_network_policy` reports it
+beside the configured mode, and the settings dialog shows both.
+
+### Allowlist refresh and edits (`network-refresh=1`)
+
+The shared library `firewall-domains.sh` builds the `allowed-domains` set for
+both the boot and every later change:
+
+- **Expiry.** Each resolved address is added with a kernel timeout of six
+  hours after the last answer that contained it; GitHub's ranges are
+  permanent until the next rebuild. An address nobody re-confirms leaves the
+  set on its own, even when no refresh runs.
+- **Refresh.** A root refresher (`update-firewall.sh --refresh-loop`, started
+  by `init-firewall.sh` in its own session, single-instance, not signalable by
+  node) re-resolves the stored list on the shortest record TTL, clamped to
+  5–30 minutes, retrying after 1, 2, 4… minutes (at most 5) while a domain
+  fails. A domain keeps the unexpired addresses of earlier answers, so a CDN
+  that rotates its answer does not lose open connections; one that stops
+  resolving keeps them only until they expire, and the report says how many
+  domains are running on such addresses and until when.
+- **Atomic replacement.** The next set is built beside the live one and
+  swapped in with `ipset swap`; there is never an empty or allow-all set.
+- **Revocation.** Entries that leave the set have their tracked connections
+  deleted (`conntrack -D`), so an open connection to a removed domain is
+  re-checked against the new set and rejected rather than continuing.
+- **Edits.** `update-firewall.sh --set-domains <list>` (root, via `docker
+  exec`) applies a list and then stores it in `/etc/orkestrator/allowed-domains`,
+  so a restart boots with it; `--add`/`--remove` edit the stored list the same
+  way. A list with characters outside a domain name is refused unchanged.
+
+The backend identifies a list by `allowedDomainsRevision` — the first 16 hex
+digits of SHA-256 over the comma-separated list it configures
+(`configuredAllowedDomains`: the environment's or global list plus the hosts
+enabled platforms require), which the container reports as `domainsRevision`.
+`get_environment_network_policy` compares them: `applied`, `pending` (saved,
+applicable in place) or `rebuild-required` (the image predates
+`network-refresh`, or the network mode changed). Saving an environment's
+domains applies them to the running container in place
+(`applyEnvironmentAllowedDomains`, serialized per environment); a start
+applies a list saved while the container was stopped; the Network section
+offers "Apply now" for anything still pending, such as a global list change.
 
 The agent-tools port can change across backend restarts. Before handing out a
 tools URL the backend compares it with the container's durable

@@ -39,6 +39,8 @@ export const IMAGE_CAPABILITIES = {
   "staged-inputs": 1,
   /** Per-environment network with explicit host service rules and IPv6 policy (step 09). */
   "network-policy": 2,
+  /** Expiring, refreshed allowlist with durable in-place edits and revocation (step 09). */
+  "network-refresh": 1,
   /** Bridge diagnostic files rotated by a launch wrapper (step 11). */
   "bounded-logs": 1,
 } as const;

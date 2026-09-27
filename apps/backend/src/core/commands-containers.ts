@@ -25,7 +25,6 @@ import {
   GROK_ACP_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
   PI_BRIDGE_PORT,
-  requiredAgentNetworkDomains,
   dockerContainerRuntimeName,
   dockerOwnerNamespace,
   defaultRepositoryConfig,
@@ -86,7 +85,11 @@ import type { CommandContext } from "./commands-context.js";
 import { ContainerLifecycleError, findOperationContainers } from "./container-lifecycle-service.js";
 import { detectDockerTopology, imageCapabilities } from "./docker-image.js";
 import { storageMountArguments } from "./container-storage.js";
-import { ensureEnvironmentNetwork, ingressPorts } from "./container-network.js";
+import {
+  configuredAllowedDomains,
+  ensureEnvironmentNetwork,
+  ingressPorts,
+} from "./container-network.js";
 import { githubRangesSeed } from "./github-ranges-cache.js";
 import {
   dockerCapacity,
@@ -313,12 +316,7 @@ export async function createDockerContainer(
     // Only re-add hosts for platforms this install actually enabled. An
     // environment that runs neither Cursor nor Grok keeps exactly the allowlist
     // the user configured; widening it would quietly undo their isolation.
-    const domains = [
-      ...new Set([
-        ...(environment.allowedDomains ?? config.global.allowedDomains),
-        ...requiredAgentNetworkDomains(config.global.enabledAgentPlatforms),
-      ]),
-    ];
+    const domains = configuredAllowedDomains(environment, config);
     args.push("-e", "NETWORK_MODE=restricted", "-e", `ALLOWED_DOMAINS=${domains.join(",")}`);
   }
 

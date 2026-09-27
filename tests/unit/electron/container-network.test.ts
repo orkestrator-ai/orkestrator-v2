@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
+import path from "node:path";
 import {
+  allowedDomainsRevision,
+  applyEnvironmentAllowedDomains,
+  configuredAllowedDomains,
   ensureEnvironmentNetwork,
   environmentNetworkName,
   ingressPorts,
@@ -8,6 +13,7 @@ import {
   removeEnvironmentNetwork,
 } from "../../../apps/backend/src/core/container-network";
 import { dockerOwnerNamespace } from "../../../apps/backend/src/core/docker-ownership";
+import { resetImageManifestCache } from "../../../apps/backend/src/core/docker-image";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,
@@ -17,6 +23,7 @@ import {
 
 const cleanup: string[] = [];
 afterEach(async () => {
+  resetImageManifestCache();
   await Promise.all(cleanup.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -142,11 +149,191 @@ exit 0
       hostServicePorts: "41234",
       ipv6: "blocked",
       githubRanges: null,
+      domainsRevision: null,
+      refreshedAt: null,
+      nextRefreshAt: null,
+      carriedDomains: null,
+      carriedUntil: null,
+      refreshFailures: null,
+      revokedEntries: null,
+      revocation: null,
     });
+    expect(
+      parseFirewallStatus(
+        '{"mode":"restricted","state":"applied","domainsRevision":"0123456789abcdef","carriedDomains":2,"revocation":"conntrack"}',
+      ),
+    ).toMatchObject({
+      domainsRevision: "0123456789abcdef",
+      carriedDomains: 2,
+      revocation: "conntrack",
+    });
+    expect(
+      parseFirewallStatus('{"mode":"restricted","domainsRevision":"not-a-digest"}')
+        ?.domainsRevision,
+    ).toBeNull();
     expect(parseFirewallStatus("not json")).toBeNull();
     expect(parseFirewallStatus('{"mode":"open"}')).toBeNull();
     expect(
       parseFirewallStatus('{"mode":"restricted","hostServicePorts":"1;rm"}')?.hostServicePorts,
     ).toBeNull();
+  });
+});
+
+const IMAGE_ID = `sha256:${"e".repeat(64)}`;
+
+async function manifestTar(capabilities: Record<string, number>): Promise<string> {
+  const dir = await tempDir("ork-network-manifest-");
+  cleanup.push(dir);
+  await fs.writeFile(
+    path.join(dir, "image-manifest.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      appVersion: "2.17.0",
+      sourceRevision: "b27421dcfa8de61b9c20a08e79efd7dfbd0c7fc2",
+      architecture: "amd64",
+      runtimes: {},
+      agents: {},
+      bridges: [],
+      capabilities,
+      stateFormats: {},
+    }),
+  );
+  const tarPath = path.join(dir, "out.tar");
+  expect(spawnSync("tar", ["-cf", tarPath, "-C", dir, "image-manifest.json"]).status).toBe(0);
+  return tarPath;
+}
+
+async function allowlistContext(allowedDomains: string[] | undefined) {
+  const dir = await tempDir("ork-network-apply-");
+  cleanup.push(dir);
+  const memory = memoryLifecycleContext(
+    [lifecycleEnvironment({ containerId: "container-1", allowedDomains })],
+    dir,
+  );
+  (memory.context.storage as unknown as { loadConfig: () => Promise<unknown> }).loadConfig =
+    async () => ({ global: { allowedDomains: ["global.example"], enabledAgentPlatforms: [] } });
+  return { ...memory, dir };
+}
+
+/**
+ * A running policy-2 container whose firewall reports `before` until the
+ * backend applies a list, and `after` once it has.
+ */
+function allowlistDocker(options: {
+  tarPath: string;
+  running?: boolean;
+  before: string;
+  after: string;
+  marker: string;
+}): string {
+  return `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  inspect) printf '2\\t${IMAGE_ID}\\t${options.running === false ? "false" : "true"}\\n' ;;
+  create) printf 'probe-container\\n' ;;
+  cp) cat '${options.tarPath}' ;;
+  rm) exit 0 ;;
+  exec)
+    case "$*" in
+      *--set-domains*) : > '${options.marker}' ;;
+      *firewall.json*)
+        if [ -e '${options.marker}' ]; then rev=${options.after}; else rev=${options.before}; fi
+        printf '{"mode":"restricted","state":"applied","domainsRevision":"%s"}\\n' "$rev" ;;
+    esac ;;
+esac
+exit 0
+`;
+}
+
+describe("allowlist edits in place", () => {
+  test("the configured list is the environment's or the global one plus required hosts", () => {
+    const config = {
+      global: { allowedDomains: ["global.example"], enabledAgentPlatforms: ["pi"] },
+    };
+    const own = configuredAllowedDomains({ allowedDomains: ["own.example"] }, config as never);
+    expect(own[0]).toBe("own.example");
+    expect(own).not.toContain("global.example");
+    expect(own.length).toBeGreaterThan(1);
+    expect(
+      configuredAllowedDomains({ allowedDomains: undefined }, {
+        global: { allowedDomains: ["global.example"], enabledAgentPlatforms: [] },
+      } as never),
+    ).toEqual(["global.example"]);
+    expect(allowedDomainsRevision(["a.example", "b.example"])).toMatch(/^[0-9a-f]{16}$/);
+    expect(allowedDomainsRevision(["a.example", "b.example"])).not.toBe(
+      allowedDomainsRevision(["b.example", "a.example"]),
+    );
+  });
+
+  test("a saved list the container does not enforce is applied through the firewall script", async () => {
+    const { context, dir } = await allowlistContext(["one.example", "two.example"]);
+    const tarPath = await manifestTar({ "network-policy": 2, "network-refresh": 1 });
+    const configured = allowedDomainsRevision(["one.example", "two.example"]);
+    await withDockerScript(
+      allowlistDocker({
+        tarPath,
+        before: allowedDomainsRevision(["one.example"]),
+        after: configured,
+        marker: path.join(dir, "applied"),
+      }),
+      async (log) => {
+        const result = await applyEnvironmentAllowedDomains("env-lifecycle", context);
+        expect(result.kind).toBe("applied");
+        expect(result.policy.domains).toBe("applied");
+        expect(result.policy.configured.domainsRevision).toBe(configured);
+        expect(await log.read()).toContain(
+          "exec --user root container-1 /usr/local/bin/update-firewall.sh --set-domains one.example,two.example",
+        );
+      },
+    );
+  });
+
+  test("an image without in-place updates, or a stopped container, is left as it is", async () => {
+    const { context, dir } = await allowlistContext(["one.example"]);
+    const legacy = await manifestTar({ "network-policy": 2 });
+    await withDockerScript(
+      allowlistDocker({
+        tarPath: legacy,
+        before: allowedDomainsRevision(["old.example"]),
+        after: allowedDomainsRevision(["one.example"]),
+        marker: path.join(dir, "applied-legacy"),
+      }),
+      async (log) => {
+        const result = await applyEnvironmentAllowedDomains("env-lifecycle", context);
+        expect(result.kind).toBe("rebuild-required");
+        expect(result.policy.domains).toBe("rebuild-required");
+        expect(await log.read()).not.toContain("--set-domains");
+      },
+    );
+    resetImageManifestCache();
+    const capable = await manifestTar({ "network-policy": 2, "network-refresh": 1 });
+    await withDockerScript(
+      allowlistDocker({
+        tarPath: capable,
+        running: false,
+        before: allowedDomainsRevision(["old.example"]),
+        after: allowedDomainsRevision(["one.example"]),
+        marker: path.join(dir, "applied-stopped"),
+      }),
+      async (log) => {
+        const result = await applyEnvironmentAllowedDomains("env-lifecycle", context);
+        expect(result.kind).toBe("not-running");
+        expect(await log.read()).not.toContain("--set-domains");
+      },
+    );
+  });
+
+  test("a list already enforced is not applied again", async () => {
+    const { context, dir } = await allowlistContext(undefined);
+    const tarPath = await manifestTar({ "network-policy": 2, "network-refresh": 1 });
+    const current = allowedDomainsRevision(["global.example"]);
+    await withDockerScript(
+      allowlistDocker({ tarPath, before: current, after: current, marker: path.join(dir, "m") }),
+      async (log) => {
+        const result = await applyEnvironmentAllowedDomains("env-lifecycle", context);
+        expect(result.kind).toBe("applied");
+        expect(await log.read()).not.toContain("--set-domains");
+      },
+    );
   });
 });

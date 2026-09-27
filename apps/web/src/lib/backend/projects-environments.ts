@@ -340,6 +340,14 @@ export async function getEnvironmentNetworkPolicy(
   return invoke<EnvironmentNetworkPolicy>("get_environment_network_policy", { environmentId });
 }
 
+/** Applies the saved allowlist to the running container in place, when it can. */
+export async function applyEnvironmentAllowedDomains(environmentId: string): Promise<{
+  kind: "applied" | "not-applicable" | "rebuild-required" | "not-running" | "failed";
+  policy: EnvironmentNetworkPolicy;
+}> {
+  return invoke("apply_environment_allowed_domains", { environmentId });
+}
+
 /** Requested budget, its source, and what Docker applied to the current runtime. */
 export async function getEnvironmentResources(
   environmentId: string,

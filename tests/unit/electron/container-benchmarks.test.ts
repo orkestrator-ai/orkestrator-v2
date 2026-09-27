@@ -326,7 +326,7 @@ describe("container baselines", () => {
       results.sampler = { running, ms: summarize(sampler), dockerCalls: summarize(samplerCalls) };
 
       // Observer churn: 200 open/close cycles over 3 containers.
-      const service = new ContainerLogService(() => undefined);
+      const service = new ContainerLogService();
       const ids = (
         await docker(["ps", "-q", "--no-trunc", "--filter", `label=orkestrator-owner=${owner}`])
       )

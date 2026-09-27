@@ -38,6 +38,7 @@ import {
   runContainerOperation,
 } from "./container-lifecycle-service.js";
 import { quiesceRuntime, replaceRuntimePreservingState } from "./container-replacement.js";
+import { applyEnvironmentAllowedDomains } from "./container-network.js";
 import {
   assertRecoveryCapacity,
   discardRecoveryCopy,
@@ -1402,6 +1403,12 @@ async function startContainerRuntime(
         }
         throw error;
       }
+    }
+    // A container boots with the allowlist it stored last; an edit saved
+    // while it was stopped (or one an interrupted apply never reached) is
+    // applied now. Failure leaves it reported as pending, not the start.
+    if (capabilities?.["network-refresh"]) {
+      await applyEnvironmentAllowedDomains(environment.id, context).catch(() => undefined);
     }
     await completeContainerOperation(context, environment.id, operationId, "succeeded");
     return { containerId, replayed: false };

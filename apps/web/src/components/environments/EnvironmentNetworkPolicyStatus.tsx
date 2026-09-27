@@ -1,6 +1,75 @@
 import { useEffect, useState } from "react";
 import type { EnvironmentNetworkPolicy } from "@orkestrator/protocol/container-recovery";
+import { Button } from "@/components/ui/button";
 import * as backend from "@/lib/backend";
+
+const APPLY_OUTCOME: Record<string, string> = {
+  "not-running": "The container is not running; the list is applied when it starts.",
+  "rebuild-required": "This container cannot change its allowlist in place; rebuild it to apply.",
+  failed: "The container kept its previous allowlist. Try again, or rebuild the container.",
+  "not-applicable": "This environment has no container to apply the list to.",
+};
+
+function DomainsState({
+  policy,
+  onApply,
+  applying,
+  outcome,
+}: {
+  policy: EnvironmentNetworkPolicy;
+  onApply: () => void;
+  applying: boolean;
+  outcome: string | null;
+}) {
+  const effective = policy.effective;
+  if (policy.configured.mode !== "restricted" || !effective || effective.mode !== "restricted") {
+    return null;
+  }
+  return (
+    <>
+      {policy.domains === "applied" ? (
+        <div>The saved allowlist is the one this container enforces.</div>
+      ) : policy.domains === "pending" ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span>The saved allowlist differs from the one this container enforces.</span>
+          <Button size="sm" variant="outline" onClick={onApply} disabled={applying}>
+            {applying ? "Applying…" : "Apply now"}
+          </Button>
+        </div>
+      ) : policy.domains === "rebuild-required" ? (
+        <div>
+          The saved allowlist differs from the one this container enforces, and its image cannot
+          change it in place. It applies when the container is rebuilt.
+        </div>
+      ) : null}
+      {effective.refreshedAt ? (
+        <div>
+          Addresses resolved {new Date(effective.refreshedAt).toLocaleString()}
+          {effective.nextRefreshAt
+            ? ` · next refresh ${new Date(effective.nextRefreshAt).toLocaleTimeString()}`
+            : ""}
+          {effective.refreshFailures ? ` · ${effective.refreshFailures} failed refreshes` : ""}
+        </div>
+      ) : null}
+      {effective.carriedDomains ? (
+        <div>
+          {effective.carriedDomains} domains did not resolve and keep their earlier addresses
+          {effective.carriedUntil
+            ? ` until ${new Date(effective.carriedUntil).toLocaleString()}`
+            : ""}
+          .
+        </div>
+      ) : null}
+      {effective.revocation === "unavailable" && effective.revokedEntries ? (
+        <div>
+          Removed addresses no longer accept new connections, but connections already open to them
+          were not closed.
+        </div>
+      ) : null}
+      {outcome ? <div role="alert">{outcome}</div> : null}
+    </>
+  );
+}
 
 /**
  * What the container's firewall actually applied, next to what is configured.
@@ -9,6 +78,22 @@ import * as backend from "@/lib/backend";
  */
 export function EnvironmentNetworkPolicyStatus({ environmentId }: { environmentId: string }) {
   const [policy, setPolicy] = useState<EnvironmentNetworkPolicy | null>(null);
+  const [applying, setApplying] = useState(false);
+  const [outcome, setOutcome] = useState<string | null>(null);
+
+  const apply = async () => {
+    setApplying(true);
+    setOutcome(null);
+    try {
+      const result = await backend.applyEnvironmentAllowedDomains(environmentId);
+      setPolicy(result.policy);
+      setOutcome(APPLY_OUTCOME[result.kind] ?? null);
+    } catch {
+      setOutcome(APPLY_OUTCOME.failed ?? null);
+    } finally {
+      setApplying(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -64,6 +149,12 @@ export function EnvironmentNetworkPolicyStatus({ environmentId }: { environmentI
             : ""}
         </div>
       )}
+      <DomainsState
+        policy={policy}
+        onApply={() => void apply()}
+        applying={applying}
+        outcome={outcome}
+      />
       {policy.policyVersion === 1 ? (
         <div>
           This container shares Docker&apos;s default network, and its firewall allows the whole

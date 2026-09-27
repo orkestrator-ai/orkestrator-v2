@@ -202,6 +202,30 @@ describe("bounded bridge output", () => {
     expect(shell).toContain("setsid bun /opt/x/index.js > /tmp/x.log 2>&1 &");
   });
 
+  test("the writer stays bounded on output without a single newline", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ork-log-writer-"));
+    try {
+      const file = path.join(dir, "bridge.log");
+      const result = Bun.spawnSync({
+        cmd: [
+          "bash",
+          path.resolve(import.meta.dir, "../../../docker/orkestrator-log-writer.sh"),
+          file,
+          "32768",
+          "2",
+        ],
+        stdin: Buffer.alloc(3 * 1024 * 1024, "n"),
+      });
+      expect(result.exitCode).toBe(0);
+      for (const name of readdirSync(dir)) {
+        expect(statSync(path.join(dir, name)).size).toBeLessThanOrEqual(32768);
+      }
+      expect(readdirSync(dir).sort()).toEqual(["bridge.log", "bridge.log.1"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("the writer rotates by size, keeps N files and cuts oversize lines", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "ork-log-writer-"));
     try {

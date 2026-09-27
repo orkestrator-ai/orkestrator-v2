@@ -189,7 +189,7 @@ case "$command" in
         ;;
     measure)
         [ "$#" -eq 2 ] || { result status=usage; exit 2; }
-        echo "ORKESTRATOR_MEASURE bytes=$(du -sb "$2" 2>/dev/null | cut -f1) available=$(df -B1 --output=avail "$2" 2>/dev/null | tail -n 1 | tr -d ' ')"
+        echo "ORKESTRATOR_MEASURE bytes=$(du -sb "$2" 2>/dev/null | cut -f1) available=$(df -B1 --output=avail "$2" 2>/dev/null | tail -n 1 | tr -d ' ') inodes=$(du -s --inodes "$2" 2>/dev/null | cut -f1) inodes_available=$(df --output=iavail "$2" 2>/dev/null | tail -n 1 | tr -d ' ')"
         ;;
     *)
         result status=usage

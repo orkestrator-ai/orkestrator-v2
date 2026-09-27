@@ -126,6 +126,14 @@ function benchContext(environments: Environment[]) {
 async function writeReport(): Promise<void> {
   const out = path.resolve(import.meta.dir, "../../../output/benchmarks");
   await fs.mkdir(out, { recursive: true });
+  // Reports are kept for 30 days; only this harness's own `<run>.json` files.
+  const cutoff = Date.now() - 30 * 24 * 60 * 60_000;
+  for (const name of await fs.readdir(out)) {
+    if (!/^b[0-9a-z]+\.json$/.test(name)) continue;
+    const file = path.join(out, name);
+    const stat = await fs.stat(file).catch(() => null);
+    if (stat && stat.mtimeMs < cutoff) await fs.rm(file, { force: true });
+  }
   const engine = await docker(["version", "--format", "{{.Server.Version}}"]).catch(
     () => "unknown",
   );

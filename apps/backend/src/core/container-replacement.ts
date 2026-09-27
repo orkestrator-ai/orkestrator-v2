@@ -366,13 +366,24 @@ async function runCopyStep(
 export interface CapacityCheck {
   estimateBytes: number | null;
   availableBytes: number | null;
+  /** Files, directories and links to copy; null when not measurable. */
+  estimateInodes?: number | null;
+  availableInodes?: number | null;
 }
+
+/** Inodes kept free beyond the estimate. */
+const CAPACITY_HEADROOM_INODES = 10_000;
 
 async function measureVolume(
   context: Pick<CommandContext, "storage">,
   imageId: string,
   volume: string,
-): Promise<{ bytes: number | null; available: number | null }> {
+): Promise<{
+  bytes: number | null;
+  available: number | null;
+  inodes: number | null;
+  inodesAvailable: number | null;
+}> {
   try {
     const { stdout } = await runCommand(
       "docker",
@@ -385,14 +396,28 @@ async function measureVolume(
       ),
       { timeoutMs: 10 * 60_000 },
     );
-    const match = /bytes=(\d*) available=(\d*)/.exec(stdout);
-    return {
-      bytes: match?.[1] ? Number(match[1]) : null,
-      available: match?.[2] ? Number(match[2]) : null,
-    };
+    return parseMeasureOutput(stdout);
   } catch {
-    return { bytes: null, available: null };
+    return { bytes: null, available: null, inodes: null, inodesAvailable: null };
   }
+}
+
+export function parseMeasureOutput(stdout: string): {
+  bytes: number | null;
+  available: number | null;
+  inodes: number | null;
+  inodesAvailable: number | null;
+} {
+  const field = (name: string) => {
+    const match = new RegExp(`(?:^| )${name}=(\\d+)(?: |$)`, "m").exec(stdout);
+    return match?.[1] ? Number(match[1]) : null;
+  };
+  return {
+    bytes: field("bytes"),
+    available: field("available"),
+    inodes: field("inodes"),
+    inodesAvailable: field("inodes_available"),
+  };
 }
 
 async function legacyWritableLayerBytes(containerId: string): Promise<number | null> {
@@ -435,12 +460,23 @@ export function capacityVerdict(
         };
   }
   const required = Math.ceil(check.estimateBytes * 1.1) + CAPACITY_HEADROOM_BYTES;
-  return check.availableBytes >= required
-    ? { ok: true }
-    : {
+  if (check.availableBytes < required) {
+    return {
+      ok: false,
+      message: `The rebuild needs about ${Math.ceil(required / 1024 ** 2)} MiB free on the Docker host; ${Math.floor(check.availableBytes / 1024 ** 2)} MiB is available. Free space and retry.`,
+    };
+  }
+  // Inodes when both sides are known (a legacy layer's file count is not).
+  if (check.estimateInodes != null && check.availableInodes != null) {
+    const requiredInodes = Math.ceil(check.estimateInodes * 1.1) + CAPACITY_HEADROOM_INODES;
+    if (check.availableInodes < requiredInodes) {
+      return {
         ok: false,
-        message: `The rebuild needs about ${Math.ceil(required / 1024 ** 2)} MiB free on the Docker host; ${Math.floor(check.availableBytes / 1024 ** 2)} MiB is available. Free space and retry.`,
+        message: `The rebuild needs about ${requiredInodes} free inodes on the Docker host's filesystem; ${check.availableInodes} are available. Remove files or free space and retry.`,
       };
+    }
+  }
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -630,18 +666,25 @@ async function replaceRuntimePreservingStateUnfenced(
         `A preserving rebuild needs an image and Docker Engine that support persistent storage (${decision.reason}). The original container was not changed.`,
       );
     }
+    const sum = (values: Array<number | null>) =>
+      values.some((value) => value === null)
+        ? null
+        : values.reduce<number>((total, value) => total + (value ?? 0), 0);
+    const sourceMeasures =
+      kind === "migrate"
+        ? null
+        : await Promise.all(
+            (record.storage.volumes ?? []).map((volume) =>
+              measureVolume(context, image.imageId, volume.name),
+            ),
+          );
     const estimate =
       kind === "migrate"
         ? await legacyWritableLayerBytes(sourceContainerId)
-        : await Promise.all(
-            (record.storage.volumes ?? []).map((volume) =>
-              measureVolume(context, image.imageId, volume.name).then((measure) => measure.bytes),
-            ),
-          ).then((sizes) =>
-            sizes.some((size) => size === null)
-              ? null
-              : sizes.reduce<number>((sum, size) => sum + (size ?? 0), 0),
-          );
+        : sum(sourceMeasures!.map((measure) => measure.bytes));
+    const estimateInodes = sourceMeasures
+      ? sum(sourceMeasures.map((measure) => measure.inodes))
+      : null;
     candidateStorage = planStorageSet(
       environment.id,
       dockerOwnerNamespace(context.storage.getDataDir()),
@@ -652,11 +695,18 @@ async function replaceRuntimePreservingStateUnfenced(
       details: { imageId: image.imageId, estimateBytes: estimate },
     });
     await ensureStorageVolumes(context, environment.id, candidateStorage);
-    const available = (
-      await measureVolume(context, image.imageId, volumeNamed(candidateStorage, "workspace"))
-    ).available;
+    const target = await measureVolume(
+      context,
+      image.imageId,
+      volumeNamed(candidateStorage, "workspace"),
+    );
     const capacity = capacityVerdict(
-      { estimateBytes: estimate, availableBytes: available },
+      {
+        estimateBytes: estimate,
+        availableBytes: target.available,
+        estimateInodes,
+        availableInodes: target.inodesAvailable,
+      },
       request.allowUnknownCapacity === true,
     );
     if (!capacity.ok) throw lifecycleError("resource-exhausted", capacity.message);

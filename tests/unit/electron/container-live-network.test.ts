@@ -370,6 +370,79 @@ describe("C24 resource budgets are enforced and reported as applied", () => {
     LIVE_TIMEOUT_MS,
   );
 });
+describe("C24 one environment at its CPU limit leaves another usable", () => {
+  live(
+    "a CPU-saturated environment stays inside its budget while a sibling answers promptly",
+    async () => {
+      const { createDockerContainer } =
+        await import("../../../apps/backend/src/core/commands-containers");
+      const { resolveDockerImage } = await import("../../../apps/backend/src/core/docker-image");
+      const { sampleContainerUsage, resetResourceCaches } =
+        await import("../../../apps/backend/src/core/container-resources");
+      resetResourceCaches();
+      const busy = lifecycleEnvironment({
+        id: `env-${RUN}-busy`,
+        networkAccessMode: "full",
+        containerResourceLimits: { cpus: 1, memoryMiB: 512, pids: 512 },
+      });
+      const quiet = lifecycleEnvironment({
+        id: `env-${RUN}-quiet`,
+        networkAccessMode: "full",
+        containerResourceLimits: { cpus: 1, memoryMiB: 1024, pids: 512 },
+      });
+      const { context } = networkContext([busy, quiet], 1);
+      const resolved = await resolveDockerImage(IMAGE);
+      if (resolved.kind !== "present") throw new Error("qualification image missing");
+      const ids: string[] = [];
+      for (const environment of [busy, quiet]) {
+        const id = await createDockerContainer(environment, context, {
+          imageId: resolved.imageId,
+          runtimeGeneration: 1,
+        });
+        ids.push(id);
+        await context.storage.updateEnvironment(environment.id, {
+          containerId: id,
+          status: "running",
+        });
+        await docker(["start", id]);
+        await waitForContainerBoot(id);
+      }
+      const [busyId, quietId] = ids as [string, string];
+      // Shared memory under a 512 MiB budget is half of it.
+      expect(
+        await docker(["exec", busyId, "sh", "-c", "df -m /dev/shm | awk 'NR == 2 { print $2 }'"]),
+      ).toBe("256");
+      // Saturate far more cores than the budget allows.
+      await docker([
+        "exec",
+        "-d",
+        "-u",
+        "node",
+        busyId,
+        "sh",
+        "-c",
+        "for i in 1 2 3 4 5 6 7 8; do (while :; do :; done) & done; wait",
+      ]);
+      await Bun.sleep(3_000);
+      const timings: number[] = [];
+      for (let index = 0; index < 10; index += 1) {
+        const started = performance.now();
+        await docker(["exec", quietId, "true"]);
+        timings.push(performance.now() - started);
+      }
+      timings.sort((a, b) => a - b);
+      // The sibling still answers like an idle container would.
+      expect(timings[5]!).toBeLessThan(1_500);
+      const usage = await sampleContainerUsage(context);
+      const busySample = usage.containers.find((entry) => entry.containerId === busyId);
+      expect(busySample?.cpuCores).not.toBeNull();
+      // Held to its one-core budget (with sampling slack), not eight cores.
+      expect(busySample!.cpuCores!).toBeLessThan(1.3);
+      await docker(["rm", "-f", ...ids]);
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});
 
 describe("C26 bounded logs", () => {
   live(

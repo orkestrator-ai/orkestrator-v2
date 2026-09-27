@@ -5,6 +5,7 @@ import {
   capacityVerdict,
   parseCopyOutput,
   candidateStartError,
+  parseMeasureOutput,
   rebuildPreview,
   replaceRuntimePreservingState,
   replacementCopyPlan,
@@ -444,5 +445,35 @@ describe("candidate start failures", () => {
     expect(String(conflict)).toContain("ContainerLifecycleError:port-conflict");
     const other = new Error("something else");
     expect(candidateStartError(other)).toBe(other);
+  });
+});
+
+describe("inode capacity", () => {
+  test("a known file count needs the inodes to hold it; an unknown one does not block", () => {
+    expect(
+      parseMeasureOutput(
+        "ORKESTRATOR_MEASURE bytes=100 available=900000000 inodes=5000 inodes_available=200",
+      ),
+    ).toEqual({ bytes: 100, available: 900000000, inodes: 5000, inodesAvailable: 200 });
+    expect(parseMeasureOutput("ORKESTRATOR_MEASURE bytes= available=")).toEqual({
+      bytes: null,
+      available: null,
+      inodes: null,
+      inodesAvailable: null,
+    });
+    const roomy = { estimateBytes: 1_000, availableBytes: 10 * 1024 ** 3 };
+    expect(
+      capacityVerdict({ ...roomy, estimateInodes: 5_000, availableInodes: 200 }, false),
+    ).toMatchObject({
+      ok: false,
+    });
+    expect(
+      capacityVerdict({ ...roomy, estimateInodes: 5_000, availableInodes: 1_000_000 }, false),
+    ).toEqual({ ok: true });
+    expect(
+      capacityVerdict({ ...roomy, estimateInodes: null, availableInodes: 200 }, false),
+    ).toEqual({
+      ok: true,
+    });
   });
 });

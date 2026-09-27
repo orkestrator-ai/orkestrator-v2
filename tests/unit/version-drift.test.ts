@@ -1263,3 +1263,17 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     ).toThrow("Pinned toolchain manifest is incomplete for darwin-arm64");
   });
 });
+
+describe("base image refresh check", () => {
+  test("reads one consistent pinned base from the Dockerfile", async () => {
+    const { pinnedBase } = await import("../../scripts/check-base-image-digest");
+    const digest = `sha256:${"a".repeat(64)}`;
+    expect(pinnedBase(`FROM img:1@${digest} AS build\nFROM img:1@${digest}\n`)).toEqual({
+      image: "img:1",
+      digest,
+    });
+    expect(pinnedBase(`FROM img:1@${digest}\nFROM img:1@sha256:${"b".repeat(64)}\n`)).toBeNull();
+    expect(pinnedBase("FROM img:1\n")).toBeNull();
+    expect(pinnedBase(read("docker/Dockerfile"))).not.toBeNull();
+  });
+});

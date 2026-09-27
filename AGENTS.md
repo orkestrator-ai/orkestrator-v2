@@ -983,7 +983,10 @@ The image is built from `oven/bun:1.4.2-debian`, pinned by its multi-architectur
 index digest on both stages, matching the Bun version managed in `mise.toml`
 for development and CI. Refresh the digest deliberately (`docker buildx
 imagetools inspect oven/bun:<tag>`) for a Bun bump or a base security update;
-`tests/unit/version-drift.test.ts` requires both `FROM` lines to agree. Every
+`mise run docker:check-base` reports when the tag has moved past the pin.
+`tests/unit/version-drift.test.ts` requires both `FROM` lines to agree. After
+any image change, `bash docker/tests/final-image-smoke.sh <image>` runs the
+built image (CI runs it on both architectures). Every
 agent CLI version below is pinned by an `ARG` in `docker/Dockerfile`, which is
 its container source of truth.
 

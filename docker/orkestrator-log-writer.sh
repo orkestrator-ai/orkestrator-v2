@@ -23,7 +23,9 @@ case "$max$keep" in *[!0-9]*) echo "orkestrator-log-writer: sizes must be number
 # to stop draining.
 trap '' HUP
 umask 077
-LC_ALL=C exec awk -v file="$file" -v max="$max" -v keep="$keep" '
+# `fold` bounds a line before awk reads it: a producer that never writes a
+# newline would otherwise have awk hold its whole output in memory.
+fold -b -w 65536 | LC_ALL=C awk -v file="$file" -v max="$max" -v keep="$keep" '
 function shell_quote(s) { gsub(/\047/, "\047\\\047\047", s); return "\047" s "\047" }
 function rotate(   i, from, to) {
     close(file)

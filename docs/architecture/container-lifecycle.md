@@ -329,6 +329,17 @@ possible and exactly which paths and provider formats survive.
 next phase boundary (it does not take the lifecycle queue the rebuild holds);
 the outcome is recorded as `cancelled` and rolled back like a failure.
 
+### Capacity preflight
+
+Before the source stops, a rebuild measures what it will copy and where it
+will go, on the daemon's filesystem: bytes (estimate × 1.1 + 512 MiB
+headroom) and, when the source is a volume set whose file count is known,
+inodes (estimate × 1.1 + 10,000). Unknown byte capacity needs the user's
+explicit confirmation; a legacy layer's file count is not measurable without
+running it, so only its bytes are checked. A filesystem that still runs out
+mid-copy (a quota Docker applies only on mount) fails the copy and rolls back
+with the original authoritative — qualified live with tmpfs-backed volumes.
+
 ### Admission limits
 
 The lifecycle queue serializes one environment's operations; across

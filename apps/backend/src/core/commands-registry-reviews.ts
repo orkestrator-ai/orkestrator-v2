@@ -256,6 +256,22 @@ export function registerReviewWorkflowCommands(
       );
     },
   );
+  register(
+    "get_multi_review_reviewer_tool_details",
+    ({ workflowId, reviewerId, detailRef }, context) => {
+      if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+      // The reference is renderer-supplied; the service validates its shape
+      // and resolves it only against this reviewer's own provider session.
+      if (typeof detailRef !== "string" || detailRef.length === 0 || detailRef.length > 2048) {
+        throw new Error("Invalid multi review reviewer tool detail reference");
+      }
+      return context.multiReviews.reviewerToolDetails(
+        asNonBlankString(workflowId, "workflowId"),
+        asNonBlankString(reviewerId, "reviewerId"),
+        detailRef,
+      );
+    },
+  );
   register("start_multi_review", (args, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     if (!isStartMultiReviewInput(args)) throw new Error("Invalid multi review start request");

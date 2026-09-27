@@ -373,6 +373,19 @@ export async function getMultiReviewReviewerTranscript(
   });
 }
 
+/** The body behind a reviewer row's deferred `detailRef`, read on expansion. */
+export async function getMultiReviewReviewerToolDetails(
+  workflowId: string,
+  reviewerId: string,
+  detailRef: string,
+): Promise<NativeAgentToolDetails> {
+  return invoke<NativeAgentToolDetails>("get_multi_review_reviewer_tool_details", {
+    workflowId,
+    reviewerId,
+    detailRef,
+  });
+}
+
 export async function deleteMultiReviewWorkflow(workflowId: string): Promise<void> {
   return invoke("delete_multi_review_workflow", { workflowId });
 }

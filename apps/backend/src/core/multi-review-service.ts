@@ -33,7 +33,7 @@ import {
 } from "@orkestrator/protocol/agent-interactions";
 import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
 import { multiReviewDuplicateReviewerCount } from "@orkestrator/protocol/multi-review-launch";
-import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import type { AgentModel, NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import {
   ReviewContractValidationError,
@@ -131,6 +131,7 @@ import {
 } from "./workflow-supervisor.js";
 import { ElapsedPollGate, type PollTrigger } from "./workflow-poll-gate.js";
 import {
+  readReviewerToolDetails,
   readReviewerTranscript,
   type ReviewerTranscriptRead,
 } from "./multi-review-reviewer-transcript.js";
@@ -721,6 +722,31 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       ...(reviewer.startedAt ? { startedAt: reviewer.startedAt } : {}),
       ...(reviewer.completedAt ? { completedAt: reviewer.completedAt } : {}),
     };
+  }
+
+  /** The body behind one reviewer row's deferred `detailRef`, from its own session. */
+  async reviewerToolDetails(
+    workflowId: string,
+    reviewerId: string,
+    detailRef: string,
+  ): Promise<NativeAgentToolDetails> {
+    const record = await this.storage.getMultiReviewWorkflow(workflowId);
+    if (!record || !isMultiReviewWorkflow(record.snapshot)) {
+      throw new Error(`Multi review workflow not found: ${workflowId}`);
+    }
+    const workflow = record.snapshot;
+    const reviewer = workflow.reviewers.find((entry) => entry.id === reviewerId);
+    if (!reviewer?.providerSessionId) {
+      throw new Error("Reviewer tool details are no longer available");
+    }
+    const key = this.providerKey(workflow, reviewer);
+    this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
+    try {
+      const provider = await this.providerInstance(workflow, reviewer);
+      return await readReviewerToolDetails(provider, reviewer.providerSessionId, detailRef);
+    } finally {
+      await this.releaseProviderReaderByKey(key);
+    }
   }
 
   async start(

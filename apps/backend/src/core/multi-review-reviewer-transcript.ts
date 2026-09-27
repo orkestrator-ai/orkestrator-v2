@@ -14,9 +14,11 @@
  * count-bounded legacy read with a hard byte guard; the fallback is measured so
  * it can be retired, not mistaken for efficient.
  *
- * The display deliberately stays on the raw representation: the reviewer tab
- * renders tool bodies inline and has no detail-resolution path, so it must not
- * ask for bridge summaries.
+ * Where the provider serves lightweight summaries (bridge transcript v2), the
+ * read asks for them: large tool bodies, diffs and inline images stay behind
+ * the bridge, and each summary part's locator becomes the row's `detailRef`,
+ * resolved through `readReviewerToolDetails` only when a row is expanded. A
+ * provider that answers raw bodies keeps rendering them inline as before.
  *
  * Source tokens are opaque to the renderer and scoped to the reviewer's
  * provider session: a replaced session never matches an old token, so the
@@ -24,6 +26,12 @@
  */
 import { createHash } from "node:crypto";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
+import {
+  BRIDGE_DETAIL_LOCATOR_MAX_LENGTH,
+  isBridgeDetailLocator,
+  readBridgePartDetail,
+} from "@orkestrator/protocol/bridge-transcript-summary";
 import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
 
 /** Messages returned to the reviewer tab at most. */
@@ -49,7 +57,55 @@ export type ReviewerTranscriptRead =
     };
 
 type SnapshotCapable = BuildPipelineProvider &
-  Partial<Pick<NativeAgentRuntimeProvider, "transcriptSnapshot">>;
+  Partial<Pick<NativeAgentRuntimeProvider, "transcriptSnapshot" | "transcriptDetail">>;
+
+const NESTED_PART_FIELDS = ["parts", "childTools", "subagentActions"] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Turn a summary part's provider locator into the renderer's `detailRef`.
+ * The locator names a message, a part and a digest of its body — nothing the
+ * reviewer tab cannot already see — and it is only ever resolved against the
+ * reviewer's own provider session.
+ */
+function displayPart(raw: unknown, depth = 0): unknown {
+  if (!isRecord(raw) || depth > 8) return raw;
+  const detail = readBridgePartDetail(raw.detail);
+  let part: Record<string, unknown> | undefined;
+  const writable = () => (part ??= { ...raw });
+  if ("detail" in raw) delete writable().detail;
+  if (detail) writable().detailRef = detail.locator;
+  for (const field of NESTED_PART_FIELDS) {
+    const children = raw[field];
+    if (!Array.isArray(children)) continue;
+    let changed = false;
+    const next = children.map((child) => {
+      const mapped = displayPart(child, depth + 1);
+      if (mapped !== child) changed = true;
+      return mapped;
+    });
+    if (changed) writable()[field] = next;
+  }
+  if (isRecord(raw.task)) {
+    const task = displayPart(raw.task, depth + 1);
+    if (task !== raw.task) writable().task = task;
+  }
+  return part ?? raw;
+}
+
+function displayMessage(raw: unknown): unknown {
+  if (!isRecord(raw) || !Array.isArray(raw.parts)) return raw;
+  let changed = false;
+  const parts = raw.parts.map((part) => {
+    const mapped = displayPart(part);
+    if (mapped !== part) changed = true;
+    return mapped;
+  });
+  return changed ? { ...raw, parts } : raw;
+}
 
 /** Session-scoped prefix; never reveals the session identifier itself. */
 function sessionScope(providerSessionId: string): string {
@@ -122,6 +178,11 @@ export async function readReviewerTranscript(
     const snapshot = await capable.transcriptSnapshot(providerSessionId, {
       limit: MAX_REVIEWER_TRANSCRIPT_MESSAGES,
       targetBytes: MAX_REVIEWER_TRANSCRIPT_BYTES,
+      // Details resolve through `readReviewerToolDetails`, so the display can
+      // take the lightweight form wherever the provider offers it.
+      ...(typeof capable.transcriptDetail === "function"
+        ? { representation: "summary" as const }
+        : {}),
       ...(unwrapToken(providerSessionId, knownSourceToken)
         ? { knownSourceToken: unwrapToken(providerSessionId, knownSourceToken) }
         : {}),
@@ -139,7 +200,11 @@ export async function readReviewerTranscript(
     // The provider aims for the target; the backend enforces it. The token
     // still describes the provider's source, so an unchanged answer later
     // correctly means "keep the bounded tail you already have".
-    const bounded = boundReviewerTranscript(snapshot.messages);
+    const bounded = boundReviewerTranscript(
+      snapshot.representation === "summary"
+        ? snapshot.messages.map(displayMessage)
+        : snapshot.messages,
+    );
     const sourceToken = snapshot.sourceToken
       ? wrapToken(providerSessionId, snapshot.sourceToken)
       : undefined;
@@ -168,4 +233,31 @@ export async function readReviewerTranscript(
     fallback: true,
     bytes: bounded.bytes,
   };
+}
+
+/**
+ * The exact body behind a reviewer row's `detailRef`, read from the reviewer's
+ * own provider session. The provider checks the body still has the digest the
+ * summary described, so this returns that revision or reports it gone.
+ */
+export async function readReviewerToolDetails(
+  provider: BuildPipelineProvider,
+  providerSessionId: string,
+  detailRef: string,
+): Promise<NativeAgentToolDetails> {
+  if (detailRef.length > BRIDGE_DETAIL_LOCATOR_MAX_LENGTH || !isBridgeDetailLocator(detailRef)) {
+    throw new Error("Reviewer tool detail reference is invalid");
+  }
+  const capable = provider as SnapshotCapable;
+  const result =
+    typeof capable.transcriptDetail === "function"
+      ? await capable.transcriptDetail(providerSessionId, detailRef)
+      : undefined;
+  if (!result || result.status === "missing" || result.status === "expired") {
+    throw new Error("Reviewer tool details are no longer available");
+  }
+  if (result.status !== "ok") {
+    return { detailRef, toolError: "Tool details exceeded the deferred display limit." };
+  }
+  return { detailRef, ...result.detail };
 }

@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 import {
+  bridgeTranscriptSummaryUpdate,
+  readBridgeTranscriptDetail,
+} from "@orkestrator/protocol/bridge-transcript-summary";
+import {
   MAX_REVIEWER_TRANSCRIPT_MESSAGES,
   boundReviewerTranscript,
+  readReviewerToolDetails,
   readReviewerTranscript,
 } from "./multi-review-reviewer-transcript.js";
 
@@ -141,5 +146,116 @@ describe("conditional reviewer transcript reads", () => {
     const read = await readReviewerTranscript(provider, "session", undefined);
     expect(read).toMatchObject({ kind: "snapshot", fallback: true, truncated: true });
     expect(read.kind === "snapshot" ? read.messages : []).toHaveLength(500);
+  });
+});
+
+describe("lightweight reviewer transcripts", () => {
+  const output = "o".repeat(64 * 1024);
+  function history() {
+    return [
+      {
+        id: "m1",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-09-27T00:00:00.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Read",
+            sourcePartId: "m1:0",
+            toolUseId: "call-1",
+            toolOutput: output,
+          },
+        ],
+      },
+    ];
+  }
+
+  function summaryProvider(messages = history()) {
+    const requested: Array<string | undefined> = [];
+    const provider = {
+      agent: "codex",
+      async messages() {
+        throw new Error("the unbounded route must not be used");
+      },
+      async transcriptSnapshot(
+        _sessionId: string,
+        options: { limit: number; targetBytes: number; representation?: "summary" },
+      ) {
+        requested.push(options.representation);
+        const update = bridgeTranscriptSummaryUpdate(messages, {
+          sessionIdentity: "s",
+          generation: "g",
+          contentEpoch: 1,
+          revision: 1,
+          limit: 100,
+          targetBytes: options.targetBytes,
+          complete: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected a snapshot");
+        return {
+          messages: update.value.messages,
+          sourceToken: update.token,
+          complete: true,
+          representation: "summary" as const,
+        };
+      },
+      async transcriptDetail(_sessionId: string, locator: string) {
+        const result = readBridgeTranscriptDetail(messages, locator);
+        return result.status === "ok"
+          ? { status: "ok" as const, detail: result.detail }
+          : { status: result.status as "missing" | "expired" | "too-large" };
+      },
+    } as unknown as BuildPipelineProvider;
+    return { provider, requested, messages };
+  }
+
+  test("asks for summaries and exposes each locator as the row's detail reference", async () => {
+    const { provider, requested } = summaryProvider();
+    const read = await readReviewerTranscript(provider, "session-1", undefined);
+    if (read.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(requested).toEqual(["summary"]);
+    const part = (read.messages[0] as { parts: Array<Record<string, unknown>> }).parts[0]!;
+    expect(part.toolOutput).toBeUndefined();
+    expect(part.detail).toBeUndefined();
+    expect(typeof part.detailRef).toBe("string");
+    expect(read.bytes).toBeLessThan(4 * 1024);
+
+    const details = await readReviewerToolDetails(provider, "session-1", part.detailRef as string);
+    expect(details).toEqual({ detailRef: part.detailRef as string, toolOutput: output });
+  });
+
+  test("a changed body or a forged reference is refused, never swapped", async () => {
+    const { provider, messages } = summaryProvider();
+    const read = await readReviewerTranscript(provider, "session-1", undefined);
+    if (read.kind !== "snapshot") throw new Error("expected a snapshot");
+    const detailRef = (read.messages[0] as { parts: Array<{ detailRef: string }> }).parts[0]!
+      .detailRef;
+    messages[0]!.parts[0]!.toolOutput = "changed";
+    await expect(readReviewerToolDetails(provider, "session-1", detailRef)).rejects.toThrow(
+      "no longer available",
+    );
+    await expect(readReviewerToolDetails(provider, "session-1", "/etc/passwd")).rejects.toThrow(
+      "invalid",
+    );
+  });
+
+  test("a provider without detail reads keeps raw bodies inline", async () => {
+    const { provider } = summaryProvider();
+    delete (provider as { transcriptDetail?: unknown }).transcriptDetail;
+    const requested: Array<string | undefined> = [];
+    const raw = {
+      ...provider,
+      async transcriptSnapshot(_id: string, options: { representation?: "summary" }) {
+        requested.push(options.representation);
+        return { messages: history(), sourceToken: "t", complete: true };
+      },
+    } as unknown as BuildPipelineProvider;
+    const read = await readReviewerTranscript(raw, "session-1", undefined);
+    if (read.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(requested).toEqual([undefined]);
+    expect(
+      (read.messages[0] as { parts: Array<{ toolOutput?: string }> }).parts[0]!.toolOutput,
+    ).toBe(output);
   });
 });

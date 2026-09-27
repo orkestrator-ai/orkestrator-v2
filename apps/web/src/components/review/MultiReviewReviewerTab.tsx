@@ -24,6 +24,7 @@ import {
 } from "@/components/chat/MessageRenderBoundary";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { ToolDetailLoaderContext } from "@/components/chat/NativeMessage.shared";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
@@ -76,6 +77,7 @@ interface MultiReviewReviewerTabProps {
   data: MultiReviewTabData & { reviewerId: string };
   isActive: boolean;
   loadTranscript?: typeof backend.getMultiReviewReviewerTranscript;
+  loadToolDetails?: typeof backend.getMultiReviewReviewerToolDetails;
   stopReviewer?: typeof backend.stopMultiReviewReviewer;
   restartReviewer?: typeof backend.restartMultiReviewReviewer;
   unstickReviewer?: typeof backend.unstickMultiReviewReviewer;
@@ -142,6 +144,7 @@ export function MultiReviewReviewerTab({
   data,
   isActive,
   loadTranscript = backend.getMultiReviewReviewerTranscript,
+  loadToolDetails = backend.getMultiReviewReviewerToolDetails,
   stopReviewer = backend.stopMultiReviewReviewer,
   restartReviewer = backend.restartMultiReviewReviewer,
   unstickReviewer = backend.unstickMultiReviewReviewer,
@@ -154,6 +157,15 @@ export function MultiReviewReviewerTab({
   const [restarting, setRestarting] = useState(false);
   const [unsticking, setUnsticking] = useState(false);
   const [manualRefreshPending, setManualRefreshPending] = useState(false);
+  /*
+   * Rows from a lightweight reviewer transcript carry a `detailRef` in place
+   * of their tool body; expanding one reads that exact body from the
+   * reviewer's own session.
+   */
+  const reviewerToolDetails = useCallback(
+    (detailRef: string) => loadToolDetails(data.workflowId, data.reviewerId, detailRef),
+    [data.reviewerId, data.workflowId, loadToolDetails],
+  );
   const requestGeneration = useRef(0);
   const inFlightRequest = useRef<{ generation: number; promise: Promise<void> } | null>(null);
   const manualRefreshAttempt = useRef<symbol | null>(null);
@@ -548,56 +560,58 @@ export function MultiReviewReviewerTab({
             className="@container flex min-h-0 flex-1 flex-col"
             data-testid="multi-review-reviewer-transcript-body"
           >
-            <VirtualizedMessageList
-              messages={messages}
-              computeItemKey={(_index, message) => message.id}
-              resolvePreviousMessage={findPreviousNativeMessage}
-              renderMessage={(_index, message, previous) => (
-                // This read-only view re-reads the whole provider transcript every
-                // few seconds while the reviewer streams, so a frame can hold a
-                // message shape no renderer has seen before. One such message must
-                // degrade to its own row — not hand the entire tab to the view
-                // error boundary — and retries as soon as a poll reports that this
-                // message changed. Keyed on content, not identity: every poll
-                // rebuilds all message objects, so identity would retry a row that
-                // fails deterministically on every interval for the whole review.
-                <MessageRenderBoundary resetKey={messageRenderResetKey(message)}>
-                  <NativeMessage
-                    message={message}
-                    previousMessage={previous}
-                    assistantLabel={label}
-                    containerId={containerId}
-                    agentExpansionScope={data.environmentId}
-                    platform={snapshot?.agent}
-                  />
-                </MessageRenderBoundary>
-              )}
-              emptyState={
-                <div className="px-6 py-12 text-center text-sm text-muted-foreground">
-                  {error
-                    ? error
-                    : running
-                      ? "The review is running. Its authoritative transcript will appear here as it is synchronized."
-                      : snapshot
-                        ? "No text transcript was produced for this review."
-                        : "Loading reviewer transcript…"}
-                </div>
-              }
-              footer={
-                thinkingStatus || reportOrError ? (
-                  <>
-                    {thinkingStatus}
-                    {reportOrError}
-                  </>
-                ) : undefined
-              }
-              scrollProps={scrollProps}
-              virtuosoRef={virtuosoRef}
-              find={{
-                isActive,
-                getSearchText: getNativeMessageSearchText,
-              }}
-            />
+            <ToolDetailLoaderContext.Provider value={reviewerToolDetails}>
+              <VirtualizedMessageList
+                messages={messages}
+                computeItemKey={(_index, message) => message.id}
+                resolvePreviousMessage={findPreviousNativeMessage}
+                renderMessage={(_index, message, previous) => (
+                  // This read-only view re-reads the whole provider transcript every
+                  // few seconds while the reviewer streams, so a frame can hold a
+                  // message shape no renderer has seen before. One such message must
+                  // degrade to its own row — not hand the entire tab to the view
+                  // error boundary — and retries as soon as a poll reports that this
+                  // message changed. Keyed on content, not identity: every poll
+                  // rebuilds all message objects, so identity would retry a row that
+                  // fails deterministically on every interval for the whole review.
+                  <MessageRenderBoundary resetKey={messageRenderResetKey(message)}>
+                    <NativeMessage
+                      message={message}
+                      previousMessage={previous}
+                      assistantLabel={label}
+                      containerId={containerId}
+                      agentExpansionScope={data.environmentId}
+                      platform={snapshot?.agent}
+                    />
+                  </MessageRenderBoundary>
+                )}
+                emptyState={
+                  <div className="px-6 py-12 text-center text-sm text-muted-foreground">
+                    {error
+                      ? error
+                      : running
+                        ? "The review is running. Its authoritative transcript will appear here as it is synchronized."
+                        : snapshot
+                          ? "No text transcript was produced for this review."
+                          : "Loading reviewer transcript…"}
+                  </div>
+                }
+                footer={
+                  thinkingStatus || reportOrError ? (
+                    <>
+                      {thinkingStatus}
+                      {reportOrError}
+                    </>
+                  ) : undefined
+                }
+                scrollProps={scrollProps}
+                virtuosoRef={virtuosoRef}
+                find={{
+                  isActive,
+                  getSearchText: getNativeMessageSearchText,
+                }}
+              />
+            </ToolDetailLoaderContext.Provider>
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent className="w-48">

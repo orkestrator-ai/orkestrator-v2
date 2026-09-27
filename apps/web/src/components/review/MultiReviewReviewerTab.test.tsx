@@ -10,7 +10,36 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
  * suites render the real component.
  */
 import * as realNativeMessage from "@/components/chat/NativeMessage";
+import { ToolDetailLoaderContext } from "@/components/chat/NativeMessage.shared";
+import { useContext, useState } from "react";
 const realNativeMessageSnapshot = { ...realNativeMessage };
+
+/** The first detail reference in a (possibly grouped) part tree. */
+function findDeferredRef(parts: unknown[] | undefined): string | undefined {
+  for (const part of parts ?? []) {
+    const record = part as { detailRef?: string; parts?: unknown[]; childTools?: unknown[] };
+    const found =
+      record.detailRef ?? findDeferredRef(record.parts) ?? findDeferredRef(record.childTools);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/** Stands in for a tool row whose body is deferred behind a detail reference. */
+function DeferredRowStub({ detailRef }: { detailRef: string }) {
+  const loadToolDetails = useContext(ToolDetailLoaderContext);
+  const [loaded, setLoaded] = useState<string | undefined>();
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        void loadToolDetails?.(detailRef).then((details) => setLoaded(details.toolOutput))
+      }
+    >
+      {loaded ?? "Expand deferred tool"}
+    </button>
+  );
+}
 mock.module("@/components/chat/NativeMessage", () => ({
   ...realNativeMessageSnapshot,
   NativeMessage: ({
@@ -19,12 +48,14 @@ mock.module("@/components/chat/NativeMessage", () => ({
     message: {
       id: string;
       content: string;
-      parts: Array<{ type: string; content: string }>;
+      parts: Array<{ type: string; content: string; detailRef?: string }>;
     };
   }) => {
     if (message.content.includes("poison")) {
       throw new Error("injected renderer failure");
     }
+    const deferred = findDeferredRef(message.parts);
+    if (deferred) return <DeferredRowStub detailRef={deferred} />;
     // Mirrors the real component: text parts are the content roots, with
     // `content` as the fallback for messages that carry no text part.
     const textParts = message.parts.filter((part) => part.type === "text");
@@ -339,5 +370,48 @@ describe("toMultiReviewReviewerMessages machine output", () => {
     await waitFor(() => expect(loadTranscript).toHaveBeenCalled());
     expect(await screen.findByText("Reading the review skill.")).toBeTruthy();
     expect(document.body.textContent).not.toContain("reviewScope");
+  });
+});
+
+describe("MultiReviewReviewerTab deferred tool details", () => {
+  test("expanding a deferred row reads its body from this reviewer's session", async () => {
+    const loadTranscript = mock(async () => ({
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+      workflowPhase: "reviewing" as const,
+      agent: "codex" as const,
+      model: "default",
+      status: "running" as const,
+      startedAt: "2026-08-17T00:00:00.000Z",
+      messages: [
+        {
+          id: "tool-row",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-08-17T00:00:01.000Z",
+          parts: [{ type: "tool-invocation", content: "Read", detailRef: "bd1.locator" }],
+        },
+      ],
+    }));
+    const loadToolDetails = mock(async (_workflowId: string, _reviewerId: string, ref: string) => ({
+      detailRef: ref,
+      toolOutput: "the deferred body",
+    }));
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+        loadToolDetails={loadToolDetails}
+      />,
+    );
+    fireEvent.click(await screen.findByText("Expand deferred tool"));
+    expect(await screen.findByText("the deferred body")).toBeTruthy();
+    expect(loadToolDetails).toHaveBeenCalledWith("multi-1", "reviewer-1", "bd1.locator");
   });
 });

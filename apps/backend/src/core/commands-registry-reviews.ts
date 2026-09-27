@@ -3,6 +3,7 @@ import {
   readReviewValidationOutput,
 } from "./review-validation-service.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { isMultiReviewReviewerHistoryPageRequest } from "@orkestrator/protocol/multi-review";
 import {
   LOOPED_REVIEW_WORKFLOW_VERSION,
   isLoopedReviewTerminalPhase,
@@ -269,6 +270,33 @@ export function registerReviewWorkflowCommands(
         asNonBlankString(workflowId, "workflowId"),
         asNonBlankString(reviewerId, "reviewerId"),
         detailRef,
+      );
+    },
+  );
+  register(
+    "get_multi_review_reviewer_history_page",
+    ({ workflowId, reviewerId, before, limit, targetBytes }, context) => {
+      if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+      // The cursor and bounds are renderer-supplied: the cursor is length-
+      // bounded here and resolved only against this reviewer's own session.
+      const request = {
+        workflowId,
+        reviewerId,
+        before,
+        ...(limit === undefined ? {} : { limit }),
+        ...(targetBytes === undefined ? {} : { targetBytes }),
+      };
+      if (!isMultiReviewReviewerHistoryPageRequest(request)) {
+        throw new Error("Invalid multi review reviewer history page request");
+      }
+      return context.multiReviews.reviewerHistoryPage(
+        request.workflowId,
+        request.reviewerId,
+        request.before,
+        {
+          ...(request.limit === undefined ? {} : { limit: request.limit }),
+          ...(request.targetBytes === undefined ? {} : { targetBytes: request.targetBytes }),
+        },
       );
     },
   );

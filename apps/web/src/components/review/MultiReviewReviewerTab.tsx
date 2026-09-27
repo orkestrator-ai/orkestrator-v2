@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import {
   AlertCircle,
@@ -9,7 +9,10 @@ import {
   RotateCcw,
   Square,
 } from "lucide-react";
-import type { MultiReviewReviewerTranscript } from "@orkestrator/protocol/multi-review";
+import type {
+  MultiReviewReviewerHistoryPage,
+  MultiReviewReviewerTranscript,
+} from "@orkestrator/protocol/multi-review";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
 import {
@@ -78,6 +81,7 @@ interface MultiReviewReviewerTabProps {
   isActive: boolean;
   loadTranscript?: typeof backend.getMultiReviewReviewerTranscript;
   loadToolDetails?: typeof backend.getMultiReviewReviewerToolDetails;
+  loadHistoryPage?: typeof backend.getMultiReviewReviewerHistoryPage;
   stopReviewer?: typeof backend.stopMultiReviewReviewer;
   restartReviewer?: typeof backend.restartMultiReviewReviewer;
   unstickReviewer?: typeof backend.unstickMultiReviewReviewer;
@@ -99,12 +103,32 @@ export function mergeMultiReviewReviewerTranscript(
   // reviewer and workflow state also did not move keeps the same object, so
   // the message projection below is not rebuilt on every poll.
   if (previous && sameReviewerState(previous, next)) return previous;
-  return { ...next, messages: previous?.messages ?? [] };
+  // The kept tail keeps the window facts that describe it.
+  const {
+    truncated: _truncated,
+    historyCursor: _historyCursor,
+    historyEpoch: _historyEpoch,
+    ...rest
+  } = next;
+  return {
+    ...rest,
+    messages: previous?.messages ?? [],
+    ...(previous?.truncated ? { truncated: true } : {}),
+    ...(previous?.historyCursor ? { historyCursor: previous.historyCursor } : {}),
+    ...(previous?.historyEpoch ? { historyEpoch: previous.historyEpoch } : {}),
+  };
 }
 
-/** Every field except the message tail and the answer's own framing. */
+/** Every field except the message tail, its window facts and the answer's framing. */
 function reviewerStateKey(snapshot: MultiReviewReviewerTranscript): string {
-  const { messages: _messages, transcript: _transcript, ...state } = snapshot;
+  const {
+    messages: _messages,
+    transcript: _transcript,
+    truncated: _truncated,
+    historyCursor: _historyCursor,
+    historyEpoch: _historyEpoch,
+    ...state
+  } = snapshot;
   // Both sides are backend answers of the same shape, so key order matches.
   return JSON.stringify(state);
 }
@@ -114,6 +138,137 @@ function sameReviewerState(
   next: MultiReviewReviewerTranscript,
 ): boolean {
   return reviewerStateKey(previous) === reviewerStateKey(next);
+}
+
+/** Earlier history this tab retains at most; past it the control retires. */
+export const MAX_REVIEWER_EARLIER_MESSAGES = 2_000;
+/** Messages asked for per "load earlier" click. */
+export const REVIEWER_HISTORY_PAGE_MESSAGES = 100;
+/** Pages of already-shown rows one click may step past. */
+const MAX_DUPLICATE_PAGE_SKIPS = 4;
+
+/**
+ * Earlier reviewer history loaded through pages, held apart from the polled
+ * tail so an ordinary poll cannot discard it.
+ */
+export interface ReviewerHistoryState {
+  /** Pages loaded so far, oldest first; never overlaps the tail. */
+  earlier: unknown[];
+  /** Cursor for the history before the oldest shown message. */
+  cursor?: string;
+  /** History epoch `earlier` and `cursor` belong to. */
+  epoch?: string;
+  /** Why no cursor is offered after following one. */
+  end?: "complete" | "unavailable" | "retained-limit";
+  /** Shown once when loaded pages had to be dropped. */
+  notice?: string;
+}
+
+export const EMPTY_REVIEWER_HISTORY: ReviewerHistoryState = { earlier: [] };
+
+/** A raw row's identity: flat bridge rows carry `id`, OpenCode rows `info.id`. */
+function messageId(message: unknown): string | undefined {
+  if (typeof message !== "object" || message === null) return undefined;
+  const record = message as { id?: unknown; info?: { id?: unknown } | null };
+  const id = record.id ?? record.info?.id;
+  return typeof id === "string" && id.length > 0 ? id : undefined;
+}
+
+/**
+ * Fold a new transcript answer into the loaded history.
+ *
+ * An unchanged answer leaves it alone. A snapshot with no loaded pages simply
+ * adopts the snapshot's cursor. With loaded pages, the new tail is stitched on
+ * by message identity: rows that aged out of the tail since the last read are
+ * kept as history, so nothing between the pages and the tail goes missing. A
+ * different epoch or a tail that no longer overlaps what is shown (the
+ * reviewer moved on further than a window while this tab was inactive, or was
+ * restarted) cannot be stitched without a gap, so the pages are dropped and
+ * the snapshot's own cursor is adopted.
+ */
+export function mergeReviewerHistory(
+  history: ReviewerHistoryState,
+  previousTail: readonly unknown[],
+  next: MultiReviewReviewerTranscript,
+  /**
+   * A page request is in flight for `history.cursor`. Rows ageing out of the
+   * tail are then kept as history even before any page landed, so the page
+   * still joins the list without a gap.
+   */
+  pageInFlight = false,
+): { history: ReviewerHistoryState; reset: boolean } {
+  if (next.transcript === "unchanged") return { history, reset: false };
+  const adopt = (notice?: string): ReviewerHistoryState => ({
+    earlier: [],
+    ...(next.historyCursor ? { cursor: next.historyCursor } : {}),
+    ...(next.historyEpoch ? { epoch: next.historyEpoch } : {}),
+    ...(notice ? { notice } : {}),
+  });
+  if (history.earlier.length === 0 && !pageInFlight) {
+    // Nothing loaded and nothing on its way: the snapshot's window is the view.
+    const same =
+      history.cursor === next.historyCursor &&
+      history.epoch === next.historyEpoch &&
+      history.end === undefined;
+    return { history: same ? history : adopt(history.notice), reset: false };
+  }
+  const firstId = messageId(next.messages[0]);
+  const combined = [...history.earlier, ...previousTail];
+  const overlap =
+    firstId === undefined ? -1 : combined.findIndex((message) => messageId(message) === firstId);
+  if (next.historyEpoch !== history.epoch || overlap < 0) {
+    return {
+      history: adopt("Earlier messages were reloaded because the reviewer's history moved on."),
+      reset: true,
+    };
+  }
+  const earlier = combined.slice(0, overlap);
+  if (earlier.length === history.earlier.length) return { history, reset: false };
+  if (earlier.length > MAX_REVIEWER_EARLIER_MESSAGES) {
+    // Dropping the oldest rows leaves nothing a cursor could continue from.
+    return {
+      history: {
+        earlier: earlier.slice(-MAX_REVIEWER_EARLIER_MESSAGES),
+        ...(history.epoch ? { epoch: history.epoch } : {}),
+        end: "retained-limit",
+      },
+      reset: false,
+    };
+  }
+  return { history: { ...history, earlier }, reset: false };
+}
+
+/**
+ * Add one page ahead of what is shown. Rows already on screen are dropped
+ * (overlapping pages are expected around the tail's head), and the retained
+ * history stays bounded.
+ */
+export function prependReviewerHistoryPage(
+  history: ReviewerHistoryState,
+  tail: readonly unknown[],
+  page: Extract<MultiReviewReviewerHistoryPage, { status: "page" }>,
+): ReviewerHistoryState {
+  const shown = new Set(
+    [...history.earlier, ...tail].map(messageId).filter((id): id is string => id !== undefined),
+  );
+  const fresh = page.messages.filter((message) => {
+    const id = messageId(message);
+    return id === undefined || !shown.has(id);
+  });
+  const earlier = [...fresh, ...history.earlier];
+  if (earlier.length >= MAX_REVIEWER_EARLIER_MESSAGES) {
+    return {
+      earlier: earlier.slice(-MAX_REVIEWER_EARLIER_MESSAGES),
+      ...(history.epoch ? { epoch: history.epoch } : {}),
+      end: "retained-limit",
+    };
+  }
+  return {
+    earlier,
+    ...(page.nextCursor ? { cursor: page.nextCursor } : {}),
+    ...(history.epoch ? { epoch: history.epoch } : {}),
+    ...(page.nextCursor ? {} : { end: page.complete ? "complete" : "unavailable" }),
+  };
 }
 
 export function toMultiReviewReviewerMessages(snapshot: MultiReviewReviewerTranscript) {
@@ -145,6 +300,7 @@ export function MultiReviewReviewerTab({
   isActive,
   loadTranscript = backend.getMultiReviewReviewerTranscript,
   loadToolDetails = backend.getMultiReviewReviewerToolDetails,
+  loadHistoryPage = backend.getMultiReviewReviewerHistoryPage,
   stopReviewer = backend.stopMultiReviewReviewer,
   restartReviewer = backend.restartMultiReviewReviewer,
   unstickReviewer = backend.unstickMultiReviewReviewer,
@@ -157,6 +313,22 @@ export function MultiReviewReviewerTab({
   const [restarting, setRestarting] = useState(false);
   const [unsticking, setUnsticking] = useState(false);
   const [manualRefreshPending, setManualRefreshPending] = useState(false);
+  const [history, setHistory] = useState<ReviewerHistoryState>(EMPTY_REVIEWER_HISTORY);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  /*
+   * Mirrors of the committed state, so a transcript answer and a history page
+   * are folded synchronously against exactly what is shown, and a reset can
+   * fence a page still in flight.
+   */
+  const snapshotRef = useRef<MultiReviewReviewerTranscript | null>(null);
+  const historyRef = useRef<ReviewerHistoryState>(EMPTY_REVIEWER_HISTORY);
+  const historyGeneration = useRef(0);
+  /** First shown message before a prepend, to hold the reader's place. */
+  const scrollAnchor = useRef<string | null>(null);
+  /** First rendered row, recorded after each render for the anchor above. */
+  const firstRenderedId = useRef<string | null>(null);
+  const pageInFlight = useRef(false);
   /*
    * Rows from a lightweight reviewer transcript carry a `detailRef` in place
    * of their tool body; expanding one reads that exact body from the
@@ -178,6 +350,38 @@ export function MultiReviewReviewerTab({
   const containerId =
     useEnvironmentStore((state) => state.getEnvironmentById(data.environmentId)?.containerId) ??
     undefined;
+
+  const commitSnapshot = useCallback((next: MultiReviewReviewerTranscript | null) => {
+    snapshotRef.current = next;
+    setSnapshot(next);
+  }, []);
+
+  const commitHistory = useCallback((next: ReviewerHistoryState, reset: boolean) => {
+    if (reset) {
+      // Fences a page still in flight: it belongs to the history just dropped.
+      historyGeneration.current += 1;
+      pageInFlight.current = false;
+      scrollAnchor.current = null;
+    }
+    historyRef.current = next;
+    setHistory(next);
+  }, []);
+
+  /** Fold one transcript answer into the tail and the loaded history together. */
+  const applyTranscript = useCallback(
+    (next: MultiReviewReviewerTranscript) => {
+      const previous = snapshotRef.current;
+      const merged = mergeReviewerHistory(
+        historyRef.current,
+        previous?.messages ?? [],
+        next,
+        pageInFlight.current,
+      );
+      if (merged.history !== historyRef.current) commitHistory(merged.history, merged.reset);
+      commitSnapshot(mergeMultiReviewReviewerTranscript(previous, next));
+    },
+    [commitHistory, commitSnapshot],
+  );
 
   const fenceRequests = useCallback(() => {
     requestGeneration.current += 1;
@@ -202,7 +406,7 @@ export function MultiReviewReviewerTab({
         });
         if (requestGeneration.current !== generation) return;
         sourceToken.current = next.sourceToken;
-        setSnapshot((previous) => mergeMultiReviewReviewerTranscript(previous, next));
+        applyTranscript(next);
         setTranscriptError(null);
       } catch (reason) {
         if (requestGeneration.current !== generation) return;
@@ -213,7 +417,72 @@ export function MultiReviewReviewerTab({
     })();
     inFlightRequest.current = { generation, promise: request };
     return request;
-  }, [data.reviewerId, data.workflowId, loadTranscript]);
+  }, [applyTranscript, data.reviewerId, data.workflowId, loadTranscript]);
+
+  /**
+   * Read the page before the oldest shown message and prepend it. An expired
+   * cursor (restarted reviewer, rewritten history) drops the loaded pages and
+   * re-reads the current transcript for a fresh cursor; it is never shown as
+   * the start of history.
+   */
+  const loadEarlier = useCallback(async () => {
+    const cursor = historyRef.current.cursor;
+    // The ref, not the button state, so a double click cannot issue two reads.
+    if (!cursor || pageInFlight.current) return;
+    const generation = historyGeneration.current;
+    setLoadingEarlier(true);
+    setHistoryError(null);
+    pageInFlight.current = true;
+    try {
+      let before = cursor;
+      for (let skips = 0; ; skips += 1) {
+        const page = await loadHistoryPage(data.workflowId, data.reviewerId, {
+          before,
+          limit: REVIEWER_HISTORY_PAGE_MESSAGES,
+        });
+        if (historyGeneration.current !== generation) return;
+        if (page.status === "expired" || page.historyEpoch !== historyRef.current.epoch) {
+          commitHistory(
+            {
+              earlier: [],
+              notice:
+                page.status === "expired" && page.reason === "session-replaced"
+                  ? "The reviewer was restarted; earlier messages now start from its new session."
+                  : "Earlier messages were reloaded because the reviewer's history changed.",
+            },
+            true,
+          );
+          // A snapshot, not an unchanged answer, is what carries a new cursor.
+          fenceRequests();
+          await refresh();
+          return;
+        }
+        const tail = snapshotRef.current?.messages ?? [];
+        const next = prependReviewerHistoryPage(historyRef.current, tail, page);
+        const added = next.earlier.length > historyRef.current.earlier.length;
+        // A page of rows already on screen (the tail's head, typically) is
+        // stepped past rather than spending the click on nothing; bounded.
+        if (
+          !added &&
+          page.nextCursor &&
+          page.nextCursor !== before &&
+          skips < MAX_DUPLICATE_PAGE_SKIPS
+        ) {
+          before = page.nextCursor;
+          continue;
+        }
+        if (added) scrollAnchor.current = firstRenderedId.current;
+        commitHistory(next, false);
+        return;
+      }
+    } catch (reason) {
+      if (historyGeneration.current !== generation) return;
+      setHistoryError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      if (historyGeneration.current === generation) pageInFlight.current = false;
+      setLoadingEarlier(false);
+    }
+  }, [commitHistory, data.reviewerId, data.workflowId, fenceRequests, loadHistoryPage, refresh]);
 
   /**
    * A manual refresh is a request for a snapshot newer than the click. If an
@@ -326,14 +595,17 @@ export function MultiReviewReviewerTab({
   ]);
 
   useEffect(() => {
-    setSnapshot(null);
+    commitSnapshot(null);
+    commitHistory(EMPTY_REVIEWER_HISTORY, true);
+    setHistoryError(null);
+    setLoadingEarlier(false);
     setTranscriptError(null);
     setActionError(null);
     setStopping(false);
     setRestarting(false);
     setUnsticking(false);
     fenceRequests();
-  }, [data.reviewerId, data.workflowId, fenceRequests]);
+  }, [commitHistory, commitSnapshot, data.reviewerId, data.workflowId, fenceRequests]);
 
   // Becoming inactive, unmounting, or replacing the transcript reader makes
   // every outstanding result stale. This lifecycle is intentionally separate
@@ -392,16 +664,38 @@ export function MultiReviewReviewerTab({
 
   const messages = useMemo(() => {
     if (!snapshot) return [];
-    return toMultiReviewReviewerMessages(snapshot);
-  }, [snapshot]);
+    if (history.earlier.length === 0) return toMultiReviewReviewerMessages(snapshot);
+    const tailIds = new Set(snapshot.messages.map(messageId).filter(Boolean));
+    const earlier = history.earlier.filter((message) => {
+      const id = messageId(message);
+      return id === undefined || !tailIds.has(id);
+    });
+    return toMultiReviewReviewerMessages({
+      ...snapshot,
+      messages: [...earlier, ...snapshot.messages],
+    });
+  }, [history.earlier, snapshot]);
 
   const scrollKey = multiReviewReviewerScrollKey(data.workflowId, data.reviewerId);
-  const { virtuosoRef, scrollProps } = useVirtuosoScrollState({
+  const { virtuosoRef, scrollProps, scrollToIndex } = useVirtuosoScrollState({
     isActive,
     persistKey: scrollKey,
     environmentId: data.environmentId,
     stickToBottomOnActivation: true,
   });
+
+  // Hold the reader on the message they were reading when a page lands above
+  // it; the list otherwise keeps its offset and the new rows push it away.
+  useLayoutEffect(() => {
+    const anchor = scrollAnchor.current;
+    if (!anchor) return;
+    scrollAnchor.current = null;
+    const index = messages.findIndex((message) => message.id === anchor);
+    if (index > 0) scrollToIndex(index);
+  }, [messages, scrollToIndex]);
+  useLayoutEffect(() => {
+    firstRenderedId.current = messages[0]?.id ?? null;
+  }, [messages]);
 
   const running = snapshot?.status === "running";
   const stalled = Boolean(snapshot?.stalledSince && running);
@@ -479,6 +773,37 @@ export function MultiReviewReviewerTab({
       {error}
     </div>
   ) : null;
+  const historyNotice =
+    history.end === "unavailable"
+      ? "Earlier messages are not available from this reviewer's session."
+      : history.end === "retained-limit"
+        ? "Showing the most earlier history this view keeps."
+        : !history.cursor && !history.end && history.earlier.length === 0 && snapshot?.truncated
+          ? "Earlier messages are not shown in this view."
+          : null;
+  const transcriptHeader =
+    history.cursor || historyNotice || history.notice || historyError ? (
+      <div className="mx-auto flex max-w-3xl flex-col items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
+        {history.notice ? <span>{history.notice}</span> : null}
+        {historyNotice ? <span>{historyNotice}</span> : null}
+        {historyError ? (
+          <span role="alert" className="text-destructive">
+            {historyError}
+          </span>
+        ) : null}
+        {history.cursor ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={loadingEarlier}
+            onClick={() => void loadEarlier()}
+          >
+            {loadingEarlier ? "Loading…" : "Load earlier messages"}
+          </Button>
+        ) : null}
+      </div>
+    ) : undefined;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -596,6 +921,7 @@ export function MultiReviewReviewerTab({
                           : "Loading reviewer transcript…"}
                   </div>
                 }
+                header={transcriptHeader}
                 footer={
                   thinkingStatus || reportOrError ? (
                     <>

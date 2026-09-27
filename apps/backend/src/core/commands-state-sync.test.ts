@@ -4906,6 +4906,52 @@ describe("multi review commands", () => {
       { multiReviews: supervisor },
     );
   });
+
+  test("delegates bounded reviewer history page reads", async () => {
+    const reviewerHistoryPage = mock(async () => ({
+      status: "page",
+      messages: [{ id: "earlier" }],
+      historyEpoch: "legacy",
+      complete: true,
+      truncated: false,
+    }));
+    const supervisor = { reviewerHistoryPage } as unknown as NonNullable<
+      CommandContext["multiReviews"]
+    >;
+    await withCommands(
+      async (invoke) => {
+        await expect(
+          invoke("get_multi_review_reviewer_history_page", {
+            workflowId: "multi-1",
+            reviewerId: "reviewer-1",
+            before: "cursor",
+            limit: 50,
+          }),
+        ).resolves.toMatchObject({ status: "page", messages: [{ id: "earlier" }] });
+        expect(reviewerHistoryPage).toHaveBeenCalledWith("multi-1", "reviewer-1", "cursor", {
+          limit: 50,
+        });
+        for (const invalid of [
+          { before: "" },
+          { before: "x".repeat(1025) },
+          { before: "cursor", limit: 201 },
+          { before: "cursor", limit: 0 },
+          { before: "cursor", targetBytes: 1024 * 1024 + 1 },
+          { before: 42 },
+        ]) {
+          await expect(
+            invoke("get_multi_review_reviewer_history_page", {
+              workflowId: "multi-1",
+              reviewerId: "reviewer-1",
+              ...invalid,
+            }),
+          ).rejects.toThrow("Invalid multi review reviewer history page request");
+        }
+        expect(reviewerHistoryPage).toHaveBeenCalledTimes(1);
+      },
+      { multiReviews: supervisor },
+    );
+  });
 });
 
 describe("build pipeline commands", () => {

@@ -41,6 +41,8 @@ export const EFFICIENCY_OPERATIONS = [
   "transcript.ui_read",
   "transcript.ui_unchanged",
   "transcript.ui_fallback",
+  "transcript.ui_history_page",
+  "transcript.ui_history_fallback",
   // Evidence verification.
   "evidence.verify",
   "evidence.permit_reuse",

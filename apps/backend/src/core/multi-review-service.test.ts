@@ -515,6 +515,67 @@ test("MultiReviewService exposes an authoritative reviewer transcript read model
   });
 });
 
+test("MultiReviewService pages earlier reviewer history bound to the reviewer's session", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  provider.messagesValue = Array.from({ length: 620 }, (_, index) => ({
+    id: `assistant-${index}`,
+    role: "assistant",
+    content: `step ${index}`,
+    parts: [{ type: "text", content: `step ${index}` }],
+  }));
+
+  await withService("env-reviewer-history", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () =>
+      Boolean((await snapshot(started.id))?.reviewers[0]?.providerSessionId),
+    );
+    const reviewer = (await snapshot(started.id))!.reviewers[0]!;
+
+    const tail = await service.reviewerTranscript(started.id, reviewer.id);
+    expect(tail).toMatchObject({ truncated: true, historyEpoch: "legacy" });
+    expect((tail.messages[0] as { id: string }).id).toBe("assistant-120");
+    expect(typeof tail.historyCursor).toBe("string");
+
+    const page = await service.reviewerHistoryPage(started.id, reviewer.id, tail.historyCursor!, {
+      limit: 100,
+    });
+    expect(page).toMatchObject({ status: "page", historyEpoch: "legacy", truncated: true });
+    if (page.status !== "page") throw new Error("expected a page");
+    expect(page.messages.map((message) => (message as { id: string }).id)).toEqual(
+      Array.from({ length: 100 }, (_, index) => `assistant-${20 + index}`),
+    );
+    const last = await service.reviewerHistoryPage(started.id, reviewer.id, page.nextCursor!);
+    expect(last).toMatchObject({ status: "page", complete: true, truncated: false });
+
+    // Another reviewer's cursor is refused, not served against this history.
+    await expect(
+      service.reviewerHistoryPage(started.id, "no-such-reviewer", tail.historyCursor!),
+    ).rejects.toThrow("Multi review reviewer not found");
+    const foreign = Buffer.from(
+      JSON.stringify({
+        v: 1,
+        key: "0".repeat(24),
+        session: "0".repeat(24),
+        epoch: "legacy",
+        before: "x",
+      }),
+    ).toString("base64url");
+    await expect(service.reviewerHistoryPage(started.id, reviewer.id, foreign)).rejects.toThrow(
+      "does not belong to this reviewer",
+    );
+
+    // Rewritten history: the cursor's message is gone, so it expires.
+    provider.messagesValue = provider.messagesValue.map((message) => ({
+      ...(message as Record<string, unknown>),
+      id: `rewritten-${(message as { id: string }).id}`,
+    }));
+    await expect(
+      service.reviewerHistoryPage(started.id, reviewer.id, page.nextCursor!),
+    ).resolves.toEqual({ status: "expired", reason: "history-changed" });
+  });
+});
+
 test("MultiReviewService persists reviewer token usage while the review is running", async () => {
   const provider = new Provider(false);
   provider.statusValue = "running";
@@ -1097,6 +1158,13 @@ test("MultiReviewService polls an HTTP interactive Fix through the no-touch acti
   const { provider: http } = httpProvider((request, init) => {
     const url = new URL(request);
     requests.push(url.pathname);
+    if (url.pathname === "/sessions/activity") {
+      const { sessionIds } = JSON.parse(String(init.body)) as { sessionIds: string[] };
+      return Response.json({
+        version: 1,
+        observations: Object.fromEntries(sessionIds.map((id) => [id, { activity: activityState }])),
+      });
+    }
     if (url.pathname.endsWith("/activity")) {
       return Response.json({ activity: activityState });
     }
@@ -1161,13 +1229,6 @@ test("MultiReviewService polls an HTTP interactive Fix through the no-touch acti
       createProvider: async (_workflow, selection) =>
         selection.agent === "codex" ? http : fallbackProvider,
       serviceOptions: {
-    if (url.pathname === "/sessions/activity") {
-      const { sessionIds } = JSON.parse(String(init.body)) as { sessionIds: string[] };
-      return Response.json({
-        version: 1,
-        observations: Object.fromEntries(sessionIds.map((id) => [id, { activity: activityState }])),
-      });
-    }
         dispatchAddressPrompt: async (workflow) => ({
           tabId: workflow.addressTabId!,
           fixSession: {
@@ -1184,67 +1245,6 @@ test("MultiReviewService polls an HTTP interactive Fix through the no-touch acti
   );
 });
 
-test("MultiReviewService resumes an interrupted address dispatch through the supervisor", async () => {
-  const provider = new Provider();
-  let dispatches = 0;
-  await withService(
-    "env-address-resume",
-    provider,
-    async ({ service, storage, start, snapshot }) => {
-      const started = await start();
-      await waitUntil(async () => {
-        await service.advanceNow(started.id);
-        return (await snapshot(started.id))?.phase === "ready";
-      });
-
-      const statusCallsBeforeAddress = provider.statusCalls;
-      const handedOff = await service.address(started.id);
-      expect(handedOff.addressPromptPending).toBe(true);
-      await waitUntil(async () => (await snapshot(started.id))?.addressPromptAttempts === 1);
-
-      // Repeating the command is idempotent and never asks a renderer to resume
-      // the durable dispatch half.
-      const resumed = await service.address(started.id);
-      expect(resumed.addressPromptPending).toBe(true);
-      expect(provider.statusCalls).toBe(statusCallsBeforeAddress);
-      await waitUntil(async () => {
-        if ((await snapshot(started.id))?.addressPromptPending !== true) {
-          await service.advanceNow(started.id);
-        }
-        const [workflow, environment] = await Promise.all([
-          snapshot(started.id),
-          storage.getEnvironment("env-address-resume"),
-        ]);
-        return (
-          workflow?.addressPromptPending !== true &&
-          environment?.agentActivitySources?.["multi-review"]?.state === "idle"
-        );
-      });
-      expect(dispatches).toBe(2);
-      await expect(service.address(started.id)).resolves.toMatchObject({ phase: "interactive" });
-      expect(dispatches).toBe(2);
-
-      // Both terminal operations release their short-lived controller claims.
-      const claimed = await storage.claimMultiReviewController(started.id, "other-owner", 15_000);
-      expect(claimed.granted).toBe(true);
-    },
-    {
-      serviceOptions: {
-        addressDispatchRetryMs: 60_000,
-        dispatchAddressPrompt: async () => {
-          dispatches += 1;
-          if (dispatches === 1) throw new Error("interrupted");
-        },
-      },
-    },
-  );
-});
-
-test("MultiReviewService fails recoverably when the consolidation session is missing", async () => {
-  const provider = new Provider();
-  await withService(
-    "env-address-missing",
-    provider,
 /**
  * Several workflows, each handed to an interactive Fix on one HTTP bridge
  * connection, advanced together. `observations` answers the batch route;
@@ -1422,6 +1422,67 @@ test("MultiReviewService reads interactive Fix activity per session on an older 
   );
 });
 
+test("MultiReviewService resumes an interrupted address dispatch through the supervisor", async () => {
+  const provider = new Provider();
+  let dispatches = 0;
+  await withService(
+    "env-address-resume",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+
+      const statusCallsBeforeAddress = provider.statusCalls;
+      const handedOff = await service.address(started.id);
+      expect(handedOff.addressPromptPending).toBe(true);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptAttempts === 1);
+
+      // Repeating the command is idempotent and never asks a renderer to resume
+      // the durable dispatch half.
+      const resumed = await service.address(started.id);
+      expect(resumed.addressPromptPending).toBe(true);
+      expect(provider.statusCalls).toBe(statusCallsBeforeAddress);
+      await waitUntil(async () => {
+        if ((await snapshot(started.id))?.addressPromptPending !== true) {
+          await service.advanceNow(started.id);
+        }
+        const [workflow, environment] = await Promise.all([
+          snapshot(started.id),
+          storage.getEnvironment("env-address-resume"),
+        ]);
+        return (
+          workflow?.addressPromptPending !== true &&
+          environment?.agentActivitySources?.["multi-review"]?.state === "idle"
+        );
+      });
+      expect(dispatches).toBe(2);
+      await expect(service.address(started.id)).resolves.toMatchObject({ phase: "interactive" });
+      expect(dispatches).toBe(2);
+
+      // Both terminal operations release their short-lived controller claims.
+      const claimed = await storage.claimMultiReviewController(started.id, "other-owner", 15_000);
+      expect(claimed.granted).toBe(true);
+    },
+    {
+      serviceOptions: {
+        addressDispatchRetryMs: 60_000,
+        dispatchAddressPrompt: async () => {
+          dispatches += 1;
+          if (dispatches === 1) throw new Error("interrupted");
+        },
+      },
+    },
+  );
+});
+
+test("MultiReviewService fails recoverably when the consolidation session is missing", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-address-missing",
+    provider,
     async ({ service, storage, start, snapshot }) => {
       const started = await start();
       await waitUntil(async () => {

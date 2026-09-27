@@ -938,6 +938,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   readonly usageMessageLimit = OPEN_CODE_MESSAGE_HISTORY_LIMIT;
+  readonly messageReadLimit = OPEN_CODE_MESSAGE_HISTORY_LIMIT;
 
   usageFromMessages(messages: readonly unknown[]): NativeAgentContextUsage | undefined {
     const sessionId = messages

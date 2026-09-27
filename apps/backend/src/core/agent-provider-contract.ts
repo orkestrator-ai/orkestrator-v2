@@ -555,6 +555,8 @@ export interface AgentSessionProvider {
   usageFromMessages?(messages: readonly unknown[]): NativeAgentContextUsage | undefined;
   /** Minimum transcript tail needed by usageFromMessages; undefined means all messages. */
   readonly usageMessageLimit?: number;
+  /** Largest `messages` limit the provider accepts; undefined means no ceiling. */
+  readonly messageReadLimit?: number;
   readonly interactions?: AgentInteractionProviderCapability;
   messages(sessionId: string, options?: { limit?: number }): Promise<unknown[]>;
   structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T> | null>;

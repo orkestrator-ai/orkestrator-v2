@@ -22,11 +22,13 @@ import type {
   ReviewValidationRun,
   StartLoopedReviewInput,
 } from "@orkestrator/protocol/review-workflow";
-import type {
-  MultiReviewWorkflow as BackendMultiReviewWorkflow,
-  MultiReviewReviewerTranscript,
-  StartMultiReviewCustomFixInput,
-  StartMultiReviewInput,
+import {
+  isMultiReviewReviewerHistoryPage,
+  type MultiReviewWorkflow as BackendMultiReviewWorkflow,
+  type MultiReviewReviewerHistoryPage,
+  type MultiReviewReviewerTranscript,
+  type StartMultiReviewCustomFixInput,
+  type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
 import type {
   Environment,
@@ -384,6 +386,29 @@ export async function getMultiReviewReviewerToolDetails(
     reviewerId,
     detailRef,
   });
+}
+
+/**
+ * Reviewer history before `before` (a transcript `historyCursor` or a page's
+ * `nextCursor`). An answer outside the protocol's bounds is refused rather
+ * than rendered.
+ */
+export async function getMultiReviewReviewerHistoryPage(
+  workflowId: string,
+  reviewerId: string,
+  options: { before: string; limit?: number; targetBytes?: number },
+): Promise<MultiReviewReviewerHistoryPage> {
+  const page = await invoke<unknown>("get_multi_review_reviewer_history_page", {
+    workflowId,
+    reviewerId,
+    before: options.before,
+    ...(options.limit === undefined ? {} : { limit: options.limit }),
+    ...(options.targetBytes === undefined ? {} : { targetBytes: options.targetBytes }),
+  });
+  if (!isMultiReviewReviewerHistoryPage(page)) {
+    throw new Error("The reviewer history page was malformed");
+  }
+  return page;
 }
 
 export async function deleteMultiReviewWorkflow(workflowId: string): Promise<void> {

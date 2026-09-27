@@ -349,6 +349,81 @@ describe("Claude activity in the shared native transcript", () => {
         rowlessBackgroundTaskMessages([{ ...watchTask, status: "completed" }], transcript),
       ).toHaveLength(0);
     });
+
+    describe("a foreground command Claude reported as a task", () => {
+      const foreground = (parentTaskUseId?: string): NativeMessage => ({
+        id: "assistant-command",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-08-16T10:00:00.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolUseId: "bash-fg",
+            toolState: "success",
+            toolArgs: { command: "bun test", description: "Run the tests" },
+            ...(parentTaskUseId ? { parentTaskUseId } : {}),
+          },
+        ],
+      });
+      const task = {
+        id: "fg-task",
+        toolUseId: "bash-fg",
+        description: "Run the tests",
+      } as const;
+
+      test("adds no card once it settles, because its own row shows it", () => {
+        /*
+         * A long turn runs dozens of these. Carding each one as well stacks the
+         * duplicates under whichever row they settled beside, and the reader
+         * sees a wall of commands in place of the text between them.
+         */
+        const [row] = normalizeNativeMessages([foreground()]);
+
+        expect(
+          rowlessBackgroundTaskMessages(
+            [{ ...task, status: "completed", settledAt: "2026-08-16T10:01:00.000Z" }],
+            [row!],
+          ),
+        ).toHaveLength(0);
+      });
+
+      test("recognises the launch inside a sub-agent's tools", () => {
+        const agentLaunch: NativeMessage = {
+          id: "assistant-agent",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-08-16T09:59:00.000Z",
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "Agent",
+              toolName: "Agent",
+              toolUseId: "agent-1",
+              toolState: "pending",
+            },
+          ],
+        };
+        const rows = normalizeNativeMessages([agentLaunch, foreground("agent-1")]);
+
+        expect(
+          rowlessBackgroundTaskMessages(
+            [{ ...task, status: "completed", settledAt: "2026-08-16T10:01:00.000Z" }],
+            rows,
+          ),
+        ).toHaveLength(0);
+      });
+
+      test("keeps a card while it runs, for the stop control", () => {
+        const [row] = normalizeNativeMessages([foreground()]);
+
+        expect(
+          rowlessBackgroundTaskMessages([{ ...task, status: "running" }], [row!]),
+        ).toHaveLength(1);
+      });
+    });
   });
 
   test("keeps an unresolved background launch a plain tool row", () => {

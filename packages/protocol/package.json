@@ -46,6 +46,7 @@
     "./pane-layout-merge": "./src/pane-layout-merge.ts",
     "./parent-watchdog": "./src/parent-watchdog.ts",
     "./bridge-lifecycle": "./src/bridge-lifecycle.ts",
+    "./bridge-transcript-summary": "./src/bridge-transcript-summary.ts",
     "./fake-intervals": "./src/fake-intervals.ts",
     "./reconnect-backoff": "./src/reconnect-backoff.ts",
     "./plan-usage": "./src/plan-usage.ts",

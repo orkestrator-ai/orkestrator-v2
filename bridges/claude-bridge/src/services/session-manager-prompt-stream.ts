@@ -7,6 +7,7 @@ import type {
 import { TaskRegistry } from "@orkestrator/protocol/task-list";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import { eventEmitter } from "./event-emitter.js";
+import { markTranscriptChanged } from "./transcript-revision.js";
 import {
   ToolTracker,
   buildMessageParts,
@@ -199,6 +200,8 @@ export function createPromptStreamState(
       // Stamped on the message itself, before it is serialized, so both this
       // frame and any REST read of the transcript agree on the revision.
       currentAssistantMessage.revision = (currentAssistantMessage.revision ?? 0) + 1;
+      // The stamp is serialized with the message, so it is transcript content.
+      markTranscriptChanged(session);
       eventEmitter.emit({
         type: "message.updated",
         sessionId,
@@ -215,6 +218,7 @@ export function createPromptStreamState(
       publishedParts = parts.slice();
       publishedModelId = currentAssistantMessage.modelId;
       currentAssistantMessage.revision = (currentAssistantMessage.revision ?? 0) + 1;
+      markTranscriptChanged(session);
       eventEmitter.emit({
         type: "message.updated",
         sessionId,
@@ -240,6 +244,7 @@ export function createPromptStreamState(
 
     publishedParts = parts.slice();
     currentAssistantMessage.revision = (currentAssistantMessage.revision ?? 0) + 1;
+    markTranscriptChanged(session);
     eventEmitter.emit({
       type: "message.patched",
       sessionId,
@@ -287,6 +292,7 @@ export function createPromptStreamState(
       currentAssistantMessage.content = content;
       currentAssistantMessage.parts = finalParts;
     }
+    markTranscriptChanged(session);
 
     emitCurrentAssistantMessage();
   };

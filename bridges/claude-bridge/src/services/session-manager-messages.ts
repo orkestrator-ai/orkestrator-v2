@@ -42,6 +42,7 @@ import {
 } from "@orkestrator/protocol/structured-output";
 import { toolDiffFromToolInput } from "@orkestrator/protocol/tool-diff";
 import { eventEmitter } from "./event-emitter.js";
+import { markTranscriptChanged } from "./transcript-revision.js";
 import {
   deleteSessionPreferences,
   MAX_DISPATCHED_REQUEST_IDS,
@@ -393,6 +394,7 @@ export function appendInterruptedNotice(session: SessionState, sessionId: string
     createdAt,
   };
   session.messages.push(message);
+  markTranscriptChanged(session);
   eventEmitter.emit({ type: "message.updated", sessionId, data: { message } });
 }
 
@@ -442,6 +444,7 @@ export function appendSubagentInterruptedNotice(
   };
   if (sourceToolUseId) subagentNoticeSources.set(message, sourceToolUseId);
   session.messages.push(message);
+  markTranscriptChanged(session);
   eventEmitter.emit({ type: "message.updated", sessionId, data: { message } });
 }
 
@@ -516,6 +519,7 @@ export function refreshSettledToolRows(
     });
     if (changed) {
       message.parts = parts;
+      markTranscriptChanged(session);
       eventEmitter.emit({ type: "message.updated", sessionId, data: { message } });
     }
   }

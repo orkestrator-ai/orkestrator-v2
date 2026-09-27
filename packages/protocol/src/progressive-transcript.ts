@@ -31,6 +31,19 @@ function digest(value: string): string {
   return (hash >>> 0).toString(36);
 }
 
+/**
+ * Opaque identity of one conditional transcript read.
+ *
+ * With a `revision`, the caller vouches that every change to message content
+ * within `contentEpoch` advances it, so no message is visited. Without one the
+ * whole history is hashed — the correct but linear fallback for legacy callers.
+ *
+ * The envelope also carries fields no message revision describes: `title`
+ * and `freshness`. They are token components of their own, so a rename or a
+ * cached→current transition cannot be answered `unchanged` against a client
+ * still showing the old value. Tokens are opaque, so adding components only
+ * costs clients holding an older token one fresh snapshot.
+ */
 export function bridgeTranscriptToken(
   options: BridgeTranscriptReadOptions,
   messages?: unknown[],
@@ -46,6 +59,7 @@ export function bridgeTranscriptToken(
     digest(String(options.contentEpoch)),
     contentRevision,
     options.complete ? "1" : "0",
+    digest(JSON.stringify([options.title ?? null, options.freshness ?? "current"])),
     boundedInteger(options.limit, BRIDGE_TRANSCRIPT_MAX_MESSAGES, BRIDGE_TRANSCRIPT_MAX_MESSAGES),
     boundedInteger(
       options.targetBytes,

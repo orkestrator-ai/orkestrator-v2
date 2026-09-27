@@ -434,8 +434,9 @@ The OpenCode server sends these event types:
 The `orkestrator` client commands reach the backend only through the
 `public_action` registry command (`apps/backend/src/core/public-api/`); the
 contract lives in `packages/protocol/src/public-api*.ts` and the guide in
-[`docs/architecture/public-cli.md`](docs/architecture/public-cli.md). When
-touching it:
+[`docs/architecture/public-cli.md`](docs/architecture/public-cli.md) (testing
+workflow: [`docs/development/cli-testing.md`](docs/development/cli-testing.md)).
+When touching it:
 
 - **Admit before acting.** A mutation's request key is reserved and its
   operation record published (under the store lock) before any side effect.
@@ -1141,6 +1142,18 @@ When running tests for a code review, `mise run test` is normally adequate. Use
 focused logged tests while investigating specific areas. By review time those
 focused checks should already have been done, so the aggregate suite is the
 normal final proof.
+
+### Driving the app with the `orkestrator` CLI
+
+The `orkestrator` client commands can do anything the UI does to projects,
+environments, settings, agent sessions, interactions, transcripts and
+in-environment commands, and they return JSON and stable exit codes. Use them
+against an isolated `dev:test` profile (`--profile NAME`) to set up test state,
+exercise backend behavior without the UI, check what a reloaded UI should show,
+and read an environment's real workspace. Follow
+[`docs/development/cli-testing.md`](docs/development/cli-testing.md) for setup
+from a worktree, safety rules and recipes. Never point it at a production
+instance while testing.
 
 ### Required frontend-to-browser test cycle for agents
 

@@ -177,6 +177,9 @@ The run manifest (IDs, exit codes, stages — no prompts or tokens) is written t
 `docs/improvements/cli-commands/plan/14-targeted-testing-and-qualification.md`.
 See [public-cli.md](../architecture/public-cli.md#targeted-scenarios).
 
+To drive a running `dev:test` profile with the CLI during manual or agent QA,
+follow [cli-testing.md](cli-testing.md).
+
 For an intentionally unlogged interactive invocation, use `mise exec -- bun`
 rather than an ambient Bun installation. Agent-operated validation should use
 the logged form above.

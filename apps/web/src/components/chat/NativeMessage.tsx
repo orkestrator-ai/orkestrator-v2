@@ -16,7 +16,10 @@ import {
   messageHasVisibleContent,
   normalizeNativeMessage,
 } from "@/lib/chat/native-message-adapters";
-import { PEER_MAIL_MESSAGE_PREFIX } from "@/lib/chat/client-only-messages";
+import {
+  PEER_MAIL_MESSAGE_PREFIX,
+  splitPeerMailNativeMessageContent,
+} from "@/lib/chat/client-only-messages";
 import { toolUseIdFromImagePartId } from "@orkestrator/protocol/transcript-part-ids";
 import {
   AgentPlatformContext,
@@ -28,9 +31,12 @@ import {
   UserPromptEvidenceContext,
   type NativeMessageProps,
 } from "./NativeMessage.shared";
+import { mailMarkdownComponents } from "@/components/agent-mail/mail-markdown-components";
 import { MessagePart } from "./NativeMessage.renderer";
 import { JsonPayloadPart } from "./JsonPayloadPart";
 import { TextPart } from "./NativeMessage.file-parts";
+import { MessageMarkdown } from "./MessageMarkdown";
+import type { Components } from "react-markdown";
 import { structuredReviewJsonPayload } from "@/lib/chat/json-payload";
 import { WebAnnotationRequestChip, webAnnotationMarkerFor } from "./WebAnnotationRequestChip";
 
@@ -158,18 +164,18 @@ export const NativeMessage = memo(function NativeMessage({
   }
 
   if (isPeerMail) {
-    const [heading, warning, ...body] = message.content.split("\n");
+    const { heading, warning, body } = splitPeerMailNativeMessageContent(message.content);
     return (
       <div className="px-2 py-3 @sm:px-4">
         <div className="mx-auto max-w-3xl rounded-lg border border-cyan-400/20 bg-cyan-400/[0.035] p-3">
           <p className="text-xs font-medium text-cyan-200">{heading}</p>
           <p className="mt-1 text-[11px] text-muted-foreground">{warning}</p>
-          <p
+          <div
             data-agent-chat-search-content="true"
-            className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed"
+            className="mt-3 min-w-0 break-words [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0"
           >
-            {body.join("\n").trimStart()}
-          </p>
+            <MessageMarkdown content={body} components={peerMailMarkdownComponents} />
+          </div>
         </div>
       </div>
     );
@@ -299,6 +305,17 @@ export const NativeMessage = memo(function NativeMessage({
     </ToolDetailLoaderContext.Provider>
   );
 });
+
+/**
+ * Use the inbox's link policy for untrusted peer mail: sender paths remain
+ * copyable text. Keep the inline card's image text aligned with search.
+ */
+const peerMailMarkdownComponents: Components = {
+  ...mailMarkdownComponents,
+  img: ({ alt, src }) => (
+    <span data-peer-mail-image="true">{alt || (typeof src === "string" ? src : "")}</span>
+  ),
+};
 
 function renderMessageParts(
   message: NativeMessageType,

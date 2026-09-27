@@ -1,4 +1,5 @@
 import { marked, Renderer, type Tokens } from "marked";
+import { parseLocalFileLinkTarget } from "@/lib/chat/file-url";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import {
@@ -7,6 +8,10 @@ import {
   structuredReviewJsonPayload,
 } from "@/lib/chat/json-payload";
 import { userPromptPresentation } from "@/lib/chat/user-prompt-display";
+import {
+  PEER_MAIL_MESSAGE_PREFIX,
+  splitPeerMailNativeMessageContent,
+} from "@/lib/chat/client-only-messages";
 
 class SearchTextRenderer extends Renderer {
   override space(): string {
@@ -97,7 +102,7 @@ class SearchTextRenderer extends Renderer {
     return this.parser.parseInline(tokens);
   }
 
-  override image(): string {
+  override image(_token: Tokens.Image): string {
     // Image alt text is not a searchable DOM text node.
     return "";
   }
@@ -107,14 +112,30 @@ class SearchTextRenderer extends Renderer {
   }
 }
 
-const searchTextRenderer = new SearchTextRenderer();
+/** Peer mail renders each image as its alt text (or URL) rather than loading it. */
+class PeerMailSearchTextRenderer extends SearchTextRenderer {
+  override link({ tokens, href }: Tokens.Link): string {
+    const label = this.parser.parseInline(tokens);
+    return parseLocalFileLinkTarget(href) ? `${label} ${href}` : label;
+  }
 
-export function markdownToAgentSearchText(markdown: string): string {
+  override image({ text, href }: Tokens.Image): string {
+    return text || href;
+  }
+}
+
+const searchTextRenderer = new SearchTextRenderer();
+const peerMailSearchTextRenderer = new PeerMailSearchTextRenderer();
+
+export function markdownToAgentSearchText(
+  markdown: string,
+  renderer: Renderer = searchTextRenderer,
+): string {
   if (!markdown) return "";
 
   try {
     const rendered = marked.parse(markdown, {
-      renderer: searchTextRenderer,
+      renderer,
       gfm: true,
       breaks: true,
       async: false,
@@ -185,6 +206,14 @@ function userTextPartSearchText(
  * system/error/legacy messages without text parts.
  */
 export function getNativeMessageSearchText(message: NativeMessage): string {
+  // A peer-mail card only tags its Markdown body as searchable content.
+  if (message.id.startsWith(PEER_MAIL_MESSAGE_PREFIX)) {
+    return markdownToAgentSearchText(
+      splitPeerMailNativeMessageContent(message.content).body,
+      peerMailSearchTextRenderer,
+    );
+  }
+
   if (
     message.role === "system" ||
     message.id.startsWith("system-") ||

@@ -41,7 +41,12 @@ import {
   hasUnusedInitialRun,
   prewarmCursorWorkspace,
 } from "./sdk-runtime.js";
-import { boundTranscript, boundTranscriptDuringStreaming, chargeTranscript } from "./transcript.js";
+import {
+  boundTranscript,
+  boundTranscriptDuringStreaming,
+  chargeTranscript,
+  rewindTranscriptTo,
+} from "./transcript.js";
 import { applyInteractionUpdate } from "./translate.js";
 import {
   assertSessionOpen,
@@ -807,13 +812,8 @@ async function rewindOwned(state: SessionState, messageId: string): Promise<void
     await store.runEvents.delete({ filter: { runIds: discardedRunIds } });
     await store.runs.delete({ filter: { agentIds: [state.agentId], runIds: discardedRunIds } });
   }
-  const transcriptIndex = state.messages.findIndex((message) => message.id === messageId);
-  state.messages.splice(transcriptIndex);
-  state.openTextParts.clear();
-  state.currentAssistantMessageId = undefined;
-  state.transcriptEpoch = (state.transcriptEpoch ?? 0) + 1;
+  rewindTranscriptTo(state, messageId);
   state.error = undefined;
-  state.revision += 1;
   boundTranscript(state);
 }
 

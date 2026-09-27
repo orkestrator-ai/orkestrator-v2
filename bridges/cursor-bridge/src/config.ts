@@ -142,6 +142,21 @@ export const MAX_TOOL_ARGUMENT_BYTES = 512 * 1024;
 export const MAX_TOOL_OUTPUT_BYTES = 512 * 1024;
 export const MAX_TOOL_DIFF_BYTES = 1024 * 1024;
 export const MAX_TOOL_TITLE_BYTES = 4 * 1024;
+/**
+ * Display parts one sub-agent may hold inside its parent's message, by count
+ * and by encoded bytes. Nested activity lands in the same message as the
+ * launch card, so without these a single chatty child could fill the whole
+ * per-message budget and push its own launch card, its siblings and the
+ * parent's prose out of the window.
+ */
+export const MAX_CHILD_PARTS_PER_TASK = 128;
+export const MAX_CHILD_BYTES_PER_TASK = Math.min(
+  4 * 1024 * 1024,
+  Math.floor(MAX_TRANSCRIPT_BYTES / 4),
+);
+/** Items one todo card keeps, and the bytes of each item's text. */
+export const MAX_TODO_ITEMS = 128;
+export const MAX_TODO_TEXT_BYTES = 2 * 1024;
 export const MAX_MODEL_ID_BYTES = 1_024;
 /** Tool names retained from a run's `system` message, for the runtime panel. */
 export const MAX_RUN_TOOL_NAMES = 128;

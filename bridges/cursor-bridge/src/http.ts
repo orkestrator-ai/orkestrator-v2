@@ -85,7 +85,12 @@ import {
   readBridgePromptCommandFields,
   type BridgeCommandCatalogueResponse,
 } from "@orkestrator/protocol/agent-command-catalogue";
-import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
+import {
+  boundTranscript,
+  boundTranscriptForRead,
+  chargeTranscript,
+  transcriptBoundSummary,
+} from "./transcript.js";
 import {
   applyComposerPatch,
   createSession,
@@ -487,6 +492,9 @@ async function routeSession(
       summary: { ...publicRuntime(state), steer: steerJournalSummary(state) },
       ...state.health.snapshot(),
       ...(mcpConfig ? { mcpConfig } : {}),
+      // Producer-side display-bound counters: how often the bound ran, what
+      // it dropped and its slowest check. Counts and limits only.
+      transcriptBounds: transcriptBoundSummary(state),
     });
   }
   if (action === "dispatch" && request.method === "GET") {

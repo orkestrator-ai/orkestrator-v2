@@ -116,8 +116,29 @@ export function applyInteractionUpdate(
   update: unknown,
   context: UpdateContext = {},
 ): void {
-  applyUpdate(state, update, context);
-  boundTranscriptDuringStreaming(state);
+  const grown = new Set<string>();
+  const outer = grownParents;
+  grownParents = grown;
+  try {
+    applyUpdate(state, update, context);
+  } finally {
+    grownParents = outer;
+  }
+  boundTranscriptDuringStreaming(state, grown);
+}
+
+/**
+ * Sub-agents that gained a display part during the update being applied.
+ *
+ * Only a new nested part can raise a child's count, so the per-child bound
+ * checks exactly these once the whole update has landed, rather than every
+ * child on every token. Set for the duration of one synchronous
+ * `applyInteractionUpdate` call.
+ */
+let grownParents: Set<string> | undefined;
+
+function noteNestedPart(parentTaskUseId: string | undefined): void {
+  if (parentTaskUseId) grownParents?.add(parentTaskUseId);
 }
 
 function applyUpdate(state: SessionState, update: unknown, context: UpdateContext): void {
@@ -224,6 +245,7 @@ function applyTextDelta(
     message.parts.push(part);
     state.openTextParts.set(openTextKey(kind, context.parentTaskUseId), part.sourcePartId);
     chargeNewEntry(state, part);
+    noteNestedPart(context.parentTaskUseId);
   }
 
   // `content` is the flat text the transcript exposes as the message body.
@@ -885,6 +907,7 @@ function upsertToolPart(
   };
   message.parts.push(part);
   chargeNewEntry(state, part);
+  noteNestedPart(parentTaskUseId);
   return part;
 }
 

@@ -144,30 +144,74 @@ while read -r ip; do
 done < <(dig +short A api.github.com | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/')
 iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
 
-# Fetch GitHub meta information and aggregate + add their IP ranges
-echo "Fetching GitHub IP ranges..."
-gh_ranges=$(curl -fsS --max-time 20 https://api.github.com/meta)
-if [ -z "$gh_ranges" ]; then
+# GitHub's published web/api/git ranges. In order: the backend's hourly seed
+# when it is under a day old (no call to GitHub at all), a live fetch of
+# api.github.com/meta (cached in this container), or this container's last good
+# copy when under seven days old. The endpoint allows 60 unauthenticated calls
+# an hour per address, so fetching on every boot makes restarts fail closed
+# under load. With nothing valid the firewall still fails.
+GITHUB_SEED=/etc/orkestrator-seed/github-ranges
+GITHUB_CACHE=/var/lib/orkestrator/github-ranges
+GITHUB_SOURCE=""
+
+ranges_fresh_within() {
+    local file="$1" max_age="$2" header stamp fetched
+    [ -f "$file" ] && [ ! -L "$file" ] || return 1
+    IFS= read -r header < "$file" || return 1
+    stamp="${header#\# github-ranges }"
+    [ "$stamp" != "$header" ] || return 1
+    fetched=$(date -d "$stamp" +%s 2>/dev/null) || return 1
+    [ $(( $(date +%s) - fetched )) -le "$max_age" ]
+}
+
+load_github_ranges() {
+    local file="$1" cidr count=0
+    while IFS= read -r cidr; do
+        case "$cidr" in '#'*|'') continue ;; esac
+        if [[ ! "$cidr" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+            echo "ERROR: Invalid CIDR range in GitHub ranges: $cidr"
+            return 1
+        fi
+        # The bootstrap above already added api.github.com's own /32, which the
+        # published ranges usually repeat verbatim.
+        ipset add -exist allowed-domains "$cidr"
+        count=$((count + 1))
+    done < "$file"
+    [ "$count" -gt 0 ]
+}
+
+fetch_github_ranges() {
+    local gh_ranges tmp
+    echo "Fetching GitHub IP ranges..."
+    gh_ranges=$(curl -fsS --max-time 20 https://api.github.com/meta) || return 1
+    [ -n "$gh_ranges" ] || return 1
+    if ! echo "$gh_ranges" | jq -e '.web and .api and .git' >/dev/null; then
+        echo "ERROR: GitHub API response missing required fields"
+        return 1
+    fi
+    mkdir -p "$(dirname "$GITHUB_CACHE")"
+    tmp="$GITHUB_CACHE.tmp.$$"
+    {
+        echo "# github-ranges $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$'
+    } > "$tmp" || return 1
+    mv -f "$tmp" "$GITHUB_CACHE"
+}
+
+echo "Processing GitHub IPs..."
+if ranges_fresh_within "$GITHUB_SEED" 86400 && load_github_ranges "$GITHUB_SEED"; then
+    GITHUB_SOURCE=seed
+elif fetch_github_ranges && load_github_ranges "$GITHUB_CACHE"; then
+    GITHUB_SOURCE=live
+elif ranges_fresh_within "$GITHUB_SEED" 604800 && load_github_ranges "$GITHUB_SEED"; then
+    GITHUB_SOURCE=seed-stale
+elif ranges_fresh_within "$GITHUB_CACHE" 604800 && load_github_ranges "$GITHUB_CACHE"; then
+    GITHUB_SOURCE=cached
+else
     echo "ERROR: Failed to fetch GitHub IP ranges"
     exit 1
 fi
-
-if ! echo "$gh_ranges" | jq -e '.web and .api and .git' >/dev/null; then
-    echo "ERROR: GitHub API response missing required fields"
-    exit 1
-fi
-
-echo "Processing GitHub IPs..."
-while read -r cidr; do
-    if [[ ! "$cidr" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
-        echo "ERROR: Invalid CIDR range from GitHub meta: $cidr"
-        exit 1
-    fi
-    echo "Adding GitHub range $cidr"
-    # The bootstrap above already added api.github.com's own /32, which the
-    # published ranges usually repeat verbatim.
-    ipset add -exist allowed-domains "$cidr"
-done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
+echo "GitHub ranges from: $GITHUB_SOURCE"
 
 # Parse ALLOWED_DOMAINS environment variable (comma-separated)
 # Fall back to default domains if not set
@@ -336,13 +380,15 @@ else
     echo "Firewall verification passed - unable to reach https://example.com as expected"
 fi
 
-# Verify GitHub API access
-if ! curl --connect-timeout 5 https://api.github.com/zen >/dev/null 2>&1; then
-    echo "ERROR: Firewall verification failed - unable to reach https://api.github.com"
+# Verify GitHub is reachable. Any HTTP answer proves the path is open; the
+# web host is used rather than the API, whose unauthenticated calls count
+# against a 60-an-hour budget per address.
+if ! curl -sS -o /dev/null --connect-timeout 5 --max-time 15 https://github.com/ >/dev/null 2>&1; then
+    echo "ERROR: Firewall verification failed - unable to reach https://github.com"
     exit 1
 else
-    echo "Firewall verification passed - able to reach https://api.github.com as expected"
+    echo "Firewall verification passed - able to reach https://github.com as expected"
 fi
 
-write_status "{\"policy\":$NETWORK_POLICY,\"mode\":\"restricted\",\"state\":\"applied\",\"appliedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"resolvedDomains\":$RESOLVED_DOMAINS,\"unresolvedDomains\":$UNRESOLVED_DOMAINS,\"allowedEntries\":$(ipset list allowed-domains | awk '/^Members:/ { members = 1; next } members && NF { count++ } END { print count + 0 }'),\"hostServicePorts\":\"$HOST_SERVICE_PORTS\",\"ipv6\":\"$IPV6_STATE\"}"
+write_status "{\"policy\":$NETWORK_POLICY,\"mode\":\"restricted\",\"state\":\"applied\",\"appliedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"resolvedDomains\":$RESOLVED_DOMAINS,\"unresolvedDomains\":$UNRESOLVED_DOMAINS,\"allowedEntries\":$(ipset list allowed-domains | awk '/^Members:/ { members = 1; next } members && NF { count++ } END { print count + 0 }'),\"hostServicePorts\":\"$HOST_SERVICE_PORTS\",\"ipv6\":\"$IPV6_STATE\",\"githubRanges\":\"$GITHUB_SOURCE\"}"
 trap - ERR

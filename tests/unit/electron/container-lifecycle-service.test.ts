@@ -479,3 +479,32 @@ describe("runtime generation binding", () => {
     ).rejects.toThrow("invalid-request");
   });
 });
+
+describe("operation phase timing", () => {
+  test("a completed operation records its monotonic duration and per-phase times", async () => {
+    const { context, environments } = memoryLifecycleContext(
+      [lifecycleEnvironment()],
+      await dataDir(),
+    );
+    const admission = await beginContainerOperation(context, "env-lifecycle", "start");
+    if (admission.kind !== "begun") throw new Error("not admitted");
+    const { operationId } = admission.operation;
+    await Bun.sleep(15);
+    await advanceContainerOperation(context, "env-lifecycle", operationId, { phase: "creating" });
+    await Bun.sleep(15);
+    await advanceContainerOperation(context, "env-lifecycle", operationId, { phase: "starting" });
+    await completeContainerOperation(context, "env-lifecycle", operationId, "succeeded");
+    const outcome = record(environments.get("env-lifecycle")!).outcomes.at(-1)!;
+    expect(outcome.durationMs).toBeGreaterThanOrEqual(25);
+    expect(outcome.phases?.map((entry) => entry.phase)).toEqual([
+      "requested",
+      "creating",
+      "starting",
+    ]);
+    expect(outcome.phases?.[0]?.ms).toBeGreaterThanOrEqual(10);
+    // Durations only: nothing about the work itself.
+    expect(Object.keys(outcome).sort()).toEqual(
+      ["completedAt", "durationMs", "kind", "operationId", "phases", "status"].sort(),
+    );
+  });
+});

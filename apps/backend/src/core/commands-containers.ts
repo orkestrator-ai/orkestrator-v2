@@ -87,6 +87,7 @@ import { ContainerLifecycleError, findOperationContainers } from "./container-li
 import { detectDockerTopology, imageCapabilities } from "./docker-image.js";
 import { storageMountArguments } from "./container-storage.js";
 import { ensureEnvironmentNetwork, ingressPorts } from "./container-network.js";
+import { githubRangesSeed } from "./github-ranges-cache.js";
 import {
   dockerCapacity,
   logDriverArguments,
@@ -438,6 +439,18 @@ export async function createDockerContainer(
   ) {
     const network = await ensureEnvironmentNetwork(context, environment.id);
     const servicePort = context.agentTools?.servicePort?.() ?? null;
+    // GitHub's ranges, fetched at most hourly by the backend, so restricted
+    // boots and restarts do not each call GitHub's rate-limited endpoint.
+    const githubSeed =
+      environment.networkAccessMode === "full"
+        ? null
+        : await githubRangesSeed(context.storage.getDataDir());
+    if (githubSeed) {
+      args.push(
+        "--mount",
+        `type=bind,src=${githubSeed},dst=/etc/orkestrator-seed/github-ranges,readonly`,
+      );
+    }
     args.push(
       "--network",
       network,

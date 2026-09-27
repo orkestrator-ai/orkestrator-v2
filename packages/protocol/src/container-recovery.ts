@@ -165,5 +165,7 @@ export interface EnvironmentNetworkPolicy {
     allowedEntries: number | null;
     hostServicePorts: string | null;
     ipv6: "blocked" | "disabled" | null;
+    /** Where GitHub's ranges came from: backend seed, live fetch or cache. */
+    githubRanges: "seed" | "live" | "seed-stale" | "cached" | null;
   } | null;
 }

@@ -110,11 +110,25 @@ function commandFailureOutcome(error: unknown): {
   };
 }
 
+/**
+ * Subprocesses started through `runCommand`, by program name. Counts only —
+ * never arguments — so benchmarks can report how many Docker calls a scenario
+ * costs.
+ */
+const commandInvocations = new Map<string, number>();
+
+export function commandInvocationCount(command: string): number {
+  return commandInvocations.get(command) ?? 0;
+}
+
 async function runCommandBytes(
   command: string,
   args: string[] = [],
   options: RunCommandOptions = {},
 ): Promise<ExecBufferResult> {
+  if (commandInvocations.size < 64 || commandInvocations.has(command)) {
+    commandInvocations.set(command, (commandInvocations.get(command) ?? 0) + 1);
+  }
   // The one boundary every `runCommand` spawn crosses, so each process is
   // counted exactly once and charged to whichever recurring job caused it.
   recurringWorkMetrics.work(spawnWorkUnit(command, args));

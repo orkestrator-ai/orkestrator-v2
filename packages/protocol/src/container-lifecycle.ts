@@ -308,6 +308,12 @@ export interface ContainerOperationOutcome {
   status: ContainerOperationStatus;
   completedAt: string;
   failureCode?: ContainerOperationRecord["failureCode"];
+  /**
+   * Monotonic wall time from admission to completion, and per phase, when the
+   * operation ran start to finish in one process. Durations only.
+   */
+  durationMs?: number;
+  phases?: Array<{ phase: string; ms: number }>;
 }
 
 export type ContainerBootPhase =
@@ -566,6 +572,17 @@ function parseOutcome(value: unknown): ContainerOperationOutcome | undefined {
   };
   const failureCode = boundedString(value.failureCode, 64);
   if (failureCode) outcome.failureCode = failureCode as ContainerOperationOutcome["failureCode"];
+  const durationMs = nonNegativeInteger(value.durationMs);
+  if (durationMs !== undefined) outcome.durationMs = durationMs;
+  if (Array.isArray(value.phases)) {
+    const phases = value.phases.slice(0, 16).flatMap((entry) => {
+      if (!isRecord(entry)) return [];
+      const phase = boundedString(entry.phase, 64);
+      const ms = nonNegativeInteger(entry.ms);
+      return phase && ms !== undefined ? [{ phase, ms }] : [];
+    });
+    if (phases.length > 0) outcome.phases = phases;
+  }
   return outcome;
 }
 

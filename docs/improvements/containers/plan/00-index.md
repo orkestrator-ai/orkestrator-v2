@@ -38,7 +38,7 @@ combine the whole row into one large change.
 | 10 | [Resource budgets and usage telemetry](10-resource-budgets-and-usage-telemetry.md) | 02, 03, 04 | Implemented, in review | Configurable limits and truthful bounded usage snapshots |
 | 11 | [Bounded logs and diagnostic subscriptions](11-bounded-logs-and-diagnostic-subscriptions.md) | 02, 04 | Implemented, in review | Rotated logs, bounded tails and owned log followers |
 | 12 | [Image build and release delivery](12-image-build-and-release-delivery.md) | 03 | Implemented, in review | Multi-stage builds, reproducible artifacts and compatibility checks |
-| 13 | [Performance baselines and targeted optimization](13-performance-baselines-and-targeted-optimization.md) | 06, 08–12 | Not started | Comparable measurements and evidence-based optimization decisions |
+| 13 | [Performance baselines and targeted optimization](13-performance-baselines-and-targeted-optimization.md) | 06, 08–12 | Implemented, in review | Comparable measurements and evidence-based optimization decisions |
 | 14 | [Integrated qualification and rollout](14-integrated-qualification-and-rollout.md) | 01–13 | Not started | Cross-platform failure matrix, staged adoption and release evidence |
 
 Step 12 can introduce the build structure after step 03; its final image must

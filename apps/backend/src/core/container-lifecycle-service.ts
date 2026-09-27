@@ -61,6 +61,28 @@ export class ContainerLifecycleError extends Error {
 /** Operations executing in this process, keyed `${registry}:${operationId}`. */
 const activeOperations = new Set<string>();
 
+/**
+ * Monotonic phase clocks for operations admitted by this process. Only
+ * durations are ever recorded; an operation reconciled after a restart has no
+ * clock and reports none.
+ */
+const MAX_TIMED_PHASES = 16;
+const operationClocks = new Map<
+  string,
+  { start: number; last: number; phase: string; phases: Array<{ phase: string; ms: number }> }
+>();
+
+function markPhase(key: string, phase: string | undefined): void {
+  const clock = operationClocks.get(key);
+  if (!clock || !phase || phase === clock.phase) return;
+  const now = performance.now();
+  if (clock.phases.length < MAX_TIMED_PHASES) {
+    clock.phases.push({ phase: clock.phase, ms: Math.round(now - clock.last) });
+  }
+  clock.phase = phase;
+  clock.last = now;
+}
+
 function activeKey(context: LifecycleContext, operationId: string): string {
   return `${dockerOwnerNamespace(context.storage.getDataDir())}:${operationId}`;
 }
@@ -196,6 +218,13 @@ export async function beginContainerOperation(
   const next = nextRecord(record);
   next.operation = operation;
   activeOperations.add(activeKey(context, operation.operationId));
+  const started = performance.now();
+  operationClocks.set(activeKey(context, operation.operationId), {
+    start: started,
+    last: started,
+    phase: operation.phase,
+    phases: [],
+  });
   try {
     environment = await persist(context, environmentId, next);
   } catch (error) {
@@ -313,6 +342,7 @@ export async function advanceContainerOperation(
   const operation = currentOperation(record, operationId);
   applyPatch(record, operation, patch, new Date().toISOString());
   record.operation = operation;
+  markPhase(activeKey(context, operationId), patch.phase);
   return persist(context, environmentId, record, patch.environment);
 }
 
@@ -354,6 +384,9 @@ export async function completeContainerOperation(
     applyPatch(record, operation, patch, now);
     operation.status = status;
     if (patch.failureCode) operation.failureCode = patch.failureCode;
+    const key = activeKey(context, operationId);
+    markPhase(key, patch.phase ?? "completed");
+    const clock = operationClocks.get(key);
     if (status === "needs-attention") {
       record.operation = operation;
     } else {
@@ -364,11 +397,18 @@ export async function completeContainerOperation(
         status,
         completedAt: now,
         ...(operation.failureCode ? { failureCode: operation.failureCode } : {}),
+        ...(clock
+          ? {
+              durationMs: Math.round(performance.now() - clock.start),
+              ...(clock.phases.length > 0 ? { phases: clock.phases } : {}),
+            }
+          : {}),
       });
     }
     return await persist(context, environmentId, record, patch.environment);
   } finally {
     activeOperations.delete(activeKey(context, operationId));
+    operationClocks.delete(activeKey(context, operationId));
   }
 }
 

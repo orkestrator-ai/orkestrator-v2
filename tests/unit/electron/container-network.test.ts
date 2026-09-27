@@ -141,6 +141,7 @@ exit 0
       allowedEntries: 40,
       hostServicePorts: "41234",
       ipv6: "blocked",
+      githubRanges: null,
     });
     expect(parseFirewallStatus("not json")).toBeNull();
     expect(parseFirewallStatus('{"mode":"open"}')).toBeNull();

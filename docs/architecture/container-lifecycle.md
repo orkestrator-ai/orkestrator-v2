@@ -407,6 +407,13 @@ three policy inputs the root bootstrap captures once, root-owned:
 | `/etc/orkestrator/host-service-ports` | Host TCP ports the workload may call (the agent-tools port) |
 | `/etc/orkestrator/ingress-ports` | Container ports Docker publishes (bridges, entry and mapped ports) |
 
+GitHub's published ranges come from a backend seed (`github-ranges-cache.ts`,
+refreshed at most hourly and mounted read-only at
+`/etc/orkestrator-seed/github-ranges`) when it is under a day old, else a live
+fetch cached in the container, else either copy under a week old; with none
+the firewall fails closed. Reachability is verified against `github.com`, not
+the rate-limited API. The report's `githubRanges` says which source applied.
+
 In restricted mode `init-firewall.sh` then allows the host only on those ports
 (gateway and `host.docker.internal` addresses) instead of the gateway `/24`,
 accepts new inbound connections only on the published ports, drops IPv6 except

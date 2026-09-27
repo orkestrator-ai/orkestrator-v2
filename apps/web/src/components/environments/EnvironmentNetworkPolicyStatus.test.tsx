@@ -27,6 +27,7 @@ const base: EnvironmentNetworkPolicy = {
     allowedEntries: 40,
     hostServicePorts: "41234",
     ipv6: "blocked",
+    githubRanges: "seed",
   },
 };
 

@@ -92,9 +92,16 @@ copy_stream() {
 
 verify() {
     local dst="$1"
+    # Hash in batches (one sha256sum per few hundred files, not a shell per
+    # file) and join the digests to each file's path, mode and size.
     (
         cd "$dst" || exit 1
-        find . -type f ! -path './.orkestrator/storage-marker.json' -printf '%P\t%#m\t%s\t' -exec sh -c 'sha256sum "$1" | cut -d" " -f1' _ {} \;
+        find . -type f ! -path './.orkestrator/storage-marker.json' -printf '%P\t%#m\t%s\n' | LC_ALL=C sort > "$WORK/dest.meta"
+        find . -type f ! -path './.orkestrator/storage-marker.json' -print0 \
+            | xargs -0 -r -n 256 sha256sum \
+            | sed -E 's#^([0-9a-f]{64})  \./#\1\t#' \
+            | awk -F'\t' '{ print $2 "\t" $1 }' | LC_ALL=C sort > "$WORK/dest.sums"
+        LC_ALL=C join -t "$(printf '\t')" "$WORK/dest.meta" "$WORK/dest.sums"
     ) | sort > "$WORK/dest.files"
     # The storage marker is written by init, not copied.
     grep -v -P '^\.orkestrator/storage-marker\.json\t' "$WORK/source.files" | sed 's#^\./##' | sort > "$WORK/source.sorted"

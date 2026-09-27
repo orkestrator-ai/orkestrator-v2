@@ -194,6 +194,13 @@ export function parseFirewallStatus(text: string): EnvironmentNetworkPolicy["eff
         ? value.hostServicePorts
         : null,
     ipv6: value.ipv6 === "blocked" || value.ipv6 === "disabled" ? value.ipv6 : null,
+    githubRanges:
+      value.githubRanges === "seed" ||
+      value.githubRanges === "live" ||
+      value.githubRanges === "seed-stale" ||
+      value.githubRanges === "cached"
+        ? value.githubRanges
+        : null,
   };
 }
 

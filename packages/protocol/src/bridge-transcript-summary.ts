@@ -149,6 +149,30 @@ export function isBridgeDetailLocator(value: unknown): value is string {
   return typeof value === "string" && decodeLocator(value) !== undefined;
 }
 
+const DETAIL_FIELDS: ReadonlySet<string> = new Set([
+  "toolOutput",
+  "toolError",
+  "toolDiff",
+  "fileDataUrl",
+]);
+
+/** A summary part's `detail`, validated, or undefined when absent or malformed. */
+export function readBridgePartDetail(value: unknown): BridgePartDetail | undefined {
+  if (!isRecord(value) || !isBridgeDetailLocator(value.locator)) return undefined;
+  if (!Number.isSafeInteger(value.bytes) || (value.bytes as number) < 0) return undefined;
+  if (!Array.isArray(value.fields) || value.fields.length === 0 || value.fields.length > 4) {
+    return undefined;
+  }
+  if (!value.fields.every((field) => typeof field === "string" && DETAIL_FIELDS.has(field))) {
+    return undefined;
+  }
+  return {
+    locator: value.locator,
+    bytes: value.bytes as number,
+    fields: value.fields as BridgeDetailField[],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Detail extraction
 

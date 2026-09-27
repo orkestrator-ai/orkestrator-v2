@@ -1756,9 +1756,18 @@ export interface NativeAgentTranscriptView<TMessage = unknown> {
   title?: string;
   providerRevision?: number;
   historyCursor?: string;
+  /**
+   * `direct` when `historyCursor` pages this view's own `historyEpoch`
+   * straight from the provider (`get_native_agent_message_page` answers with
+   * the same epoch). Absent: the cursor belongs to the joined sync-v1 paging
+   * namespace, as before.
+   */
+  historyPaging?: NativeAgentHistoryPaging;
   historyEpoch: string;
   historyComplete: boolean;
 }
+
+export type NativeAgentHistoryPaging = "direct";
 
 /** Action-critical state which is safe to apply without transcript/discovery. */
 export interface NativeAgentSessionStateView {
@@ -1865,6 +1874,7 @@ export interface NativeAgentTranscriptDelta<TMessage = unknown> {
   historyEpoch: string;
   historyComplete: boolean;
   historyCursor?: string;
+  historyPaging?: NativeAgentHistoryPaging;
   title?: string;
   messageWindow?: NativeAgentMessageWindow;
   providerRevision?: number;
@@ -2236,6 +2246,7 @@ function isNativeAgentTranscriptDelta(value: unknown): value is NativeAgentTrans
     typeof candidate.historyComplete !== "boolean" ||
     (candidate.historyCursor !== undefined &&
       (typeof candidate.historyCursor !== "string" || candidate.historyCursor.length > 1_024)) ||
+    (candidate.historyPaging !== undefined && candidate.historyPaging !== "direct") ||
     (candidate.liveMessageIds !== undefined &&
       (!Array.isArray(candidate.liveMessageIds) || candidate.liveMessageIds.length > 4_096))
   ) {
@@ -2292,6 +2303,8 @@ export function applyNativeAgentTranscriptDelta<TMessage>(
      * to `historyComplete` and to whatever paging state the consumer owns.
      */
     historyCursor: delta.historyCursor,
+    // Mirrors the cursor it describes, so it is authoritative in the same way.
+    historyPaging: delta.historyPaging,
     ...(delta.title === undefined ? {} : { title: delta.title }),
     ...(delta.messageWindow === undefined ? {} : { messageWindow: delta.messageWindow }),
     ...(delta.providerRevision === undefined ? {} : { providerRevision: delta.providerRevision }),
@@ -2335,7 +2348,10 @@ export function isNativeAgentTranscriptUpdate(
     typeof transcript.historyEpoch !== "string" ||
     transcript.historyEpoch.length === 0 ||
     transcript.historyEpoch.length > 128 ||
-    typeof transcript.historyComplete !== "boolean"
+    typeof transcript.historyComplete !== "boolean" ||
+    (transcript.historyCursor !== undefined &&
+      (typeof transcript.historyCursor !== "string" || transcript.historyCursor.length > 1_024)) ||
+    (transcript.historyPaging !== undefined && transcript.historyPaging !== "direct")
   ) {
     return false;
   }

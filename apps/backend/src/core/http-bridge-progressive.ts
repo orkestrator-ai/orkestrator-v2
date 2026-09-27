@@ -27,6 +27,10 @@ import {
   normalizeClaudeBackgroundTasks,
 } from "./http-bridge-claude-runtime.js";
 import type { HttpBridgeRuntimeMetadata } from "./http-bridge-runtime-metadata.js";
+import {
+  readHttpBridgeSummaryTranscript,
+  type HttpBridgeTranscriptCapabilities,
+} from "./http-bridge-transcript-v2.js";
 import { snapshotNotices } from "./http-bridge-runtime-health.js";
 import {
   assertOk,
@@ -80,9 +84,45 @@ export async function readHttpBridgeTranscriptSnapshot(input: {
   connection: BridgeConnection;
   fetchImpl: typeof fetch;
   sessionId: string;
-  options: { limit: number; targetBytes: number; knownSourceToken?: string };
+  options: {
+    limit: number;
+    targetBytes: number;
+    knownSourceToken?: string;
+    representation?: "summary";
+  };
   readLegacy: () => Promise<LegacyTranscriptSnapshot>;
+  /** Present when summaries may be requested; records what the bridge answered. */
+  capabilities?: HttpBridgeTranscriptCapabilities;
 }): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
+  const legacyFallback = async (): Promise<ProviderTranscriptSnapshot> => {
+    const legacy = await input.readLegacy();
+    return {
+      messages:
+        legacy.messages.length > input.options.limit
+          ? legacy.messages.slice(-input.options.limit)
+          : legacy.messages,
+      complete: !legacy.truncated && legacy.messages.length <= input.options.limit,
+      ...(legacy.revision === undefined ? {} : { revision: legacy.revision }),
+      freshness: "current",
+    };
+  };
+  if (
+    input.options.representation === "summary" &&
+    input.capabilities?.supports("summaries") === true
+  ) {
+    const summary = await readHttpBridgeSummaryTranscript(input);
+    if (summary.kind === "summary") {
+      input.capabilities.markSupported("summaries");
+      return summary.result;
+    }
+    // An older bridge ignored `version=2` and answered v1: that body is still
+    // a valid answer to this read, so use it rather than asking again.
+    input.capabilities.markUnsupported("summaries");
+    if (summary.response.status === 404 || summary.response.status === 405) {
+      return legacyFallback();
+    }
+    return mapV1TranscriptBody(input.agent, summary.body);
+  }
   const query = new URLSearchParams({
     version: "1",
     limit: String(input.options.limit),
@@ -95,33 +135,29 @@ export async function readHttpBridgeTranscriptSnapshot(input: {
     {},
     input.fetchImpl,
   );
-  if (response.status === 404 || response.status === 405) {
-    const legacy = await input.readLegacy();
-    return {
-      messages:
-        legacy.messages.length > input.options.limit
-          ? legacy.messages.slice(-input.options.limit)
-          : legacy.messages,
-      complete: !legacy.truncated && legacy.messages.length <= input.options.limit,
-      ...(legacy.revision === undefined ? {} : { revision: legacy.revision }),
-      freshness: "current",
-    };
-  }
+  if (response.status === 404 || response.status === 405) return legacyFallback();
   assertOk(response, `${input.agent} progressive transcript read`);
   const body = asRecord(
     await boundedJson(response, `${input.agent} progressive transcript read`, {
       remaining: 16 * 1024 * 1024,
     }),
   );
+  return mapV1TranscriptBody(input.agent, body);
+}
+
+function mapV1TranscriptBody(
+  agent: HttpBridgeAgent,
+  body: Record<string, unknown> | null | undefined,
+): ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string } {
   if (body?.status === "unchanged" && typeof body.token === "string") {
     return { unchanged: true, sourceToken: body.token };
   }
   if (body?.status !== "snapshot" || typeof body.token !== "string") {
-    throw new ProviderUnavailableError(`${input.agent} returned a malformed transcript update`);
+    throw new ProviderUnavailableError(`${agent} returned a malformed transcript update`);
   }
   const value = asRecord(body.value);
   if (!value || !Array.isArray(value.messages)) {
-    throw new ProviderUnavailableError(`${input.agent} returned a malformed transcript snapshot`);
+    throw new ProviderUnavailableError(`${agent} returned a malformed transcript snapshot`);
   }
   const generation =
     typeof value.generation === "string" || Number.isSafeInteger(value.generation)

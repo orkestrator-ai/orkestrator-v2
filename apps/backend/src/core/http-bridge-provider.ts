@@ -11,6 +11,8 @@ import type {
   ProviderExecutionMode,
   ProviderInteractiveSnapshot,
   ProviderSessionStateSnapshot,
+  ProviderTranscriptDetail,
+  ProviderTranscriptPage,
   ProviderTranscriptSnapshot,
   ProviderSendOptions,
   ProviderSessionObservation,
@@ -90,6 +92,11 @@ import {
   bridgePromptAttachments,
 } from "./http-bridge-transport.js";
 import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
+import {
+  HttpBridgeTranscriptCapabilities,
+  readHttpBridgeTranscriptDetail,
+  readHttpBridgeTranscriptPage,
+} from "./http-bridge-transcript-v2.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly agent: HttpBridgeAgent;
@@ -111,6 +118,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   /** Runtime inventory is optional UI metadata and must not delay transcripts. */
   private readonly runtimeMetadataRefreshes = new Map<string, Promise<void>>();
   private runtimeMetadataGeneration = 0;
+  /** What this bridge connection answered about transcript v2; see the module. */
+  private readonly transcriptCapabilities = new HttpBridgeTranscriptCapabilities();
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -548,7 +557,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
 
   async transcriptSnapshot(
     sessionId: string,
-    options: { limit: number; targetBytes: number; knownSourceToken?: string },
+    options: {
+      limit: number;
+      targetBytes: number;
+      knownSourceToken?: string;
+      representation?: "summary";
+    },
   ): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
     return readHttpBridgeTranscriptSnapshot({
       agent: this.agent,
@@ -557,7 +571,40 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       sessionId,
       options,
       readLegacy: () => this.readLegacyTranscript(sessionId),
+      capabilities: this.transcriptCapabilities,
     });
+  }
+
+  async transcriptDetail(
+    sessionId: string,
+    locator: string,
+  ): Promise<ProviderTranscriptDetail | undefined> {
+    if (!this.transcriptCapabilities.supports("details")) return undefined;
+    const detail = await readHttpBridgeTranscriptDetail({
+      agent: this.agent,
+      connection: this.connection,
+      fetchImpl: this.fetchImpl,
+      sessionId,
+      locator,
+    });
+    if (detail === undefined) this.transcriptCapabilities.markUnsupported("details");
+    return detail;
+  }
+
+  async transcriptPage(
+    sessionId: string,
+    options: { cursor: string; limit: number; targetBytes: number },
+  ): Promise<ProviderTranscriptPage | undefined> {
+    if (!this.transcriptCapabilities.supports("pages")) return undefined;
+    const page = await readHttpBridgeTranscriptPage({
+      agent: this.agent,
+      connection: this.connection,
+      fetchImpl: this.fetchImpl,
+      sessionId,
+      ...options,
+    });
+    if (page === undefined) this.transcriptCapabilities.markUnsupported("pages");
+    return page;
   }
 
   /** Legacy bounded message surface retained for older callers. */

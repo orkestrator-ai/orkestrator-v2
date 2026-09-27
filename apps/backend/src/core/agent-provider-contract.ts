@@ -392,7 +392,46 @@ export interface ProviderTranscriptSnapshot {
   freshness?: "cached" | "current";
   /** Provider/bridge conditional token; scoped to this source session/window. */
   sourceToken?: string;
+  /**
+   * `summary` when the provider already replaced large bodies with detail
+   * locators before windowing (bridge transcript v2). The window then measures
+   * lightweight rows, so a short one is not a sign of a raw artifact having
+   * pushed messages out, and details resolve through `transcriptDetail`.
+   */
+  representation?: "summary";
+  /** Provider page cursor for history before `historyStartIndex`, scoped to `historyEpoch`. */
+  historyCursor?: string;
 }
+
+/** One provider-served history page, positioned within a history epoch. */
+export type ProviderTranscriptPage =
+  | {
+      status: "page";
+      messages: unknown[];
+      historyStartIndex: number;
+      /** Cursor for the page before this one; absent when this page starts history. */
+      historyCursor?: string;
+      /** True when nothing before this page was ever lost. */
+      complete: boolean;
+      truncated: boolean;
+      historyEpoch: string;
+      representation: "summary";
+    }
+  /** The cursor's epoch or generation is gone; the reader must start over. */
+  | { status: "expired" };
+
+/** Exact detail behind a summary locator, or why it cannot be served. */
+export type ProviderTranscriptDetail =
+  | {
+      status: "ok";
+      detail: {
+        toolOutput?: string;
+        toolError?: string;
+        toolDiff?: Record<string, unknown>;
+        fileDataUrl?: string;
+      };
+    }
+  | { status: "missing" | "expired" | "too-large" };
 
 /**
  * Action-critical provider state without transcript or catalogue discovery.
@@ -530,8 +569,34 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
   /** Highest-priority bounded display read; never performs optional discovery. */
   transcriptSnapshot?(
     sessionId: string,
-    options: { limit: number; targetBytes: number; knownSourceToken?: string },
+    options: {
+      limit: number;
+      targetBytes: number;
+      knownSourceToken?: string;
+      /**
+       * Ask for lightweight summaries where the provider supports them. Only
+       * the native projection, which resolves detail locators, may ask: other
+       * consumers render the bodies inline.
+       */
+      representation?: "summary";
+    },
   ): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }>;
+  /**
+   * The exact body behind a summary part's locator. Undefined when this
+   * provider connection does not serve details (an older bridge).
+   */
+  transcriptDetail?(
+    sessionId: string,
+    locator: string,
+  ): Promise<ProviderTranscriptDetail | undefined>;
+  /**
+   * History before a summary snapshot's `historyCursor`, served directly by
+   * the provider. Undefined when this provider connection cannot page.
+   */
+  transcriptPage?(
+    sessionId: string,
+    options: { cursor: string; limit: number; targetBytes: number },
+  ): Promise<ProviderTranscriptPage | undefined>;
   /** Action-critical state read; never fetches transcript or optional discovery. */
   sessionStateSnapshot?(sessionId: string): Promise<ProviderSessionStateSnapshot>;
   /** Live, bounded model discovery for launch surfaces without a session yet. */

@@ -136,7 +136,10 @@ Protocol or storage decisions:
     may carry `messagePatches` instead of whole `messageUpserts`: per message,
     its non-part fields, `content` as {length, append} or {value}, and per
     part {keep: i} | {keep: i, length, append} (text appended to the kept
-    part's content, every other field identical) | {value: part}.
+    part's content, every other field identical) | {keep: i, set?, unset?,
+    field?, children?} (a few fields replaced/removed and at most one nested
+    part array — parts, childTools or subagentActions — patched recursively,
+    at most 4 levels; used only when clearly smaller) | {value: part}.
   - Base identity: a delta is only applied when the client's view token equals
     `baseToken`, which pins the exact previous version of every message the
     server diffed, so kept parts are addressed by index without a per-part
@@ -166,14 +169,12 @@ Before/after measurements (harness workload j, same machine, 40 observations;
     growing prose                         446,320 B -> 27,316 B  (0.061)
     30 completed tools + growing text     704,320 B -> 41,356 B  (0.059)
     tool-heavy turn                       352,760 B -> 32,840 B  (0.093)
-    sub-agent gaining one action per obs  237,645 B -> 214,925 B (0.904)
+    sub-agent gaining one action per obs  237,645 B -> 34,985 B  (0.147)
   No additional snapshots or recoveries in any workload.
-Decision: Adopt. Total bytes fall by 91-94% on three of four representative
+Decision: Adopt. Total bytes fall by 85-94% on all four representative
   workloads with no recovery regression; server CPU is one comparison per
   part of changed messages using the step-12 encoding memo.
-Remaining limitations: nested children (sub-agent actions, grouped tools) are
-  replaced as a whole part, which is why the nested workload saves only ~10%;
-  nested part operations are a possible follow-up. The bridge-to-backend hop
+Remaining limitations: the bridge-to-backend hop
   still carries lightweight summary snapshots (conditional on the source
   token) rather than patches; not measured as a separate cost. Compressed
   (encoded) bytes and multi-client remote runs were not measured.

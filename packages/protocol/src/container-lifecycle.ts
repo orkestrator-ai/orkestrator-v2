@@ -290,6 +290,20 @@ export interface ContainerBootRecord {
   failureCode?: string;
 }
 
+/** Maximum retained storage sets per environment (step 07). */
+export const MAX_RETAINED_STORAGE_SETS = 16;
+
+/** A storage set kept as a recovery copy after a replacement or reset. */
+export interface RetainedStorageSet {
+  storageSetId: string;
+  workspaceGeneration: number;
+  volumes: ContainerVolumeReference[];
+  retainedAt: string;
+  reason: "rebuild-source" | "workspace-reset" | "restore-source" | "failed-candidate";
+  /** Operation that retained it. */
+  operationId?: string;
+}
+
 export interface ContainerSetupRecord {
   runtimeGeneration: number;
   workspaceGeneration: number;
@@ -309,6 +323,13 @@ export interface EnvironmentContainerLifecycle {
   outcomes: ContainerOperationOutcome[];
   /** Last readiness observation for the current runtime (step 04). */
   boot?: ContainerBootRecord;
+  /** Recovery copies kept after replacement or reset; never evicted to fit a bound. */
+  retainedStorage?: RetainedStorageSet[];
+  /**
+   * Legacy containers kept stopped as the recovery copy of a migration
+   * (their writable layer is the only other copy of the workspace).
+   */
+  retainedRuntimes?: ContainerRuntimeIdentity[];
   /**
    * Which workspace/runtime the last successful setup belongs to. A completion
    * recorded for another generation does not count as setup of this one.
@@ -566,6 +587,38 @@ export function parseContainerLifecycle(value: unknown): ParsedContainerLifecycl
       const failureCode = boundedString(value.boot.failureCode, 64);
       if (failureCode) record.boot.failureCode = failureCode;
     }
+  }
+  if (Array.isArray(value.retainedStorage)) {
+    // Retained copies are never dropped to fit a bound: an unreadable entry is
+    // kept verbatim-enough (id + volumes) so its data stays referenced.
+    record.retainedStorage = value.retainedStorage.flatMap((entry) => {
+      if (!isRecord(entry)) return [];
+      const storageSetId = boundedString(entry.storageSetId, 128);
+      if (!storageSetId) return [];
+      const reason =
+        entry.reason === "rebuild-source" ||
+        entry.reason === "workspace-reset" ||
+        entry.reason === "restore-source" ||
+        entry.reason === "failed-candidate"
+          ? entry.reason
+          : "rebuild-source";
+      const retained: RetainedStorageSet = {
+        storageSetId,
+        workspaceGeneration: nonNegativeInteger(entry.workspaceGeneration) ?? 0,
+        volumes: parseStorage({ volumes: entry.volumes }).volumes ?? [],
+        retainedAt: boundedString(entry.retainedAt, 64) ?? new Date(0).toISOString(),
+        reason,
+      };
+      const operationId = boundedString(entry.operationId, 64);
+      if (operationId) retained.operationId = operationId;
+      return [retained];
+    });
+  }
+  if (Array.isArray(value.retainedRuntimes)) {
+    record.retainedRuntimes = value.retainedRuntimes.flatMap((entry) => {
+      const runtime = parseRuntime(entry);
+      return runtime ? [runtime] : [];
+    });
   }
   if (isRecord(value.setup)) {
     const runtimeGeneration = nonNegativeInteger(value.setup.runtimeGeneration);

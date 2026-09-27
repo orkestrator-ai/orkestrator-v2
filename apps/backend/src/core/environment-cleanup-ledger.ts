@@ -6,7 +6,13 @@ import path from "node:path";
  * Host-side resources a deleted environment can leave behind. Each step is
  * idempotent: running it against something already gone succeeds.
  */
-export const ENVIRONMENT_CLEANUP_STEPS = ["container", "worktree", "branch", "state-dirs"] as const;
+export const ENVIRONMENT_CLEANUP_STEPS = [
+  "container",
+  "volumes",
+  "worktree",
+  "branch",
+  "state-dirs",
+] as const;
 
 export type EnvironmentCleanupStep = (typeof ENVIRONMENT_CLEANUP_STEPS)[number];
 
@@ -31,6 +37,12 @@ export interface EnvironmentCleanupEntry {
   /** Branches worth checking for the merge test besides `origin/HEAD`. */
   baseBranches: string[];
   containerId: string | null;
+  /**
+   * Owner-labelled storage volumes of the environment. Removed only after the
+   * container is gone, and only while their labels still name this owner and
+   * environment.
+   */
+  volumes: string[];
   stateDirectories: string[];
   pending: EnvironmentCleanupStep[];
   attempts: number;
@@ -87,6 +99,7 @@ function parseEntry(value: unknown): EnvironmentCleanupEntry | null {
     createdFromCommit: stringOrNull(record.createdFromCommit),
     baseBranches: strings(record.baseBranches),
     containerId: stringOrNull(record.containerId),
+    volumes: strings(record.volumes).slice(0, 32),
     stateDirectories: strings(record.stateDirectories),
     pending: Array.isArray(record.pending) ? [...new Set(record.pending.filter(isStep))] : [],
     attempts:

@@ -74,12 +74,22 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!ENABLED) return;
-  const ids = (await docker(["ps", "-aq", "--filter", `label=${RUN_LABEL}`]).catch(() => ""))
-    .split("\n")
-    .filter(Boolean);
-  if (ids.length > 0) await docker(["rm", "-f", ...ids]).catch(() => undefined);
+  // Containers carry the run label or (when created by backend code under
+  // test) this run's private owner label; nothing else is touched.
+  const ids = new Set<string>();
+  for (const filter of [`label=${RUN_LABEL}`, `label=orkestrator-owner=${owner}`]) {
+    for (const id of (await docker(["ps", "-aq", "--filter", filter]).catch(() => "")).split(
+      "\n",
+    )) {
+      if (id) ids.add(id);
+    }
+  }
+  if (ids.size > 0) await docker(["rm", "-f", ...ids]).catch(() => undefined);
+  // Volumes are labelled with this run's private owner namespace.
   const volumes = (
-    await docker(["volume", "ls", "-q", "--filter", `label=${RUN_LABEL}`]).catch(() => "")
+    await docker(["volume", "ls", "-q", "--filter", `label=orkestrator-owner=${owner}`]).catch(
+      () => "",
+    )
   )
     .split("\n")
     .filter(Boolean);
@@ -168,6 +178,175 @@ describe("C11 explicit stop drains workload under init", () => {
       expect(Number(zombies)).toBe(0);
       await docker(["stop", "-t", "3", id]);
       expect(await docker(["inspect", "-f", "{{.State.Running}}", id])).toBe("false");
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});
+
+describe("C12 persistent workspace survives stop/start and runtime replacement", () => {
+  live(
+    "retains tracked, untracked, ignored, binary, modes, symlinks, branches and unpushed commits",
+    async () => {
+      const { memoryLifecycleContext, lifecycleEnvironment } =
+        await import("./container-lifecycle-fixtures");
+      const { ensureStorageVolumes, initializeStorageSet, planStorageSet, storageMountArguments } =
+        await import("../../../apps/backend/src/core/container-storage");
+      const { resolveDockerImage } = await import("../../../apps/backend/src/core/docker-image");
+      const { context } = memoryLifecycleContext(
+        [lifecycleEnvironment({ id: `env-${RUN}` })],
+        dataDir,
+      );
+      const resolved = await resolveDockerImage(IMAGE);
+      if (resolved.kind !== "present") throw new Error("qualification image missing");
+      const storage = planStorageSet(`env-${RUN}`, owner, 1);
+      await ensureStorageVolumes(context, `env-${RUN}`, storage);
+      expect(await initializeStorageSet(context, resolved.imageId, `env-${RUN}`, storage)).toEqual({
+        ok: true,
+      });
+
+      const run = async (name: string) =>
+        docker([
+          "run",
+          "-d",
+          "--name",
+          `ork-${RUN}-${name}`,
+          "--label",
+          RUN_LABEL,
+          "--label",
+          "app=orkestrator-v2",
+          "--label",
+          `orkestrator-owner=${owner}`,
+          "--cap-add",
+          "NET_ADMIN",
+          "-e",
+          "NETWORK_MODE=full",
+          ...storageMountArguments(storage),
+          resolved.imageId,
+        ]);
+      const first = await run("c12-a");
+      await waitForContainerBoot(first);
+      const fixture = [
+        "set -e",
+        "cd /workspace",
+        "git init -q -b main . && git config user.email q@example.invalid && git config user.name q",
+        "printf 'tracked\\n' > tracked.txt && printf 'ignored.log\\n' > .gitignore",
+        "git add . && git commit -qm base",
+        "git checkout -qb feature && printf 'unpushed\\n' > feature.txt && git add feature.txt && git commit -qm unpushed",
+        "printf 'edited\\n' >> tracked.txt",
+        "printf 'untracked\\n' > untracked.txt && printf 'noise\\n' > ignored.log",
+        "head -c 4096 /dev/urandom > binary.bin && sha256sum binary.bin > /tmp/binary.sum",
+        "printf '#!/bin/sh\\n' > run.sh && chmod 750 run.sh",
+        "ln -s tracked.txt internal-link && ln -s /etc/hostname external-link",
+        "cat /tmp/binary.sum",
+      ].join("\n");
+      const binarySum = (await docker(["exec", first, "bash", "-c", fixture])).split(" ")[0];
+      const snapshot = [
+        "cd /workspace",
+        "git rev-parse HEAD feature main",
+        "git branch --show-current",
+        "git status --porcelain --ignored | sort",
+        "stat -c '%a' run.sh",
+        "readlink internal-link external-link",
+        "sha256sum binary.bin | cut -d' ' -f1",
+      ].join(" && ");
+      const before = await docker(["exec", first, "bash", "-c", snapshot]);
+      expect(before).toContain(binarySum!);
+
+      // Stop/start the same runtime.
+      await docker(["stop", "-t", "5", first]);
+      await docker(["start", first]);
+      await waitForContainerBoot(first);
+      expect(await docker(["exec", first, "bash", "-c", snapshot])).toBe(before);
+
+      // Replace the runtime entirely: the storage set is the workspace.
+      await docker(["rm", "-f", first]);
+      const second = await run("c12-b");
+      await waitForContainerBoot(second);
+      expect(await docker(["exec", second, "bash", "-c", snapshot])).toBe(before);
+      expect(
+        await docker(["exec", second, "sh", "-c", "mountpoint -q /workspace && echo mounted"]),
+      ).toBe("mounted");
+      await docker(["rm", "-f", second]);
+      await docker(["volume", "rm", ...(storage.volumes ?? []).map((volume) => volume.name)]);
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});
+
+describe("C12 backend-created runtime on persistent storage", () => {
+  live(
+    "mounts the workspace and every provider state path from the storage set",
+    async () => {
+      const { memoryLifecycleContext, lifecycleEnvironment } =
+        await import("./container-lifecycle-fixtures");
+      const { ensureStorageVolumes, initializeStorageSet, planStorageSet } =
+        await import("../../../apps/backend/src/core/container-storage");
+      const { PROVIDER_STATE_LAYOUT } =
+        await import("../../../apps/backend/src/core/container-state-layout");
+      const { createDockerContainer } =
+        await import("../../../apps/backend/src/core/commands-containers");
+      const { resolveDockerImage } = await import("../../../apps/backend/src/core/docker-image");
+      const environment = lifecycleEnvironment({
+        id: `env-${RUN}-created`,
+        networkAccessMode: "full",
+      });
+      const { context } = memoryLifecycleContext([environment], dataDir);
+      // No host credential directory is mounted into a qualification runtime.
+      Object.assign(context, { runtimeFlavor: "agent-test", credentialSources: new Set() });
+      Object.assign(context.storage, {
+        getProject: async () => ({
+          id: "project-1",
+          name: "Project",
+          gitUrl: "https://example.invalid/none.git",
+          localPath: null,
+          addedAt: new Date(0).toISOString(),
+          order: 0,
+        }),
+        loadConfig: async () => ({
+          version: "1.0.0",
+          global: { allowedDomains: [] },
+          repositories: {},
+        }),
+      });
+      const resolved = await resolveDockerImage(IMAGE);
+      if (resolved.kind !== "present") throw new Error("qualification image missing");
+      const storage = planStorageSet(environment.id, owner, 1);
+      await ensureStorageVolumes(context, environment.id, storage);
+      expect(
+        await initializeStorageSet(context, resolved.imageId, environment.id, storage),
+      ).toEqual({
+        ok: true,
+      });
+      const containerId = await createDockerContainer(environment, context, {
+        imageId: resolved.imageId,
+        runtimeGeneration: 1,
+        storage,
+      });
+      await docker(["start", containerId]);
+      await waitForContainerBoot(containerId);
+      const check = PROVIDER_STATE_LAYOUT.map(
+        (entry) =>
+          `mountpoint -q ${entry.containerPath} && [ "$(stat -c %U ${entry.containerPath})" = node ] && touch ${entry.containerPath}/.probe || echo FAIL:${entry.containerPath}`,
+      ).join("; ");
+      const result = await docker([
+        "exec",
+        containerId,
+        "bash",
+        "-c",
+        `mountpoint -q /workspace || echo FAIL:/workspace; ${check}`,
+      ]);
+      expect(result).toBe("");
+      // Credentials the entrypoint writes stay outside the preserved set.
+      expect(
+        await docker([
+          "exec",
+          containerId,
+          "sh",
+          "-c",
+          "mountpoint -q /home/node/.claude && echo mounted || echo layer",
+        ]),
+      ).toBe("layer");
+      await docker(["rm", "-f", containerId]);
     },
     LIVE_TIMEOUT_MS,
   );

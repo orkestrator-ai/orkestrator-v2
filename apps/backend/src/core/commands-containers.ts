@@ -1,3 +1,5 @@
+import { boundedTailCommand, boundDiagnosticTail } from "./container-log-bounds.js";
+import { persistentStateExports } from "./container-state-layout.js";
 import {
   os,
   path,
@@ -77,6 +79,8 @@ import type { LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 import { ContainerLifecycleError, findOperationContainers } from "./container-lifecycle-service.js";
 import { detectDockerTopology, imageCapabilities } from "./docker-image.js";
+import { storageMountArguments } from "./container-storage.js";
+import type { ContainerStorageIdentity } from "@orkestrator/protocol/container-lifecycle";
 import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
 
 const AGENT_TEST_LOCAL_GIT_REMOTE_PATH = "/orkestrator-agent-test-origin.git";
@@ -114,6 +118,8 @@ export interface CreateContainerIdentity {
   operationId?: string;
   /** Runtime generation of the new container; `>1` gets a distinct name. */
   runtimeGeneration?: number;
+  /** Persistent storage set to mount; absent keeps the legacy writable layer. */
+  storage?: ContainerStorageIdentity;
 }
 
 /**
@@ -222,6 +228,15 @@ export async function createDockerContainer(
     // shadows Docker Desktop's working DNS address with the VM bridge gateway.
     ...(shouldAddDockerHostGatewayAlias(process.platform, topology.kind)
       ? ["--add-host", "host.docker.internal:host-gateway"]
+      : []),
+    ...(identity.storage?.format === "volume-v1"
+      ? [
+          ...storageMountArguments(identity.storage),
+          "-e",
+          "ORKESTRATOR_WORKSPACE_STORAGE=volume-v1",
+          "-e",
+          `ORKESTRATOR_ENVIRONMENT_ID=${environment.id}`,
+        ]
       : []),
     "-e",
     `GIT_URL=${containerGitUrl}`,
@@ -429,10 +444,10 @@ export async function startContainerServer(
     const logFile = containerServerLogFile(processName);
     const log = await dockerExec(
       containerId,
-      `cat ${logFile} 2>/dev/null || true`,
+      boundedTailCommand(logFile),
       undefined,
       redactValues,
-    ).catch(() => "");
+    ).then(boundDiagnosticTail, () => "");
     throw new Error(
       `${error instanceof Error ? error.message : String(error)}${log.trim() ? `\n${log.trim()}` : ""}`,
     );
@@ -533,6 +548,7 @@ export async function startContainerOpenCodeServer(
     unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN
     export OPENCODE_SERVER_USERNAME=opencode
     export OPENCODE_SERVER_PASSWORD=${quoteShell(authToken)}
+    ${persistentStateExports("opencode")}
     setsid opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0 > /tmp/opencode-serve.log 2>&1 &
   `,
     [authToken],
@@ -541,10 +557,10 @@ export async function startContainerOpenCodeServer(
     async (error) => {
       const log = await dockerExec(
         containerId,
-        "cat /tmp/opencode-serve.log 2>/dev/null || true",
+        boundedTailCommand("/tmp/opencode-serve.log"),
         undefined,
         [authToken],
-      ).catch(() => "");
+      ).then(boundDiagnosticTail, () => "");
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}${log.trim() ? `\n${log.trim()}` : ""}`,
       );

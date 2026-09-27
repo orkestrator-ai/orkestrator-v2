@@ -1501,6 +1501,11 @@ export async function deleteEnvironment(
           });
         }
       }
+      // Persistent storage goes after its container; a failure stays pending
+      // in the ledger and is retried by the reconciler.
+      if (cleanup?.pending.includes("volumes")) {
+        await runEnvironmentCleanupStep(cleanup, "volumes", context);
+      }
       await stopLocalServersForEnvironmentUnlocked(environmentId, context);
       if (cleanup?.worktreePath) {
         const worktreeRemoved = await runEnvironmentCleanupStep(cleanup, "worktree", context);

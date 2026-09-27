@@ -221,3 +221,46 @@ An image with the `graceful-shutdown` capability runs under Docker's `--init`
 Backend shutdown never stops user containers; their processes are rehydrated
 and uncertain operations reconciled on the next start. Approvals are never
 approved by a stop: bridges deny or withdraw on the way out.
+
+## Persistent storage (`volume-v1`)
+
+A new environment — or one whose legacy runtime was explicitly discarded — gets
+a storage set when the image declares `persistent-workspace`, the daemon is
+Engine 26+ (volume sub-path mounts) and `ORKESTRATOR_CONTAINER_STORAGE` is not
+`legacy-layer`. An existing legacy runtime is never migrated by a start, read,
+status refresh or UI mount; that is an explicit operation (step 06).
+
+| Volume | Mount | Holds |
+| --- | --- | --- |
+| `workspace` | `/workspace` (whole) | Git database, tracked/untracked/ignored files, `.orkestrator` private state |
+| `state` | by sub-path only, at each `PROVIDER_STATE_LAYOUT` path | Provider transcripts and the bridges' own journals/session maps |
+
+Rules:
+
+- Planned volume names (owner, environment, storage set, role) are persisted
+  before any volume is created; an interrupted attempt adopts only volumes with
+  exactly the expected labels.
+- A helper container (image's `orkestrator-storage.sh`, entrypoint overridden,
+  no network) initializes an empty volume once — ownership, state
+  sub-directories, a private marker — and verifies the marker before every
+  read-write mount. A non-empty volume without a marker, a foreign marker or
+  unexpected ownership is a `needs-attention` condition; nothing is erased or
+  recursively re-owned.
+- `workspace-setup.sh` refuses to clone when `/workspace` is not a mount point,
+  lacks this environment's marker, or holds files but no repository.
+- Credentials, configuration, caches and binaries stay in the container layer.
+  User-authored secrets can still exist in the workspace or transcripts;
+  volumes get private permissions and are never exported implicitly.
+- Codex's runtime databases (`CODEX_SQLITE_HOME`) and OpenCode's database
+  (`OPENCODE_DB`) are relocated onto the state volume only when that mount is
+  present, so a legacy runtime keeps its existing sessions where they are.
+- Discarding a volume-backed runtime deletes its storage set (label-verified,
+  never forced) and starts a new workspace generation; a volume that will not
+  remove stays referenced as a retained copy. Deleting an environment removes
+  its volumes after its container, through the cleanup ledger.
+
+Per-provider preservation (`PROVIDER_PRESERVATION`): Claude, Pi and Cursor are
+full; Codex (thread-name index not preserved, relocated databases pending
+qualification), OpenCode (revert snapshots not preserved) and Grok (root-level
+registries not preserved) are partial and say so. Named volumes are
+persistence, not backup: a Docker administrator can still remove them.

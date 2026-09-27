@@ -403,6 +403,28 @@ if [ -n "$GIT_URL" ] && [ ! -d "/workspace/.git" ]; then
     BRANCH="${GIT_BRANCH:-main}"
     BASE_BRANCH="${GIT_BASE_BRANCH:-}"
 
+    # A persistent workspace volume is cloned into only when it is verifiably
+    # this environment's freshly initialized volume. A volume that failed to
+    # mount must not be replaced by a clone into the container layer that
+    # would later be reported as persistent, and unknown content in a
+    # persistent volume is refused rather than erased.
+    if [ "${ORKESTRATOR_WORKSPACE_STORAGE:-legacy-layer}" = "volume-v1" ]; then
+        if ! mountpoint -q /workspace; then
+            echo -e "${RED}The persistent workspace volume is not mounted; refusing to clone into the container layer.${NC}"
+            exit 1
+        fi
+        STORAGE_MARKER=/workspace/.orkestrator/storage-marker.json
+        if [ ! -f "$STORAGE_MARKER" ] || [ -L "$STORAGE_MARKER" ] || \
+           [ "$(jq -r '.environmentId // empty' "$STORAGE_MARKER" 2>/dev/null)" != "${ORKESTRATOR_ENVIRONMENT_ID:-}" ]; then
+            echo -e "${RED}The workspace volume has no valid storage marker for this environment; refusing to initialize it.${NC}"
+            exit 1
+        fi
+        if [ -n "$(find /workspace -mindepth 1 -maxdepth 1 ! -name .orkestrator ! -name lost+found -print -quit 2>/dev/null)" ]; then
+            echo -e "${RED}The workspace volume holds files but no repository; refusing to overwrite them.${NC}"
+            exit 1
+        fi
+    fi
+
     # Clean /workspace
     echo "Preparing workspace..."
     preserve_orkestrator_workspace_state

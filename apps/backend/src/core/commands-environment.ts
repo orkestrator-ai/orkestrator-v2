@@ -4,8 +4,18 @@ import {
   setupCompletionIsCurrent,
   type ContainerLifecycleErrorCode,
   type ContainerMutationIdentity,
+  type ContainerStorageIdentity,
   type RecreateEnvironmentRequest,
 } from "@orkestrator/protocol/container-lifecycle";
+import {
+  ensureStorageVolumes,
+  initializeStorageSet,
+  planStorageSet,
+  removeStorageVolumes,
+  selectStorageFormat,
+  storageHelperFailureMessage,
+  verifyStorageSet,
+} from "./container-storage.js";
 import {
   ContainerInitializationError,
   assertEnvironmentNotDraining,
@@ -138,7 +148,12 @@ import {
   ensureContainerProjectFilesAccess,
 } from "./commands-files.js";
 import { AmbiguousContainerCreateError, createDockerContainer } from "./commands-containers.js";
-import { configuredImageRef, imageCapabilities, resolveDockerImage } from "./docker-image.js";
+import {
+  configuredImageRef,
+  detectDockerTopology,
+  imageCapabilities,
+  resolveDockerImage,
+} from "./docker-image.js";
 import {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   environmentLifecycleErrorMessage,
@@ -1125,6 +1140,109 @@ export async function prepareEnvironmentForSetup(
   return reconcile(prepared, context);
 }
 
+async function verifyRuntimeStorage(
+  environment: Environment,
+  context: CommandContext,
+): Promise<void> {
+  const parsed = parseContainerLifecycle(environment.containerLifecycle);
+  if (!parsed.supported || parsed.record.storage.format !== "volume-v1") return;
+  const imageId = currentRuntimeIdentity(environment, context)?.imageId;
+  if (!imageId) return;
+  const verified = await verifyStorageSet(context, imageId, environment.id, parsed.record.storage);
+  if (!verified.ok) {
+    throw new Error(
+      formatContainerLifecycleError("needs-attention", storageHelperFailureMessage(verified)),
+    );
+  }
+}
+
+async function discardPersistentStorage(
+  context: CommandContext,
+  environmentId: string,
+  operationId: string,
+): Promise<ContainerStorageIdentity | undefined> {
+  const environment = await context.storage.getEnvironment(environmentId);
+  const parsed = parseContainerLifecycle(environment?.containerLifecycle);
+  if (!environment || !parsed.supported || parsed.record.storage.format !== "volume-v1") {
+    return undefined;
+  }
+  const storage = parsed.record.storage;
+  const kept = await removeStorageVolumes(context, environmentId, storage);
+  if (kept && kept.length > 0) {
+    await context.storage.updateEnvironment(environmentId, {
+      containerLifecycle: {
+        ...parsed.record,
+        revision: parsed.record.revision + 1,
+        retainedStorage: [
+          ...(parsed.record.retainedStorage ?? []),
+          {
+            storageSetId: storage.storageSetId ?? "unknown",
+            workspaceGeneration: storage.workspaceGeneration,
+            volumes: kept,
+            retainedAt: new Date().toISOString(),
+            reason: "workspace-reset",
+            operationId,
+          },
+        ],
+      },
+    });
+  }
+  return { format: "legacy-layer", workspaceGeneration: storage.workspaceGeneration + 1 };
+}
+
+/**
+ * Chooses and prepares the storage a new runtime mounts. An environment whose
+ * lifecycle already names a persistent storage set keeps it (verified before
+ * it is mounted read-write). One without — a new environment, or one whose
+ * legacy runtime was discarded — gets persistent volumes when the image and
+ * daemon support them. Planned volume names are persisted before any volume
+ * is created so an interrupted attempt adopts exactly those volumes.
+ */
+async function prepareRuntimeStorage(
+  environment: Environment,
+  context: CommandContext,
+  operationId: string,
+  imageId: string | undefined,
+): Promise<ContainerStorageIdentity | undefined> {
+  const current = (await context.storage.getEnvironment(environment.id)) ?? environment;
+  const parsed = parseContainerLifecycle(current.containerLifecycle);
+  if (!parsed.supported) return undefined;
+  let storage = parsed.record.storage;
+  if (storage.format !== "volume-v1") {
+    if (!imageId) return undefined;
+    const decision = selectStorageFormat(
+      await imageCapabilities(imageId, context),
+      await detectDockerTopology(),
+    );
+    if (decision.format !== "volume-v1") return undefined;
+    storage = planStorageSet(
+      environment.id,
+      dockerOwnerNamespace(context.storage.getDataDir()),
+      storage.workspaceGeneration,
+    );
+    await advanceContainerOperation(context, environment.id, operationId, {
+      phase: "allocating-storage",
+      storage,
+    });
+  }
+  if (!imageId) {
+    throw new Error(
+      formatContainerLifecycleError(
+        "capability-unavailable",
+        "The environment image could not be identified, so its persistent storage cannot be checked.",
+      ),
+    );
+  }
+  await ensureStorageVolumes(context, environment.id, storage);
+  const initialized = await initializeStorageSet(context, imageId, environment.id, storage);
+  if (!initialized.ok) {
+    throw new Error(
+      formatContainerLifecycleError("needs-attention", storageHelperFailureMessage(initialized)),
+    );
+  }
+  return storage;
+}
+
 /**
  * Whether the environment's recorded setup completion describes its current
  * runtime and workspace (see `setupCompletionIsCurrent`).
@@ -1210,6 +1328,7 @@ async function startContainerRuntime(
     if (!containerId) {
       const runtimeGeneration = nextRuntimeGeneration(environment);
       const image = await resolveOperationImage(context);
+      const storage = await prepareRuntimeStorage(environment, context, operationId, image.imageId);
       await advanceContainerOperation(context, environment.id, operationId, {
         phase: "creating",
         details: { generation: runtimeGeneration, ...image },
@@ -1218,6 +1337,7 @@ async function startContainerRuntime(
         operationId,
         runtimeGeneration,
         imageId: image.imageId,
+        storage,
       });
       unpersistedContainerId = containerId;
       await advanceContainerOperation(context, environment.id, operationId, {
@@ -1232,6 +1352,11 @@ async function startContainerRuntime(
         environment: { containerId },
       });
       unpersistedContainerId = null;
+    } else {
+      // Persistent volumes are verified against their private markers before
+      // the runtime mounts them read-write again. A missing or foreign marker
+      // is a recovery condition, never a reason to reinitialize.
+      await verifyRuntimeStorage(environment, context);
     }
     await advanceContainerOperation(context, environment.id, operationId, {
       phase: "starting",
@@ -1750,9 +1875,14 @@ export async function recreateEnvironmentOnce(
   // PTY id or a retained setup buffer must not attach to the replacement.
   await context.storage.clearBackendTerminalSessionIds?.(environment.id);
   cleanupEnvironmentSetupState(environment.id);
+  // Discard deletes the workspace too. Persistent volumes go with it; one that
+  // will not remove stays referenced as a retained copy rather than orphaned.
+  // The next start begins a new workspace generation on a new storage set.
+  const discardedStorage = await discardPersistentStorage(context, environment.id, operationId);
   await completeContainerOperation(context, environment.id, operationId, "succeeded", {
     phase: "removed",
     runtime: null,
+    ...(discardedStorage ? { storage: discardedStorage } : {}),
     environment: {
       containerId: null,
       status: "stopped",

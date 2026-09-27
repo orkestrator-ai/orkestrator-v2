@@ -580,7 +580,7 @@ case "$1" in
       *"cat /tmp/orkestrator-ai/cursor-api-key-fingerprint"*)
         cat "$FAKE_CURSOR_FINGERPRINT_FILE" 2>/dev/null || true
         exit 0 ;;
-      *"cat /tmp/${provider}-acp-bridge.log"*)
+      *"tail -c"*"/tmp/${provider}-acp-bridge.log"*)
         printf '${provider} acp log\\n'; exit 0 ;;
       *pkill*)
         rm -f "$FAKE_BRIDGE_TOKEN_FILE"
@@ -732,7 +732,7 @@ case "$1" in
       *"cat /tmp/pi-bridge-token"*)
         cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
         exit 0 ;;
-      *"cat /tmp/pi-bridge.log"*)
+      *"tail -c"*"/tmp/pi-bridge.log"*)
         printf 'pi bridge log\\n'
         exit 0 ;;
       *pkill*)

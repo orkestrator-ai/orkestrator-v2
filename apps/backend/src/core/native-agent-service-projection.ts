@@ -57,7 +57,17 @@ import {
   NATIVE_SYNC_MAX_REVISION_BYTES,
   NATIVE_SYNC_MAX_TOTAL_REVISION_BYTES,
   NATIVE_SYNC_REVISION_TTL_MS,
+  NATIVE_DIRECT_PAGE_CACHE_MAX_BYTES,
+  NATIVE_DIRECT_PAGE_CACHE_MAX_ENTRIES,
+  NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_BYTES,
+  NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_ENTRIES,
+  NATIVE_DIRECT_PAGE_CACHE_TTL_MS,
   NATIVE_FILE_DETAIL_MAX_BYTES,
+  NATIVE_PROJECTED_MESSAGE_CACHE_MAX_BYTES,
+  NATIVE_PROJECTED_MESSAGE_CACHE_MAX_ENTRIES,
+  NATIVE_PROJECTED_MESSAGE_CACHE_MAX_ENTRY_BYTES,
+  NATIVE_PROJECTED_MESSAGE_CACHE_MAX_SESSION_BYTES,
+  NATIVE_PROJECTED_MESSAGE_CACHE_MAX_SESSION_ENTRIES,
   NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES,
   NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES,
   NATIVE_TOOL_DETAIL_MAX_BYTES,
@@ -93,7 +103,17 @@ import {
 import { OPEN_CODE_INLINE_ERROR_ID_PREFIX } from "./opencode-messages.js";
 import { readReadableHostFile } from "./path-safety.js";
 import { readBridgePartDetail as bridgePartDetail } from "@orkestrator/protocol/bridge-transcript-summary";
-import { decodeHistoryCursor, encodeDirectHistoryCursor } from "./native-agent-direct-history.js";
+import {
+  DirectHistoryPageCache,
+  decodeHistoryCursor,
+  encodeDirectHistoryCursor,
+} from "./native-agent-direct-history.js";
+import {
+  ProjectedMessageCache,
+  copyProjectionSource,
+  type ProjectionDetailRegistration,
+  type ProjectionEntryContext,
+} from "./native-agent-projection-entries.js";
 import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/native-agent-transcript-patch";
 import { encodedPatchBytes, patchTranscriptDelta } from "./native-agent-transcript-patches.js";
 import {
@@ -600,6 +620,31 @@ function progressiveHydrationToken(snapshot: ProviderTranscriptSnapshot): string
 const PROGRESSIVE_HYDRATION_MAX_ATTEMPTS = 3;
 const PROGRESSIVE_HYDRATION_RETRY_BASE_MS = 25;
 
+type PromptPresentationKind = NonNullable<
+  PersistedNativeAgentSession["initialPromptPresentation"]
+>["kind"];
+
+/** A provider transcript row after `projectionMessages` validated its shape. */
+type ProviderTranscriptRow = Record<string, unknown> & {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  parts: unknown[];
+  createdAt: string;
+};
+
+interface ProjectedTranscriptMessage {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  parts: unknown[];
+  createdAt: string;
+  modelId?: string;
+  turnId?: string;
+  planReview?: boolean;
+  promptPresentation?: PromptPresentationKind;
+}
+
 type ProgressiveHydrationEntry = {
   sourceToken: string;
   snapshot?: ProviderTranscriptSnapshot;
@@ -673,6 +718,33 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   private readonly progressiveMetrics = new ProgressiveReadMetrics();
   /** In-flight provider reads of remote tool details, one per reference. */
   private readonly remoteToolDetailReads = new Map<string, Promise<NativeAgentToolDetails>>();
+  /** Projected rows reused while their provider rows are unchanged (step 12). */
+  private readonly projectedMessages = new ProjectedMessageCache({
+    maxEntries: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_ENTRIES,
+    maxBytes: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_BYTES,
+    maxSessionEntries: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_SESSION_ENTRIES,
+    maxSessionBytes: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_SESSION_BYTES,
+    maxEntryBytes: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_ENTRY_BYTES,
+    ...this.options.projectedMessageCacheLimits,
+  });
+  /** Immutable direct history pages of each session's current epoch (step 11). */
+  private readonly directHistoryPages = new DirectHistoryPageCache<{
+    page: NativeAgentMessagePage;
+    details: readonly ProjectionDetailRegistration[];
+  }>({
+    maxEntries: NATIVE_DIRECT_PAGE_CACHE_MAX_ENTRIES,
+    maxBytes: NATIVE_DIRECT_PAGE_CACHE_MAX_BYTES,
+    maxSessionEntries: NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_ENTRIES,
+    maxSessionBytes: NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_BYTES,
+    ttlMs: NATIVE_DIRECT_PAGE_CACHE_TTL_MS,
+    ...this.options.directHistoryPageCacheLimits,
+  });
+  /**
+   * Collects the detail references registered while one row (or one page) is
+   * projected, so a reuse can re-register them without the bodies. Projection
+   * is synchronous, so a single slot cannot interleave between reads.
+   */
+  private detailRegistrations: ProjectionDetailRegistration[] | undefined;
 
   /**
    * Whether a parked dispatch is still reconciling or has become a final
@@ -737,6 +809,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     this.progressiveTrailing.clear();
     this.interactiveSnapshotShares.clear();
     this.progressiveMetrics.clear();
+    this.projectedMessages.clear();
+    this.directHistoryPages.clear();
     const drained = await displayTailDrain;
     if (drained.skipped > 0) {
       // Aggregate count only: previews carry transcript content.
@@ -818,6 +892,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     });
     this.toolDetailCacheBytes += bytes;
     this.pruneToolDetailCache();
+    this.detailRegistrations?.push({ ref: detailRef });
     return detailRef;
   }
 
@@ -836,6 +911,15 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       .update(`remote\0${sessionKey}\0${messageId}\0${partPath}\0${remote.locator}`)
       .digest("hex")
       .slice(0, 32);
+    this.detailRegistrations?.push({
+      ref: detailRef,
+      remote: {
+        messageId,
+        partPath,
+        providerSessionId: remote.providerSessionId,
+        locator: remote.locator,
+      },
+    });
     const previous = this.toolDetailCache.get(detailRef);
     if (previous) {
       // Keep an already-fetched body; just refresh its recency.
@@ -853,6 +937,44 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     this.toolDetailCacheBytes += bytes;
     this.pruneToolDetailCache();
     return detailRef;
+  }
+
+  /**
+   * Re-register the detail references a reused row or page carries, as its
+   * projection would have: refresh each entry's recency, and register a
+   * provider-held one again if it was evicted. False when an inline body was
+   * evicted — only a fresh projection of the row can restore it.
+   */
+  private restoreDetailRegistrations(
+    sessionKey: string,
+    registrations: readonly ProjectionDetailRegistration[],
+  ): boolean {
+    const sink = this.detailRegistrations;
+    this.detailRegistrations = undefined;
+    try {
+      for (const registration of registrations) {
+        const entry = this.toolDetailCache.get(registration.ref);
+        if (entry && entry.sessionKey === sessionKey) {
+          this.toolDetailCache.delete(registration.ref);
+          this.toolDetailCache.set(registration.ref, entry);
+          continue;
+        }
+        if (!registration.remote) return false;
+        this.cacheRemoteToolDetails(
+          sessionKey,
+          registration.remote.messageId,
+          registration.remote.partPath,
+          {
+            providerSessionId: registration.remote.providerSessionId,
+            locator: registration.remote.locator,
+          },
+        );
+      }
+    } finally {
+      this.detailRegistrations = sink;
+    }
+    sink?.push(...registrations);
+    return true;
   }
 
   protected pruneToolDetailCache(): void {
@@ -1011,6 +1133,72 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     return projected;
   }
 
+  /**
+   * One validated provider row, projected — or the projection kept from an
+   * earlier read of an identical row in the same context (see
+   * `native-agent-projection-entries.ts`). A miss projects from a private copy
+   * of the row, so the value kept for later reads shares nothing a provider
+   * could mutate afterwards.
+   */
+  private projectedMessage(
+    context: ProjectionEntryContext,
+    message: ProviderTranscriptRow,
+    promptPresentation: PromptPresentationKind | undefined,
+    remote: { providerSessionId: string } | undefined,
+  ): ProjectedTranscriptMessage {
+    const cached = this.projectedMessages.lookup(context, message.id, message, promptPresentation);
+    if (cached && this.restoreDetailRegistrations(context.sessionKey, cached.details)) {
+      return cached.projected as ProjectedTranscriptMessage;
+    }
+    const source = this.projectedMessages.enabled ? copyProjectionSource(message) : undefined;
+    const row = (source?.copy ?? message) as ProviderTranscriptRow;
+    const sink = this.detailRegistrations;
+    const details: ProjectionDetailRegistration[] = [];
+    this.detailRegistrations = details;
+    let projected: ProjectedTranscriptMessage;
+    try {
+      const projectedParts = attachProgressToToolRows(
+        row.parts.map((part, index) =>
+          this.projectionPart(context.sessionKey, row.id, part, String(index), remote),
+        ),
+      );
+      const projectedMessage: ProjectedTranscriptMessage = {
+        id: row.id,
+        role: row.role,
+        content: row.content,
+        parts: projectedParts,
+        createdAt: row.createdAt,
+        ...(typeof row.modelId === "string" ? { modelId: row.modelId } : {}),
+        ...(typeof row.turnId === "string" ? { turnId: row.turnId } : {}),
+        ...(typeof row.planReview === "boolean" ? { planReview: row.planReview } : {}),
+        ...(promptPresentation ? { promptPresentation } : {}),
+      };
+      projected = context.coordinator
+        ? coordinatorDisplayMessage(projectedMessage)
+        : projectedMessage;
+    } finally {
+      this.detailRegistrations = sink;
+    }
+    sink?.push(...details);
+    if (source) {
+      let encodedBytes: number | undefined;
+      try {
+        // Memoized: every later measurement of this row reuses it.
+        encodedBytes = encodedValue(projected).bytes;
+      } catch {
+        // Not serializable: the window bound below reports it; keep it uncached.
+      }
+      if (encodedBytes !== undefined) {
+        this.projectedMessages.store(context, message.id, source, promptPresentation, {
+          projected,
+          details,
+          encodedBytes,
+        });
+      }
+    }
+    return projected;
+  }
+
   protected projectionMessages(
     sessionKey: string,
     messages: unknown[],
@@ -1028,6 +1216,11 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         (candidate as Record<string, unknown>).role === "user",
     );
     const requestedStart = Math.max(0, messages.length - limit);
+    const context: ProjectionEntryContext = {
+      sessionKey,
+      ...(remote ? { remoteSessionId: remote.providerSessionId } : {}),
+      coordinator: coordinatorTranscript,
+    };
     const requested = messages.slice(requestedStart).map((raw, requestedIndex) => {
       const message =
         raw && typeof raw === "object" && !Array.isArray(raw)
@@ -1052,23 +1245,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         initialPromptPresentation && parsedDelegation?.frame === initialPromptPresentation.frame
           ? initialPromptPresentation.kind
           : undefined;
-      const projectedParts = attachProgressToToolRows(
-        message.parts.map((part, index) =>
-          this.projectionPart(sessionKey, message.id as string, part, String(index), remote),
-        ),
+      return this.projectedMessage(
+        context,
+        message as ProviderTranscriptRow,
+        promptPresentation,
+        remote,
       );
-      const projectedMessage = {
-        id: message.id,
-        role,
-        content: message.content,
-        parts: projectedParts,
-        createdAt: message.createdAt,
-        ...(typeof message.modelId === "string" ? { modelId: message.modelId } : {}),
-        ...(typeof message.turnId === "string" ? { turnId: message.turnId } : {}),
-        ...(typeof message.planReview === "boolean" ? { planReview: message.planReview } : {}),
-        ...(promptPresentation ? { promptPresentation } : {}),
-      };
-      return coordinatorTranscript ? coordinatorDisplayMessage(projectedMessage) : projectedMessage;
     });
     let boundedTranscript;
     try {
@@ -1856,8 +2038,23 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       };
     }
     const summary = snapshot.representation === "summary";
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    if (snapshot.historyEpoch !== undefined) {
+      // A new epoch is a rewritten history: rows kept for the old one go now
+      // rather than aging out, and so do pages cut from it.
+      if (previous !== undefined && previous.value.historyEpoch !== snapshot.historyEpoch) {
+        this.projectedMessages.forgetSession(sessionKey);
+      }
+      if (summary) {
+        this.directHistoryPages.observeEpoch(sessionKey, providerSessionId, snapshot.historyEpoch);
+      }
+    }
     const normalized = this.projectionMessages(
-      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+      sessionKey,
       snapshot.messages,
       input.liveWindow.messages,
       NATIVE_SYNC_MAX_SNAPSHOT_BYTES,
@@ -1945,11 +2142,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       boundedStartIndex !== undefined &&
       boundedStartIndex <= snapshot.historyStartIndex
         ? encodeDirectHistoryCursor({
-            sessionKey: nativeAgentSessionStorageKey(
-              input.environmentId,
-              input.agent,
-              input.logicalSessionKey,
-            ),
+            sessionKey,
             providerSessionId,
             historyEpoch: snapshot.historyEpoch,
             providerCursor: snapshot.historyCursor,
@@ -1993,12 +2186,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         : randomUUID());
     const historyCursor =
       directHistoryCursor ??
-      this.transcriptHistoryCursor(
-        nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
-        bounded.messages,
-        historyEpoch,
-        providerSessionId,
-      );
+      this.transcriptHistoryCursor(sessionKey, bounded.messages, historyEpoch, providerSessionId);
     // Unchanged rows keep the objects already held, so every later comparison
     // and encoding of them in this read and the next is a reference check.
     const messages = reuseUnchangedMessages(previous?.value.messages, bounded.messages);
@@ -3092,8 +3280,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   /**
    * Serve a direct (provider-positioned) page, or undefined for a joined-
    * history cursor. No projection refresh, composer or interaction read, and
-   * no fingerprint pass over earlier pages: validate the owner, read the
-   * range, project only it.
+   * no fingerprint pass over earlier pages: validate the owner, then answer
+   * from the page cache while the cursor's epoch is still the session's
+   * current one, or read and project only that range.
    */
   private async directMessagePage(
     input: NativeAgentMessagePageInput,
@@ -3108,12 +3297,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const startedAt = monotonicMs();
     const resolved = await this.resolveProjectionSession(input);
     if (!resolved) throw new Error("Native agent history is unavailable");
+    const providerSessionId = resolved.session.providerSessionId;
     const cursor = decodeHistoryCursor(input.before, {
       sessionKey: resolved.key,
-      providerSessionId: resolved.session.providerSessionId,
+      providerSessionId,
     });
     if (cursor.version !== 2) throw new Error("Native agent history cursor expired");
-    if (!resolved.provider.transcriptPage) {
+    const transcriptPage = resolved.provider.transcriptPage?.bind(resolved.provider);
+    if (!transcriptPage) {
       throw new Error("Native agent history cursor expired");
     }
     const limit = Math.min(
@@ -3124,57 +3315,113 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       input.targetBytes ?? NATIVE_HISTORY_PAGE_DEFAULT_BYTES,
       NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES,
     );
-    const sourceStartedAt = monotonicMs();
-    const page = await resolved.provider.transcriptPage(resolved.session.providerSessionId, {
-      cursor: cursor.providerCursor,
+    const pageKey = [
+      resolved.key,
+      providerSessionId,
+      cursor.epoch,
+      cursor.providerCursor,
       limit,
       targetBytes,
-    });
-    const sourceMs = monotonicMs() - sourceStartedAt;
-    // An epoch the provider no longer holds is a rewritten history. The
-    // renderer resets and re-reads rather than stitching pages from two
-    // histories together.
-    if (!page || page.status !== "page" || page.historyEpoch !== cursor.epoch) {
-      this.recordProgressiveMetric("transcript", startedAt, "provider", "missing", { sourceMs });
-      throw new Error("Native agent history cursor expired");
-    }
-    const normalizeStartedAt = monotonicMs();
-    const projected = this.projectionMessages(
+    ].join("\0");
+    const cached = this.directHistoryPages.lookup(
       resolved.key,
-      page.messages,
-      Math.max(limit, page.messages.length),
-      NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES + 64 * 1024,
-      resolved.session.initialPromptPresentation,
-      Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
-      { providerSessionId: resolved.session.providerSessionId },
+      providerSessionId,
+      cursor.epoch,
+      pageKey,
+      this.now(),
     );
-    const normalizeMs = monotonicMs() - normalizeStartedAt;
-    // The provider already bounded the page; a projection that still dropped
-    // a row would lose it between two cursors, so refuse rather than skip it.
-    if (projected.messages.length !== page.messages.length) {
-      throw new Error("Native agent history page exceeded its bound");
+    if (cached) {
+      if (this.restoreDetailRegistrations(resolved.key, cached.details)) {
+        this.recordProgressiveMetric("transcript", startedAt, "memory", "cached");
+        return { ...cached.page, messages: cached.page.messages.slice() };
+      }
+      // An inline detail body was evicted; only a fresh read registers it again.
+      this.directHistoryPages.delete(pageKey);
     }
-    const nextCursor = page.historyCursor
-      ? encodeDirectHistoryCursor({
-          sessionKey: resolved.key,
-          providerSessionId: resolved.session.providerSessionId,
+    const { page } = await this.directHistoryPages.load(
+      { sessionKey: resolved.key, providerSessionId, epoch: cursor.epoch, key: pageKey },
+      async () => {
+        const sourceStartedAt = monotonicMs();
+        const providerPage = await transcriptPage(providerSessionId, {
+          cursor: cursor.providerCursor,
+          limit,
+          targetBytes,
+        });
+        const sourceMs = monotonicMs() - sourceStartedAt;
+        // An epoch the provider no longer holds is a rewritten history. The
+        // renderer resets and re-reads rather than stitching pages from two
+        // histories together.
+        if (
+          !providerPage ||
+          providerPage.status !== "page" ||
+          providerPage.historyEpoch !== cursor.epoch
+        ) {
+          this.recordProgressiveMetric("transcript", startedAt, "provider", "missing", {
+            sourceMs,
+          });
+          throw new Error("Native agent history cursor expired");
+        }
+        const normalizeStartedAt = monotonicMs();
+        const details: ProjectionDetailRegistration[] = [];
+        const sink = this.detailRegistrations;
+        this.detailRegistrations = details;
+        let projected: { messages: unknown[] };
+        try {
+          projected = this.projectionMessages(
+            resolved.key,
+            providerPage.messages,
+            Math.max(limit, providerPage.messages.length),
+            NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES + 64 * 1024,
+            resolved.session.initialPromptPresentation,
+            Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
+            { providerSessionId },
+          );
+        } finally {
+          this.detailRegistrations = sink;
+        }
+        const normalizeMs = monotonicMs() - normalizeStartedAt;
+        // The provider already bounded the page; a projection that still
+        // dropped a row would lose it between two cursors, so refuse rather
+        // than skip it.
+        if (projected.messages.length !== providerPage.messages.length) {
+          throw new Error("Native agent history page exceeded its bound");
+        }
+        const nextCursor = providerPage.historyCursor
+          ? encodeDirectHistoryCursor({
+              sessionKey: resolved.key,
+              providerSessionId,
+              historyEpoch: cursor.epoch,
+              providerCursor: providerPage.historyCursor,
+            })
+          : undefined;
+        if (providerPage.historyCursor && !nextCursor) {
+          throw new Error("Native agent history cursor expired");
+        }
+        this.recordProgressiveMetric("transcript", startedAt, "provider", "snapshot", {
+          sourceMs,
+          normalizeMs,
+        });
+        const page: NativeAgentMessagePage = {
+          syncVersion: 1,
+          messages: projected.messages,
           historyEpoch: cursor.epoch,
-          providerCursor: page.historyCursor,
-        })
-      : undefined;
-    if (page.historyCursor && !nextCursor) throw new Error("Native agent history cursor expired");
-    this.recordProgressiveMetric("transcript", startedAt, "provider", "snapshot", {
-      sourceMs,
-      normalizeMs,
-    });
-    return {
-      syncVersion: 1,
-      messages: projected.messages,
-      historyEpoch: cursor.epoch,
-      ...(nextCursor ? { nextCursor } : {}),
-      complete: !nextCursor && page.complete,
-      truncated: Boolean(nextCursor) || !page.complete || page.truncated,
-    };
+          ...(nextCursor ? { nextCursor } : {}),
+          complete: !nextCursor && providerPage.complete,
+          truncated: Boolean(nextCursor) || !providerPage.complete || providerPage.truncated,
+        };
+        const detailBytes = details.reduce(
+          (total, detail) => total + 64 + detail.ref.length + (detail.remote?.locator.length ?? 0),
+          0,
+        );
+        return {
+          value: { page, details },
+          bytes: encodedArrayBytes(page.messages) + detailBytes + (nextCursor?.length ?? 0) + 256,
+        };
+      },
+      () => this.now(),
+    );
+    // Callers share the cached page; each gets its own message array.
+    return { ...page, messages: page.messages.slice() };
   }
 
   /**
@@ -3652,6 +3899,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const history = this.projectionHistory.get(key);
     if (history) this.projectionHistoryBytes -= history.bytes;
     this.projectionHistory.delete(key);
+    // Rewind, resume and replacement all land here: nothing kept for the old
+    // history may be reused, and a page read still in flight is not admitted.
+    this.projectedMessages.forgetSession(key);
+    this.directHistoryPages.forgetSession(key);
     // The identity behind this key changed, so the grace the previous session
     // had spent says nothing about the new one. A tab that resumes into a
     // different provider session starts its reconnect from a full window.

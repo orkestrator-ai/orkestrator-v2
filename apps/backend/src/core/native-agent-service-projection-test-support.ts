@@ -286,6 +286,8 @@ export async function withService(
     onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
+    projectedMessageCacheLimits?: NativeAgentServiceOptions["projectedMessageCacheLimits"];
+    directHistoryPageCacheLimits?: NativeAgentServiceOptions["directHistoryPageCacheLimits"];
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -333,6 +335,12 @@ export async function withService(
     ...(setup.toolDetailCacheMaxBytes === undefined
       ? {}
       : { toolDetailCacheMaxBytes: setup.toolDetailCacheMaxBytes }),
+    ...(setup.projectedMessageCacheLimits
+      ? { projectedMessageCacheLimits: setup.projectedMessageCacheLimits }
+      : {}),
+    ...(setup.directHistoryPageCacheLimits
+      ? { directHistoryPageCacheLimits: setup.directHistoryPageCacheLimits }
+      : {}),
   });
   try {
     await run({ storage, service });

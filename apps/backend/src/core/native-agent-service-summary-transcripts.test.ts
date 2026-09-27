@@ -19,6 +19,7 @@ import type {
   ProviderTranscriptSnapshot,
 } from "./agent-provider-contract.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
+import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 
 const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
 
@@ -397,6 +398,225 @@ describe("remote detail reads", () => {
         // The row was re-registered by the newer read; the stale read's
         // failure must not remove that fresh reference.
         expect(cache.toolDetailCache.has(detailRef)).toBe(true);
+      },
+    );
+  });
+});
+
+describe("direct history page cache", () => {
+  function pagedHistory(count: number) {
+    return {
+      messages: Array.from({ length: count }, (_, index) =>
+        message(`m${index}`, [
+          {
+            type: "tool-invocation",
+            content: "Read",
+            sourcePartId: `m${index}:0`,
+            toolUseId: `call-${index}`,
+            toolOutput: String(index % 10).repeat(10_000),
+          },
+        ]),
+      ),
+      epoch: 1,
+      revision: 1,
+    };
+  }
+
+  const sessionKeyOf = () =>
+    nativeAgentSessionStorageKey(
+      identity.environmentId,
+      identity.agent,
+      identity.logicalSessionKey,
+    );
+
+  async function firstCursor(service: {
+    getTranscriptUpdate: (input: never) => Promise<unknown>;
+  }): Promise<string> {
+    const update = (await service.getTranscriptUpdate({
+      ...identity,
+      viewVersion: 1,
+      liveWindow,
+      forceSnapshot: true,
+    } as never)) as { status: string; value: { historyCursor?: string } };
+    if (update.status !== "snapshot" || !update.value.historyCursor) {
+      throw new Error("expected a snapshot with a direct cursor");
+    }
+    return update.value.historyCursor;
+  }
+
+  test("a repeated page is served from memory, and its detail references still resolve", async () => {
+    const history = pagedHistory(250);
+    const { stub } = summaryProvider(history);
+    await withService(
+      { prefix: "orkestrator-summary-page-cache-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const before = await firstCursor(service);
+        const first = await service.getMessagePage({ ...identity, syncVersion: 1, before });
+        expect(stub.transcriptPage).toHaveBeenCalledTimes(1);
+        // Even with every detail reference evicted, the cached page is served
+        // and re-registers the provider-held references it carries.
+        (service as unknown as { toolDetailCache: Map<string, unknown> }).toolDetailCache.clear();
+        const second = await service.getMessagePage({ ...identity, syncVersion: 1, before });
+        expect(stub.transcriptPage).toHaveBeenCalledTimes(1);
+        expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+        const row = second.messages[10] as TestMessage;
+        const details = await service.getProjectionToolDetails({
+          ...identity,
+          detailRef: row.parts[0]!.detailRef as string,
+        });
+        expect(details.toolOutput).toBe(
+          history.messages.find((entry) => entry.id === row.id)!.parts[0]!.toolOutput as string,
+        );
+      },
+    );
+  });
+
+  test("an observed epoch change or a session invalidation drops cached pages", async () => {
+    const history = pagedHistory(250);
+    const { stub } = summaryProvider(history);
+    await withService(
+      { prefix: "orkestrator-summary-page-epoch-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const before = await firstCursor(service);
+        await service.getMessagePage({ ...identity, syncVersion: 1, before });
+        // A rewind (session action) invalidates the session's pages.
+        (service as unknown as { invalidateProjection(key: string): void }).invalidateProjection(
+          sessionKeyOf(),
+        );
+        await service.getMessagePage({ ...identity, syncVersion: 1, before });
+        expect(stub.transcriptPage).toHaveBeenCalledTimes(2);
+
+        // The provider rotates its epoch; the next live read observes it, so
+        // the old cursor goes back to the provider and is refused there.
+        history.epoch = 2;
+        history.revision += 1;
+        await firstCursor(service);
+        await expect(
+          service.getMessagePage({ ...identity, syncVersion: 1, before }),
+        ).rejects.toThrow("expired");
+        expect(stub.transcriptPage).toHaveBeenCalledTimes(3);
+      },
+    );
+  });
+
+  test("two concurrent readers of one page share a single provider read", async () => {
+    const history = pagedHistory(250);
+    const { stub } = summaryProvider(history);
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reads = 0;
+    const provider = {
+      ...stub.provider,
+      transcriptPage: async (...args: Parameters<NonNullable<typeof stub.transcriptPage>>) => {
+        reads += 1;
+        await gate;
+        return stub.transcriptPage!(...args);
+      },
+    } as typeof stub.provider;
+    await withService(
+      { prefix: "orkestrator-summary-page-shared-", provider: async () => provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const before = await firstCursor(service);
+        const first = service.getMessagePage({ ...identity, syncVersion: 1, before });
+        const second = service.getMessagePage({ ...identity, syncVersion: 1, before });
+        while (reads === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        release!();
+        const [a, b] = await Promise.all([first, second]);
+        expect(reads).toBe(1);
+        expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+        // Each caller owns its message array.
+        expect(a.messages).not.toBe(b.messages);
+      },
+    );
+  });
+
+  test("byte-limited pages advance, and a second walk is served entirely from memory", async () => {
+    const history = pagedHistory(160);
+    const { stub } = summaryProvider(history);
+    await withService(
+      { prefix: "orkestrator-summary-page-bytes-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const start = await firstCursor(service);
+        const walk = async () => {
+          const ids: string[] = [];
+          let cursor: string | undefined = start;
+          let pages = 0;
+          while (cursor) {
+            const page = await service.getMessagePage({
+              ...identity,
+              syncVersion: 1,
+              before: cursor,
+              limit: 50,
+              targetBytes: 4 * 1024,
+            });
+            expect(page.messages.length).toBeGreaterThan(0);
+            expect(page.messages.length).toBeLessThan(50);
+            ids.unshift(...page.messages.map((entry) => (entry as TestMessage).id));
+            cursor = page.nextCursor;
+            pages += 1;
+          }
+          return { ids, pages };
+        };
+        const cold = await walk();
+        expect(cold.ids).toEqual(history.messages.slice(0, 60).map((entry) => entry.id));
+        const coldReads = stub.transcriptPage!.mock.calls.length;
+        expect(coldReads).toBe(cold.pages);
+        const warm = await walk();
+        expect(warm).toEqual(cold);
+        expect(stub.transcriptPage!.mock.calls.length).toBe(coldReads);
+        // A different byte target is a different page.
+        await service.getMessagePage({
+          ...identity,
+          syncVersion: 1,
+          before: start,
+          limit: 50,
+          targetBytes: 8 * 1024,
+        });
+        expect(stub.transcriptPage!.mock.calls.length).toBe(coldReads + 1);
+      },
+    );
+  });
+
+  test("pages evict under the byte bound and are read again", async () => {
+    const history = pagedHistory(250);
+    const { stub } = summaryProvider(history);
+    await withService(
+      {
+        prefix: "orkestrator-summary-page-evict-",
+        provider: async () => stub.provider,
+        // Room for one ~60-row page only.
+        directHistoryPageCacheLimits: { maxBytes: 40 * 1024 },
+      },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const before = await firstCursor(service);
+        const first = await service.getMessagePage({
+          ...identity,
+          syncVersion: 1,
+          before,
+          limit: 60,
+        });
+        await service.getMessagePage({
+          ...identity,
+          syncVersion: 1,
+          before: first.nextCursor!,
+          limit: 60,
+        });
+        expect(stub.transcriptPage).toHaveBeenCalledTimes(2);
+        await service.getMessagePage({ ...identity, syncVersion: 1, before, limit: 60 });
+        expect(stub.transcriptPage).toHaveBeenCalledTimes(3);
+        const cache = (
+          service as unknown as { directHistoryPages: { bytes: number; size: number } }
+        ).directHistoryPages;
+        expect(cache.size).toBe(1);
+        expect(cache.bytes).toBeLessThanOrEqual(40 * 1024);
       },
     );
   });

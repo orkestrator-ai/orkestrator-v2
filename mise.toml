@@ -286,7 +286,7 @@ run = "bun scripts/generate-codex-app-server-protocol.ts --check"
 
 [tasks."docker:build"]
 description = "Build the production Docker image"
-run = "docker build -t orkestrator-v2:latest -f docker/Dockerfile ."
+run = "docker build $(bun scripts/docker-image-build-args.ts) -t orkestrator-v2:latest -f docker/Dockerfile ."
 
 [tasks."docker:build:dev"]
 description = "Build the development Docker image"

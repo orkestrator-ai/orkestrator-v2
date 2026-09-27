@@ -76,6 +76,7 @@ import {
 import type { LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 import { ContainerLifecycleError, findOperationContainers } from "./container-lifecycle-service.js";
+import { detectDockerTopology } from "./docker-image.js";
 
 const AGENT_TEST_LOCAL_GIT_REMOTE_PATH = "/orkestrator-agent-test-origin.git";
 
@@ -103,6 +104,11 @@ export function publishedPortArguments(
 }
 
 export interface CreateContainerIdentity {
+  /**
+   * Immutable image id resolved when the operation was admitted. Creating from
+   * the id means re-tagging the image mid-operation cannot switch it.
+   */
+  imageId?: string;
   /** Lifecycle operation creating this runtime; labelled for reconciliation. */
   operationId?: string;
   /** Runtime generation of the new container; `>1` gets a distinct name. */
@@ -156,6 +162,15 @@ export async function createDockerContainer(
     ? AGENT_TEST_LOCAL_GIT_REMOTE_PATH
     : project.gitUrl;
   const dockerOwner = dockerOwnerNamespace(context.storage.getDataDir());
+  // Bind mounts name backend-host paths and bridges are reached on backend
+  // loopback ports; neither exists on a remote daemon.
+  const topology = await detectDockerTopology();
+  if (topology.kind === "remote") {
+    throw new ContainerLifecycleError(
+      "unsupported-topology",
+      topology.remediation ?? "The Docker daemon is not local to this backend.",
+    );
+  }
   const runtimeGeneration = identity.runtimeGeneration ?? 1;
   const args = [
     "create",
@@ -198,7 +213,7 @@ export async function createDockerContainer(
     // Linux Engine does not provide Docker Desktop's host.docker.internal DNS
     // entry automatically. Do not add this override on macOS/Windows: there it
     // shadows Docker Desktop's working DNS address with the VM bridge gateway.
-    ...(shouldAddDockerHostGatewayAlias()
+    ...(shouldAddDockerHostGatewayAlias(process.platform, topology.kind)
       ? ["--add-host", "host.docker.internal:host-gateway"]
       : []),
     "-e",
@@ -335,7 +350,7 @@ export async function createDockerContainer(
   args.push("-p", `127.0.0.1::${CURSOR_BRIDGE_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${GROK_ACP_BRIDGE_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${PI_BRIDGE_PORT}/tcp`);
-  args.push(context.dockerImage ?? DOCKER_IMAGE);
+  args.push(identity.imageId ?? context.dockerImage ?? DOCKER_IMAGE);
 
   let containerId: string;
   try {

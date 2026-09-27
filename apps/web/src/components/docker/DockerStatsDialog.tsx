@@ -46,6 +46,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatBytes, formatRelativeTime } from "./docker-stats-format";
+import { DockerImageStatusPanel } from "./DockerImageStatusPanel";
 
 interface DockerStatsDialogProps {
   open: boolean;
@@ -269,6 +270,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
 
     return (
       <div className="max-w-3xl space-y-6">
+        <DockerImageStatusPanel />
         {/* System Resources */}
         {stats && (
           <div className="space-y-4">

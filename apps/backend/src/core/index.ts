@@ -1,3 +1,4 @@
+import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { openRegistryWriter } from "./registry-writer-lease.js";
 import { reconcileContainerOperations } from "./container-lifecycle-service.js";
 import { DesignService } from "./design-service.js";
@@ -751,6 +752,9 @@ export class OrkestratorBackend {
           error instanceof Error ? error.message : error,
         );
       });
+      // Probe containers are never started; one left by an interrupted
+      // manifest read is removed in the background.
+      void cleanupStaleManifestProbes(this.context).catch(() => undefined);
     }
     await this.agentTools.start();
     this.reserveOwnedPreviewPorts();

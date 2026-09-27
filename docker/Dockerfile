@@ -439,6 +439,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends util-linux \
   && command -v setpriv \
   && test "$(setpriv --reuid=node --regid=node --init-groups id -u)" = "$(id -u node)"
 
+# Image manifest: identity, pinned versions and the container contracts this
+# image implements. Generated from the ARG pins above and verified against the
+# scripts installed in this layer; see docker/image-manifest.ts. The backend
+# reads it from a never-started container, so the entrypoint never runs to
+# answer "what is this image?".
+ARG ORKESTRATOR_SOURCE_REVISION=unknown
+ARG ORKESTRATOR_IMAGE_CAPABILITIES=unverified
+LABEL org.orkestrator.image.manifest-schema="1" \
+      org.orkestrator.image.capabilities="${ORKESTRATOR_IMAGE_CAPABILITIES}"
+COPY package.json /tmp/orkestrator-manifest/package.json
+COPY packages/protocol/src/image-manifest.ts /tmp/orkestrator-manifest/packages/protocol/src/image-manifest.ts
+COPY docker/image-manifest.ts /tmp/orkestrator-manifest/docker/image-manifest.ts
+RUN ORKESTRATOR_PACKAGE_JSON=/tmp/orkestrator-manifest/package.json \
+    BUN_VERSION="$(bun --version)" \
+    bun /tmp/orkestrator-manifest/docker/image-manifest.ts generate \
+      --out /usr/local/share/orkestrator/image-manifest.json \
+ && chmod 0644 /usr/local/share/orkestrator/image-manifest.json \
+ && rm -rf /tmp/orkestrator-manifest
+
 USER node
 
 # Default terminal settings

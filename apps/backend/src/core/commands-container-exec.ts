@@ -84,11 +84,15 @@ export const DOCKER_DESKTOP_GATEWAY_HOST = "gateway.docker.internal";
 
 export function shouldAddDockerHostGatewayAlias(
   platform: NodeJS.Platform = process.platform,
+  daemon: "local-engine" | "desktop" | "remote" | "unknown" | "unavailable" = "local-engine",
 ): boolean {
   // Docker Desktop publishes host.docker.internal through its own DNS. An
   // explicit host-gateway entry shadows that working address with the Linux VM
-  // bridge gateway on macOS/Windows, which cannot reach host-only listeners.
-  return platform === "linux";
+  // bridge gateway on macOS/Windows — and on Docker Desktop for Linux, whose
+  // daemon also runs in a VM — which cannot reach host-only listeners. Only a
+  // Linux Engine needs the alias.
+  // An undetermined daemon keeps the platform default rather than guessing.
+  return platform === "linux" && daemon !== "desktop" && daemon !== "remote";
 }
 
 /**

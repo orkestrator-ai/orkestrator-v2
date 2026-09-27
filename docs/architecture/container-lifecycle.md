@@ -122,3 +122,51 @@ and is unsupported.
 
 Any command may send `expectedRuntimeGeneration`; a replaced runtime answers
 `runtime-changed` instead of connecting the handle to the new container.
+
+## Images
+
+An operation resolves the configured tag once, at admission
+(`resolveOperationImage`), persists the immutable image id (and registry
+digest when the image came from a registry) in the operation, and creates the
+container from that id. Moving the tag mid-operation cannot change what the
+candidate runs. A missing image fails before anything is created.
+
+Each image carries a manifest at `/usr/local/share/orkestrator/image-manifest.json`
+(`packages/protocol/src/image-manifest.ts`), generated during the build by
+`docker/image-manifest.ts` from the Dockerfile's ARG pins:
+
+- **Capabilities are probed, not declared.** A contract script carries a
+  `ORKESTRATOR_CAPABILITY <name>=<version>` marker; a capability is in the
+  manifest only when its marker is present in the file installed at the
+  contract path. The build host probes the repository sources to stamp the
+  same list into the `org.orkestrator.image.capabilities` label, and the image
+  build fails if the installed files disagree (`scripts/docker-image-build-args.ts`).
+- **Read without running.** The backend reads the manifest from an owned,
+  labelled, network-less container that is never started, copies the file out
+  as a bounded tar stream (regular file, ≤ 64 KiB) and removes the container;
+  an interrupted probe is reclaimed at startup. Results are cached by image id.
+- **Legacy means legacy.** An image without a manifest keeps its guarded
+  operations and never gains a capability by default.
+
+`get_docker_image_status` reports `missing`, `compatible`, `legacy`,
+`incompatible` or `unavailable` with the missing capabilities and fixed
+remediation text. `check_base_image` remains a presence-only adapter.
+
+## Daemon topology
+
+`detectDockerTopology` reads the current context's endpoint (which reflects
+`DOCKER_HOST`/`DOCKER_CONTEXT`) and `docker info`, and keeps only fixed
+categories: `local-engine`, `desktop`, `remote`, `unknown`, `unavailable`, plus
+`rootless` and the server version. Raw endpoints are never persisted or
+emitted.
+
+Bind mounts name backend-host paths and bridges are reached on backend
+loopback ports, so container creation on a **remote** daemon is refused with
+`unsupported-topology`. The supported remote workflow is the standalone
+backend beside its daemon plus the remote gateway. The `host.docker.internal`
+host-gateway alias is added only for a Linux Engine; Docker Desktop (including
+Desktop for Linux) provides its own DNS entry.
+
+Qualified locally: Docker Engine 29.7.2 on Linux amd64. Docker Desktop and
+rootless daemons are detected and reported but not yet qualified; features
+that depend on cgroup or firewall enforcement gate on them explicitly.

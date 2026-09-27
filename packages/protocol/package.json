@@ -30,6 +30,7 @@
     "./feature-planning": "./src/feature-planning.ts",
     "./fatal-rejections": "./src/fatal-rejections.ts",
     "./gateway-token": "./src/gateway-token.ts",
+    "./image-manifest": "./src/image-manifest.ts",
     "./git-remote-url": "./src/git-remote-url.ts",
     "./github-repository": "./src/github-repository.ts",
     "./host-test-scheduler": "./src/host-test-scheduler.ts",

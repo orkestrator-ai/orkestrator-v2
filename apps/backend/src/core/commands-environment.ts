@@ -24,7 +24,6 @@ import {
   path,
   spawnPty,
   APP_SLUG,
-  DOCKER_IMAGE,
   DOCKER_LABEL_APP,
   DOCKER_LABEL_APP_VALUE,
   DOCKER_LABEL_OWNER,
@@ -127,6 +126,7 @@ import {
   ensureContainerProjectFilesAccess,
 } from "./commands-files.js";
 import { AmbiguousContainerCreateError, createDockerContainer } from "./commands-containers.js";
+import { configuredImageRef, resolveDockerImage } from "./docker-image.js";
 import {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   environmentLifecycleErrorMessage,
@@ -1104,6 +1104,29 @@ export async function prepareEnvironmentForSetup(
 }
 
 /**
+ * Resolves the configured image tag once, at admission, to its immutable id.
+ * The id is persisted with the operation and used for the create, so a tag
+ * moved mid-operation cannot change what the candidate runs. A missing image
+ * fails here with the image-unavailable classification; an answer that cannot
+ * be read leaves the create to report the daemon's own error.
+ */
+export async function resolveOperationImage(
+  context: Pick<CommandContext, "dockerImage">,
+): Promise<{ imageRef: string; imageId?: string; registryDigest?: string }> {
+  const imageRef = configuredImageRef(context);
+  const resolved = await resolveDockerImage(imageRef);
+  if (resolved.kind === "missing") {
+    throw new Error(`No such image: ${imageRef}`);
+  }
+  if (resolved.kind !== "present") return { imageRef };
+  return {
+    imageRef,
+    imageId: resolved.imageId,
+    ...(resolved.registryDigest ? { registryDigest: resolved.registryDigest } : {}),
+  };
+}
+
+/**
  * Creates (when needed) and starts an environment's container as one durable
  * lifecycle operation. Each phase is persisted before its Docker effect, the
  * create is labelled with the operation id, and the container id is committed
@@ -1131,14 +1154,15 @@ async function startContainerRuntime(
     let containerId = environment.containerId;
     if (!containerId) {
       const runtimeGeneration = nextRuntimeGeneration(environment);
-      const imageRef = context.dockerImage ?? DOCKER_IMAGE;
+      const image = await resolveOperationImage(context);
       await advanceContainerOperation(context, environment.id, operationId, {
         phase: "creating",
-        details: { generation: runtimeGeneration, imageRef },
+        details: { generation: runtimeGeneration, ...image },
       });
       containerId = await createDockerContainer(environment, context, {
         operationId,
         runtimeGeneration,
+        imageId: image.imageId,
       });
       unpersistedContainerId = containerId;
       await advanceContainerOperation(context, environment.id, operationId, {
@@ -1147,7 +1171,7 @@ async function startContainerRuntime(
           containerId,
           runtimeGeneration,
           owner: dockerOwnerNamespace(context.storage.getDataDir()),
-          imageRef,
+          ...image,
           createdByOperationId: operationId,
         },
         environment: { containerId },

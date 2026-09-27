@@ -13,6 +13,8 @@ set -e
 # with CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER in apps/backend/src/core/commands.ts.
 ORKESTRATOR_SETUP_CAPABILITIES=prepare-only
 export ORKESTRATOR_SETUP_CAPABILITIES
+# Image manifest contract (docker/image-manifest.ts):
+# ORKESTRATOR_CAPABILITY workspace-prepare=1
 
 PREPARE_ONLY=false
 if [ "${1:-}" = "--prepare-only" ]; then

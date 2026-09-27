@@ -1,5 +1,6 @@
 import { invoke } from "@/lib/native/backend";
 import type { DockerAvailability } from "@orkestrator/protocol/docker-availability";
+import type { DockerTopology, ImageStatus } from "@orkestrator/protocol/image-manifest";
 import type {
   Environment,
   EnvironmentStatus,
@@ -541,3 +542,13 @@ export async function openLocalInEditor(path: string, editor: PreferredEditor): 
 // --- File Commands ---
 
 /** Represents a file changed in git */
+
+/** Configured environment image: identity and container-contract compatibility. */
+export async function getDockerImageStatus(): Promise<ImageStatus> {
+  return invoke<ImageStatus>("get_docker_image_status");
+}
+
+/** Effective Docker daemon topology (endpoint kind, rootless, versions). */
+export async function getDockerTopology(refresh = false): Promise<DockerTopology> {
+  return invoke<DockerTopology>("get_docker_topology", { refresh });
+}

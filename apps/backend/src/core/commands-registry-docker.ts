@@ -1,4 +1,5 @@
 import { createSharedContainerLogReader } from "./container-log-snapshots.js";
+import { detectDockerTopology, getImageStatus } from "./docker-image.js";
 import {
   classify,
   listContainerCleanupInventory,
@@ -60,6 +61,7 @@ import {
   assertEnvironmentDeletionNotRequested,
   startAssignedContainerRuntimeTask,
   stopEnvironmentTask,
+  resolveOperationImage,
 } from "./commands-helpers.js";
 
 const lastDockerAvailabilityDiagnosticByLogger = new WeakMap<(message: string) => void, string>();
@@ -158,6 +160,12 @@ export function registerDockerCommands(
       })
     ).stdout.trim(),
   );
+  register("get_docker_image_status", (_args, context) => getImageStatus(context));
+  register("get_docker_topology", ({ refresh }) =>
+    detectDockerTopology({ refresh: refresh === true }),
+  );
+  // Legacy boolean adapter: presence only. It never implies compatibility;
+  // capability gates use `get_docker_image_status`.
   register("check_base_image", (_args, context) =>
     runCommand("docker", ["image", "inspect", context.dockerImage ?? DOCKER_IMAGE], {
       timeoutMs: 10_000,
@@ -178,14 +186,15 @@ export function registerDockerCommands(
       if (environment.containerId) return environment.containerId;
       const outcome = await runContainerOperation(context, id, "create", identity, async (op) => {
         const runtimeGeneration = nextRuntimeGeneration(environment);
-        const imageRef = context.dockerImage ?? DOCKER_IMAGE;
+        const image = await resolveOperationImage(context);
         await advanceContainerOperation(context, id, op.operationId, {
           phase: "creating",
-          details: { generation: runtimeGeneration, imageRef },
+          details: { generation: runtimeGeneration, ...image },
         });
         const containerId = await createDockerContainer(environment, context, {
           operationId: op.operationId,
           runtimeGeneration,
+          imageId: image.imageId,
         });
         await advanceContainerOperation(context, id, op.operationId, {
           phase: "created",
@@ -193,7 +202,7 @@ export function registerDockerCommands(
             containerId,
             runtimeGeneration,
             owner: dockerOwnerNamespace(context.storage.getDataDir()),
-            imageRef,
+            ...image,
             createdByOperationId: op.operationId,
           },
           environment: { containerId },

@@ -97,6 +97,7 @@ import {
 } from "./multi-review-progress.js";
 import { readTranscriptProgressSample } from "./transcript-progress.js";
 
+import { ActivityReadCoalescer } from "./activity-read-coalescer.js";
 import {
   recordEfficiency,
   type EfficiencyPhase,
@@ -410,6 +411,8 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
   stallWarningMs?: number;
   stallAbandonMs?: number;
   /**
+  /** Batch collection window of interactive Fix activity reads (`ActivityReadCoalescer`). */
+  activityReadCoalesceWindowMs?: number;
    * Status-observation cadence for work that is simply running at a provider.
    * Defaults to {@link DEFAULT_OBSERVATION_MS}, or to `pollIntervalMs` when a
    * caller configured that explicitly.
@@ -486,6 +489,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   private readonly evidencePermits = new ReviewEvidencePermits();
   /**
    * Per-workflow-object write queue. Reviewers advance concurrently and every
+  private readonly activityReads: ActivityReadCoalescer;
    * save is revision- and fence-checked, so unserialized saves of the same
    * in-memory workflow would reject one another as revision conflicts.
    */
@@ -525,6 +529,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     this.keyed =
       options.keyedScheduling ??
       (options.adaptiveScheduling !== false && keyedSchedulingEnabled("multi-review"));
+    this.activityReads = new ActivityReadCoalescer(options.activityReadCoalesceWindowMs);
     // The spacing is the slowest cadence these counts were designed for (the
     // 3 s observation interval), so the elapsed bound never shortens a grace.
     this.pollGate = new ElapsedPollGate(
@@ -2390,15 +2395,18 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         provider: session.agent,
         fence: session.sessionKey,
       });
-      // One session per workflow, read under this workflow's fence, so there
-      // is nothing to batch here: `observeActivityBatch` would need a
-      // cross-workflow coalescer. The tab's own background sweep already
-      // batches this session with every other native-agent read.
-      const activity = provider.observeActivity
-        ? (await provider.observeActivity(session.providerSessionId)).state
-        : provider.activity
-          ? await provider.activity(session.providerSessionId)
-          : undefined;
+      // One session per workflow, read under this workflow's fence. Reads of
+      // workflows advanced together share one batched no-touch request per
+      // provider connection where it has one (older bridges fall back to the
+      // single route); a failed or `unavailable` read rejects this workflow's
+      // read alone, exactly like a failed single read.
+      const activity = ActivityReadCoalescer.batches(provider)
+        ? (await this.activityReads.read(provider, session.providerSessionId)).state
+        : provider.observeActivity
+          ? (await provider.observeActivity(session.providerSessionId)).state
+          : provider.activity
+            ? await provider.activity(session.providerSessionId)
+            : undefined;
       let observation: (ProviderSessionObservation & { error?: string }) | undefined;
       if (activity === undefined) {
         observation = await readProviderStatus(provider, session.providerSessionId);

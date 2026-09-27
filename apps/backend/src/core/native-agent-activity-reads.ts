@@ -3,7 +3,7 @@ import {
   SESSION_ACTIVITY_BATCH_LIMITS,
 } from "@orkestrator/protocol/session-activity-batch";
 import {
-  type NativeAgentRuntimeProvider,
+  type AgentSessionProvider,
   type ProviderActivityObservation,
   type ProviderActivityState,
   ProviderUnavailableError,
@@ -23,9 +23,21 @@ export interface ActivityGroupRead {
   observation?: ProviderActivityObservation;
 }
 
+/** The activity and status surface one group read may use. */
+export type ActivityGroupProvider = Pick<
+  AgentSessionProvider,
+  | "activityBatch"
+  | "observeActivityBatch"
+  | "observeActivity"
+  | "activity"
+  | "status"
+  | "observeSession"
+  | "settleTurn"
+>;
+
 /** One session's read through the provider's best single-session contract. */
 async function readOne(
-  provider: NativeAgentRuntimeProvider,
+  provider: ActivityGroupProvider,
   sessionId: string,
 ): Promise<ActivityGroupRead> {
   if (provider.observeActivity) {
@@ -69,25 +81,39 @@ type Unit<S> =
  * already in flight still settle, and their successful answers are applied.
  * The first failure is then rethrown, which the caller handles exactly like a
  * failed per-session read: the group's observations stay uncertain.
+ *
+ * With `onReadFailure`, sessions are independent instead: a session whose read
+ * failed (or was answered `unavailable`) is reported there, every other read
+ * still runs, and the call resolves once all have settled. `apply` failures
+ * still reject.
  */
 export async function readActivityGroup<S extends { providerSessionId: string }>(options: {
-  provider: NativeAgentRuntimeProvider;
+  provider: ActivityGroupProvider;
   sessions: readonly S[];
   apply: (session: S, read: ActivityGroupRead) => Promise<void>;
+  onReadFailure?: (session: S, error: unknown) => void;
   concurrency?: number;
   chunkSize?: number;
 }): Promise<void> {
-  const { provider, sessions, apply } = options;
+  const { provider, sessions, apply, onReadFailure } = options;
   if (provider.activityBatch) {
-    const states = await provider.activityBatch(
-      sessions.map((session) => session.providerSessionId),
-    );
+    let states: Map<string, ProviderActivityState>;
+    try {
+      states = await provider.activityBatch(sessions.map((session) => session.providerSessionId));
+    } catch (error) {
+      if (!onReadFailure) throw error;
+      for (const session of sessions) onReadFailure(session, error);
+      return;
+    }
     for (const session of sessions) {
       const state = states.get(session.providerSessionId);
       if (!state) {
-        throw new ProviderUnavailableError(
+        const error = new ProviderUnavailableError(
           `Provider activity snapshot omitted ${session.providerSessionId}`,
         );
+        if (!onReadFailure) throw error;
+        onReadFailure(session, error);
+        continue;
       }
       await apply(session, { state });
     }
@@ -131,6 +157,10 @@ export async function readActivityGroup<S extends { providerSessionId: string }>
   const fail = (error: unknown): void => {
     failure ??= { error };
   };
+  const failRead = (session: S, error: unknown): void => {
+    if (onReadFailure) onReadFailure(session, error);
+    else fail(error);
+  };
   let applying: Promise<void> = Promise.resolve();
   const deliver = (session: S, read: ActivityGroupRead): void => {
     applying = applying.then(() => apply(session, read).catch(fail));
@@ -139,7 +169,14 @@ export async function readActivityGroup<S extends { providerSessionId: string }>
   const run = async (unit: Unit<S>): Promise<void> => {
     try {
       if (unit.kind === "single") {
-        deliver(unit.session, await readOne(provider, unit.session.providerSessionId));
+        let read: ActivityGroupRead;
+        try {
+          read = await readOne(provider, unit.session.providerSessionId);
+        } catch (error) {
+          failRead(unit.session, error);
+          return;
+        }
+        deliver(unit.session, read);
         return;
       }
       let entries: Awaited<ReturnType<NonNullable<typeof provider.observeActivityBatch>>>;
@@ -159,7 +196,8 @@ export async function readActivityGroup<S extends { providerSessionId: string }>
         if (entry === "deferred") {
           queue.push({ kind: "single", session });
         } else if (entry === undefined || entry === "unavailable") {
-          fail(
+          failRead(
+            session,
             new ProviderUnavailableError(
               `Provider activity unavailable for ${session.providerSessionId}`,
             ),

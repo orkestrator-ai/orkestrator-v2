@@ -265,6 +265,34 @@ describe("readActivityGroup with individual reads", () => {
     expect(applied.size).toBeLessThanOrEqual(2);
   });
 
+  test("with onReadFailure, a failed read is reported alone and every other read runs", async () => {
+    const reads: string[] = [];
+    const p = provider({
+      observeActivity: async (id) => {
+        reads.push(id);
+        if (id === "s-0") throw new ProviderUnavailableError("HTTP 503");
+        return { state: "idle" };
+      },
+    });
+    const { applied, apply } = collector();
+    const failed: string[] = [];
+
+    await readActivityGroup({
+      provider: p,
+      sessions: sessions(20),
+      apply,
+      concurrency: 2,
+      onReadFailure: (session, error) => {
+        expect(error).toBeInstanceOf(ProviderUnavailableError);
+        failed.push(session.providerSessionId);
+      },
+    });
+
+    expect(reads).toHaveLength(20);
+    expect(failed).toEqual(["s-0"]);
+    expect(applied.size).toBe(19);
+  });
+
   test("falls back to the coarse status contract without observeActivity", async () => {
     const p = provider({
       status: async (id: string) =>

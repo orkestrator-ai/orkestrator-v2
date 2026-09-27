@@ -1094,7 +1094,7 @@ test("MultiReviewService polls an HTTP interactive Fix through the no-touch acti
   const fallbackProvider = new Provider();
   const requests: string[] = [];
   let activityState: "working" | "idle" = "working";
-  const { provider: http } = httpProvider((request) => {
+  const { provider: http } = httpProvider((request, init) => {
     const url = new URL(request);
     requests.push(url.pathname);
     if (url.pathname.endsWith("/activity")) {
@@ -1129,7 +1129,7 @@ test("MultiReviewService polls an HTTP interactive Fix through the no-touch acti
 
       requests.length = 0;
       await service.advanceNow(started.id);
-      expect(requests.filter((path) => path.endsWith("/activity"))).toHaveLength(1);
+      expect(requests.filter((path) => path.endsWith("/activity"))).toEqual(["/sessions/activity"]);
       expect(
         requests.some(
           (path) =>
@@ -1140,7 +1140,10 @@ test("MultiReviewService polls an HTTP interactive Fix through the no-touch acti
 
       activityState = "idle";
       await service.advanceNow(started.id);
-      expect(requests.filter((path) => path.endsWith("/activity"))).toHaveLength(2);
+      expect(requests.filter((path) => path.endsWith("/activity"))).toEqual([
+        "/sessions/activity",
+        "/sessions/activity",
+      ]);
       expect(
         requests.filter(
           (path) =>
@@ -1158,6 +1161,13 @@ test("MultiReviewService polls an HTTP interactive Fix through the no-touch acti
       createProvider: async (_workflow, selection) =>
         selection.agent === "codex" ? http : fallbackProvider,
       serviceOptions: {
+    if (url.pathname === "/sessions/activity") {
+      const { sessionIds } = JSON.parse(String(init.body)) as { sessionIds: string[] };
+      return Response.json({
+        version: 1,
+        observations: Object.fromEntries(sessionIds.map((id) => [id, { activity: activityState }])),
+      });
+    }
         dispatchAddressPrompt: async (workflow) => ({
           tabId: workflow.addressTabId!,
           fixSession: {
@@ -1235,6 +1245,183 @@ test("MultiReviewService fails recoverably when the consolidation session is mis
   await withService(
     "env-address-missing",
     provider,
+/**
+ * Several workflows, each handed to an interactive Fix on one HTTP bridge
+ * connection, advanced together. `observations` answers the batch route;
+ * `undefined` makes it an older bridge without one.
+ */
+async function withInteractiveFixes(
+  label: string,
+  observations: Record<string, string> | undefined,
+  run: (context: {
+    service: MultiReviewService;
+    workflowIds: string[];
+    requests: string[];
+    batchBodies: string[][];
+    snapshot: (workflowId: string) => Promise<MultiReviewWorkflow | undefined>;
+  }) => Promise<void>,
+): Promise<void> {
+  const fallbackProvider = new Provider();
+  const requests: string[] = [];
+  const batchBodies: string[][] = [];
+  const activityOf = (sessionId: string) =>
+    observations?.[sessionId.replace(/^http-fix-.*-(\d)$/, "fix-$1")] ?? "working";
+  const { provider: http } = httpProvider((request, init) => {
+    const url = new URL(request);
+    requests.push(url.pathname);
+    if (url.pathname === "/sessions/activity") {
+      if (!observations) return new Response("", { status: 404 });
+      const { sessionIds } = JSON.parse(String(init.body)) as { sessionIds: string[] };
+      batchBodies.push(sessionIds);
+      return Response.json({
+        version: 1,
+        observations: Object.fromEntries(
+          sessionIds.map((id) => [id, { activity: activityOf(id) }]),
+        ),
+      });
+    }
+    if (url.pathname.endsWith("/activity")) {
+      const sessionId = decodeURIComponent(url.pathname.split("/")[2]!);
+      return Response.json({ activity: activityOf(sessionId) });
+    }
+    return Response.json({ status: "running", contextUsage: { usedTokens: 1, sessionTokens: 1 } });
+  }, codexConnection);
+  const environmentIds = [0, 1, 2].map((index) => `env-${label}-${index}`);
+  await withService(
+    environmentIds[0]!,
+    fallbackProvider,
+    async ({ service, storage, snapshot }) => {
+      for (const environmentId of environmentIds.slice(1)) {
+        await storage.addEnvironment({
+          id: environmentId,
+          projectId: "project-1",
+          name: "review",
+          branch: "change",
+          containerId: null,
+          status: "running",
+          prUrl: null,
+          prState: null,
+          hasMergeConflicts: null,
+          createdAt: new Date(0).toISOString(),
+          networkAccessMode: "full",
+          order: 0,
+          environmentType: "local",
+          worktreePath: "/tmp/review",
+          setupScriptsComplete: true,
+        });
+      }
+      const workflowIds: string[] = [];
+      for (const environmentId of environmentIds) {
+        const started = await service.start({
+          environmentId,
+          projectId: "project-1",
+          targetBranch: "main",
+          reviewers: [{ agent: "claude", model: "opus" }],
+          reviewModel: { agent: "claude", model: "opus" },
+          fixModel: { agent: "codex", model: "gpt-5.6" },
+        });
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.phase === "ready";
+        });
+        await service.address(started.id);
+        await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+        workflowIds.push(started.id);
+      }
+      // Drain the handoff's own follow-up passes before measuring.
+      await Promise.all(workflowIds.map((id) => service.advanceNow(id)));
+      requests.length = 0;
+      batchBodies.length = 0;
+      await run({ service, workflowIds, requests, batchBodies, snapshot });
+    },
+    {
+      packageFlow: true,
+      createProvider: async (_workflow, selection) =>
+        selection.agent === "codex" ? http : fallbackProvider,
+      serviceOptions: {
+        // Generous, so three concurrent passes always meet in one window.
+        activityReadCoalesceWindowMs: 250,
+        dispatchAddressPrompt: async (workflow) => ({
+          tabId: workflow.addressTabId!,
+          fixSession: {
+            ...workflow.fixModel,
+            sessionKey: workflow.addressSessionKey!,
+            providerSessionId: `http-fix-${workflow.id}-${environmentIds.indexOf(workflow.environmentId)}`,
+            requestIds: [workflow.addressRequestId!],
+            status: "running",
+            startedAt: new Date().toISOString(),
+          },
+        }),
+      },
+    },
+  );
+}
+
+const singleActivityRead = (path: string) => /^\/session\/[^/]+\/activity$/.test(path);
+
+test("MultiReviewService batches concurrent interactive Fix activity reads per bridge", async () => {
+  await withInteractiveFixes(
+    "fix-batch",
+    { "fix-0": "working", "fix-1": "working", "fix-2": "waiting" },
+    async ({ service, workflowIds, requests, batchBodies, snapshot }) => {
+      await Promise.all(workflowIds.map((id) => service.advanceNow(id)));
+
+      expect(requests.filter((path) => path === "/sessions/activity")).toHaveLength(1);
+      expect(batchBodies[0]).toHaveLength(3);
+      expect(requests.filter(singleActivityRead)).toEqual([]);
+      for (const id of workflowIds) {
+        expect((await snapshot(id))?.fixSession).toMatchObject({
+          status: "running",
+          observedRunning: true,
+        });
+      }
+    },
+  );
+});
+
+test("MultiReviewService keeps missing and unavailable Fix activity distinct in a batch", async () => {
+  await withInteractiveFixes(
+    "fix-batch-partial",
+    { "fix-0": "working", "fix-1": "missing", "fix-2": "unavailable" },
+    async ({ service, workflowIds, requests, snapshot }) => {
+      await Promise.all(workflowIds.map((id) => service.advanceNow(id)));
+
+      expect(requests.filter((path) => path === "/sessions/activity")).toHaveLength(1);
+      const [working, missing, unavailable] = await Promise.all(workflowIds.map(snapshot));
+      expect(working?.fixSession).toMatchObject({ status: "running", observedRunning: true });
+      // Only the bridge's proof of nonexistence settles a Fix as gone.
+      expect(missing?.fixSession).toMatchObject({
+        status: "failed",
+        error: "The interactive fix session no longer exists",
+      });
+      // Uncertainty is a failed read of that workflow alone: nothing settles.
+      expect(unavailable?.fixSession?.status).toBe("running");
+      expect(unavailable?.fixSession?.error).toBeUndefined();
+      expect(unavailable?.fixSession?.completedAt).toBeUndefined();
+    },
+  );
+});
+
+test("MultiReviewService reads interactive Fix activity per session on an older bridge", async () => {
+  await withInteractiveFixes(
+    "fix-batch-old-bridge",
+    undefined,
+    async ({ service, workflowIds, requests, snapshot }) => {
+      await Promise.all(workflowIds.map((id) => service.advanceNow(id)));
+      await Promise.all(workflowIds.map((id) => service.advanceNow(id)));
+
+      // The absent route is learned once per connection, not once per read.
+      expect(requests.filter((path) => path === "/sessions/activity").length).toBeLessThanOrEqual(
+        1,
+      );
+      expect(requests.filter(singleActivityRead)).toHaveLength(6);
+      for (const id of workflowIds) {
+        expect((await snapshot(id))?.fixSession).toMatchObject({ status: "running" });
+      }
+    },
+  );
+});
+
     async ({ service, storage, start, snapshot }) => {
       const started = await start();
       await waitUntil(async () => {

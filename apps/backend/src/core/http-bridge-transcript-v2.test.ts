@@ -85,6 +85,25 @@ function runtime(provider: unknown): NativeAgentRuntimeProvider {
 }
 
 describe("bridge transcript v2 negotiation", () => {
+  test("an unknown session's 404 does not disable summaries for another session", async () => {
+    const { provider, requests } = httpProvider((url) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.includes("/missing/")) return new Response("", { status: 404 });
+      return Response.json(
+        bridgeTranscriptSummaryUpdate(messages, {
+          ...readOptions,
+          limit: 1,
+          targetBytes: 512 * 1024,
+          pages: true,
+        }),
+      );
+    }, codexConnection);
+    await runtime(provider).transcriptSnapshot!("missing", summaryRead);
+    const found = await runtime(provider).transcriptSnapshot!("session-1", summaryRead);
+    if ("unchanged" in found) throw new Error("expected snapshot");
+    expect(found.representation).toBe("summary");
+    expect(new URL(requests.at(-1)!.url).searchParams.get("version")).toBe("2");
+  });
   test("a v2 bridge answers summaries whose details and pages resolve exactly", async () => {
     const { provider, requests } = bridge(2, { details: true, pages: true });
     const snapshot = await runtime(provider).transcriptSnapshot!("session-1", summaryRead);

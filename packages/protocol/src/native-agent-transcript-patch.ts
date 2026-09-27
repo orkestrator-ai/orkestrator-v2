@@ -8,9 +8,9 @@
  * copy", "keep your copy and append this text", or "here is the new part".
  *
  * Patches ride inside a transcript delta, which a client applies only when its
- * current view token equals the delta's `baseToken`. That token pins the exact
- * previous version of every message the server diffed against, so a patch can
- * address previous parts by index without per-part revisions. Anything that
+ * current view token equals the delta's `baseToken`. A per-message part digest
+ * also checks the local base, which can differ after a renderer remount.
+ * Anything that
  * does not line up — a missing message, an index out of range, a declared
  * length that does not match — rejects the whole delta, and the client falls
  * back to a snapshot. A valid prefix of an invalid batch is never applied.
@@ -24,7 +24,7 @@
  * smaller than the message it replaces.
  */
 
-export const NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION = 1 as const;
+export const NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION = 2 as const;
 
 const MAX_PATCH_PARTS = 4_096;
 const MAX_PATCHES = 4_096;
@@ -56,6 +56,8 @@ export type NativeAgentPartPatch =
 
 export interface NativeAgentMessagePatch {
   id: string;
+  basePartsCount: number;
+  basePartsDigest: string;
   /** Every message field except `id`, `parts` and `content`, as in the new message. */
   fields: Record<string, unknown>;
   content: { length: number; append: string } | { value: string };
@@ -65,6 +67,18 @@ export interface NativeAgentMessagePatch {
 type Encode = (value: unknown) => string;
 
 const defaultEncode: Encode = (value) => JSON.stringify(value) ?? "null";
+
+function partsDigest(parts: readonly unknown[]): string {
+  const serialized = JSON.stringify(parts);
+  let first = 2_166_136_261;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < serialized.length; index += 1) {
+    const code = serialized.charCodeAt(index);
+    first = Math.imul(first ^ code, 16_777_619);
+    second = Math.imul(second ^ code, 0x85ebca6b);
+  }
+  return `${(first >>> 0).toString(36)}:${(second >>> 0).toString(36)}`;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -231,7 +245,14 @@ export function buildNativeAgentMessagePatch(
   const content = next.content.startsWith(previous.content)
     ? { length: previous.content.length, append: next.content.slice(previous.content.length) }
     : { value: next.content };
-  return { id: next.id, fields, content, parts };
+  return {
+    id: next.id,
+    basePartsCount: previous.parts.length,
+    basePartsDigest: partsDigest(previous.parts),
+    fields,
+    content,
+    parts,
+  };
 }
 
 /**
@@ -244,6 +265,11 @@ export function applyNativeAgentMessagePatch<TMessage>(
 ): TMessage | null {
   if (!isRecord(previous) || previous.id !== patch.id) return null;
   if (!Array.isArray(previous.parts) || typeof previous.content !== "string") return null;
+  if (
+    previous.parts.length !== patch.basePartsCount ||
+    partsDigest(previous.parts) !== patch.basePartsDigest
+  )
+    return null;
   const parts = applyPartPatches(previous.parts as unknown[], patch.parts);
   if (parts === null) return null;
   let content: string;
@@ -301,6 +327,13 @@ export function isNativeAgentMessagePatch(value: unknown): value is NativeAgentM
   if (typeof value.id !== "string" || value.id.length === 0 || value.id.length > 4_096) {
     return false;
   }
+  if (
+    !isCount(value.basePartsCount) ||
+    value.basePartsCount > MAX_PATCH_PARTS ||
+    typeof value.basePartsDigest !== "string" ||
+    !/^[a-z0-9]+:[a-z0-9]+$/.test(value.basePartsDigest)
+  )
+    return false;
   if (!isRecord(value.fields) || Object.keys(value.fields).length > MAX_FIELDS) return false;
   if ("parts" in value.fields || "content" in value.fields || "id" in value.fields) return false;
   const content = value.content;

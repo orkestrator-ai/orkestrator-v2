@@ -907,6 +907,7 @@ export function MultiReviewReviewerTab({
                       containerId={containerId}
                       agentExpansionScope={data.environmentId}
                       platform={snapshot?.agent}
+                      loadToolDetails={reviewerToolDetails}
                     />
                   </MessageRenderBoundary>
                 )}

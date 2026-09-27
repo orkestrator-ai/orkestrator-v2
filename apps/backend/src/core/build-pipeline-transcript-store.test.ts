@@ -160,6 +160,20 @@ describe("BuildPipelineTranscriptStore", () => {
     expect(transcripts.stats().manifestBytesWritten).toBe(writes.manifestBytesWritten);
   });
 
+  test("a newly omitted message advances the reference and fingerprint", async () => {
+    const transcripts = store(await tempDirectory(), {
+      limits: { maxChunkBytes: 4_096, maxSessionBytes: 20_000 },
+    });
+    const body = messages(1);
+    const first = committed(await transcripts.commit(input(body)));
+    const appended = [...body, { id: "huge", text: "x".repeat(10_000) }];
+    const second = committed(await transcripts.commit(input(appended, { revision: 2 })));
+    expect(second.written).toBe(true);
+    expect(second.reference.manifestRevision).toBeGreaterThan(first.reference.manifestRevision);
+    expect(second.reference).toMatchObject({ complete: false, omittedMessages: 1, revision: 2 });
+    expect(second.fingerprint).not.toBe(first.fingerprint);
+  });
+
   test("records oversized content as explicitly incomplete instead of failing", async () => {
     const transcripts = store(await tempDirectory(), {
       limits: { maxChunkBytes: 4_096, maxSessionBytes: 20_000 },

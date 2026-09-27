@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { ByteCountSemaphore, KeyedSerialQueue } from "./keyed-record-concurrency.js";
 import {
   KEYED_RECORD_TEMP_EXTENSION,
+  KEYED_RECORD_EXTENSION,
   ensureNamespaceDirectory,
   readBoundedFile,
   recordFileStem,
@@ -94,7 +95,10 @@ export interface RecordManifestStoreOptions {
 
 export type ManifestCommitResult =
   | KeyedRecordWriteResult
-  | { status: "rejected"; reason: "too-many-chunks" | "chunk-too-large" | "unknown-chunk" };
+  | {
+      status: "rejected";
+      reason: "too-many-chunks" | "chunk-too-large" | "unknown-chunk" | "corrupt-current";
+    };
 
 function isChunkRef(value: unknown): value is ChunkRef {
   if (!value || typeof value !== "object") return false;
@@ -193,7 +197,7 @@ export class RecordManifestStore {
   ): Promise<{ revision: number; manifest: RecordManifest } | null> {
     const read =
       generation === "current"
-        ? await this.manifests.get(key)
+        ? await this.manifests.getCurrentOnly(key)
         : await this.manifests.getPrevious(key);
     if (read.status !== "found" || (generation === "current" && read.generation !== "current")) {
       return null;
@@ -282,6 +286,19 @@ export class RecordManifestStore {
     await this.ensureDirectories();
     const stem = recordFileStem(this.options.namespace, key);
     return this.keyQueue.run(stem, async () => {
+      const currentFile = await this.manifests.getCurrentOnly(key);
+      // A corrupt current can still have the only viable previous manifest.
+      // Repair must resolve it before a new commit can rotate generations.
+      if (this.options.retentionClass === "durable" && currentFile.status === "corrupt") {
+        return { status: "rejected", reason: "corrupt-current" };
+      }
+      if (
+        this.options.retentionClass === "durable" &&
+        currentFile.status === "found" &&
+        !parseManifest(currentFile.payload)
+      ) {
+        return { status: "rejected", reason: "corrupt-current" };
+      }
       const before = await this.readManifest(key, "current");
       const beforePrevious =
         this.options.retentionClass === "durable" ? await this.readManifest(key, "previous") : null;
@@ -339,11 +356,11 @@ export class RecordManifestStore {
       const committed = await this.readManifest(key, "current");
       if (!committed || committed.revision !== result.revision) return result;
       await this.options.faults?.at?.("before-cleanup", { key });
+      const retainedPrevious =
+        this.options.retentionClass === "durable" ? await this.readManifest(key, "previous") : null;
       const keep = new Set([
         ...committed.manifest.chunks.map((chunk) => chunk.name),
-        ...(this.options.retentionClass === "durable"
-          ? (before?.manifest.chunks.map((chunk) => chunk.name) ?? [])
-          : []),
+        ...(retainedPrevious?.manifest.chunks.map((chunk) => chunk.name) ?? []),
       ]);
       const dropped = [
         ...(beforePrevious?.manifest.chunks ?? []),
@@ -414,19 +431,45 @@ export class RecordManifestStore {
     await this.ensureDirectories();
     const manifestReport = await this.manifests.repair();
     const referenced = new Set<string>();
-    for (const metadata of await this.manifests.list()) {
+    const indexed = await this.manifests.list();
+    const indexedStems = new Set(
+      indexed.map((entry) => recordFileStem(this.options.namespace, entry.key)),
+    );
+    const maxEntries =
+      this.options.maxRepairEntries ??
+      this.options.maxRecords * this.options.maxChunksPerRecord + 1_024;
+    // Reconciliation leaves a corrupt durable current on disk so its .prev
+    // can answer reads. If that stem is absent from the index, chunk GC cannot
+    // prove its previous generation unreferenced.
+    let unindexedDurableCurrent = false;
+    if (this.options.retentionClass === "durable") {
+      const manifestsDirectory = await fs.opendir(path.join(this.options.directory, "manifests"));
+      let inspected = 0;
+      for await (const entry of manifestsDirectory) {
+        if (++inspected > maxEntries) {
+          unindexedDurableCurrent = true;
+          break;
+        }
+        const name = entry.name;
+        if (
+          name.endsWith(KEYED_RECORD_EXTENSION) &&
+          !indexedStems.has(name.slice(0, -KEYED_RECORD_EXTENSION.length))
+        ) {
+          unindexedDurableCurrent = true;
+          break;
+        }
+      }
+    }
+    for (const metadata of indexed) {
       for (const generation of ["current", "previous"] as const) {
         const loaded = await this.readManifest(metadata.key, generation);
         for (const chunk of loaded?.manifest.chunks ?? []) referenced.add(chunk.name);
       }
     }
     const grace = this.options.tempGraceMs ?? 60_000;
-    const maxEntries =
-      this.options.maxRepairEntries ??
-      this.options.maxRecords * this.options.maxChunksPerRecord + 1_024;
     let scannedChunks = 0;
     let removedChunks = 0;
-    let complete = manifestReport.complete;
+    let complete = manifestReport.complete && !unindexedDurableCurrent;
     const directory = await fs.opendir(this.chunksDirectory, { bufferSize: 64 });
     try {
       for await (const dirent of directory) {
@@ -440,7 +483,7 @@ export class RecordManifestStore {
         const stat = await fs.lstat(fullPath).catch(() => null);
         if (!stat || this.now() - stat.mtimeMs <= grace) continue;
         // An incomplete manifest scan cannot prove a chunk unreferenced.
-        if (!manifestReport.complete) continue;
+        if (!complete) continue;
         await fs.rm(fullPath, { force: true });
         removedChunks += 1;
       }

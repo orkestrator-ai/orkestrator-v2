@@ -58,8 +58,8 @@ export const BUILD_PIPELINE_TRANSCRIPT_LIMITS: Readonly<BuildPipelineTranscriptL
   Object.freeze({
     targetChunkBytes: 256 * 1024,
     maxChunkBytes: 8 * 1024 * 1024,
-    // Above the old 32 MiB whole-snapshot bound, so no transcript the inline
-    // format could hold is truncated by the migration.
+    // Above the old 32 MiB whole-snapshot bound. Migration keeps an inline
+    // body when an individual message cannot fit one chunk.
     maxSessionBytes: 48 * 1024 * 1024,
     maxChunksPerSession: 1_024,
     maxSessions: 16_384,
@@ -300,7 +300,9 @@ export class BuildPipelineTranscriptStore {
         current &&
         currentMeta &&
         currentMeta.sdkSessionId === input.sdkSessionId &&
-        currentMeta.contentDigest === contentDigest
+        currentMeta.contentDigest === contentDigest &&
+        currentMeta.fingerprint === input.fingerprint &&
+        currentMeta.omittedMessages === retained.omitted
       ) {
         this.counters.idempotentCommits += 1;
         return {

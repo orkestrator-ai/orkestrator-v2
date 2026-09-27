@@ -113,7 +113,9 @@ async function importPipeline(
       fingerprint,
       sourceRevision: record.revision,
     });
-    if (committed.status !== "committed") return null;
+    // The legacy body is the last complete copy. Never discard it when
+    // retention had to omit a message during import.
+    if (committed.status !== "committed" || !committed.reference.complete) return null;
     const verified = await store.read(record.id, sessionKey, committed.reference);
     if (
       verified.status !== "found" ||

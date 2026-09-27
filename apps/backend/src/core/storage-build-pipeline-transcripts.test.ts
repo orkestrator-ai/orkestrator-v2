@@ -131,6 +131,22 @@ async function seedLegacy(storage: StorageService) {
 }
 
 describe("build pipeline transcript migration", () => {
+  test("keeps a legacy inline body when one message exceeds the chunk limit", async () => {
+    await withStorage(async (storage, dataDir) => {
+      const huge = messages(1, "large", 9 * 1024 * 1024);
+      await storage.saveBuildPipeline(
+        "large",
+        "proj-1",
+        "",
+        2,
+        pipelineSnapshot("large", [legacySession("large:build", "build", huge)]),
+      );
+      const report = await storage.migrateBuildPipelineTranscripts();
+      expect(report.remaining).toBe(1);
+      expect((await sessionsOf(storage, "large"))[0]!.messages).toEqual(huge);
+      expect(await controlFile(dataDir)).toContain(SENTINEL);
+    });
+  });
   test("moves inline transcripts out of the control file without changing revisions", async () => {
     await withStorage(async (storage, dataDir) => {
       const bodies = await seedLegacy(storage);

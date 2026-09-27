@@ -178,6 +178,39 @@ describe("RecordManifestStore", () => {
     expect(await cache.read("key")).toEqual({ status: "unavailable", reason: "chunk-unreadable" });
   });
 
+  test("a corrupt current manifest cannot rotate away the valid previous chunks", async () => {
+    const directory = await tempDirectory();
+    const store = manifestStore(directory);
+    await store.commit("key", [Buffer.from("first")]);
+    await store.commit("key", [Buffer.from("second")]);
+    const file = path.join(store.manifests.directory, `${store.manifests.stemFor("key")}.rec`);
+    const bytes = await fs.readFile(file);
+    bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 0xff;
+    await fs.writeFile(file, bytes);
+    expect(text(await store.read("key"))).toEqual(["first"]);
+    expect(await store.commit("key", [Buffer.from("third")])).toEqual({
+      status: "rejected",
+      reason: "corrupt-current",
+    });
+    expect(text(await store.read("key"))).toEqual(["first"]);
+    const later = manifestStore(directory, { now: () => Date.now() + 120_000 });
+    await later.repair();
+    expect(text(await later.read("key"))).toEqual(["first"]);
+  });
+
+  test("repair keeps previous chunks when the durable current header is unindexed", async () => {
+    const directory = await tempDirectory();
+    const store = manifestStore(directory);
+    await store.commit("key", [Buffer.from("first")]);
+    await store.commit("key", [Buffer.from("second")]);
+    const file = path.join(store.manifests.directory, `${store.manifests.stemFor("key")}.rec`);
+    await fs.writeFile(file, "bad header\n");
+    const later = manifestStore(directory, { now: () => Date.now() + 120_000 });
+    const report = await later.repair();
+    expect(report.complete).toBe(false);
+    expect(text(await later.read("key"))).toEqual(["first"]);
+  });
+
   test("deletes every manifest generation and the chunks they reference", async () => {
     const directory = await tempDirectory();
     const store = manifestStore(directory);

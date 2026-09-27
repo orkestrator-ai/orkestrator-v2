@@ -384,8 +384,17 @@ function isSummarizable(
 export function summarizeBridgeMessage<T>(message: T): T {
   if (!isSummarizable(message)) return message;
   let changed = false;
+  const keys = message.parts.map(topLevelKey);
+  const counts = new Map<string, number>();
+  for (const key of keys) counts.set(key, (counts.get(key) ?? 0) + 1);
   const parts = message.parts.map((part, index) => {
-    const summarized = summarizePart(part, message.id, [topLevelKey(part, index)], 0);
+    const key = keys[index]!;
+    const summarized = summarizePart(
+      part,
+      message.id,
+      [counts.get(key)! > 1 ? `i:${index}` : key],
+      0,
+    );
     if (summarized !== part) changed = true;
     return summarized;
   });

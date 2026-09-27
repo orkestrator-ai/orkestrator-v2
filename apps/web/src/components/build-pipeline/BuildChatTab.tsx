@@ -547,19 +547,52 @@ export function BuildChatTab({
   const transcriptStale = isBuildPipelineTranscriptStale(selectedSession);
   const transcriptUnavailable = isBuildPipelineTranscriptUnavailable(selectedSession);
   const transcriptRequestRef = useRef<string | null>(null);
+  const transcriptRetryAttemptRef = useRef(0);
+  const transcriptRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [transcriptRetryTick, setTranscriptRetryTick] = useState(0);
   const selectedSessionKey = selectedSession?.sessionKey;
   const selectedMessageRevision = selectedSession?.messageRevision ?? 0;
+  const selectedLoadedCount = selectedSession?.messages?.length ?? -1;
   useEffect(() => {
     if (!isActive || !transcriptStale || !selectedSessionKey) return;
-    const request = `${data.pipelineId}\0${selectedSessionKey}\0${selectedMessageRevision}`;
+    const request = `${data.pipelineId}\0${selectedSessionKey}\0${selectedMessageRevision}\0${selectedLoadedCount}`;
     if (transcriptRequestRef.current === request) return;
     transcriptRequestRef.current = request;
     void hydrateBuildPipeline(data.pipelineId, undefined, {
       prioritySessionKey: selectedSessionKey,
-    }).catch((error) => {
-      console.warn("[BuildChatTab] Failed to load the stage transcript:", error);
-    });
-  }, [data.pipelineId, isActive, selectedMessageRevision, selectedSessionKey, transcriptStale]);
+    })
+      .then(() => {
+        if (transcriptRequestRef.current !== request) return;
+        transcriptRetryAttemptRef.current = 0;
+        if (transcriptRetryTimerRef.current) clearTimeout(transcriptRetryTimerRef.current);
+        transcriptRetryTimerRef.current = null;
+      })
+      .catch((error) => {
+        if (transcriptRequestRef.current !== request) return;
+        transcriptRequestRef.current = null;
+        console.warn("[BuildChatTab] Failed to load the stage transcript:", error);
+        const delay = Math.min(250 * 2 ** transcriptRetryAttemptRef.current, 10_000);
+        transcriptRetryAttemptRef.current += 1;
+        transcriptRetryTimerRef.current = setTimeout(() => {
+          transcriptRetryTimerRef.current = null;
+          setTranscriptRetryTick((tick) => tick + 1);
+        }, delay);
+      });
+  }, [
+    data.pipelineId,
+    isActive,
+    selectedLoadedCount,
+    selectedMessageRevision,
+    selectedSessionKey,
+    transcriptStale,
+    transcriptRetryTick,
+  ]);
+  useEffect(
+    () => () => {
+      if (transcriptRetryTimerRef.current) clearTimeout(transcriptRetryTimerRef.current);
+    },
+    [],
+  );
   const reportSession = pipeline ? reviewReportSession(pipeline) : undefined;
   const fanoutReviewerBySessionKey = useMemo(
     () =>

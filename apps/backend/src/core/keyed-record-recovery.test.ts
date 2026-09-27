@@ -148,6 +148,38 @@ describe("keyed record recovery matrix", () => {
     expect((await fs.readdir(directory)).filter((name) => !name.startsWith("_"))).toHaveLength(2);
   });
 
+  test("a write after current corruption preserves the last valid previous generation", async () => {
+    for (const corruption of ["payload", "header"] as const) {
+      const directory = path.join(await tempDirectory(), corruption);
+      const store = storeAt(directory, { retentionClass: "durable" });
+      await store.put("key", "generation-1");
+      await store.put("key", "generation-2");
+      const file = recordPath(directory, "key");
+      if (corruption === "header") {
+        await fs.writeFile(file, "bad header\n");
+      } else {
+        const bytes = await fs.readFile(file);
+        bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 0xff;
+        await fs.writeFile(file, bytes);
+      }
+      const failed = storeAt(directory, {
+        retentionClass: "durable",
+        faults: {
+          at: (stage) => {
+            if (stage === "after-retain-previous") throw new Error("publish interrupted");
+          },
+        },
+      });
+      await expect(failed.put("key", "generation-3")).rejects.toThrow("publish interrupted");
+      expect(await store.get("key")).toMatchObject({ status: "found", generation: "previous" });
+      expect(await payloadOf(store, "key")).toBe("generation-1");
+      expect(await store.put("key", "generation-3")).toMatchObject({ status: "written" });
+      expect(await payloadOf(store, "key")).toBe("generation-3");
+      const previous = await store.getPrevious("key");
+      expect(previous.status === "found" ? previous.payload.toString() : null).toBe("generation-1");
+    }
+  });
+
   test("an interrupted delete cannot be undone by the retained generation", async () => {
     const directory = path.join(await tempDirectory(), "records");
     await storeAt(directory, { retentionClass: "durable" }).put("key", "one");

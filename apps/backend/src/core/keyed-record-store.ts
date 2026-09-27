@@ -67,6 +67,7 @@ export type KeyedRecordLock = (targetPath: string) => Promise<() => Promise<void
 export type KeyedRecordFaultStage =
   | "after-stage"
   | "before-publish"
+  | "after-retain-previous"
   | "after-publish"
   | "before-index-commit"
   | "after-delete-current";
@@ -313,6 +314,18 @@ export class KeyedRecordStore {
     return read;
   }
 
+  /** Reads only the current generation, without durable fallback. */
+  async getCurrentOnly(key: string): Promise<KeyedRecordRead> {
+    this.counters.payloadReads += 1;
+    this.observe("payload-read", key);
+    const read = await readRecordFile(
+      this.currentPath(this.stemFor(key)),
+      { schema: this.schema, key, retentionClass: this.retentionClass },
+      this.limits,
+    );
+    return read.status === "ok" ? { ...read, status: "found", generation: "current" } : read;
+  }
+
   /** Reads the previous durable generation explicitly (manifest fallback). */
   async getPrevious(key: string): Promise<KeyedRecordRead> {
     if (this.retentionClass !== "durable") return { status: "missing" };
@@ -544,7 +557,11 @@ export class KeyedRecordStore {
         return { status: "rejected", reason: "fenced" };
       }
       await this.fault("before-publish", key);
-      if (durable && current.status !== "missing") await this.retainPrevious(stem);
+      if (durable && current.status !== "missing") {
+        const verified = await this.getCurrentOnly(key);
+        if (verified.status === "found") await this.retainPrevious(stem);
+        await this.fault("after-retain-previous", key);
+      }
       await fs.rename(tempPath, currentPath);
       if (durable) await syncDirectory(this.directory);
       await this.fault("after-publish", key);

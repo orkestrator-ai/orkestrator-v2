@@ -67,6 +67,33 @@ function detailOf(part: unknown): BridgePartDetail | undefined {
 }
 
 describe("summaries", () => {
+  test("each file in a shared tool invocation resolves its own deferred diff", () => {
+    const original = message("patch", [
+      {
+        type: "tool-invocation",
+        content: "a",
+        toolUseId: "apply",
+        toolDiff: { filePath: "a.ts", diff: big(8_192, "a") },
+      },
+      {
+        type: "tool-invocation",
+        content: "b",
+        toolUseId: "apply",
+        toolDiff: { filePath: "b.ts", diff: big(8_192, "b") },
+      },
+    ]);
+    const summary = summarizeBridgeMessage(original);
+    const locators = summary.parts.map(
+      (part) => (part as Part & { detail: BridgePartDetail }).detail.locator,
+    );
+    expect(locators[0]).not.toBe(locators[1]);
+    for (let index = 0; index < 2; index += 1) {
+      expect(readBridgeTranscriptDetail([original], locators[index]!)).toMatchObject({
+        status: "ok",
+        detail: { toolDiff: original.parts[index]!.toolDiff },
+      });
+    }
+  });
   test("move large bodies behind a locator and keep everything a collapsed row shows", () => {
     const summarized = summarizeBridgeMessage(
       message("m1", [

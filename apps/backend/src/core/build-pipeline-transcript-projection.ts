@@ -134,59 +134,122 @@ export async function conditionalBuildPipelineRead(
   const ordered = stale
     .map((session, index) => ({ session, index }))
     .sort((left, right) => rank(left.session) - rank(right.session) || right.index - left.index);
-  let remaining = budgetBytes;
+  const projectedRecord = withoutTranscriptBodies(record);
+  let remaining =
+    budgetBytes -
+    Buffer.byteLength(
+      JSON.stringify({ unchanged: false, record: projectedRecord, messagePatches: [] }),
+      "utf8",
+    );
   const messagePatches: BuildPipelineMessagePatch[] = [];
+  const defer = (sessionKey: string, revision: number) => {
+    const patch: BuildPipelineMessagePatch = {
+      sessionKey,
+      startIndex: 0,
+      revision,
+      messages: [],
+      deferred: true,
+    };
+    const size =
+      Buffer.byteLength(JSON.stringify(patch), "utf8") + (messagePatches.length > 0 ? 1 : 0);
+    if (size <= remaining) {
+      messagePatches.push(patch);
+      remaining -= size;
+    }
+  };
   for (const { session } of ordered) {
     const committed = committedTranscriptCursor(session);
     const cursor = cursorFor(session);
-    const usableBase =
-      cursor !== undefined &&
-      cursor.revision < committed.revision &&
-      cursor.count <= committed.count;
+    const mayHaveBase = cursor !== undefined && cursor.count > 0;
     if (remaining <= 0) {
-      messagePatches.push({
-        sessionKey: session.sessionKey,
-        startIndex: 0,
-        revision: committed.revision,
-        messages: [],
-        deferred: true,
-      });
+      defer(session.sessionKey, committed.revision);
       continue;
     }
     // Overlap by one: the entry the client saw last may still have streamed.
-    const tailStart = usableBase ? Math.max(0, cursor.count - 1) : 0;
+    const tailStart = mayHaveBase ? cursor.count - 1 : 0;
     let read = await reader.readBuildPipelineTranscript(record.id, session, {
       fromIndex: tailStart,
+      toIndex: tailStart + 1,
     });
-    // A substituted generation is not the revision the client's base came
-    // from: send it whole instead of as a tail.
-    if (read.status === "found" && read.substituted && tailStart > 0) {
-      read = await reader.readBuildPipelineTranscript(record.id, session, { fromIndex: 0 });
+    // An unrelated generation cannot use the client's tail. A continuation
+    // of the same substituted generation can keep paging from that base.
+    const exactBase =
+      read.status === "found" &&
+      mayHaveBase &&
+      cursor.count <= read.messageCount &&
+      (read.substituted
+        ? cursor.revision === read.revision
+        : cursor.revision <= committed.revision);
+    if (read.status === "found" && !exactBase && tailStart > 0) {
+      read = await reader.readBuildPipelineTranscript(record.id, session, {
+        fromIndex: 0,
+        toIndex: 1,
+      });
     }
     if (read.status !== "found") {
-      messagePatches.push({
+      const unavailable: BuildPipelineMessagePatch = {
         sessionKey: session.sessionKey,
         startIndex: 0,
         revision: committed.revision,
         messages: [],
         unavailable: true,
-      });
+      };
+      const size =
+        Buffer.byteLength(JSON.stringify(unavailable), "utf8") +
+        (messagePatches.length > 0 ? 1 : 0);
+      if (size <= remaining) {
+        messagePatches.push(unavailable);
+        remaining -= size;
+      }
       continue;
     }
-    remaining -= Buffer.byteLength(JSON.stringify(read.messages), "utf8");
-    const exactBase = usableBase && !read.substituted;
-    messagePatches.push({
+    const patch: BuildPipelineMessagePatch = {
       sessionKey: session.sessionKey,
-      ...(exactBase ? { baseRevision: cursor.revision, baseCount: cursor.count } : {}),
+      ...(exactBase ? { baseRevision: cursor!.revision, baseCount: cursor!.count } : {}),
       startIndex: read.startIndex,
       revision: read.substituted ? read.revision : committed.revision,
-      messages: read.messages,
+      messages: [],
       ...(read.complete ? {} : { complete: false as const }),
-    });
+    };
+    // Include the patch envelope and its comma in the response budget. Read
+    // one message at a time so no stored 48 MiB body is materialized here.
+    const patchOverhead =
+      Buffer.byteLength(JSON.stringify(patch), "utf8") + (messagePatches.length > 0 ? 1 : 0);
+    let allowance = remaining - patchOverhead;
+    let nextIndex = read.startIndex;
+    let candidate: TranscriptRead = read;
+    while (candidate.status === "found" && nextIndex < candidate.messageCount) {
+      const message = candidate.messages[0];
+      if (message === undefined) break;
+      const bytes =
+        Buffer.byteLength(JSON.stringify(message) ?? "null", "utf8") +
+        (patch.messages.length > 0 ? 1 : 0);
+      if (bytes > allowance) break;
+      patch.messages.push(message);
+      allowance -= bytes;
+      nextIndex += 1;
+      if (nextIndex >= candidate.messageCount) break;
+      candidate = await reader.readBuildPipelineTranscript(record.id, session, {
+        fromIndex: nextIndex,
+        toIndex: nextIndex + 1,
+      });
+      if (
+        candidate.status !== "found" ||
+        candidate.substituted !== read.substituted ||
+        candidate.revision !== read.revision
+      )
+        break;
+    }
+    if (patch.messages.length === 0 && read.messageCount > read.startIndex) {
+      defer(session.sessionKey, committed.revision);
+      continue;
+    }
+    remaining = allowance;
+    messagePatches.push(patch);
   }
   return {
     unchanged: false,
-    record: withoutTranscriptBodies(record),
+    record: projectedRecord,
     messagePatches,
   };
 }

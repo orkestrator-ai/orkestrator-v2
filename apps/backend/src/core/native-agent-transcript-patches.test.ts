@@ -75,7 +75,7 @@ describe("part-level transcript patches", () => {
           logicalSessionKey: "env-env-1:patches",
         };
         await service.ensureSession(identity);
-        const read = (knownToken?: string, patchVersion?: 1) =>
+        const read = (knownToken?: string, patchVersion?: 2) =>
           service.getTranscriptUpdate({
             ...identity,
             viewVersion: 1,
@@ -88,7 +88,7 @@ describe("part-level transcript patches", () => {
 
         messages = turn(40, "Working on it, now reading the next file");
         revision += 1;
-        const patched = await read(first.token, 1);
+        const patched = await read(first.token, 2);
         if (patched.status !== "delta") throw new Error("expected a delta");
         expect(patched.delta.messageUpserts).toHaveLength(0);
         expect(patched.delta.messagePatches).toHaveLength(1);

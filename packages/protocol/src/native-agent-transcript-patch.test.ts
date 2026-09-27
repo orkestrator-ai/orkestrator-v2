@@ -157,10 +157,7 @@ describe("message patches", () => {
       createdAt: "c",
     };
     const patch: NativeAgentMessagePatch = {
-      id: "m1",
-      fields: { role: "assistant", createdAt: "c" },
-      content: { length: 3, append: "d" },
-      parts: [{ keep: 0 }],
+      ...buildNativeAgentMessagePatch(base, { ...base, content: "abcd" })!,
     };
     expect(applyNativeAgentMessagePatch(base, patch)).not.toBeNull();
     expect(applyNativeAgentMessagePatch({ ...base, content: "ab" }, patch)).toBeNull();
@@ -172,11 +169,22 @@ describe("message patches", () => {
       }),
     ).toBeNull();
     expect(applyNativeAgentMessagePatch(base, { ...patch, id: "m2" })).toBeNull();
+    expect(
+      applyNativeAgentMessagePatch(
+        { ...base, parts: [{ ...base.parts[0]!, content: "different" }] },
+        patch,
+      ),
+    ).toBeNull();
+    expect(
+      applyNativeAgentMessagePatch({ ...base, parts: [...base.parts, base.parts[0]!] }, patch),
+    ).toBeNull();
   });
 
   test("the validator refuses shapes that could smuggle fields or break bounds", () => {
     const valid = {
       id: "m1",
+      basePartsCount: 2,
+      basePartsDigest: "abc:def",
       fields: {},
       content: { value: "" },
       parts: [{ keep: 0 }, { value: {} }, { keep: 1, length: 0, append: "" }],
@@ -260,7 +268,16 @@ describe("patched transcript deltas", () => {
     });
     expect(
       isNativeAgentTranscriptUpdate(
-        envelope([{ id: "m", fields: {}, content: { value: "" }, parts: [] }]),
+        envelope([
+          {
+            id: "m",
+            basePartsCount: 0,
+            basePartsDigest: "abc:def",
+            fields: {},
+            content: { value: "" },
+            parts: [],
+          },
+        ]),
       ),
     ).toBe(true);
     expect(isNativeAgentTranscriptUpdate(envelope([{ id: "m" }]))).toBe(false);
@@ -303,6 +320,8 @@ describe("nested part patches", () => {
       depth === 0 ? { keep: 0 } : { keep: 0, field: "parts", children: [deep(depth - 1)] };
     const patch = (depth: number) => ({
       id: "m",
+      basePartsCount: 1,
+      basePartsDigest: "abc:def",
       fields: {},
       content: { value: "" },
       parts: [deep(depth)],

@@ -117,10 +117,10 @@ export async function readHttpBridgeTranscriptSnapshot(input: {
     }
     // An older bridge ignored `version=2` and answered v1: that body is still
     // a valid answer to this read, so use it rather than asking again.
-    input.capabilities.markUnsupported("summaries");
     if (summary.response.status === 404 || summary.response.status === 405) {
       return legacyFallback();
     }
+    input.capabilities.markUnsupported("summaries");
     return mapV1TranscriptBody(input.agent, summary.body);
   }
   const query = new URLSearchParams({

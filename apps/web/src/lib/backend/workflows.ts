@@ -534,7 +534,7 @@ export async function getNativeAgentTranscriptUpdate<TMessage = unknown>(input: 
   knownToken?: string;
   forceSnapshot?: boolean;
   /** Ask for part-level patches; only when the backend advertised them. */
-  patchVersion?: 1;
+  patchVersion?: 2;
 }): Promise<NativeAgentTranscriptUpdate<TMessage>> {
   const response = await invoke<unknown>("get_native_agent_transcript_update", input);
   if (

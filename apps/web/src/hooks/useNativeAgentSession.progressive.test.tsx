@@ -20,6 +20,7 @@ import type {
   NativeAgentViewIdentity,
 } from "@orkestrator/protocol/native-agent";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
+import { buildNativeAgentMessagePatch } from "@orkestrator/protocol/native-agent-transcript-patch";
 import * as realBackend from "@/lib/backend";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -27,6 +28,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 interface TestMessage {
   id: string;
   text: string;
+  content?: string;
   parts?: Array<{ type: string; content: string }>;
 }
 
@@ -41,7 +43,12 @@ let stateUpdates: Array<
 let discoveryUpdates: Array<
   () => NativeAgentDiscoveryUpdate | Promise<NativeAgentDiscoveryUpdate>
 > = [];
-let transcriptCalls: Array<{ knownToken?: string; forceSnapshot?: boolean }> = [];
+let transcriptCalls: Array<{
+  knownToken?: string;
+  forceSnapshot?: boolean;
+  patchVersion?: number;
+}> = [];
+let patchCapability = false;
 let stateCalls: Array<{ knownToken?: string; forceSnapshot?: boolean }> = [];
 let messagePages: Array<
   () => NativeAgentMessagePage<TestMessage> | Promise<NativeAgentMessagePage<TestMessage>>
@@ -75,10 +82,15 @@ const getNativeAgentSyncCapabilitiesMock = mock(async () => ({
   projectionSyncVersions: [1],
   historyPagingVersions: [1],
   progressiveViewVersions: [1],
+  transcriptPatchVersions: patchCapability ? [2] : [],
 }));
 const getNativeAgentTranscriptUpdateMock = mock(
-  async (input: { knownToken?: string; forceSnapshot?: boolean }) => {
-    transcriptCalls.push({ knownToken: input.knownToken, forceSnapshot: input.forceSnapshot });
+  async (input: { knownToken?: string; forceSnapshot?: boolean; patchVersion?: number }) => {
+    transcriptCalls.push({
+      knownToken: input.knownToken,
+      forceSnapshot: input.forceSnapshot,
+      patchVersion: input.patchVersion,
+    });
     const next = transcriptUpdates.shift();
     if (!next) {
       return {
@@ -322,6 +334,7 @@ beforeEach(() => {
   stateUpdates = [];
   discoveryUpdates = [];
   transcriptCalls = [];
+  patchCapability = false;
   stateCalls = [];
   messagePages = [];
   messagePageCalls = [];
@@ -601,6 +614,65 @@ describe("useNativeAgentSession progressive view", () => {
     expect(remount.result.current.transcriptAvailability).toBe("current");
     expect(transcriptCalls[0]?.knownToken).toBe("transcript-1");
     expect(transcriptCalls[0]?.forceSnapshot).toBeUndefined();
+  });
+
+  test("a remount rejects a part patch based on a trimmed server head and fetches a snapshot", async () => {
+    patchCapability = true;
+    const full = { ...message("asst", "turn", parts(3)), content: "turn" };
+    const trimmed = { ...full, parts: full.parts!.slice(1) };
+    const updated = { ...full, text: "turn updated", content: "turn updated" };
+    const serverUpdated = { ...trimmed, text: "turn updated", content: "turn updated" };
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [full])];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    const first = renderSession();
+    await waitFor(() =>
+      expect(first.result.current.projection?.messages[0]?.parts).toHaveLength(3),
+    );
+    transcriptUpdates = [
+      () =>
+        transcriptSnapshot("transcript-2", [trimmed], {
+          messageWindow: {
+            limit: 1,
+            truncated: true,
+            truncationReason: "bytes",
+            omittedParts: 1,
+            canLoadEarlier: false,
+          },
+        }),
+    ];
+    await act(async () => {
+      await first.result.current.refresh();
+    });
+    expect(first.result.current.projection?.messages[0]?.parts).toHaveLength(3);
+    first.unmount();
+
+    transcriptCalls = [];
+    const patch = buildNativeAgentMessagePatch(trimmed, serverUpdated)!;
+    transcriptUpdates = [
+      () => ({
+        viewVersion: 1,
+        status: "delta",
+        baseToken: "transcript-2",
+        token: "transcript-3",
+        identity,
+        delta: {
+          messageUpserts: [],
+          messagePatches: [patch],
+          deletedMessageIds: [],
+          freshness: "current",
+          historyEpoch: "epoch-1",
+          historyComplete: true,
+        },
+      }),
+      () => transcriptSnapshot("transcript-3", [updated]),
+    ];
+    stateUpdates = [() => stateSnapshot("state-2")];
+    const remount = renderSession();
+    await waitFor(() =>
+      expect(remount.result.current.projection?.messages[0]?.text).toBe("turn updated"),
+    );
+    expect(transcriptCalls[0]).toMatchObject({ knownToken: "transcript-2", patchVersion: 2 });
+    expect(transcriptCalls[1]?.forceSnapshot).toBe(true);
   });
 
   test("background polls do not oscillate transcriptRefreshing while unavailable", async () => {

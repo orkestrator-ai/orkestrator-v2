@@ -6,6 +6,7 @@ import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import { StorageService } from "./storage.js";
 import { BUILD_PIPELINE_TRANSCRIPT_DIRECTORY } from "./build-pipeline-transcript-store.js";
 import {
+  BUILD_PIPELINE_PATCH_BUDGET_BYTES,
   conditionalBuildPipelineRead,
   withoutTranscriptBodies,
 } from "./build-pipeline-transcript-projection.js";
@@ -165,12 +166,118 @@ describe("build pipeline transcript projection", () => {
         storage,
         record,
         { knownSessions: {}, prioritySessionKey: "review" },
-        1,
+        1_800,
       );
       if (read.unchanged) throw new Error("expected patches");
       expect(read.messagePatches[0]).toMatchObject({ sessionKey: "review", startIndex: 0 });
-      expect(read.messagePatches[0]!.messages).toHaveLength(20);
+      expect(read.messagePatches[0]!.messages.length).toBeGreaterThan(0);
+      expect(read.messagePatches[0]!.messages.length).toBeLessThanOrEqual(20);
+      expect(Buffer.byteLength(JSON.stringify(read), "utf8")).toBeLessThanOrEqual(1_800);
       expect(read.messagePatches.slice(1).every((patch) => patch.deferred)).toBe(true);
+    });
+  });
+
+  test("pages a transcript within the response budget until all messages arrive", async () => {
+    await withStorage(async (storage) => {
+      const { record, build } = await seed(storage);
+      let held: unknown[] = [];
+      for (let attempt = 0; attempt < 20 && held.length < build.length; attempt += 1) {
+        const read = await conditionalBuildPipelineRead(
+          storage,
+          record,
+          {
+            knownRevision: record.revision,
+            knownSessions: {
+              ...(held.length ? { build: { revision: 3, count: held.length } } : {}),
+              review: { revision: 2, count: 20 },
+              legacy: { revision: 1, count: 4 },
+            },
+            prioritySessionKey: "build",
+          },
+          1_800,
+        );
+        if (read.unchanged) throw new Error("expected a patch");
+        expect(Buffer.byteLength(JSON.stringify(read), "utf8")).toBeLessThanOrEqual(1_800);
+        const patch = read.messagePatches.find((entry) => entry.sessionKey === "build");
+        expect(patch?.messages.length).toBeGreaterThan(0);
+        held = [...held.slice(0, patch!.startIndex), ...patch!.messages];
+      }
+      expect(held).toEqual(build);
+    });
+  });
+
+  test("a stored transcript larger than the default response budget hydrates in bounded pages", async () => {
+    await withStorage(async (storage) => {
+      const body = messages(5, "large").map((entry) => ({
+        ...(entry as object),
+        text: "x".repeat(7 * 1024 * 1024),
+      }));
+      const session = await referencedSession(storage, "large", body, 1);
+      const record = await storage.saveBuildPipeline("p1", "proj-1", "", 2, {
+        id: "p1",
+        phase: "complete",
+        sessions: [session],
+        currentSessionIndex: 0,
+      });
+      let held: unknown[] = [];
+      for (let attempt = 0; attempt < 5 && held.length < body.length; attempt += 1) {
+        const read = await conditionalBuildPipelineRead(storage, record, {
+          knownSessions: held.length ? { large: { revision: 1, count: held.length } } : {},
+          prioritySessionKey: "large",
+        });
+        if (read.unchanged) throw new Error("expected a patch");
+        expect(Buffer.byteLength(JSON.stringify(read), "utf8")).toBeLessThanOrEqual(
+          BUILD_PIPELINE_PATCH_BUDGET_BYTES,
+        );
+        const patch = read.messagePatches[0]!;
+        expect(patch.messages.length).toBeGreaterThan(0);
+        held = [...held.slice(0, patch.startIndex), ...patch.messages];
+      }
+      expect(held).toEqual(body);
+    });
+  });
+
+  test("continues paging a substituted generation from its own cursor", async () => {
+    await withStorage(async (storage) => {
+      const { record, build } = await seed(storage);
+      const reader = {
+        readBuildPipelineTranscript: async (
+          _pipelineId: string,
+          _session: unknown,
+          window: { fromIndex?: number; toIndex?: number } = {},
+        ) => ({
+          status: "found" as const,
+          messages: build.slice(window.fromIndex ?? 0, window.toIndex ?? build.length),
+          startIndex: window.fromIndex ?? 0,
+          messageCount: build.length,
+          revision: 4,
+          complete: true,
+          substituted: true,
+        }),
+      };
+      let held: unknown[] = [];
+      for (let attempt = 0; attempt < 20 && held.length < build.length; attempt += 1) {
+        const read = await conditionalBuildPipelineRead(
+          reader,
+          record,
+          {
+            knownSessions: {
+              ...(held.length ? { build: { revision: 4, count: held.length } } : {}),
+              review: { revision: 2, count: 20 },
+              legacy: { revision: 1, count: 4 },
+            },
+            prioritySessionKey: "build",
+          },
+          1_800,
+        );
+        if (read.unchanged) throw new Error("expected patch");
+        const patch = read.messagePatches[0]!;
+        expect(patch.revision).toBe(4);
+        expect(patch.messages.length).toBeGreaterThan(0);
+        if (held.length) expect(patch.baseRevision).toBe(4);
+        held = [...held.slice(0, patch.startIndex), ...patch.messages];
+      }
+      expect(held).toEqual(build);
     });
   });
 

@@ -122,7 +122,10 @@ export function isBuildPipelineTranscriptStale(
   if (cached.messages === undefined) {
     return committed > 0 || (cached.transcript?.messageCount ?? 0) > 0;
   }
-  return loadedRevision(cached) !== committed;
+  return (
+    loadedRevision(cached) !== committed ||
+    (cached.transcript !== undefined && cached.messages.length < cached.transcript.messageCount)
+  );
 }
 
 /** True when the backend reported this session's stored transcript unreadable. */

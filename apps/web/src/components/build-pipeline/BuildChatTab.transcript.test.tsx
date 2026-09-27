@@ -4,7 +4,7 @@
  * committed body on demand and reports a stored transcript it cannot read.
  */
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -31,10 +31,12 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
 }));
 
 const getBuildPipelineConditionalMock = mock(async (..._args: unknown[]): Promise<unknown> => null);
+const pauseBuildPipelineMock = mock(async (..._args: unknown[]): Promise<unknown> => null);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getBuildPipelineConditional: getBuildPipelineConditionalMock,
+  pauseBuildPipeline: pauseBuildPipelineMock,
 }));
 
 const { BuildChatTab } = await import("./BuildChatTab");
@@ -116,9 +118,9 @@ const pipeline: BuildPipeline = {
 };
 
 function renderTab() {
-  const element = (
+  const element = (isActive: boolean) => (
     <BuildChatTab
-      isActive
+      isActive={isActive}
       data={{
         environmentId: "env-1",
         pipelineId: pipeline.id,
@@ -127,14 +129,15 @@ function renderTab() {
       }}
     />
   );
-  const view = render(element);
-  return { rerender: () => view.rerender(element) };
+  const view = render(element(true));
+  return { rerender: (isActive = true) => view.rerender(element(isActive)) };
 }
 
 describe("BuildChatTab referenced transcripts", () => {
   beforeEach(() => {
     cleanup();
     getBuildPipelineConditionalMock.mockClear();
+    pauseBuildPipelineMock.mockClear();
     useBuildPipelineStore.setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set([pipeline.environmentId]),
@@ -194,5 +197,43 @@ describe("BuildChatTab referenced transcripts", () => {
     rerender();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(getBuildPipelineConditionalMock.mock.calls.length).toBe(calls);
+  });
+
+  test("a body-less pause response preserves the loaded stage transcript", async () => {
+    const active = { ...pipeline, phase: "building" as const, backendRevision: 9 };
+    pauseBuildPipelineMock.mockImplementation(async () => ({
+      ...active,
+      phase: "paused" as const,
+      pausedFromPhase: "building" as const,
+      backendRevision: 10,
+    }));
+    renderTab();
+    expect(await screen.findByText("All criteria pass")).toBeTruthy();
+    act(() => useBuildPipelineStore.getState().replacePipeline(active));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    await waitFor(() =>
+      expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe("paused"),
+    );
+    expect(screen.getByText("All criteria pass")).toBeTruthy();
+  });
+
+  test("a failed stage fetch retries while the completed tab remains open", async () => {
+    const answer = getBuildPipelineConditionalMock.getMockImplementation()!;
+    getBuildPipelineConditionalMock.mockImplementationOnce(async () => {
+      throw new Error("temporary backend restart");
+    });
+    const warn = console.warn;
+    console.warn = mock(() => undefined) as typeof console.warn;
+    try {
+      renderTab();
+      await waitFor(() => expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(console.warn).toHaveBeenCalled());
+      getBuildPipelineConditionalMock.mockImplementation(answer);
+      expect(await screen.findByText("All criteria pass")).toBeTruthy();
+      expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(2);
+    } finally {
+      console.warn = warn;
+    }
   });
 });

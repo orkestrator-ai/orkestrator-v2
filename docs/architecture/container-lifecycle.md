@@ -311,6 +311,16 @@ possible and exactly which paths and provider formats survive.
 next phase boundary (it does not take the lifecycle queue the rebuild holds);
 the outcome is recorded as `cancelled` and rolled back like a failure.
 
+### Admission limits
+
+The lifecycle queue serializes one environment's operations; across
+environments `container-admission.ts` bounds the expensive ones. Four
+container starts (through readiness) and two preserving rebuilds or
+migrations run at once; further requests wait in arrival order, and one
+beyond the wait bound (64 starts, 32 copies) is refused `resource-exhausted`
+rather than queued without limit. A rebuild holds its prompt fence while it
+waits for a slot.
+
 ### Pausing admissions
 
 `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` is the release safety switch: a

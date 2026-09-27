@@ -1,4 +1,5 @@
 import { withEnvironmentReplacement } from "./container-readiness.js";
+import { withContainerAdmission } from "./container-admission.js";
 import {
   formatContainerLifecycleError,
   parseContainerLifecycle,
@@ -1318,7 +1319,18 @@ export async function resolveOperationImage(
  * create is labelled with the operation id, and the container id is committed
  * together with its runtime identity.
  */
-async function startContainerRuntime(
+function startContainerRuntime(
+  environment: Environment,
+  context: CommandContext,
+  identity: ContainerMutationIdentity,
+): Promise<{ containerId: string; replayed: false } | { replayed: true }> {
+  // A bounded number of starts run at once across environments.
+  return withContainerAdmission("start", () =>
+    startContainerRuntimeAdmitted(environment, context, identity),
+  );
+}
+
+async function startContainerRuntimeAdmitted(
   environment: Environment,
   context: CommandContext,
   identity: ContainerMutationIdentity,

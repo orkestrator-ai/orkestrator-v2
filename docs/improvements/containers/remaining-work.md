@@ -30,7 +30,7 @@ credentials this host does not have — named explicitly).
 | # | Step | Item | Status |
 | --- | --- | --- | --- |
 | 15 | 14 | No switch that refuses new rebuild/migration admissions while recovery continues | Done — `ORKESTRATOR_CONTAINER_REPLACEMENT=paused`; preview reports `admission-paused` |
-| 16 | 10 | No admission limit for concurrent expensive starts/migrations | Open |
+| 16 | 10 | No admission limit for concurrent expensive starts/migrations | Done — `container-admission.ts`: 4 starts, 2 copies, bounded FIFO waits |
 | 17 | 11 | No renderer log viewer on the subscription API (ended/gap/disconnected states, release when hidden) | Open |
 | 18 | 10 | Placeholder zeros (unknown memory/CPU/disk, `created: 0`) still reach the UI | Open |
 | 19 | 10 | No automatic refresh of usage; staleness only means "daemon unavailable" | Open |

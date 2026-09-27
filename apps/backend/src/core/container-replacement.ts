@@ -1,4 +1,5 @@
 import { withEnvironmentReplacement } from "./container-readiness.js";
+import { withContainerAdmission } from "./container-admission.js";
 import {
   MAX_RETAINED_STORAGE_SETS,
   formatContainerLifecycleError,
@@ -530,8 +531,10 @@ export async function replaceRuntimePreservingState(
   context: CommandContext,
 ): Promise<ReplacementOutcome | undefined> {
   // No agent prompt reaches this environment while its runtime is replaced.
+  // At most a few copies run at once across environments; the fence holds
+  // while this one waits for a slot.
   return withEnvironmentReplacement(request.environmentId, () =>
-    replaceRuntimePreservingStateUnfenced(request, context),
+    withContainerAdmission("copy", () => replaceRuntimePreservingStateUnfenced(request, context)),
   );
 }
 

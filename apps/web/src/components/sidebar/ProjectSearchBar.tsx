@@ -47,6 +47,13 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return tagName === "input" || tagName === "textarea" || tagName === "select";
 }
 
+/** The open-search shortcut accepts either modifier; label it the way the platform does. */
+export function searchShortcutLabel(): string {
+  if (typeof navigator === "undefined") return "Ctrl K";
+  const platform = navigator.platform || navigator.userAgent;
+  return /Mac|iPhone|iPad|iPod/i.test(platform) ? "⌘K" : "Ctrl K";
+}
+
 function ShortcutHint({ keys, label }: { keys: string; label: string }) {
   return (
     <span className="inline-flex items-center gap-1.5">
@@ -287,6 +294,7 @@ export function ProjectSearchBar({
     }
   };
 
+  const shortcutLabel = useMemo(searchShortcutLabel, []);
   const hasQuery = parseProjectSearchQuery(query).length > 0;
   const projectHeading = hasQuery ? "Projects" : "Recent projects";
   const environmentHeading = hasQuery ? "Environments" : "Recent environments";
@@ -303,11 +311,22 @@ export function ProjectSearchBar({
         type="button"
         data-testid="project-search-trigger"
         aria-label="Search projects and environments"
+        aria-keyshortcuts="Meta+K Control+K"
         onClick={() => setOpen(true)}
-        className="flex h-8 w-full items-center gap-2 rounded-lg border border-border/70 bg-input-surface px-2.5 text-left text-sm text-muted-foreground transition-colors hover:bg-elevated hover:text-foreground md:h-7"
+        // Borderless, so the padding is purely optical: it puts the icon's ink
+        // under the header's "Projects" title (pl-3) and the badge's right edge
+        // under the ink of the header's 28px "+" button (pr-2).
+        className="flex h-8 w-full items-center gap-2 rounded-lg bg-input-surface pl-[3px] pr-[9px] text-left text-sm text-muted-foreground transition-colors hover:bg-elevated hover:text-foreground md:h-7"
       >
         <Search className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         <span className="min-w-0 truncate">Search projects, environments...</span>
+        <kbd
+          data-testid="project-search-shortcut"
+          aria-hidden="true"
+          className="ml-auto shrink-0 rounded-[5px] border border-border/70 bg-zinc-900 px-1.5 py-px font-sans text-[10px] font-medium text-zinc-300"
+        >
+          {shortcutLabel}
+        </kbd>
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>

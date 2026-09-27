@@ -635,7 +635,8 @@ describe("BuildChatTab backend projection", () => {
       />,
     );
 
-    fireEvent.click(screen.getByText("Tests"));
+    expandStageGroups();
+    fireEvent.click(screen.getByRole("tab", { name: /^Tests,/ }));
     fireEvent.click(screen.getByRole("button", { name: "Stop mise run test" }));
 
     await waitFor(() => expect(stopReviewValidationCommandMock).toHaveBeenCalledTimes(1));
@@ -3928,7 +3929,12 @@ describe("BuildChatTab rehydration", () => {
     await waitFor(() => {
       expect(screen.getByText("Backend-owned build")).toBeTruthy();
     });
-    expect(getBuildPipelineConditionalMock).toHaveBeenCalledWith(pipeline.id, undefined, undefined);
+    expect(getBuildPipelineConditionalMock).toHaveBeenCalledWith(
+      pipeline.id,
+      undefined,
+      {},
+      undefined,
+    );
   });
 
   test("does not refetch in a loop when the pipeline genuinely does not exist", async () => {

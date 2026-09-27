@@ -1,6 +1,6 @@
 import type { RecurringPriorityClass } from "@orkestrator/protocol/recurring-work";
 import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
-import { responseDigest } from "./worktree-snapshot-digest.js";
+import { measuredResponseDigest } from "./worktree-snapshot-digest.js";
 import type { WorkAdmissionPool } from "./work-admission.js";
 
 /**
@@ -17,8 +17,21 @@ import type { WorkAdmissionPool } from "./work-admission.js";
  * - under **qualified watcher coverage**, valid until a tree-relevant hint,
  *   a mutation or an explicit refresh (no age bound — a quiet watched worktree
  *   is not re-walked because five seconds passed);
- * - otherwise (containers, a failed or unqualified watcher) for
- *   `maxAgeMs`, joining any walk already running.
+ * - otherwise (containers, a failed or unqualified watcher) for the target's
+ *   current age bound — `coverage.maxAgeMs`, else `limits.maxAgeMs` —
+ *   joining any walk already running. The owner chooses the bound per target
+ *   (containers get a longer one while another signal covers them; see
+ *   `DiffStatsService`).
+ *
+ * A walk is serialized once: the same encoding yields the wire digest and the
+ * retained size, and conditional replies reuse that digest.
+ *
+ * Identity is the owner key plus its lineage: the owner re-`register`s a key
+ * on every retarget (root switch, replaced container) and resume (restarted
+ * container), which discards the body, fences the running walk and restarts
+ * the revision. The exclusion policy and node cap are compiled in and the
+ * tree commands take no options, so neither can change under a live owner;
+ * a backend restart is a new owner generation.
  *
  * While a client has read the tree recently (`demandWindowMs`), a relevant
  * hint re-walks it proactively so the revision — and the announced event —
@@ -42,6 +55,8 @@ export interface TreeCoverage {
   qualified: boolean;
   /** Changes whenever the watcher is replaced; a walk under an older watcher is age-bounded. */
   watcherGeneration: number;
+  /** Age bound for an unqualified body right now; defaults to `limits.maxAgeMs`. */
+  maxAgeMs?: number;
 }
 
 export interface TreeReadResult {
@@ -273,7 +288,8 @@ export class WorktreeTreeSnapshots {
     ) {
       return true;
     }
-    return this.options.monotonicNow() - body.completedAt <= this.limits.maxAgeMs;
+    const maxAgeMs = coverage.maxAgeMs ?? this.limits.maxAgeMs;
+    return this.options.monotonicNow() - body.completedAt <= maxAgeMs;
   }
 
   private startWalk(state: TreeState, priority: Exclude<RecurringPriorityClass, "critical">): void {
@@ -338,9 +354,7 @@ export class WorktreeTreeSnapshots {
     if (state.released || attempt.mutationGeneration !== state.mutationGeneration) return;
 
     state.failure = undefined;
-    const serialized = JSON.stringify(tree);
-    const digest = responseDigest(tree);
-    const bytes = Buffer.byteLength(serialized, "utf8");
+    const { digest, bytes } = measuredResponseDigest(tree);
     const changed = digest !== state.digest;
     if (changed) {
       state.revision += 1;

@@ -175,11 +175,33 @@ function recordFor(
   };
 }
 
+/**
+ * Newest source messages a handoff can ever use. Every rendered record costs
+ * well over 100 characters, so no more than this many fit the prompt budget;
+ * the caller reads only this window (plus the first message) of the stored
+ * transcript instead of the whole history.
+ */
+export const BUILD_PIPELINE_HANDOFF_TAIL_MESSAGES = Math.ceil(
+  BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET / 90,
+);
+
+/** Bounded, explicit transcript input: indexed messages plus the full count. */
+export interface BuildReviewHandoffTranscript {
+  entries: ReadonlyArray<{ index: number; message: unknown }>;
+  total: number;
+}
+
 export interface BuildReviewHandoffOptions {
   environmentId: string;
   sourceAgent: BuildPipelineAgent;
   destinationAgent: BuildPipelineAgent;
-  sourceSession: PipelineSession;
+  sourceSession: Pick<PipelineSession, "sessionKey" | "sdkSessionId" | "label" | "startedAt">;
+  /**
+   * The source review's messages: the first one (ticket and snapshot rules)
+   * and the newest {@link BUILD_PIPELINE_HANDOFF_TAIL_MESSAGES}. The session's
+   * transcript no longer rides on the workflow record, so the caller reads it.
+   */
+  sourceTranscript: BuildReviewHandoffTranscript;
 }
 
 /**
@@ -192,7 +214,6 @@ export interface BuildReviewHandoffOptions {
  */
 export function buildReviewHandoffPrompt(options: BuildReviewHandoffOptions): string {
   const createdAt = new Date().toISOString();
-  const sourceMessages = options.sourceSession.messages ?? [];
   const sourceLabel =
     options.sourceAgent === "opencode"
       ? "OpenCode"
@@ -231,7 +252,7 @@ ${TRANSCRIPT_OPEN}
   const footer = `
 ${TRANSCRIPT_CLOSE}
 </orkestrator-handoff>`;
-  const records = sourceMessages.map((message, index) =>
+  const records = options.sourceTranscript.entries.map(({ index, message }) =>
     recordFor(message, index, options.sourceSession.startedAt),
   );
   const transcriptBudget = Math.max(
@@ -239,7 +260,7 @@ ${TRANSCRIPT_CLOSE}
     BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET - header.length - footer.length - OMISSION_NOTICE_RESERVE,
   );
   const selected = selectTranscriptRecords(records, transcriptBudget);
-  const omitted = records.length - selected.length;
+  const omitted = Math.max(options.sourceTranscript.total, records.length) - selected.length;
   const omissionNotice =
     omitted > 0
       ? `\n${omitted} review ${omitted === 1 ? "message was" : "messages were"} omitted to fit the context budget.`

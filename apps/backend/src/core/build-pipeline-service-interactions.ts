@@ -438,6 +438,10 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
     expectedRevision: number,
   ): Promise<PersistedBuildPipeline> {
     pipeline.controller = "backend";
+    // Transcript bodies commit first (chunks, then manifest) so the control
+    // record below only ever references durable data. A checkpoint failure
+    // keeps the previous reference and never blocks this control write.
+    const checkpoint = await this.transcriptCheckpoints.prepare(pipeline);
     pipeline.backendRevision = expectedRevision + 1;
     // Storage validates only serializability and size, and `requireRecord`
     // rejects a snapshot that fails `isBuildPipeline` — so committing an
@@ -449,6 +453,7 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
       pipeline.backendRevision = expectedRevision;
       throw new Error(`Refusing to persist an invalid build pipeline snapshot: ${pipeline.id}`);
     }
+    await this.storage.buildPipelineTranscriptFault("before-control-save", pipeline.id);
     const saved = await this.storage.saveBuildPipeline(
       pipeline.id,
       pipeline.projectId,
@@ -457,6 +462,15 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
       pipeline,
       expectedRevision,
     );
+    await this.storage.buildPipelineTranscriptFault("after-control-save", pipeline.id);
+    if (saved.id === pipeline.id) {
+      checkpoint.settle();
+    } else {
+      // Admission returned an equivalent pipeline instead of creating this
+      // one, so transcripts committed under this id have no owner.
+      this.transcriptCheckpoints.forget(pipeline.sessions);
+      await this.storage.deleteBuildPipelineTranscriptsFor(pipeline.id).catch(() => undefined);
+    }
     pipeline.backendRevision = saved.revision;
     this.noteRecord(pipeline.id, pipeline);
     return saved;

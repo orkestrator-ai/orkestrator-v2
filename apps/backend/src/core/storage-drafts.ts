@@ -1,14 +1,11 @@
 import * as shared from "./storage-shared.js";
 import {
   MAX_JSON_BACKUPS,
-  activeBuildAdmissionKey,
-  activeGitHubBuildReservation,
   exists,
   fs,
   isNonBlankString,
   isNonNegativeInteger,
   isPersistedAgentHandoff,
-  isPersistedBuildPipeline,
   isPersistedComposeDraft,
   isPersistedFileDraft,
   isPositiveInteger,
@@ -80,7 +77,7 @@ type LoadedNativeAgentSessions = shared.LoadedNativeAgentSessions;
 type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogStore;
 type ResourceChangeListener = shared.ResourceChangeListener;
 
-import { StoragePrompts } from "./storage-prompts.ts";
+import { StorageBuildPipelines } from "./storage-build-pipelines.ts";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
@@ -147,7 +144,7 @@ export type StorageLayerTypes = [
   ResourceChangeListener,
 ];
 
-export abstract class StorageDrafts extends StoragePrompts {
+export abstract class StorageDrafts extends StorageBuildPipelines {
   async getComposeDraft(draftKey: string): Promise<PersistedComposeDraft | null> {
     if (!isNonBlankString(draftKey)) throw new Error("Compose draft key must not be blank");
     return (await this.loadComposeDrafts())[draftKey] ?? null;
@@ -661,195 +658,6 @@ export abstract class StorageDrafts extends StoragePrompts {
         this.agentHandoffsFile(),
         (storedId, handoff) =>
           isPersistedAgentHandoff(handoff, storedId) && handoff.environmentId !== environmentId,
-      );
-      return removedIds;
-    });
-  }
-
-  protected async loadBuildPipelines(): Promise<Record<string, PersistedBuildPipeline>> {
-    const stored = await this.loadJson<Record<string, PersistedBuildPipeline>>(
-      this.buildPipelinesFile(),
-      () => ({}),
-    );
-    return Object.fromEntries(
-      Object.entries(stored).filter(([storedId, pipeline]) =>
-        isPersistedBuildPipeline(pipeline, storedId),
-      ),
-    ) as Record<string, PersistedBuildPipeline>;
-  }
-
-  async getBuildPipeline(pipelineId: string): Promise<PersistedBuildPipeline | null> {
-    if (!isNonBlankString(pipelineId)) {
-      throw new Error("Build pipeline ID must not be blank");
-    }
-    return (await this.loadBuildPipelines())[pipelineId] ?? null;
-  }
-
-  async listBuildPipelines(projectId: string): Promise<PersistedBuildPipeline[]> {
-    if (!isNonBlankString(projectId)) {
-      throw new Error("Build pipeline project ID must not be blank");
-    }
-    return Object.values(await this.loadBuildPipelines())
-      .filter((pipeline) => pipeline.projectId === projectId)
-      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
-  }
-
-  /** Backend supervisors use this to re-arm every active pipeline on startup. */
-  async listAllBuildPipelines(): Promise<PersistedBuildPipeline[]> {
-    return Object.values(await this.loadBuildPipelines()).sort((left, right) =>
-      left.updatedAt.localeCompare(right.updatedAt),
-    );
-  }
-
-  async saveBuildPipeline(
-    pipelineId: string,
-    projectId: string,
-    environmentId: string,
-    version: number,
-    snapshot: unknown,
-    expectedRevision?: number,
-  ): Promise<PersistedBuildPipeline> {
-    if (!isNonBlankString(pipelineId)) {
-      throw new Error("Build pipeline ID must not be blank");
-    }
-    if (!isNonBlankString(projectId)) {
-      throw new Error("Build pipeline project ID must not be blank");
-    }
-    if (typeof environmentId !== "string") {
-      throw new Error("Build pipeline environment ID must be a string");
-    }
-    if (!isPositiveInteger(version)) {
-      throw new Error("Build pipeline version must be a positive integer");
-    }
-    if (!isRecord(snapshot)) {
-      throw new Error("Build pipeline snapshot must be a JSON object");
-    }
-    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
-      throw new Error("Build pipeline expected revision must be a non-negative integer");
-    }
-    let serializedSnapshot: string | undefined;
-    try {
-      serializedSnapshot = JSON.stringify(snapshot);
-    } catch {
-      throw new Error("Build pipeline snapshot must be JSON serializable");
-    }
-    if (serializedSnapshot === undefined) {
-      throw new Error("Build pipeline snapshot must be JSON serializable");
-    }
-    // Task snapshots embed base64 attachment data and structured review reports
-    // retain full findings. Reject an over-sized snapshot rather than truncating
-    // it: a silently trimmed task is a pipeline that builds the wrong thing.
-    if (Buffer.byteLength(serializedSnapshot, "utf8") > 32 * 1024 * 1024) {
-      throw new Error("Build pipeline snapshot exceeds the 32 MB limit");
-    }
-
-    return this.enqueueBuildPipelineMutation(async () => {
-      if (environmentId) {
-        await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Build pipeline");
-      }
-      const pipelines = await this.loadBuildPipelines();
-      const previous = pipelines[pipelineId];
-      if (previous && previous.projectId !== projectId) {
-        throw new Error("Build pipeline belongs to another project");
-      }
-      if (expectedRevision !== undefined && (previous?.revision ?? 0) !== expectedRevision) {
-        throw new Error("Build pipeline revision conflict");
-      }
-      const admissionKey = activeBuildAdmissionKey(snapshot);
-      if (!previous && expectedRevision === 0 && admissionKey) {
-        const admitted = Object.values(pipelines).find(
-          (pipeline) => activeBuildAdmissionKey(pipeline.snapshot) === admissionKey,
-        );
-        if (admitted) return admitted;
-      }
-      const reservation = activeGitHubBuildReservation(snapshot);
-      if (
-        reservation &&
-        Object.values(pipelines).some(
-          (pipeline) =>
-            pipeline.id !== pipelineId &&
-            activeGitHubBuildReservation(pipeline.snapshot) === reservation,
-        )
-      ) {
-        throw new Error(`An active build already exists for ${reservation}`);
-      }
-      const saved: PersistedBuildPipeline = {
-        version,
-        id: pipelineId,
-        projectId,
-        environmentId,
-        snapshot,
-        updatedAt: nowIso(),
-        revision: (previous?.revision ?? 0) + 1,
-      };
-      pipelines[pipelineId] = saved;
-      await this.saveSensitiveJson(this.buildPipelinesFile(), pipelines);
-      this.announce("build-pipeline", pipelineId, projectId);
-      return saved;
-    });
-  }
-
-  async deleteBuildPipeline(pipelineId: string): Promise<void> {
-    if (!isNonBlankString(pipelineId)) {
-      throw new Error("Build pipeline ID must not be blank");
-    }
-    await this.enqueueBuildPipelineMutation(async () => {
-      const pipelines = await this.loadBuildPipelines();
-      if (pipelineId in pipelines) {
-        const removedProjectId = pipelines[pipelineId]?.projectId;
-        delete pipelines[pipelineId];
-        await this.saveSensitiveJson(this.buildPipelinesFile(), pipelines);
-        this.announce("build-pipeline", pipelineId, removedProjectId, undefined, true);
-      }
-      await this.scrubSensitiveJsonBackups(
-        this.buildPipelinesFile(),
-        (storedId, pipeline) =>
-          storedId !== pipelineId && isPersistedBuildPipeline(pipeline, storedId),
-      );
-    });
-  }
-
-  async deleteBuildPipelinesByEnvironment(
-    environmentId: string,
-    linkedPipelineId?: string,
-  ): Promise<string[]> {
-    if (!isNonBlankString(environmentId)) {
-      throw new Error("Build pipeline environment ID must not be blank");
-    }
-    if (
-      linkedPipelineId !== undefined &&
-      linkedPipelineId !== "" &&
-      !isNonBlankString(linkedPipelineId)
-    ) {
-      throw new Error("Linked build pipeline ID must not be blank");
-    }
-    return this.enqueueBuildPipelineMutation(async () => {
-      const pipelines = await this.loadBuildPipelines();
-      const linkedId = isNonBlankString(linkedPipelineId) ? linkedPipelineId : null;
-      const removedPipelines = Object.values(pipelines).filter(
-        (pipeline) => pipeline.environmentId === environmentId || pipeline.id === linkedId,
-      );
-      const removedIds = removedPipelines.map((pipeline) => pipeline.id);
-      if (removedIds.length > 0) {
-        for (const removedId of removedIds) delete pipelines[removedId];
-        await this.saveSensitiveJson(this.buildPipelinesFile(), pipelines);
-        for (const removed of removedPipelines) {
-          this.announce("build-pipeline", removed.id, removed.projectId, undefined, true);
-        }
-      }
-      const removedIdSet = new Set(removedIds);
-      if (linkedId) removedIdSet.add(linkedId);
-
-      // Task snapshots embed base64 attachments and full review findings, so
-      // the same backup scrub the looped review path performs applies here.
-      // Check both ownership forms because a newly-created pipeline deliberately
-      // has a blank environmentId until create_environment links it.
-      await this.scrubSensitiveJsonBackups(
-        this.buildPipelinesFile(),
-        (storedId, pipeline) =>
-          isPersistedBuildPipeline(pipeline, storedId) &&
-          pipeline.environmentId !== environmentId &&
-          !removedIdSet.has(storedId),
       );
       return removedIds;
     });

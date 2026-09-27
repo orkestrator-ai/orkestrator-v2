@@ -7,7 +7,13 @@ export const NATIVE_DISPLAY_TAIL_LEGACY_SCHEMA = "native-agent-display-tail-v1";
 export const NATIVE_DISPLAY_TAIL_MAX_BYTES = 512 * 1024;
 export const NATIVE_DISPLAY_TAIL_MAX_SESSIONS = 128;
 export const NATIVE_DISPLAY_TAIL_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+/** Quiet period after the last update before a restart-preview checkpoint. */
 export const NATIVE_DISPLAY_TAIL_WRITE_DEBOUNCE_MS = 2_000;
+/**
+ * Upper bound on how stale a checkpoint may get while a session keeps
+ * streaming: the quiet period alone would postpone it indefinitely.
+ */
+export const NATIVE_DISPLAY_TAIL_MAX_CHECKPOINT_AGE_MS = 10_000;
 
 /** Recovery fields only — never persist tokens, credentials, or payload bodies. */
 export interface NativeAgentDisplayTailWindow {

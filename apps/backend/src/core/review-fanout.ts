@@ -74,6 +74,11 @@ import {
   stalledMinutes,
   type ProgressObservation,
 } from "./multi-review-progress.js";
+import {
+  hasProgressSnapshot,
+  readTranscriptProgressSample,
+  type ProgressReadKind,
+} from "./transcript-progress.js";
 import { probeReviewWorktree, REVIEW_WORKTREE_PROBE_ATTEMPTS } from "./review-worktree-probe.js";
 import {
   efficiencyPlatform,
@@ -91,6 +96,13 @@ import { PassTranscriptReader } from "./review-fanout-transcript.js";
 
 export const MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS = REVIEW_FANOUT_MAX_SCHEMA_REPAIR_ATTEMPTS;
 export const MAX_REVIEW_IDLE_RESULT_POLLS = REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS;
+
+/** Content-free measurement of how each due progress probe was answered. */
+const PROGRESS_READ_OPERATIONS = {
+  unchanged: "transcript.progress_unchanged",
+  snapshot: "transcript.progress_snapshot",
+  fallback: "transcript.progress_fallback",
+} as const satisfies Record<ProgressReadKind, EfficiencyEvent["operation"]>;
 
 export function reviewFanoutNowIso(): string {
   return new Date().toISOString();
@@ -1473,8 +1485,11 @@ export class ReviewFanoutRunner {
    * into the parent transcript as it happens.
    *
    * The transcript is read only when the tracker says a probe is due: a
-   * throttled pass starts no provider request at all. A provider that meters
-   * usage from messages shares that one due read.
+   * throttled pass starts no provider request at all. A due probe asks for a
+   * bounded, conditional one-message snapshot (`transcript-progress.ts`); an
+   * unchanged reviewer answers without any transcript body. A provider without
+   * that surface falls back to its newest message, and one that meters usage
+   * from messages shares that one due read.
    *
    * The warning is durable so the tab can show it; the abandon is what stops one
    * stuck reviewer from halting consolidation for good.
@@ -1508,12 +1523,28 @@ export class ReviewFanoutRunner {
     });
     const observation = await this.host.progress.observe(
       providerSessionId,
-      async () =>
-        (
-          await transcript.read(
-            usageFromTranscript ? provider.usageMessageLimit : PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
-          )
-        ).slice(-PROGRESS_TRANSCRIPT_TAIL_MESSAGES),
+      (known) => {
+        // The progress sample comes from the bounded snapshot when the
+        // provider has one; usage metering then needs its own (bounded,
+        // `usageMessageLimit`) read, started only because a probe is due.
+        if (usageFromTranscript && hasProgressSnapshot(provider)) {
+          void transcript.read(provider.usageMessageLimit);
+        }
+        return readTranscriptProgressSample({
+          provider,
+          sessionId: providerSessionId,
+          known,
+          // Usage metering peeks this read later, so it keeps the usage shape
+          // whenever that still covers the window the sample asked for.
+          fallbackRead: (limit) =>
+            transcript.read(
+              usageFromTranscript && (provider.usageMessageLimit ?? Infinity) >= limit
+                ? provider.usageMessageLimit
+                : limit,
+            ),
+          onRead: (kind) => this.record({ operation: PROGRESS_READ_OPERATIONS[kind] }),
+        });
+      },
       reviewer.progressDigest,
     );
     if (usageFromTranscript) {

@@ -288,6 +288,14 @@ export interface SessionState {
   droppedParts: number;
   transcriptTruncated: boolean;
   revision: number;
+  /**
+   * Bumped whenever retained history is replaced rather than appended to
+   * (branch navigation re-renders a different history from index 0). Part of
+   * the transcript read's `contentEpoch`, so a reader's absolute positions —
+   * a history cursor, a window's `startIndex` — cannot survive the switch.
+   * Process-local: a new bridge process already has a new generation.
+   */
+  transcriptEpoch?: number;
   structured: Map<string, unknown>;
   promptJournal: Map<string, PromptJournalEntry>;
   steerJournal: Map<string, SteerJournalEntry>;

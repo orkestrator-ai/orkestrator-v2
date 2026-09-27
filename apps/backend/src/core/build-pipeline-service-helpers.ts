@@ -509,14 +509,18 @@ export function withUnattendedPolicy(prompt: string): string {
 }
 
 /**
- * Change detector for a transcript snapshot.
+ * The content-bearing change key a transcript snapshot used to persist:
+ * `<length>:<serialized tail entry>`.
  *
  * Serializing both sides in full on every tick costs O(transcript) twice per
  * pass, per pipeline, and transcripts reach megabytes. Provider transcripts
  * grow by appending and by rewriting the entry currently streaming, so the
  * length plus the tail entry captures every change they actually make.
+ *
+ * Kept as the input to the fixed-size forms below, and for progress digests
+ * that were persisted from it; never store this string itself.
  */
-export function transcriptFingerprint(messages: unknown[]): string {
+export function legacyTranscriptFingerprint(messages: readonly unknown[]): string {
   if (messages.length === 0) return "0:";
   let tail: string;
   try {
@@ -527,6 +531,37 @@ export function transcriptFingerprint(messages: unknown[]): string {
     tail = String(Date.now());
   }
   return `${messages.length}:${tail}`;
+}
+
+const TRANSCRIPT_FINGERPRINT_PREFIX = "tf2:";
+
+function digestLegacyFingerprint(legacy: string): string {
+  const count = legacy.slice(0, Math.max(0, legacy.indexOf(":")));
+  const digest = createHash("sha256").update(legacy).digest("hex").slice(0, 32);
+  return `${TRANSCRIPT_FINGERPRINT_PREFIX}${count}:${digest}`;
+}
+
+/**
+ * Fixed-size change detector for a transcript snapshot.
+ *
+ * The persisted pipeline used to carry the raw legacy key, which is a second
+ * full copy of the newest transcript entry — often the largest one, holding a
+ * whole tool result — in every snapshot write. This keeps the same change
+ * semantics (it is a digest of exactly that key) in a few dozen bytes.
+ */
+export function transcriptFingerprint(messages: readonly unknown[]): string {
+  return digestLegacyFingerprint(legacyTranscriptFingerprint(messages));
+}
+
+/**
+ * A stored fingerprint in the current form. Snapshots written before the
+ * digest carry the raw key; digesting it yields exactly what
+ * {@link transcriptFingerprint} computes for the same transcript, so an
+ * upgrade does not register a spurious change or rewrite.
+ */
+export function normalizeTranscriptFingerprint(stored: string | undefined): string | undefined {
+  if (stored === undefined || stored.startsWith(TRANSCRIPT_FINGERPRINT_PREFIX)) return stored;
+  return digestLegacyFingerprint(stored);
 }
 
 /**

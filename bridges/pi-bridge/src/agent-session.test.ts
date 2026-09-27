@@ -701,10 +701,14 @@ describe("Pi SDK lifecycle", () => {
       },
     ];
 
+    expect(state.transcriptEpoch).toBeUndefined();
     await navigateSessionHistory(state, "newer-message");
 
     expect(navigatedTo).toBe("newer-entry");
     expect(state.messages).toEqual([]);
+    // Another branch starts at index 0 again, so every earlier position
+    // (history cursors, `startIndex`) must belong to a different epoch.
+    expect(state.transcriptEpoch).toBe(1);
   });
 
   test("updates live model and thinking selections to what the session accepts", async () => {

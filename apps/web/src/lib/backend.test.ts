@@ -2288,6 +2288,7 @@ describe("backend command wrapper coverage", () => {
       "getNativeAgentDiscoveryUpdate",
       "getNativeAgentProjectionUpdate",
       "getNativeAgentMessagePage",
+      "getMultiReviewReviewerHistoryPage",
     ]);
     const commandWrappers = Object.entries(backendWrappers).flatMap(([name, value]) =>
       typeof value === "function" && !specialWrappers.has(name)
@@ -2388,6 +2389,44 @@ describe("backend command wrapper coverage", () => {
     };
     invokeMock.mockResolvedValueOnce(page);
     await expect(backendWrappers.getNativeAgentMessagePage(pageInput)).resolves.toEqual(page);
+  });
+
+  test("validates and forwards reviewer history pages", async () => {
+    const page = {
+      status: "page" as const,
+      messages: [],
+      historyEpoch: "epoch-1",
+      nextCursor: "cursor-2",
+      complete: false,
+      truncated: true,
+    };
+    invokeMock.mockResolvedValueOnce(page);
+    await expect(
+      backendWrappers.getMultiReviewReviewerHistoryPage("workflow-1", "reviewer-1", {
+        before: "cursor-1",
+        limit: 50,
+      }),
+    ).resolves.toEqual(page);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_multi_review_reviewer_history_page", {
+      workflowId: "workflow-1",
+      reviewerId: "reviewer-1",
+      before: "cursor-1",
+      limit: 50,
+    });
+
+    invokeMock.mockResolvedValueOnce({ status: "expired", reason: "history-changed" });
+    await expect(
+      backendWrappers.getMultiReviewReviewerHistoryPage("workflow-1", "reviewer-1", {
+        before: "cursor-1",
+      }),
+    ).resolves.toEqual({ status: "expired", reason: "history-changed" });
+
+    invokeMock.mockResolvedValueOnce({ status: "page", messages: [] });
+    await expect(
+      backendWrappers.getMultiReviewReviewerHistoryPage("workflow-1", "reviewer-1", {
+        before: "cursor-1",
+      }),
+    ).rejects.toThrow("The reviewer history page was malformed");
   });
 
   test("validates independent native-agent view-domain responses", async () => {

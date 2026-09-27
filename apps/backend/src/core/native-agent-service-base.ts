@@ -201,6 +201,11 @@ export abstract class NativeAgentServiceBase {
       bytes: number;
       /** Exact provider-reported image path; never supplied by the renderer. */
       localImagePath?: string;
+      /**
+       * A provider-held body behind a summary locator, fetched on first
+       * expansion. `resolved` once `details` holds the exact body.
+       */
+      remote?: { providerSessionId: string; locator: string; resolved: boolean };
     }
   >();
   /** Entries temporarily protected while an authoritative refresh recreates them. */

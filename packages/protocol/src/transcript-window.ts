@@ -53,6 +53,13 @@ export interface BoundTranscriptOptions {
    * report `overflowed` instead.
    */
   contentFallbackBytes?: number | null;
+  /**
+   * Encoded bytes of one message. Defaults to serializing it; a caller that
+   * already memoizes encodings of immutable messages passes its own so a
+   * bound does not re-serialize what the caller measured moments earlier.
+   * Must return exactly the UTF-8 length of `JSON.stringify(message)`.
+   */
+  measure?: (message: unknown) => number;
 }
 
 interface BoundableMessage {
@@ -114,7 +121,9 @@ export function boundTranscriptResponse<TMessage extends BoundableMessage>(
       : options.contentFallbackBytes;
 
   const selected = [...messages];
-  const sizes = selected.map((message) => Buffer.byteLength(JSON.stringify(message)));
+  const measure =
+    options.measure ?? ((message: unknown) => Buffer.byteLength(JSON.stringify(message)));
+  const sizes = selected.map((message) => measure(message));
   // Array brackets plus one comma between each adjacent pair.
   let bytes =
     envelope + 2 + sizes.reduce((total, size) => total + size, 0) + Math.max(0, sizes.length - 1);
@@ -135,17 +144,21 @@ export function boundTranscriptResponse<TMessage extends BoundableMessage>(
     // Re-measuring the whole message per shift is quadratic, and this path only
     // ever runs when that message is already multi-megabyte — a message built
     // from many small parts would otherwise cost thousands of full passes.
-    const parts = [...oldestRetained.parts];
-    const partSizes = parts.map((part) => Buffer.byteLength(JSON.stringify(part)));
-    while (parts.length > 0 && bytes > maximumBytes) {
-      parts.shift();
-      const shed = partSizes.shift()!;
-      // A removed part takes its separating comma with it, except the last one.
-      bytes -= shed + (parts.length > 0 ? 1 : 0);
+    // Advancing an index rather than `shift()`ing keeps the loop linear too:
+    // each shift moves every remaining element, and this can shed thousands.
+    const partSizes = oldestRetained.parts.map((part) => Buffer.byteLength(JSON.stringify(part)));
+    const partCount = partSizes.length;
+    while (omittedParts < partCount && bytes > maximumBytes) {
+      const shed = partSizes[omittedParts]!;
       omittedParts += 1;
+      // A removed part takes its separating comma with it, except the last one.
+      bytes -= shed + (omittedParts < partCount ? 1 : 0);
     }
     if (omittedParts > 0) {
-      selected[start] = { ...oldestRetained, parts } as TMessage;
+      selected[start] = {
+        ...oldestRetained,
+        parts: oldestRetained.parts.slice(omittedParts),
+      } as TMessage;
     }
     if (bytes > maximumBytes && contentFallbackBytes !== null) {
       selected[start] = {

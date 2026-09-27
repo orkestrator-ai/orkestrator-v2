@@ -160,7 +160,6 @@ export abstract class StorageBase {
   protected multiReviewMutation: Promise<unknown> = Promise.resolve();
   protected buildPipelineMutation: Promise<unknown> = Promise.resolve();
   protected nativeAgentSessionMutation: Promise<unknown> = Promise.resolve();
-  protected nativeAgentDisplayTailMutation: Promise<unknown> = Promise.resolve();
   protected agentInteractionJournalMutation: Promise<unknown> = Promise.resolve();
   protected promptQueueMutation: Promise<unknown> = Promise.resolve();
   protected promptQueueClaimRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -345,8 +344,14 @@ export abstract class StorageBase {
     return this.file("native-agent-sessions.json");
   }
 
+  /** Legacy shared display-tail store; read only by the one-time import. */
   protected nativeAgentDisplayTailsFile(): string {
     return this.file("native-agent-display-tails.json");
+  }
+
+  /** Keyed display-tail records (one private file per session). */
+  protected nativeAgentDisplayTailRecordsDir(): string {
+    return this.file("native-agent-display-tail-records");
   }
 
   protected agentInteractionJournalFile(): string {
@@ -971,26 +976,6 @@ export abstract class StorageBase {
     };
     const next = this.nativeAgentSessionMutation.then(run, run);
     this.nativeAgentSessionMutation = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
-  }
-
-  protected enqueueNativeAgentDisplayTailMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.nativeAgentDisplayTailsFile(),
-        "native agent display tail storage",
-      );
-      try {
-        return await operation();
-      } finally {
-        await release();
-      }
-    };
-    const next = this.nativeAgentDisplayTailMutation.then(run, run);
-    this.nativeAgentDisplayTailMutation = next.then(
       () => undefined,
       () => undefined,
     );

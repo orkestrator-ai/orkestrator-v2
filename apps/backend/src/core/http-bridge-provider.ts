@@ -3,6 +3,7 @@ import type {
   AgentInteractionProviderCapability,
   BridgeConnection,
   NativeAgentRuntimeProvider,
+  ProviderActivityBatchEntry,
   ProviderActivityObservation,
   ProviderActivityState,
   ProviderActiveSteerRun,
@@ -11,7 +12,6 @@ import type {
   ProviderExecutionMode,
   ProviderInteractiveSnapshot,
   ProviderSessionStateSnapshot,
-  ProviderTranscriptSnapshot,
   ProviderSendOptions,
   ProviderSessionObservation,
   ProviderSessionRegistration,
@@ -70,12 +70,7 @@ import {
   claudeTurnActivityFromPayload,
   normalizeClaudeBackgroundTasks,
 } from "./http-bridge-claude-runtime.js";
-import {
-  readHttpBridgeAuthoritativeSessionState,
-  readHttpBridgeLegacyTranscript,
-  readHttpBridgeTranscriptSnapshot,
-  type LegacyTranscriptSnapshot,
-} from "./http-bridge-progressive.js";
+import { readHttpBridgeAuthoritativeSessionState } from "./http-bridge-progressive.js";
 import {
   assertOk,
   assertOkWithErrorDetail,
@@ -90,6 +85,8 @@ import {
   bridgePromptAttachments,
 } from "./http-bridge-transport.js";
 import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
+import { HttpBridgeTranscriptReader } from "./http-bridge-transcript-reader.js";
+import { HttpBridgeActivityBatchReader } from "./http-bridge-activity-batch.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly agent: HttpBridgeAgent;
@@ -111,6 +108,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   /** Runtime inventory is optional UI metadata and must not delay transcripts. */
   private readonly runtimeMetadataRefreshes = new Map<string, Promise<void>>();
   private runtimeMetadataGeneration = 0;
+  /** What this bridge connection answered about transcript v2; see the module. */
+  private readonly transcripts: HttpBridgeTranscriptReader;
+  /** Scoped to this connection, so a restarted bridge re-detects the batch route. */
+  private readonly activityBatchReader: HttpBridgeActivityBatchReader;
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -118,9 +119,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     stageImages?: HttpBridgeProviderDependencies["stageImages"],
   ) {
     this.agent = connection.agent as HttpBridgeAgent;
+    this.transcripts = new HttpBridgeTranscriptReader(this.agent, connection, fetchImpl);
     this.stageImages = stageImages;
     this.interactionAdapter = new HttpBridgeInteractionAdapter(this.agent, connection, fetchImpl);
     this.catalogAdapter = new HttpBridgeCatalogAdapter(this.agent, connection, fetchImpl);
+    this.activityBatchReader = new HttpBridgeActivityBatchReader(connection, fetchImpl);
     this.interactions = {
       listPendingInteractions: (sessionId) =>
         this.interactionAdapter.listPendingInteractions(sessionId),
@@ -513,56 +516,41 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     };
   }
 
-  /**
-   * Read activity from the bridge's dedicated observation route.
-   *
-   * This deliberately does not reuse `status()` plus the pending-input routes.
-   * Those are the routes a *tab* reads, so each one is a liveness touch: the
-   * codex bridge refreshes `lastAccessed` (blocking idle thread detaching) and
-   * the claude bridge additionally hydrates the persisted transcript. This
-   * method is polled every couple of seconds for every session in every
-   * environment, so it must have no side effect at all — `/activity` exists
-   * only to answer it.
-   *
-   * The route reports an unknown session in-band as `missing` and never 404s.
-   * A 404 here therefore means the route itself is absent — an older bridge —
-   * and must surface as a failure rather than as "this session is gone", which
-   * the caller would act on by deleting the user's session mapping.
-   */
+  /** The no-touch `/activity` read; see {@link readProviderActivityObservation}. */
   async observeActivity(sessionId: string): Promise<ProviderActivityObservation> {
     return readProviderActivityObservation(this.connection, sessionId, this.fetchImpl);
+  }
+
+  /**
+   * {@link observeActivity} for a bounded set of sessions in one request, from
+   * the same no-touch read on the bridge. `"unsupported"` (an older bridge) is
+   * remembered for this connection; see {@link HttpBridgeActivityBatchReader}.
+   */
+  observeActivityBatch(
+    sessionIds: readonly string[],
+  ): Promise<ReadonlyMap<string, ProviderActivityBatchEntry> | "unsupported"> {
+    return this.activityBatchReader.read(sessionIds);
   }
 
   async activity(sessionId: string): Promise<ProviderActivityState> {
     return (await this.observeActivity(sessionId)).state;
   }
 
-  private async readLegacyTranscript(sessionId: string): Promise<LegacyTranscriptSnapshot> {
-    return readHttpBridgeLegacyTranscript({
-      agent: this.agent,
-      connection: this.connection,
-      fetchImpl: this.fetchImpl,
-      sessionId,
-    });
+  transcriptSnapshot(...args: Parameters<HttpBridgeTranscriptReader["snapshot"]>) {
+    return this.transcripts.snapshot(...args);
   }
 
-  async transcriptSnapshot(
-    sessionId: string,
-    options: { limit: number; targetBytes: number; knownSourceToken?: string },
-  ): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
-    return readHttpBridgeTranscriptSnapshot({
-      agent: this.agent,
-      connection: this.connection,
-      fetchImpl: this.fetchImpl,
-      sessionId,
-      options,
-      readLegacy: () => this.readLegacyTranscript(sessionId),
-    });
+  transcriptDetail(sessionId: string, locator: string) {
+    return this.transcripts.detail(sessionId, locator);
+  }
+
+  transcriptPage(...args: Parameters<HttpBridgeTranscriptReader["page"]>) {
+    return this.transcripts.page(...args);
   }
 
   /** Legacy bounded message surface retained for older callers. */
   async messages(sessionId: string, options?: { limit?: number }): Promise<unknown[]> {
-    const messages = (await this.readLegacyTranscript(sessionId)).messages;
+    const messages = (await this.transcripts.legacy(sessionId)).messages;
     const limit = options?.limit;
     if (limit === undefined) return messages;
     if (!Number.isSafeInteger(limit) || limit <= 0) {
@@ -645,7 +633,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           {},
           this.fetchImpl,
         ),
-        this.readLegacyTranscript(sessionId),
+        this.transcripts.legacy(sessionId),
         refreshMetadata && !cachedMetadata
           ? this.runtimeHealth(sessionId)
           : Promise.resolve(undefined),
@@ -770,7 +758,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     const [sessionResponse, transcript, configResponse, initResponse, runtimeResponse] =
       await Promise.all([
         bridgeFetch(this.connection, sessionPath, {}, this.fetchImpl),
-        this.readLegacyTranscript(sessionId),
+        this.transcripts.legacy(sessionId),
         this.agent === "codex"
           ? bridgeFetch(
               this.connection,

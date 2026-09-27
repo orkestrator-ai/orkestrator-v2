@@ -1718,7 +1718,8 @@ describe("progressive transcript route", () => {
                 // preview, and it would refuse to persist a display tail for
                 // every Codex tab.
                 freshness: "current",
-                generation: 3,
+                // Scoped to this bridge process, engine generation after it.
+                generation: expect.stringMatching(/:3$/),
                 contentEpoch: 2,
                 revision: 5,
                 title: "Codex session",

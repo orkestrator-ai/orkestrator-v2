@@ -137,6 +137,18 @@ export interface MultiReviewReviewerTranscript {
   sourceToken?: string;
   /** True when older messages were omitted to respect the count/byte bounds. */
   truncated?: boolean;
+  /**
+   * Opaque cursor for the history before `messages[0]`, sent to
+   * `get_multi_review_reviewer_history_page`. Present only on snapshot answers
+   * whose window omitted earlier history that can be paged; it is bound to
+   * this reviewer, its provider session and {@link historyEpoch}.
+   */
+  historyCursor?: string;
+  /**
+   * History continuity epoch of a snapshot answer. A change means earlier
+   * pages the caller holds belong to another history and must be dropped.
+   */
+  historyEpoch?: string;
   report?: StructuredReviewReport;
   error?: string;
   progressAt?: string;
@@ -172,6 +184,100 @@ export function isMultiReviewReviewerTranscriptRequest(
       (typeof record.knownSourceToken === "string" &&
         record.knownSourceToken.length > 0 &&
         record.knownSourceToken.length <= MULTI_REVIEW_TRANSCRIPT_TOKEN_MAX_LENGTH))
+  );
+}
+
+/** Upper bound on a reviewer history cursor, in characters. */
+export const MULTI_REVIEW_HISTORY_CURSOR_MAX_LENGTH = 1024;
+/** Messages one reviewer history page may carry at most. */
+export const MULTI_REVIEW_HISTORY_PAGE_MAX_MESSAGES = 200;
+/** Byte target a reviewer history page request may ask for at most. */
+export const MULTI_REVIEW_HISTORY_PAGE_MAX_TARGET_BYTES = 1024 * 1024;
+/** Upper bound on a history epoch, in characters. */
+export const MULTI_REVIEW_HISTORY_EPOCH_MAX_LENGTH = 128;
+
+/** Request for the reviewer history immediately before `before`. */
+export interface MultiReviewReviewerHistoryPageRequest {
+  workflowId: string;
+  reviewerId: string;
+  /** `historyCursor` from a transcript snapshot, or `nextCursor` from a page. */
+  before: string;
+  limit?: number;
+  targetBytes?: number;
+}
+
+function isBoundedPositiveInteger(value: unknown, maximum: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= maximum;
+}
+
+export function isMultiReviewReviewerHistoryPageRequest(
+  value: unknown,
+): value is MultiReviewReviewerHistoryPageRequest {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).every((key) =>
+      ["workflowId", "reviewerId", "before", "limit", "targetBytes"].includes(key),
+    ) &&
+    typeof record.workflowId === "string" &&
+    record.workflowId.trim().length > 0 &&
+    typeof record.reviewerId === "string" &&
+    record.reviewerId.trim().length > 0 &&
+    typeof record.before === "string" &&
+    record.before.length > 0 &&
+    record.before.length <= MULTI_REVIEW_HISTORY_CURSOR_MAX_LENGTH &&
+    (record.limit === undefined ||
+      isBoundedPositiveInteger(record.limit, MULTI_REVIEW_HISTORY_PAGE_MAX_MESSAGES)) &&
+    (record.targetBytes === undefined ||
+      isBoundedPositiveInteger(record.targetBytes, MULTI_REVIEW_HISTORY_PAGE_MAX_TARGET_BYTES))
+  );
+}
+
+/**
+ * One page of reviewer history, or why the cursor can no longer be served.
+ *
+ * `expired` is never an empty page: the history the cursor described was
+ * replaced (a restarted reviewer) or rewritten, so the caller drops the pages
+ * it holds and re-reads the current transcript for a fresh cursor.
+ */
+export type MultiReviewReviewerHistoryPage =
+  | {
+      status: "page";
+      /** Oldest first, immediately before the cursor's position. */
+      messages: unknown[];
+      historyEpoch: string;
+      /** Cursor for the page before this one; absent when nothing more can be paged. */
+      nextCursor?: string;
+      /** True only when this page reaches the start of the reviewer's history. */
+      complete: boolean;
+      /** True when earlier history exists (pageable or not). */
+      truncated: boolean;
+    }
+  | { status: "expired"; reason: "session-replaced" | "history-changed" };
+
+export function isMultiReviewReviewerHistoryPage(
+  value: unknown,
+): value is MultiReviewReviewerHistoryPage {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (record.status === "expired") {
+    return record.reason === "session-replaced" || record.reason === "history-changed";
+  }
+  return (
+    record.status === "page" &&
+    Array.isArray(record.messages) &&
+    record.messages.length <= MULTI_REVIEW_HISTORY_PAGE_MAX_MESSAGES &&
+    typeof record.historyEpoch === "string" &&
+    record.historyEpoch.length > 0 &&
+    record.historyEpoch.length <= MULTI_REVIEW_HISTORY_EPOCH_MAX_LENGTH &&
+    (record.nextCursor === undefined ||
+      (typeof record.nextCursor === "string" &&
+        record.nextCursor.length > 0 &&
+        record.nextCursor.length <= MULTI_REVIEW_HISTORY_CURSOR_MAX_LENGTH)) &&
+    typeof record.complete === "boolean" &&
+    typeof record.truncated === "boolean" &&
+    // A complete page ends history; it cannot also offer a cursor.
+    !(record.complete === true && record.nextCursor !== undefined)
   );
 }
 

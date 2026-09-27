@@ -7,6 +7,8 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import health from "./routes/health.js";
 import config from "./routes/config.js";
 import session from "./routes/session.js";
+import { sessionActivityBatch } from "./routes/session-activity.js";
+import { compressTranscriptReads } from "./routes/session-transcript.js";
 import events from "./routes/events.js";
 import mcp from "./routes/mcp.js";
 import plugins from "./routes/plugins.js";
@@ -155,6 +157,7 @@ app.use("/session/:id/transcript", async (c, next) => {
   c.res.headers.append("Vary", "Accept-Encoding");
 });
 app.use("/session/:id/transcript", compress({ encoding: "gzip" }));
+compressTranscriptReads(app);
 
 /**
  * Lightweight authenticated probe used to reject a cached client after token
@@ -180,6 +183,8 @@ app.post("/global/refresh-catalog", async (c) => {
 app.route("/global", health);
 app.route("/config", config);
 app.route("/session", session);
+// `POST /sessions/activity`: outside `/session/:id` so no id route can shadow it.
+app.route("/", sessionActivityBatch);
 app.route("/event", events);
 app.route("/mcp", mcp);
 app.route("/plugins", plugins);

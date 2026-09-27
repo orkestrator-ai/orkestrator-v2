@@ -41,6 +41,7 @@ import {
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
 import { eventEmitter } from "./event-emitter.js";
+import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
 import {
   deleteSessionPreferences,
   MAX_LOCAL_TRANSCRIPT_ENTRIES,
@@ -118,11 +119,14 @@ export function applyLocalTranscriptOverlay(session: SessionState): void {
   const overlay = session.localTranscript;
   if (!overlay?.length) return;
   const existing = new Set(session.messages.map((message) => message.id));
+  let appended = false;
   for (const message of overlay) {
     if (existing.has(message.id)) continue;
     session.messages.push(message);
     existing.add(message.id);
+    appended = true;
   }
+  if (appended) markTranscriptChanged(session);
 }
 export let sessionDeletionTick = 0;
 
@@ -444,6 +448,10 @@ export async function hydratePersistedSessionMessages(
     }
     applyLocalTranscriptOverlay(session);
     session.persistedMessagesLoaded = true;
+    // A new history, not an edit of the preview: positions in the preview do
+    // not correspond to positions in the hydrated rollout. Installed only after
+    // the ownership check above, so a stale read cannot move a newer epoch.
+    resetTranscriptEpoch(session);
     touchSession(session);
   }
   return session.messages;
@@ -599,6 +607,9 @@ export function evictIdleHydratedTranscripts(now: number = Date.now()): string[]
     session.messages = [];
     session.taskRegistry = undefined;
     session.persistedMessagesLoaded = false;
+    // An evicted transcript is an unloaded preview, not an empty conversation:
+    // a new epoch keeps any token for the hydrated history from matching it.
+    resetTranscriptEpoch(session);
     evicted.push(session.id);
   }
 

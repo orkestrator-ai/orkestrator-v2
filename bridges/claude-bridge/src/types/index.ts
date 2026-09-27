@@ -477,6 +477,25 @@ export interface SessionState {
   /** True once the persisted SDK transcript has been normalized on demand. */
   persistedMessagesLoaded?: boolean;
   /**
+   * Transcript content revision: advances whenever anything serialized from
+   * {@link messages} changes, so `GET /:id/transcript` can answer a matching
+   * token without walking the history.
+   *
+   * Not the per-message {@link NormalizedMessage.revision} (an SSE patch
+   * counter), the turn generation, or any status/usage revision. Owned by
+   * `transcript-revision.ts`: write it only through `markTranscriptChanged` /
+   * `resetTranscriptEpoch`. Runtime-only; a restarted bridge has a new
+   * transcript generation, so no token outlives the process that issued it.
+   */
+  transcriptRevision?: number;
+  /**
+   * History epoch: replaced whenever {@link messages} is replaced wholesale
+   * (hydration, eviction, a conversation reset) rather than appended to or
+   * edited in place. Readers treat positions from different epochs as
+   * unrelated. Same ownership rules as {@link transcriptRevision}.
+   */
+  transcriptEpoch?: number;
+  /**
    * Epoch millis of the last read or hydration of this session's state.
    *
    * Drives idle transcript eviction. Deliberately separate from

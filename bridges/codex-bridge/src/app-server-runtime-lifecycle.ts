@@ -100,7 +100,7 @@ import {
 } from "./messages/render-turn.js";
 import { UpdateCoalescer } from "./messages/coalescer.js";
 import { describeDiffBudget } from "./messages/diff-budget.js";
-import { getTranscriptCacheStats } from "./transcript-cache.js";
+import { getTranscriptCacheStats, type TranscriptCacheStats } from "./transcript-cache.js";
 import {
   createMessageId,
   createSessionId,
@@ -676,6 +676,11 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       const hydrated = await hydrateMessagesFromPersistedSession(context.threadId, {
         structuredOutputTurns: this.structuredOutputTurnsForThread(context.threadId),
       });
+      // A rollout that could not be read at all is not an empty conversation:
+      // leave the transcript unhydrated so readers keep reporting a cached,
+      // incomplete preview (and the next attach retries) instead of an
+      // authoritative empty history that would overwrite a display tail.
+      if (hydrated.readFailed) return;
       context.messages = hydrated.messages;
       this.registry.indexHydratedAsyncQuestions(context);
       this.applyPersistedModelOverrides(context);
@@ -696,7 +701,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     sessions: number;
     detachedThreads: number;
     reattachedThreads: number;
-    transcriptCache: { entries: number; bytes: number };
+    transcriptCache: TranscriptCacheStats;
     diffBudget: { baselineEntries: number; baselineBytes: number; cacheEntries: number };
   } {
     let baselineEntries = 0;

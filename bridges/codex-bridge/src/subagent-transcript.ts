@@ -397,7 +397,7 @@ export function normalizeTranscriptToolArgs(
   // encrypted. Rollouts retain the Fernet envelope rather than plaintext, so
   // never expose that opaque implementation detail as thousands of characters
   // of tool input. The readable final_answer event is added as a text action by
-  // parseChildTranscript below.
+  // foldChildTranscriptRecord below.
   if (
     COLLABORATION_MESSAGE_TOOLS.has(toolName) &&
     typeof parsed.message === "string" &&
@@ -622,165 +622,284 @@ function resolveSubagentOutcome(
   return "pending";
 }
 
-function parseChildTranscript(
-  records: TranscriptRecord[],
-  base: SpawnedSubagent,
-): TranscriptSubagentPart & { reopenedAfterTerminal: boolean } {
-  const actions: TranscriptActionPart[] = [];
-  const actionIndexByCallId = new Map<string, number>();
+/** Shown in a child card whose rollout could not be read in full. */
+export const INCOMPLETE_CHILD_TRANSCRIPT_NOTICE =
+  "Part of this agent's transcript could not be read, so its activity may be incomplete.";
 
-  let name = base.nickname;
-  let role = base.role;
-  let prompt = base.prompt;
-  let state: ToolState = "pending";
-  let sawTerminalState = false;
-  let reopenedAfterTerminal = false;
+export type TranscriptReadStatus = "complete" | "degraded" | "unavailable";
 
+/**
+ * Everything a child card derives from the child's **own** rollout.
+ *
+ * Nothing here depends on the parent's spawn call, so it can be folded once per
+ * child rollout generation and extended record-by-record as the child appends,
+ * rather than re-walking the child's whole history on every render. The spawn
+ * call's nickname/role/prompt are layered on afterwards by `partFromChildSummary`.
+ */
+export interface ChildTranscriptSummary {
+  actions: readonly TranscriptActionPart[];
+  actionCount: number;
+  /** The last `agent_nickname` any `session_meta` record named. */
+  nickname?: string;
+  /** The last `agent_role` any `session_meta` record named. */
+  role?: string;
+  state: ToolState;
+  reopenedAfterTerminal: boolean;
+  /**
+   * Whether the whole rollout was read. `degraded` means some records were
+   * unreadable (overlong or corrupt); `unavailable` means the file could not be
+   * read at all. Neither is the same as a child that has done nothing yet.
+   */
+  readStatus: TranscriptReadStatus;
+}
+
+/** Mutable accumulator behind `ChildTranscriptSummary`. Never handed out. */
+export interface ChildTranscriptFoldState {
+  actions: TranscriptActionPart[];
+  actionIndexByCallId: Map<string, number>;
+  actionCount: number;
+  nickname?: string;
+  role?: string;
+  state: ToolState;
+  sawTerminalState: boolean;
+  reopenedAfterTerminal: boolean;
+  /** Rough retained size, for the transcript cache's byte accounting. */
+  approxChars: number;
+}
+
+export function createChildTranscriptFoldState(): ChildTranscriptFoldState {
+  return {
+    actions: [],
+    actionIndexByCallId: new Map(),
+    actionCount: 0,
+    state: "pending",
+    sawTerminalState: false,
+    reopenedAfterTerminal: false,
+    approxChars: 0,
+  };
+}
+
+function approximateChars(value: unknown): number {
+  return typeof value === "string" ? value.length : 256;
+}
+
+function pushChildAction(fold: ChildTranscriptFoldState, action: TranscriptActionPart): void {
+  fold.actions.push(action);
+  if (action.type === "tool-invocation") fold.actionCount += 1;
+  fold.approxChars += action.content.length + approximateChars(action.toolOutput ?? "");
+}
+
+/**
+ * Applies one child rollout record. Order-sensitive: records must be folded in
+ * file order, exactly once each.
+ */
+export function foldChildTranscriptRecord(
+  fold: ChildTranscriptFoldState,
+  record: TranscriptRecord,
+): void {
   const markPending = (): void => {
-    if (sawTerminalState) reopenedAfterTerminal = true;
-    state = "pending";
+    if (fold.sawTerminalState) fold.reopenedAfterTerminal = true;
+    fold.state = "pending";
   };
   const markTerminal = (terminalState: "success" | "failure"): void => {
-    state = terminalState;
-    sawTerminalState = true;
+    fold.state = terminalState;
+    fold.sawTerminalState = true;
   };
-  /** Read through a closure: the loop's control flow cannot narrow `state`. */
-  const settledSuccessfully = (): boolean => state === "success";
 
-  for (const record of records) {
-    const payload = record.payload;
-    if (!payload) {
-      continue;
-    }
+  const payload = record.payload;
+  if (!payload) {
+    return;
+  }
 
-    // A Codex child thread is reusable. Its rollout therefore contains all of
-    // its turns, including an earlier final_answer followed by a later
-    // follow-up. Starting a new turn must reopen the row; otherwise the old
-    // terminal marker remains sticky while new actions stream underneath it.
-    if (
-      record.type === "turn_context" ||
-      (record.type === "event_msg" &&
-        (payload.type === "task_started" || payload.type === "user_message"))
-    ) {
-      markPending();
-      continue;
-    }
+  // A Codex child thread is reusable. Its rollout therefore contains all of
+  // its turns, including an earlier final_answer followed by a later
+  // follow-up. Starting a new turn must reopen the row; otherwise the old
+  // terminal marker remains sticky while new actions stream underneath it.
+  if (
+    record.type === "turn_context" ||
+    (record.type === "event_msg" &&
+      (payload.type === "task_started" || payload.type === "user_message"))
+  ) {
+    markPending();
+    return;
+  }
 
-    if (record.type === "session_meta") {
-      name = asString(payload.agent_nickname) ?? name;
-      role = asString(payload.agent_role) ?? role;
-      continue;
-    }
+  if (record.type === "session_meta") {
+    fold.nickname = asString(payload.agent_nickname) ?? fold.nickname;
+    fold.role = asString(payload.agent_role) ?? fold.role;
+    return;
+  }
 
-    if (record.type === "event_msg" && payload.type === "task_complete") {
-      markTerminal("success");
-      continue;
-    }
+  if (record.type === "event_msg" && payload.type === "task_complete") {
+    markTerminal("success");
+    return;
+  }
 
-    if (record.type === "event_msg") {
-      const eventType = asString(payload.type);
-      if (isExplicitSubagentFailureEvent(eventType)) {
-        // `turn_aborted` is the weakest of these events: it names the cancelled
-        // turn, not the agent, and an interrupt aimed at a child that already
-        // finished is a no-op. Every real turn writes `turn_context`,
-        // `task_started` or `user_message` first, all of which reopen the row,
-        // so an abort with nothing between it and a terminal success describes
-        // no turn this child ever ran and must not repaint that outcome. Mirrors
-        // `preserveTerminalState` in `applyCodexCollabStateToSubagentParts`. The
-        // `task_*` events name the agent's own task and stay unconditional.
-        if (eventType !== "turn_aborted" || !settledSuccessfully()) {
-          markTerminal("failure");
-        }
-        continue;
+  if (record.type === "event_msg") {
+    const eventType = asString(payload.type);
+    if (isExplicitSubagentFailureEvent(eventType)) {
+      // `turn_aborted` is the weakest of these events: it names the cancelled
+      // turn, not the agent, and an interrupt aimed at a child that already
+      // finished is a no-op. Every real turn writes `turn_context`,
+      // `task_started` or `user_message` first, all of which reopen the row,
+      // so an abort with nothing between it and a terminal success describes
+      // no turn this child ever ran and must not repaint that outcome. Mirrors
+      // `preserveTerminalState` in `applyCodexCollabStateToSubagentParts`. The
+      // `task_*` events name the agent's own task and stay unconditional.
+      if (eventType !== "turn_aborted" || fold.state !== "success") {
+        markTerminal("failure");
       }
-    }
-
-    if (record.type === "event_msg" && payload.type === "agent_message") {
-      const phase = asString(payload.phase);
-      if (phase === "commentary") {
-        markPending();
-        const content = asString(payload.message);
-        if (content) actions.push({ type: "text", content });
-      } else if (phase === "final_answer") {
-        appendTextAction(actions, payload.message);
-      }
-      if (phase === "final_answer") {
-        markTerminal("success");
-      }
-      continue;
-    }
-
-    if (record.type !== "response_item") {
-      continue;
-    }
-
-    const payloadType = asString(payload.type);
-    if (payloadType === "function_call" || payloadType === "custom_tool_call") {
-      markPending();
-      const toolName = asString(payload.name) ?? "tool";
-      const callId = asString(payload.call_id);
-      const input = payloadType === "custom_tool_call" ? payload.input : payload.arguments;
-      const status = asString(payload.status);
-      const initialState: ToolState =
-        status === "failed" ? "failure" : status === "completed" ? "success" : "pending";
-      const part = createActionPart(toolName, input, initialState);
-
-      if (
-        payloadType === "custom_tool_call" &&
-        (initialState === "success" || initialState === "failure")
-      ) {
-        const output = payload.output;
-        actions.push(
-          applyTranscriptToolOutput(
-            part,
-            output,
-            resolveTranscriptToolOutputState(toolName, output, initialState),
-          ),
-        );
-      } else {
-        actions.push(part);
-      }
-
-      if (callId) {
-        actionIndexByCallId.set(callId, actions.length - 1);
-      }
-      continue;
-    }
-
-    if (payloadType === "function_call_output" || payloadType === "custom_tool_call_output") {
-      const callId = asString(payload.call_id);
-      if (!callId) {
-        continue;
-      }
-
-      const actionIndex = actionIndexByCallId.get(callId);
-      if (actionIndex === undefined) {
-        continue;
-      }
-
-      const existing = actions[actionIndex] as TranscriptActionPart;
-      actions[actionIndex] = applyTranscriptToolOutput(
-        existing,
-        payload.output,
-        payloadType === "custom_tool_call_output"
-          ? resolveTranscriptToolOutputState(
-              existing.toolName,
-              payload.output,
-              existing.toolState ?? null,
-            )
-          : null,
-      );
-      continue;
-    }
-
-    if (payloadType === "message" && asString(payload.phase) === "final_answer") {
-      appendTextAction(actions, messageContentText(payload.content));
-      markTerminal("success");
+      return;
     }
   }
 
-  const actionCount = actions.filter((action) => action.type === "tool-invocation").length;
+  if (record.type === "event_msg" && payload.type === "agent_message") {
+    const phase = asString(payload.phase);
+    if (phase === "commentary") {
+      markPending();
+      const content = asString(payload.message);
+      if (content) pushChildAction(fold, { type: "text", content });
+    } else if (phase === "final_answer") {
+      appendChildTextAction(fold, payload.message);
+    }
+    if (phase === "final_answer") {
+      markTerminal("success");
+    }
+    return;
+  }
+
+  if (record.type !== "response_item") {
+    return;
+  }
+
+  const payloadType = asString(payload.type);
+  if (payloadType === "function_call" || payloadType === "custom_tool_call") {
+    markPending();
+    const toolName = asString(payload.name) ?? "tool";
+    const callId = asString(payload.call_id);
+    const input = payloadType === "custom_tool_call" ? payload.input : payload.arguments;
+    const status = asString(payload.status);
+    const initialState: ToolState =
+      status === "failed" ? "failure" : status === "completed" ? "success" : "pending";
+    const part = createActionPart(toolName, input, initialState);
+    fold.approxChars += approximateChars(input);
+
+    if (
+      payloadType === "custom_tool_call" &&
+      (initialState === "success" || initialState === "failure")
+    ) {
+      const output = payload.output;
+      pushChildAction(
+        fold,
+        applyTranscriptToolOutput(
+          part,
+          output,
+          resolveTranscriptToolOutputState(toolName, output, initialState),
+        ),
+      );
+    } else {
+      pushChildAction(fold, part);
+    }
+
+    if (callId) {
+      fold.actionIndexByCallId.set(callId, fold.actions.length - 1);
+    }
+    return;
+  }
+
+  if (payloadType === "function_call_output" || payloadType === "custom_tool_call_output") {
+    const callId = asString(payload.call_id);
+    if (!callId) {
+      return;
+    }
+
+    const actionIndex = fold.actionIndexByCallId.get(callId);
+    if (actionIndex === undefined) {
+      return;
+    }
+
+    const existing = fold.actions[actionIndex] as TranscriptActionPart;
+    // Replaced, never mutated: summaries already handed out share these objects.
+    const updated = applyTranscriptToolOutput(
+      existing,
+      payload.output,
+      payloadType === "custom_tool_call_output"
+        ? resolveTranscriptToolOutputState(
+            existing.toolName,
+            payload.output,
+            existing.toolState ?? null,
+          )
+        : null,
+    );
+    fold.actions[actionIndex] = updated;
+    fold.approxChars += approximateChars(updated.toolOutput ?? updated.toolError ?? "");
+    return;
+  }
+
+  if (payloadType === "message" && asString(payload.phase) === "final_answer") {
+    appendChildTextAction(fold, messageContentText(payload.content));
+    markTerminal("success");
+  }
+}
+
+function appendChildTextAction(fold: ChildTranscriptFoldState, value: unknown): void {
+  const before = fold.actions.length;
+  appendTextAction(fold.actions, value);
+  if (fold.actions.length > before) {
+    fold.approxChars += fold.actions[fold.actions.length - 1]!.content.length;
+  }
+}
+
+/** A point-in-time copy of the fold; later folding cannot change it. */
+export function childTranscriptSummary(
+  fold: ChildTranscriptFoldState,
+  readStatus: TranscriptReadStatus = "complete",
+): ChildTranscriptSummary {
+  return {
+    actions: [...fold.actions],
+    actionCount: fold.actionCount,
+    nickname: fold.nickname,
+    role: fold.role,
+    state: fold.state,
+    reopenedAfterTerminal: fold.reopenedAfterTerminal,
+    readStatus,
+  };
+}
+
+/** Estimated retained heap of a fold, in bytes (UTF-16 strings plus objects). */
+export function estimateChildTranscriptFoldBytes(fold: ChildTranscriptFoldState): number {
+  return fold.approxChars * 2 + fold.actions.length * 256 + fold.actionIndexByCallId.size * 96;
+}
+
+export function summarizeChildTranscriptRecords(
+  records: Iterable<TranscriptRecord>,
+  readStatus: TranscriptReadStatus = "complete",
+): ChildTranscriptSummary {
+  const fold = createChildTranscriptFoldState();
+  for (const record of records) foldChildTranscriptRecord(fold, record);
+  return childTranscriptSummary(fold, readStatus);
+}
+
+export const EMPTY_CHILD_TRANSCRIPT_SUMMARY: ChildTranscriptSummary = Object.freeze({
+  actions: Object.freeze([]) as readonly TranscriptActionPart[],
+  actionCount: 0,
+  state: "pending" as const,
+  reopenedAfterTerminal: false,
+  readStatus: "complete" as const,
+});
+
+function partFromChildSummary(
+  summary: ChildTranscriptSummary,
+  base: SpawnedSubagent,
+): TranscriptSubagentPart & { reopenedAfterTerminal: boolean } {
+  const name = summary.nickname ?? base.nickname;
+  const role = summary.role ?? base.role;
   const displayName = name ?? role ?? base.agentId ?? "subagent";
+  // A fresh array per part: collaboration reconciliation replaces entries.
+  const actions: TranscriptActionPart[] = [...summary.actions];
+  if (summary.readStatus !== "complete") {
+    actions.push({ type: "text", content: INCOMPLETE_CHILD_TRANSCRIPT_NOTICE });
+  }
 
   return {
     type: "subagent",
@@ -788,11 +907,11 @@ function parseChildTranscript(
     subagentId: base.agentId,
     subagentName: name,
     subagentRole: role,
-    subagentPrompt: prompt,
+    subagentPrompt: base.prompt,
     subagentActions: actions,
-    subagentActionCount: actionCount,
-    toolState: state,
-    reopenedAfterTerminal,
+    subagentActionCount: summary.actionCount,
+    toolState: summary.state,
+    reopenedAfterTerminal: summary.reopenedAfterTerminal,
   };
 }
 
@@ -806,9 +925,17 @@ function parseChildTranscript(
  */
 export function deriveSubagentPartFromChildRecords(
   agentId: string,
-  records: TranscriptRecord[],
+  records: Iterable<TranscriptRecord>,
 ): TranscriptSubagentPart {
-  const { reopenedAfterTerminal: _reopenedAfterTerminal, ...part } = parseChildTranscript(records, {
+  return deriveSubagentPartFromChildSummary(agentId, summarizeChildTranscriptRecords(records));
+}
+
+/** `deriveSubagentPartFromChildRecords` over an already-folded child rollout. */
+export function deriveSubagentPartFromChildSummary(
+  agentId: string,
+  summary: ChildTranscriptSummary,
+): TranscriptSubagentPart {
+  const { reopenedAfterTerminal: _reopenedAfterTerminal, ...part } = partFromChildSummary(summary, {
     callId: `native:${agentId}`,
     agentId,
   });
@@ -822,25 +949,31 @@ export function deriveSubagentPartFromChildRecords(
   return part;
 }
 
+/** One rollout line as a record, or `null` when the line is not valid JSON. */
+export function parseTranscriptRecordLine(line: string): TranscriptRecord | null {
+  try {
+    const parsed = JSON.parse(line) as {
+      timestamp?: unknown;
+      type?: unknown;
+      payload?: unknown;
+    };
+
+    return {
+      timestamp: typeof parsed.timestamp === "string" ? parsed.timestamp : undefined,
+      type: typeof parsed.type === "string" ? parsed.type : undefined,
+      payload: isRecord(parsed.payload) ? parsed.payload : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function parseTranscriptRecords(lines: string[]): TranscriptRecord[] {
   const records: TranscriptRecord[] = [];
 
   for (const line of lines) {
-    try {
-      const parsed = JSON.parse(line) as {
-        timestamp?: unknown;
-        type?: unknown;
-        payload?: unknown;
-      };
-
-      records.push({
-        timestamp: typeof parsed.timestamp === "string" ? parsed.timestamp : undefined,
-        type: typeof parsed.type === "string" ? parsed.type : undefined,
-        payload: isRecord(parsed.payload) ? parsed.payload : undefined,
-      });
-    } catch {
-      continue;
-    }
+    const record = parseTranscriptRecordLine(line);
+    if (record) records.push(record);
   }
 
   return records;
@@ -852,7 +985,7 @@ export function parseTranscriptRecords(lines: string[]): TranscriptRecord[] {
  * the originating collaboration tool call_id.
  */
 export function parseSubAgentActivityRecords(
-  records: TranscriptRecord[],
+  records: Iterable<TranscriptRecord>,
 ): SubAgentActivityRecord[] {
   const activities: SubAgentActivityRecord[] = [];
 
@@ -915,7 +1048,7 @@ function isActiveAgentStatus(status: unknown): boolean {
 }
 
 function parseCollabOutcomeByAgentId(
-  parentRecords: TranscriptRecord[],
+  parentRecords: readonly TranscriptRecord[],
   agentIdByPath: ReadonlyMap<string, string>,
 ): Map<string, SubagentOutcome> {
   const outcomeByAgentId = new Map<string, SubagentOutcome>();
@@ -1003,8 +1136,31 @@ function parseCollabOutcomeByAgentId(
 }
 
 export function deriveSubagentPartsFromTranscriptRecords(
-  parentRecords: TranscriptRecord[],
-  childRecordsByAgentId: Map<string, TranscriptRecord[]>,
+  parentRecords: readonly TranscriptRecord[],
+  childRecordsByAgentId: ReadonlyMap<string, Iterable<TranscriptRecord>>,
+  resolvedAgentIdBySpawnCallId: ReadonlyMap<string, string> = new Map(),
+): TranscriptSubagentPart[] {
+  const childSummaries = new Map<string, ChildTranscriptSummary>();
+  for (const [agentId, records] of childRecordsByAgentId) {
+    childSummaries.set(agentId, summarizeChildTranscriptRecords(records));
+  }
+  return deriveSubagentPartsFromChildSummaries(
+    parentRecords,
+    childSummaries,
+    resolvedAgentIdBySpawnCallId,
+  );
+}
+
+/**
+ * `deriveSubagentPartsFromTranscriptRecords` over already-folded child rollouts.
+ *
+ * The parent side needs only its collaboration records (spawn/wait/list calls,
+ * their outputs, `sub_agent_activity` events and the first `session_meta`);
+ * `createCollaborationRecordFilter` selects exactly those.
+ */
+export function deriveSubagentPartsFromChildSummaries(
+  parentRecords: readonly TranscriptRecord[],
+  childSummaryByAgentId: ReadonlyMap<string, ChildTranscriptSummary>,
   resolvedAgentIdBySpawnCallId: ReadonlyMap<string, string> = new Map(),
 ): TranscriptSubagentPart[] {
   const spawnedSubagents: SpawnedSubagent[] = [];
@@ -1077,7 +1233,10 @@ export function deriveSubagentPartsFromTranscriptRecords(
 
   return spawnedSubagents.map((spawned) => {
     if (spawned.failed) {
-      const { reopenedAfterTerminal: _reopened, ...part } = parseChildTranscript([], spawned);
+      const { reopenedAfterTerminal: _reopened, ...part } = partFromChildSummary(
+        EMPTY_CHILD_TRANSCRIPT_SUMMARY,
+        spawned,
+      );
       return {
         ...part,
         toolState: "failure" as const,
@@ -1086,8 +1245,10 @@ export function deriveSubagentPartsFromTranscriptRecords(
         ],
       };
     }
-    const childRecords = spawned.agentId ? (childRecordsByAgentId.get(spawned.agentId) ?? []) : [];
-    const part = parseChildTranscript(childRecords, spawned);
+    const childSummary =
+      (spawned.agentId ? childSummaryByAgentId.get(spawned.agentId) : undefined) ??
+      EMPTY_CHILD_TRANSCRIPT_SUMMARY;
+    const part = partFromChildSummary(childSummary, spawned);
     const parentOutcome = spawned.agentId ? collabOutcomeByAgentId.get(spawned.agentId) : undefined;
 
     const { reopenedAfterTerminal, ...transcriptPart } = part;
@@ -1115,4 +1276,49 @@ export function mergeSubagentPartsIntoMessageParts<T extends MergeablePart>(
   }
 
   return [...parts.slice(0, insertIndex), ...subagentParts, ...parts.slice(insertIndex)];
+}
+
+const COLLABORATION_CALL_TOOLS = new Set(["spawn_agent", "wait_agent", "list_agents"]);
+
+/**
+ * Selects the parent-rollout records that sub-agent derivation reads, so a full
+ * hydration can stream the rollout once and keep only these instead of every
+ * record: the first `session_meta` (for `parentAgentPath`), `sub_agent_activity`
+ * events, spawn/wait/list calls, and their outputs.
+ *
+ * Stateful and order-sensitive — feed records in file order. An output whose
+ * call was not seen first is still kept when it could carry a spawn result; the
+ * substring test is a cheap superset of what `parseSpawnResult` accepts.
+ */
+export function createCollaborationRecordFilter(): (record: TranscriptRecord) => boolean {
+  const collaborationCallIds = new Set<string>();
+  let sawSessionMeta = false;
+  return (record) => {
+    if (record.type === "session_meta") {
+      if (sawSessionMeta) return false;
+      sawSessionMeta = true;
+      return true;
+    }
+    const payload = record.payload;
+    if (!payload) return false;
+    if (record.type === "event_msg") return payload.type === "sub_agent_activity";
+    if (record.type !== "response_item") return false;
+    if (payload.type === "function_call") {
+      const name = asString(payload.name);
+      if (!name || !COLLABORATION_CALL_TOOLS.has(name)) return false;
+      const callId = asString(payload.call_id);
+      if (callId) collaborationCallIds.add(callId);
+      return true;
+    }
+    if (payload.type !== "function_call_output") return false;
+    const callId = asString(payload.call_id);
+    if (callId && collaborationCallIds.has(callId)) return true;
+    const output = payload.output;
+    return (
+      typeof output === "string" &&
+      (output.includes("agent_id") ||
+        output.includes("task_name") ||
+        output.includes("collab spawn failed"))
+    );
+  };
 }

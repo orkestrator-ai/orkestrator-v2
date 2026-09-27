@@ -63,7 +63,12 @@ import {
   type SessionState,
 } from "./acp-context.js";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
-import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
+import {
+  bridgeTranscriptRouteBody,
+  bridgeTranscriptSubReadBody,
+  isBridgeTranscriptSubRead,
+} from "@orkestrator/protocol/bridge-transcript-routes";
+import { acpTranscriptSource } from "./acp-transcript-source.js";
 import { boundTranscript } from "./acp-transcript.js";
 import {
   boundTranscriptForRead,
@@ -87,6 +92,11 @@ import {
 } from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { dispatchAcpPrompt, promptStopReason } from "./acp-prompt.js";
+import { sessionActivityObservation } from "./acp-activity.js";
+import {
+  answerSessionActivityBatch,
+  SESSION_ACTIVITY_BATCH_PATH,
+} from "@orkestrator/protocol/session-activity-batch";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { structuredPromptInstruction } from "./acp-prompt.js";
 import { primeCommandChanges, settleCommandChangeWindows } from "./acp-command-changes.js";
@@ -202,14 +212,26 @@ export async function route(
     });
     return json(response, 201, publicSession(state));
   }
+  // The batched form of `/session/:id/activity`, from the same no-touch read.
+  // Outside `/session/...`, so the id route below can never claim it.
+  if (url.pathname === SESSION_ACTIVITY_BATCH_PATH && request.method === "POST") {
+    const answer = await answerSessionActivityBatch(request, sessionActivityObservation, {
+      contentLength: request.headers["content-length"],
+    });
+    return json(response, answer.status, answer.body);
+  }
   const match =
-    /^\/session\/([^/]+)(?:\/(close|messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
+    /^\/session\/([^/]+)(?:\/(close|messages|transcript(?:\/(?:detail|page))?|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
       url.pathname,
     );
   if (!match) return json(response, 404, { error: "Not found" });
+  // `detail` or `page` for `/transcript/detail` and `/transcript/page`.
+  const transcriptSubRead = match[2]?.startsWith("transcript/")
+    ? match[2].slice("transcript/".length)
+    : undefined;
   const state = sessions.get(match[1]!);
   if (!state) {
-    if (match[2] === "activity") return json(response, 200, { activity: "missing" });
+    if (match[2] === "activity") return json(response, 200, sessionActivityObservation(match[1]!));
     // Same reasoning: a 404 here would read as "this bridge predates the
     // route" and fail the environment. Health is optional metadata, so an
     // unknown session answers empty rather than failing.
@@ -225,6 +247,17 @@ export async function route(
     // only ever mean "this bridge predates it".
     if (match[2] === "close" && request.method === "POST") {
       return json(response, 200, { closed: true, missing: true });
+    }
+    // Transcript detail and page reads, likewise: `missing` / `expired` in
+    // band. The summary route itself keeps its 404.
+    if (isBridgeTranscriptSubRead(transcriptSubRead) && request.method === "GET") {
+      return json(
+        response,
+        200,
+        bridgeTranscriptSubReadBody(undefined, transcriptSubRead, (name) =>
+          url.searchParams.get(name),
+        ),
+      );
     }
     return json(response, 404, { error: "Session not found" });
   }
@@ -256,21 +289,17 @@ export async function route(
       messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))),
     );
   }
-  if (action === "transcript" && request.method === "GET") {
+  if ((action === "transcript" || transcriptSubRead) && request.method === "GET") {
     boundTranscriptForRead(state);
+    // Summary, detail and page read one source (see `acp-transcript-source.ts`).
+    const source = acpTranscriptSource(state, `${provider}:${TRANSCRIPT_GENERATION}`);
+    const query = (name: string) => url.searchParams.get(name);
     return json(
       response,
       200,
-      bridgeTranscriptUpdate(state.messages, {
-        sessionIdentity: state.id,
-        generation: `${provider}:${TRANSCRIPT_GENERATION}`,
-        contentEpoch: state.droppedMessages,
-        revision: state.revision,
-        limit: Number(url.searchParams.get("limit")),
-        targetBytes: Number(url.searchParams.get("targetBytes")),
-        knownToken: url.searchParams.get("knownToken") ?? undefined,
-        complete: !state.transcriptTruncated && state.droppedMessages === 0,
-      }),
+      isBridgeTranscriptSubRead(transcriptSubRead)
+        ? bridgeTranscriptSubReadBody(source, transcriptSubRead, query)
+        : bridgeTranscriptRouteBody(source, query),
     );
   }
   if (action === "status" && request.method === "GET") {
@@ -341,10 +370,7 @@ export async function route(
     });
   }
   if (action === "activity" && request.method === "GET") {
-    return json(response, 200, {
-      activity:
-        state.status === "running" || state.activeSubagentToolIds.size > 0 ? "working" : "idle",
-    });
+    return json(response, 200, sessionActivityObservation(match[1]!));
   }
   /**
    * Did this bridge ever take this request id?

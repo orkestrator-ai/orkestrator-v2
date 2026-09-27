@@ -53,6 +53,7 @@ import {
   sessions,
 } from "./session-manager-core.js";
 import { eventEmitter } from "./event-emitter.js";
+import { markTranscriptChanged } from "./transcript-revision.js";
 import { effectiveExecutionPolicy, isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
 import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
 import { MAX_LOCAL_TRANSCRIPT_ENTRIES } from "./session-preferences.js";
@@ -776,6 +777,7 @@ export function appendLocalCommandResult(
     createdAt: new Date().toISOString(),
   };
   session.messages.push(message);
+  markTranscriptChanged(session);
   session.localTranscript = [...(session.localTranscript ?? []), message].slice(
     -MAX_LOCAL_TRANSCRIPT_ENTRIES,
   );

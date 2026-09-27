@@ -91,11 +91,13 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import {
-  NATIVE_DISPLAY_TAIL_MAX_SESSIONS,
-  NATIVE_DISPLAY_TAIL_MAX_TOTAL_BYTES,
   isNativeAgentDisplayTail,
   type NativeAgentDisplayTail,
 } from "./native-agent-display-tails.js";
+import {
+  NativeAgentDisplayTailStore,
+  type NativeAgentDisplayTailDeletion,
+} from "./native-agent-display-tail-store.js";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
@@ -163,6 +165,7 @@ export type StorageLayerTypes = [
 ];
 
 export abstract class StorageNative extends StorageReviews {
+  private displayTailStoreInstance: NativeAgentDisplayTailStore | null = null;
   async getCoordinatorWorkspaceById(_coordinatorId: string): Promise<CoordinatorWorkspace | null> {
     throw new Error("Coordinator storage is unavailable in this storage layer");
   }
@@ -707,97 +710,60 @@ export abstract class StorageNative extends StorageReviews {
     });
   }
 
+  /**
+   * Display tails live in independent keyed records (plan step 07): reading
+   * or writing one session's restart preview touches only that record and a
+   * small metadata index. Constructed lazily so storage that never shows a
+   * native session never creates the namespace or runs the legacy import.
+   */
+  protected nativeAgentDisplayTailStore(): NativeAgentDisplayTailStore {
+    this.displayTailStoreInstance ??= new NativeAgentDisplayTailStore({
+      directory: this.nativeAgentDisplayTailRecordsDir(),
+      legacyFile: this.nativeAgentDisplayTailsFile(),
+      lock: (target) => this.acquireMutationLock(target, "native agent display tail storage"),
+    });
+    return this.displayTailStoreInstance;
+  }
+
   async getNativeAgentDisplayTail(key: string): Promise<NativeAgentDisplayTail | null> {
     if (!isNonBlankString(key)) {
       throw new Error("Native agent display tail key must not be blank");
     }
-    return this.enqueueNativeAgentDisplayTailMutation(async () => {
-      const store = await this.loadNativeAgentDisplayTails();
-      const tail = store[key];
-      return tail && isNativeAgentDisplayTail(tail) ? tail : null;
-    });
+    return this.nativeAgentDisplayTailStore().get(key);
   }
 
-  async putNativeAgentDisplayTail(key: string, tail: NativeAgentDisplayTail): Promise<boolean> {
+  /**
+   * `fence` is a value from `captureNativeAgentDisplayTailFence` taken when the
+   * tail was produced; the write is refused if the key or its environment was
+   * deleted since. Omitted, the fence is taken now.
+   */
+  async putNativeAgentDisplayTail(
+    key: string,
+    tail: NativeAgentDisplayTail,
+    options: { fence?: number } = {},
+  ): Promise<boolean> {
     if (!isNonBlankString(key) || !isNativeAgentDisplayTail(tail)) return false;
-    return this.enqueueNativeAgentDisplayTailMutation(async () => {
-      const store = await this.loadNativeAgentDisplayTails();
-      store[key] = tail;
-      this.evictNativeAgentDisplayTails(store, key);
-      try {
-        await this.saveSensitiveJson(this.nativeAgentDisplayTailsFile(), store);
-        return true;
-      } catch {
-        return false;
-      }
-    });
+    return this.nativeAgentDisplayTailStore().put(key, tail, options);
+  }
+
+  captureNativeAgentDisplayTailFence(): number {
+    return this.nativeAgentDisplayTailStore().captureFence();
+  }
+
+  onNativeAgentDisplayTailDeleted(
+    listener: (event: NativeAgentDisplayTailDeletion) => void,
+  ): () => void {
+    return this.nativeAgentDisplayTailStore().onDeleted(listener);
   }
 
   async deleteNativeAgentDisplayTail(key: string): Promise<void> {
     if (!isNonBlankString(key)) return;
-    await this.enqueueNativeAgentDisplayTailMutation(async () => {
-      await this.deleteNativeAgentDisplayTailUnlocked(key);
-    });
-  }
-
-  private async deleteNativeAgentDisplayTailUnlocked(key: string): Promise<void> {
-    const store = await this.loadNativeAgentDisplayTails();
-    if (!(key in store)) return;
-    delete store[key];
-    await this.saveSensitiveJson(this.nativeAgentDisplayTailsFile(), store);
-    await this.scrubSensitiveJsonBackups(
-      this.nativeAgentDisplayTailsFile(),
-      (storedKey) => storedKey !== key,
-    );
+    await this.nativeAgentDisplayTailStore().delete(key);
   }
 
   async deleteNativeAgentDisplayTailsByEnvironment(environmentId: string): Promise<void> {
     if (!isNonBlankString(environmentId)) return;
-    await this.enqueueNativeAgentDisplayTailMutation(async () => {
-      const store = await this.loadNativeAgentDisplayTails();
-      const retained = Object.fromEntries(
-        Object.entries(store).filter(([, tail]) => tail.environmentId !== environmentId),
-      );
-      if (Object.keys(retained).length === Object.keys(store).length) return;
-      await this.saveSensitiveJson(this.nativeAgentDisplayTailsFile(), retained);
-      await this.scrubSensitiveJsonBackups(
-        this.nativeAgentDisplayTailsFile(),
-        (_storedKey, record) => {
-          return isNativeAgentDisplayTail(record) && record.environmentId !== environmentId;
-        },
-      );
-    });
-  }
-
-  private async loadNativeAgentDisplayTails(): Promise<Record<string, NativeAgentDisplayTail>> {
-    const stored = await this.loadJson<unknown>(this.nativeAgentDisplayTailsFile(), () => ({}));
-    if (!isRecord(stored)) return {};
-    return Object.fromEntries(
-      Object.entries(stored).filter((entry): entry is [string, NativeAgentDisplayTail] =>
-        isNativeAgentDisplayTail(entry[1]),
-      ),
-    );
-  }
-
-  private evictNativeAgentDisplayTails(
-    store: Record<string, NativeAgentDisplayTail>,
-    keepKey: string,
-  ): void {
-    const entries = Object.entries(store).sort((left, right) =>
-      left[1].updatedAt.localeCompare(right[1].updatedAt),
-    );
-    let bytes = entries.reduce((sum, [, tail]) => sum + Buffer.byteLength(JSON.stringify(tail)), 0);
-    while (
-      entries.length > NATIVE_DISPLAY_TAIL_MAX_SESSIONS ||
-      bytes > NATIVE_DISPLAY_TAIL_MAX_TOTAL_BYTES
-    ) {
-      const oldest = entries.find(([key]) => key !== keepKey) ?? entries[0];
-      if (!oldest) break;
-      const [oldestKey, oldestTail] = oldest;
-      delete store[oldestKey];
-      bytes -= Buffer.byteLength(JSON.stringify(oldestTail));
-      entries.splice(entries.indexOf(oldest), 1);
-    }
+    await this.nativeAgentDisplayTailStore().deleteByEnvironment(environmentId);
   }
 
   async deleteNativeAgentSessionsByEnvironment(environmentId: string): Promise<void> {

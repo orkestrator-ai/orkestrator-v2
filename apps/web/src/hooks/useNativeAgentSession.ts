@@ -19,6 +19,7 @@ import type {
   NativeAgentTranscriptUpdate,
   NativeAgentTranscriptView,
 } from "@orkestrator/protocol/native-agent";
+import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/native-agent-transcript-patch";
 import {
   applyNativeAgentProjectionDelta,
   applyNativeAgentTranscriptDelta,
@@ -56,6 +57,7 @@ import {
   stopNativeAgentBackgroundTask,
   updateNativeAgentControls,
 } from "@/lib/backend";
+import { encodedValueBytes, retainedHistoryBytes } from "@/lib/native-history-accounting";
 import { nativeSessionReadDemand } from "@/lib/native-session-read-policy";
 import {
   nativeObservationInvalidationMatches,
@@ -68,6 +70,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import {
   evictNativeAgentHistoryCaches,
+  nativeAgentHistoryBytesExcept,
   useNativeAgentProjectionStore,
   type NativeAgentSyncCacheEntry,
   type NativeAgentProgressiveCacheEntry,
@@ -83,22 +86,23 @@ const CLIENT_HISTORY_MAX_BYTES = 8 * 1024 * 1024;
 const CLIENT_HISTORY_TOTAL_MAX_BYTES = 32 * 1024 * 1024;
 /** Mirrors the backend page ceiling so a request is never silently clamped. */
 const HISTORY_PAGE_MAX_MESSAGES = 200;
+/** Pages of already-held rows a single "load earlier" may step past. */
+const MAX_DUPLICATE_PAGE_SKIPS =
+  Math.ceil(CLIENT_HISTORY_MAX_MESSAGES / HISTORY_PAGE_MAX_MESSAGES) + 1;
 
 let syncCapability: {
   supported: boolean;
   progressive: boolean;
   /** The backend announces stamped, session-scoped activity invalidations. */
   observationEvents?: boolean;
+  /** The backend can answer transcript deltas with part-level patches. */
+  transcriptPatches?: boolean;
   checkedAt: number;
   generation: number;
 } | null = null;
 let syncCapabilityGeneration = 0;
 let syncCapabilityInvalidationQueued = false;
 let syncCapabilityRequest: { generation: number; promise: Promise<boolean> } | null = null;
-
-function encodedBytes(value: unknown): number {
-  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
-}
 
 function messagePartCount(message: unknown): number {
   const parts = (message as { parts?: unknown })?.parts;
@@ -258,6 +262,21 @@ function preferCompleteLiveHead<TMessage>(
     ...headParts,
     ...localParts.slice(offset + headParts.length),
   ];
+  const sameHeadFields =
+    local &&
+    Object.keys(head as object).length === Object.keys(local as object).length &&
+    Object.entries(head as object).every(
+      ([key, value]) => key === "parts" || value === (local as Record<string, unknown>)[key],
+    );
+  if (
+    sameHeadFields &&
+    parts.length === localParts.length &&
+    headParts.every(
+      (part, index) => JSON.stringify(part) === JSON.stringify(localParts[offset + index]),
+    )
+  ) {
+    return { messages: [local, ...incoming.slice(1)], restoredPrefix: true };
+  }
   return {
     messages: [{ ...head, parts } as TMessage, ...incoming.slice(1)],
     restoredPrefix: omittedParts === undefined ? offset > 0 : offset >= omittedParts,
@@ -408,11 +427,15 @@ async function nativeAgentSyncSupported(): Promise<boolean> {
       const observationEvents =
         capabilities.observationEventVersions?.includes(NATIVE_AGENT_OBSERVATION_EVENT_VERSION) ===
         true;
+      const transcriptPatches =
+        capabilities.transcriptPatchVersions?.includes(NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION) ===
+        true;
       if (generation === syncCapabilityGeneration) {
         syncCapability = {
           supported,
           progressive,
           observationEvents,
+          transcriptPatches,
           checkedAt: Date.now(),
           generation,
         };
@@ -451,6 +474,13 @@ async function nativeAgentSyncSupported(): Promise<boolean> {
 export function nativeObservationEventsSupported(): boolean {
   return Boolean(
     syncCapability?.generation === syncCapabilityGeneration && syncCapability.observationEvents,
+  );
+}
+
+/** Synchronous and conservative: false until this backend generation answered. */
+function nativeTranscriptPatchesSupported(): boolean {
+  return Boolean(
+    syncCapability?.generation === syncCapabilityGeneration && syncCapability.transcriptPatches,
   );
 }
 
@@ -807,6 +837,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     matchingSharedProjection ?? null,
   );
   const syncTokenRef = useRef<string | undefined>(sharedSyncCache?.token);
+  const duplicatePageSkipsRef = useRef(0);
   const matchingTranscriptView = restoreTranscriptViewFromProjection(
     matchingProgressiveCache?.identity,
     matchingSharedProjection,
@@ -1005,11 +1036,7 @@ export function useNativeAgentSession<TMessage = unknown>({
    * behind a cursor only the server can mint.
    */
   const historyRequestBudget = useCallback((): { messages: number; bytes: number } => {
-    const store = useNativeAgentProjectionStore.getState();
-    const otherHistoryBytes = Array.from(store.syncCaches.entries()).reduce(
-      (total, [key, cache]) => total + (key === sessionKey ? 0 : cache.historyBytes),
-      0,
-    );
+    const otherHistoryBytes = nativeAgentHistoryBytesExcept(sessionKey);
     const byteCeiling = Math.min(
       CLIENT_HISTORY_MAX_BYTES,
       Math.max(0, CLIENT_HISTORY_TOTAL_MAX_BYTES - otherHistoryBytes),
@@ -1020,7 +1047,9 @@ export function useNativeAgentSession<TMessage = unknown>({
         0,
         CLIENT_HISTORY_MAX_MESSAGES - liveMessages - historyMessagesRef.current.length,
       ),
-      bytes: Math.max(0, byteCeiling - encodedBytes(historyMessagesRef.current)),
+      // Summed from cached per-message sizes; the retained pages were measured
+      // when they arrived and are not serialized again here.
+      bytes: Math.max(0, byteCeiling - retainedHistoryBytes(historyMessagesRef.current)),
     };
   }, [sessionKey]);
 
@@ -1168,21 +1197,18 @@ export function useNativeAgentSession<TMessage = unknown>({
         retainedCursor = boundaryCursor;
       }
 
-      const otherHistoryBytes = Array.from(store.syncCaches.entries()).reduce(
-        (total, [key, cache]) => total + (key === sessionKey ? 0 : cache.historyBytes),
-        0,
-      );
-      let retainedHistoryBytes = encodedBytes(retainedMessages);
+      const otherHistoryBytes = nativeAgentHistoryBytesExcept(sessionKey);
+      let historyBytes = retainedHistoryBytes(retainedMessages);
       let settledCursor = retainedCursor;
       if (
         retainedMessages.length + displayLive.length > CLIENT_HISTORY_MAX_MESSAGES ||
-        retainedHistoryBytes > CLIENT_HISTORY_MAX_BYTES ||
-        retainedHistoryBytes + otherHistoryBytes > CLIENT_HISTORY_TOTAL_MAX_BYTES
+        historyBytes > CLIENT_HISTORY_MAX_BYTES ||
+        historyBytes + otherHistoryBytes > CLIENT_HISTORY_TOTAL_MAX_BYTES
       ) {
         // Eviction is an explicit collapse back to the bounded live view. The
         // server-supplied first cursor lets the same history be fetched again.
         retainedMessages = [];
-        retainedHistoryBytes = encodedBytes(retainedMessages);
+        historyBytes = 0;
         settledCursor = boundaryCursor;
       }
 
@@ -1223,7 +1249,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(boundaryCursor ? { boundaryCursor } : {}),
         historyComplete: retainedComplete,
         historyMessages: retainedMessages,
-        historyBytes: retainedHistoryBytes,
+        historyBytes,
         evictionGeneration,
       };
     },
@@ -1297,7 +1323,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(historyUnpageableRef.current ? { historyUnpageable: true } : {}),
         historyComplete: historyCompleteRef.current,
         historyMessages: historyMessagesRef.current,
-        historyBytes: encodedBytes(historyMessagesRef.current),
+        historyBytes: retainedHistoryBytes(historyMessagesRef.current),
       });
       return next;
     },
@@ -1448,7 +1474,9 @@ export function useNativeAgentSession<TMessage = unknown>({
        * the shared store cannot evict — its trim loop refuses to drop the
        * session it is currently writing, so nothing else would reclaim this.
        */
-      let retainedBytes = retained.length > 0 ? encodedBytes(retained) : 0;
+      // The prefix is made of objects this renderer already holds, so their
+      // sizes are cached; only the arriving live tail is ever serialized.
+      let retainedBytes = retainedHistoryBytes(retained);
       const retentionCollapsed =
         retained.length > 0 &&
         (retained.length + displayLive.length > CLIENT_HISTORY_MAX_MESSAGES ||
@@ -1483,21 +1511,46 @@ export function useNativeAgentSession<TMessage = unknown>({
         !evicted &&
         syncLiveProjectionRef.current !== null;
       if (!pagingCarriesOver) historyUnpageableRef.current = false;
-      const historyBoundaryCursor = pagingCarriesOver
-        ? historyBoundaryCursorRef.current
-        : undefined;
+      /*
+       * A direct cursor pages this view's own epoch straight from the
+       * provider, so it can seed paging without the joined snapshot that
+       * otherwise has to mint one. Adopt it whenever this hook holds no
+       * cursor of its own for the epoch, or retention just collapsed to the
+       * live tail (an older cursor would skip the rows the collapse dropped).
+       * Existing paging state otherwise wins: it already points further back.
+       */
+      const directHistoryCursor =
+        value.historyPaging === "direct" ? value.historyCursor : undefined;
+      const adoptDirectCursor =
+        directHistoryCursor !== undefined &&
+        (!pagingCarriesOver ||
+          retentionCollapsed ||
+          (!historyCursorRef.current && !historyBoundaryCursorRef.current));
+      const historyBoundaryCursor = adoptDirectCursor
+        ? directHistoryCursor
+        : pagingCarriesOver
+          ? historyBoundaryCursorRef.current
+          : undefined;
       /*
        * A collapse discards retained pages, so the range they covered has to
        * become fetchable again. The boundary is the only cursor that still
        * describes it; the page cursor pointed further back than anything now
        * on screen.
        */
-      const settledHistoryCursor = !pagingCarriesOver
-        ? undefined
-        : retentionCollapsed
-          ? historyBoundaryCursorRef.current
-          : historyCursorRef.current;
-      const historyPagingEpoch = pagingCarriesOver ? historyEpochRef.current : undefined;
+      const settledHistoryCursor = adoptDirectCursor
+        ? directHistoryCursor
+        : !pagingCarriesOver
+          ? undefined
+          : retentionCollapsed
+            ? historyBoundaryCursorRef.current
+            : historyCursorRef.current;
+      // A direct page answers with the view's own epoch, which is therefore
+      // the paging epoch the page is checked against.
+      const historyPagingEpoch = adoptDirectCursor
+        ? value.historyEpoch
+        : pagingCarriesOver
+          ? historyEpochRef.current
+          : undefined;
       /*
        * Completeness is about what this client can show, not about the window
        * the transcript happened to carry. A live tail reports itself truncated
@@ -1604,7 +1657,11 @@ export function useNativeAgentSession<TMessage = unknown>({
           : {}),
         ...(current?.turnBoundaries ? { turnBoundaries: current.turnBoundaries } : {}),
         ...retainedCommandFields(current, progressiveDiscoveryRef.current, value.identity),
-        revision: (current?.revision ?? 0) + 1,
+        // Ordered after whatever is on screen, not after `current`: a new
+        // provider session under the same source generation starts `current`
+        // over, and a revision reset to 1 would make `applyProjection` drop
+        // the new session's transcript as older than the one it replaces.
+        revision: (projectionRef.current?.revision ?? 0) + 1,
         generation: value.identity.sourceGeneration,
       };
       const next: NativeAgentSessionProjection<TMessage> = {
@@ -1695,8 +1752,15 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(value.shareUrl === undefined ? {} : { shareUrl: value.shareUrl }),
         connection: value.connection,
         turn: value.turn,
-        messages: current?.messages ?? [],
-        ...(current?.messageWindow ? { messageWindow: current.messageWindow } : {}),
+        // Messages belong to the provider session they were read from. State
+        // for a replacement session must not relabel the old transcript as
+        // its own while the new transcript is still on its way.
+        ...(current && current.sessionId && current.sessionId !== value.identity.providerSessionId
+          ? { messages: [] }
+          : {
+              messages: current?.messages ?? [],
+              ...(current?.messageWindow ? { messageWindow: current.messageWindow } : {}),
+            }),
         interactions: value.interactions,
         composerControls: value.composerControls,
         ...(value.composer ? { composer: value.composer } : {}),
@@ -1943,6 +2007,9 @@ export function useNativeAgentSession<TMessage = unknown>({
               ...identity,
               viewVersion: 1,
               liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+              ...(nativeTranscriptPatchesSupported()
+                ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
+                : {}),
               ...(forceSnapshot
                 ? { forceSnapshot: true }
                 : progressiveTranscriptTokenRef.current
@@ -2939,220 +3006,242 @@ export function useNativeAgentSession<TMessage = unknown>({
    * counter, so repeated clicks cannot outrun the provider or ask for a window
    * the session never had.
    */
-  const loadEarlierMessages = useCallback(async () => {
-    const requestedOperationEpoch = projectionOperationEpochRef.current;
-    const progressive = await nativeAgentProgressiveSupported();
-    if (progressive && !historyCursorRef.current) {
-      if (historyUnpageableRef.current) return projectionRef.current;
-      /*
-       * The progressive transcript can know that history is incomplete long
-       * before the paging cache exists: only a sync-v1 read fills that cache,
-       * and this tab may never have issued one. A click is the request to
-       * mint a cursor even when the live tail itself reported that it could
-       * not page — the joined snapshot is what turns "not shown" into a page.
-       */
-      const update = await getNativeAgentProjectionUpdate<TMessage>({
-        ...identity,
-        syncVersion: 1,
-        liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
-        forceSnapshot: true,
-      });
-      /*
-       * Fence before committing, not after. A mutation that landed while the
-       * snapshot was in flight owns the transcript now, and installing this
-       * plan would rewrite the paging refs from a pre-mutation live tail.
-       */
+  const loadEarlierMessages =
+    useCallback(async (): Promise<NativeAgentSessionProjection<TMessage> | null> => {
+      const requestedOperationEpoch = projectionOperationEpochRef.current;
+      const progressive = await nativeAgentProgressiveSupported();
+      if (progressive && !historyCursorRef.current) {
+        if (historyUnpageableRef.current) return projectionRef.current;
+        /*
+         * The progressive transcript can know that history is incomplete long
+         * before the paging cache exists: only a sync-v1 read fills that cache,
+         * and this tab may never have issued one. A click is the request to
+         * mint a cursor even when the live tail itself reported that it could
+         * not page — the joined snapshot is what turns "not shown" into a page.
+         */
+        const update = await getNativeAgentProjectionUpdate<TMessage>({
+          ...identity,
+          syncVersion: 1,
+          liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+          forceSnapshot: true,
+        });
+        /*
+         * Fence before committing, not after. A mutation that landed while the
+         * snapshot was in flight owns the transcript now, and installing this
+         * plan would rewrite the paging refs from a pre-mutation live tail.
+         */
+        if (requestedOperationEpoch !== projectionOperationEpochRef.current) {
+          return projectionRef.current;
+        }
+        if (update.status === "snapshot") {
+          const live = update.projection;
+          if (
+            isNativeAgentSessionProjection(live) &&
+            live.platform === platform &&
+            live.environmentId === environmentId &&
+            update.historyCursor
+          ) {
+            commitSyncMaterialization(
+              planSyncMaterialization({
+                live,
+                token: update.token,
+                historyEpoch: update.historyEpoch,
+                historyComplete: update.historyComplete,
+                boundary: { cursor: update.historyCursor },
+              }),
+            );
+          }
+        }
+        if (!historyCursorRef.current) {
+          /*
+           * The joined snapshot could not mint a cursor. Falling through to a
+           * wider legacy `messageLimit` would replace the progressive window
+           * with a full-projection read that cannot restore the omitted
+           * content either, so retire the control on this transcript instead.
+           */
+          return retireLoadEarlierControl({ sticky: true });
+        }
+      }
       if (requestedOperationEpoch !== projectionOperationEpochRef.current) {
         return projectionRef.current;
       }
-      if (update.status === "snapshot") {
-        const live = update.projection;
-        if (
-          isNativeAgentSessionProjection(live) &&
-          live.platform === platform &&
-          live.environmentId === environmentId &&
-          update.historyCursor
-        ) {
-          commitSyncMaterialization(
-            planSyncMaterialization({
-              live,
-              token: update.token,
-              historyEpoch: update.historyEpoch,
-              historyComplete: update.historyComplete,
-              boundary: { cursor: update.historyCursor },
-            }),
+      if (await nativeAgentSyncSupported()) {
+        const before = historyCursorRef.current;
+        if (before) {
+          /*
+           * Free room from inactive identities first, then ask for a page that
+           * fits what is left. Bounding the request is what keeps acceptance
+           * all-or-nothing: a page trimmed on arrival would strand its older half
+           * behind a cursor only the server can mint.
+           */
+          evictNativeAgentHistoryCaches(
+            sessionKey,
+            retainedHistoryBytes(historyMessagesRef.current),
+            CLIENT_HISTORY_TOTAL_MAX_BYTES,
           );
+          const budget = historyRequestBudget();
+          if (budget.messages <= 0 || budget.bytes <= 0) {
+            return retireLoadEarlierControl();
+          }
+          const sequence = ++refreshSequenceRef.current;
+          const page = await getNativeAgentMessagePage<TMessage>({
+            ...identity,
+            syncVersion: 1,
+            before,
+            limit: Math.min(budget.messages, HISTORY_PAGE_MAX_MESSAGES),
+            targetBytes: budget.bytes,
+          });
+          // A mutation that landed while the page was in flight owns the transcript
+          // now. Installing this page would merge history into a live tail it no
+          // longer describes.
+          if (
+            sequence !== refreshSequenceRef.current ||
+            requestedOperationEpoch !== projectionOperationEpochRef.current
+          ) {
+            return projectionRef.current;
+          }
+          const syncLive = syncLiveProjectionRef.current;
+          const token = syncTokenRef.current;
+          /*
+           * `historyEpochRef` and `page.historyEpoch` are both the backend's paging
+           * epoch, so a mismatch means the history this cursor described has been
+           * rewritten. The token is deliberately not required: a progressive tail
+           * pages without ever holding a joined-projection token.
+           */
+          if (page.historyEpoch !== historyEpochRef.current || !syncLive) {
+            resetSyncState();
+            await refresh({ manual: true });
+            return projectionRef.current;
+          }
+          const current = projectionRef.current;
+          const live =
+            current &&
+            current.platform === syncLive.platform &&
+            current.environmentId === syncLive.environmentId &&
+            current.sessionId === syncLive.sessionId &&
+            current.generation === syncLive.generation
+              ? {
+                  ...current,
+                  messages: syncLive.messages,
+                  ...(syncLive.messageWindow
+                    ? { messageWindow: syncLive.messageWindow }
+                    : { messageWindow: undefined }),
+                }
+              : syncLive;
+          const existing = new Set(
+            [...historyMessagesRef.current, ...live.messages].map(
+              (message) => (message as { id?: unknown }).id,
+            ),
+          );
+          const newMessages = page.messages.filter(
+            (message) => !existing.has((message as { id?: unknown }).id),
+          );
+          /*
+           * A direct cursor adopted after messages aged out of the live tail
+           * points at the tail's head, so its first pages can hold only rows
+           * this client kept on screen. Step past them instead of spending a
+           * click on a page that shows nothing; bounded by what the client can
+           * retain, so it cannot loop.
+           */
+          if (
+            newMessages.length === 0 &&
+            page.messages.length > 0 &&
+            page.nextCursor &&
+            page.nextCursor !== before &&
+            duplicatePageSkipsRef.current < MAX_DUPLICATE_PAGE_SKIPS
+          ) {
+            duplicatePageSkipsRef.current += 1;
+            historyCursorRef.current = page.nextCursor;
+            return loadEarlierMessages();
+          }
+          duplicatePageSkipsRef.current = 0;
+          const retained = [...historyMessagesRef.current];
+          const accepted: TMessage[] = [];
+          const messageBudget = Math.max(0, CLIENT_HISTORY_MAX_MESSAGES - live.messages.length);
+          let acceptedBytes = 0;
+          for (let index = newMessages.length - 1; index >= 0; index -= 1) {
+            if (accepted.length + retained.length >= messageBudget) break;
+            const message = newMessages[index]!;
+            // Element size plus its separating comma. Measured once: planning
+            // and the store reuse the cached size of every accepted message.
+            const bytes = encodedValueBytes(message) + 1;
+            if (acceptedBytes + bytes > budget.bytes) break;
+            accepted.unshift(message);
+            acceptedBytes += bytes;
+          }
+          // One message larger than the whole remaining byte budget would otherwise
+          // make the control permanently inert. Take it anyway: the plan below
+          // still enforces the retained-history ceiling, and a click must always
+          // either show more or stop offering to.
+          if (accepted.length === 0 && newMessages.length > 0 && retained.length < messageBudget) {
+            accepted.push(newMessages[newMessages.length - 1]!);
+          }
+          const acceptedWholePage = accepted.length === newMessages.length;
+          /*
+           * A partially accepted page keeps the cursor it was fetched with.
+           * Advancing to `nextCursor` would acknowledge messages that were never
+           * retained, and clearing the cursor entirely — the previous behaviour —
+           * made them unreachable until the history epoch rotated.
+           */
+          const plan = planSyncMaterialization({
+            live,
+            ...(token ? { token } : {}),
+            historyEpoch: page.historyEpoch,
+            historyComplete: page.complete,
+            retained: {
+              messages: [...accepted, ...retained],
+              ...(acceptedWholePage
+                ? page.nextCursor
+                  ? { cursor: page.nextCursor }
+                  : {}
+                : { cursor: before }),
+              complete: page.complete,
+            },
+          });
+          return commitSyncMaterialization(plan);
         }
       }
-      if (!historyCursorRef.current) {
-        /*
-         * The joined snapshot could not mint a cursor. Falling through to a
-         * wider legacy `messageLimit` would replace the progressive window
-         * with a full-projection read that cannot restore the omitted
-         * content either, so retire the control on this transcript instead.
-         */
-        return retireLoadEarlierControl({ sticky: true });
-      }
-    }
-    if (requestedOperationEpoch !== projectionOperationEpochRef.current) {
-      return projectionRef.current;
-    }
-    if (await nativeAgentSyncSupported()) {
-      const before = historyCursorRef.current;
-      if (before) {
-        /*
-         * Free room from inactive identities first, then ask for a page that
-         * fits what is left. Bounding the request is what keeps acceptance
-         * all-or-nothing: a page trimmed on arrival would strand its older half
-         * behind a cursor only the server can mint.
-         */
-        evictNativeAgentHistoryCaches(
-          sessionKey,
-          encodedBytes(historyMessagesRef.current),
-          CLIENT_HISTORY_TOTAL_MAX_BYTES,
-        );
-        const budget = historyRequestBudget();
-        if (budget.messages <= 0 || budget.bytes <= 0) {
-          return retireLoadEarlierControl();
-        }
-        const sequence = ++refreshSequenceRef.current;
-        const page = await getNativeAgentMessagePage<TMessage>({
-          ...identity,
-          syncVersion: 1,
-          before,
-          limit: Math.min(budget.messages, HISTORY_PAGE_MAX_MESSAGES),
-          targetBytes: budget.bytes,
-        });
-        // A mutation that landed while the page was in flight owns the transcript
-        // now. Installing this page would merge history into a live tail it no
-        // longer describes.
-        if (
-          sequence !== refreshSequenceRef.current ||
-          requestedOperationEpoch !== projectionOperationEpochRef.current
-        ) {
-          return projectionRef.current;
-        }
-        const syncLive = syncLiveProjectionRef.current;
-        const token = syncTokenRef.current;
-        /*
-         * `historyEpochRef` and `page.historyEpoch` are both the backend's paging
-         * epoch, so a mismatch means the history this cursor described has been
-         * rewritten. The token is deliberately not required: a progressive tail
-         * pages without ever holding a joined-projection token.
-         */
-        if (page.historyEpoch !== historyEpochRef.current || !syncLive) {
-          resetSyncState();
-          await refresh({ manual: true });
-          return projectionRef.current;
-        }
-        const current = projectionRef.current;
-        const live =
-          current &&
-          current.platform === syncLive.platform &&
-          current.environmentId === syncLive.environmentId &&
-          current.sessionId === syncLive.sessionId &&
-          current.generation === syncLive.generation
-            ? {
-                ...current,
-                messages: syncLive.messages,
-                ...(syncLive.messageWindow
-                  ? { messageWindow: syncLive.messageWindow }
-                  : { messageWindow: undefined }),
-              }
-            : syncLive;
-        const existing = new Set(
-          [...historyMessagesRef.current, ...live.messages].map(
-            (message) => (message as { id?: unknown }).id,
-          ),
-        );
-        const newMessages = page.messages.filter(
-          (message) => !existing.has((message as { id?: unknown }).id),
-        );
-        const retained = [...historyMessagesRef.current];
-        const accepted: TMessage[] = [];
-        const messageBudget = Math.max(0, CLIENT_HISTORY_MAX_MESSAGES - live.messages.length);
-        let acceptedBytes = 0;
-        for (let index = newMessages.length - 1; index >= 0; index -= 1) {
-          if (accepted.length + retained.length >= messageBudget) break;
-          const message = newMessages[index]!;
-          const bytes = encodedBytes(message) + 1;
-          if (acceptedBytes + bytes > budget.bytes) break;
-          accepted.unshift(message);
-          acceptedBytes += bytes;
-        }
-        // One message larger than the whole remaining byte budget would otherwise
-        // make the control permanently inert. Take it anyway: the plan below
-        // still enforces the retained-history ceiling, and a click must always
-        // either show more or stop offering to.
-        if (accepted.length === 0 && newMessages.length > 0 && retained.length < messageBudget) {
-          accepted.push(newMessages[newMessages.length - 1]!);
-        }
-        const acceptedWholePage = accepted.length === newMessages.length;
-        /*
-         * A partially accepted page keeps the cursor it was fetched with.
-         * Advancing to `nextCursor` would acknowledge messages that were never
-         * retained, and clearing the cursor entirely — the previous behaviour —
-         * made them unreachable until the history epoch rotated.
-         */
-        const plan = planSyncMaterialization({
-          live,
-          ...(token ? { token } : {}),
-          historyEpoch: page.historyEpoch,
-          historyComplete: page.complete,
-          retained: {
-            messages: [...accepted, ...retained],
-            ...(acceptedWholePage
-              ? page.nextCursor
-                ? { cursor: page.nextCursor }
-                : {}
-              : { cursor: before }),
-            complete: page.complete,
-          },
-        });
-        return commitSyncMaterialization(plan);
-      }
-    }
-    const current =
-      projectionRef.current?.messageWindow?.limit ?? messageLimit ?? DEFAULT_MESSAGE_WINDOW;
-    const next = Math.min(current * 2, MAX_MESSAGE_WINDOW);
-    if (next <= current) return retireLoadEarlierControl({ sticky: true });
-    setMessageLimit(next);
-    const sequence = ++refreshSequenceRef.current;
-    const previousIds = new Set(
-      (projectionRef.current?.messages ?? [])
-        .map((message) => (message as { id?: unknown }).id)
-        .filter((id): id is string => typeof id === "string"),
-    );
-    const projection = await getNativeAgentProjection<TMessage>({
-      ...identity,
-      messageLimit: next,
-    });
-    if (
-      sequence === refreshSequenceRef.current &&
-      requestedOperationEpoch === projectionOperationEpochRef.current
-    ) {
-      applyProjection(projection);
-      const added = (projection?.messages ?? []).some((message) => {
-        const id = (message as { id?: unknown }).id;
-        return typeof id === "string" && !previousIds.has(id);
+      const current =
+        projectionRef.current?.messageWindow?.limit ?? messageLimit ?? DEFAULT_MESSAGE_WINDOW;
+      const next = Math.min(current * 2, MAX_MESSAGE_WINDOW);
+      if (next <= current) return retireLoadEarlierControl({ sticky: true });
+      setMessageLimit(next);
+      const sequence = ++refreshSequenceRef.current;
+      const previousIds = new Set(
+        (projectionRef.current?.messages ?? [])
+          .map((message) => (message as { id?: unknown }).id)
+          .filter((id): id is string => typeof id === "string"),
+      );
+      const projection = await getNativeAgentProjection<TMessage>({
+        ...identity,
+        messageLimit: next,
       });
-      if (!added) return retireLoadEarlierControl({ sticky: true });
-    }
-    return projection;
-  }, [
-    applyProjection,
-    commitSyncMaterialization,
-    historyRequestBudget,
-    identity,
-    messageLimit,
-    planSyncMaterialization,
-    environmentId,
-    platform,
-    refresh,
-    resetSyncState,
-    retireLoadEarlierControl,
-    sessionKey,
-  ]);
+      if (
+        sequence === refreshSequenceRef.current &&
+        requestedOperationEpoch === projectionOperationEpochRef.current
+      ) {
+        applyProjection(projection);
+        const added = (projection?.messages ?? []).some((message) => {
+          const id = (message as { id?: unknown }).id;
+          return typeof id === "string" && !previousIds.has(id);
+        });
+        if (!added) return retireLoadEarlierControl({ sticky: true });
+      }
+      return projection;
+    }, [
+      applyProjection,
+      commitSyncMaterialization,
+      historyRequestBudget,
+      identity,
+      messageLimit,
+      planSyncMaterialization,
+      environmentId,
+      platform,
+      refresh,
+      resetSyncState,
+      retireLoadEarlierControl,
+      sessionKey,
+    ]);
 
   return {
     sessionKey,

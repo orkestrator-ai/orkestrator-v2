@@ -1,0 +1,1129 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "scripts/efficiency/run.ts",
+  "machine": {
+    "cpuModel": "AMD Ryzen 5 PRO 5650U with Radeon Graphics",
+    "cpuCount": 12,
+    "totalMemoryBytes": 32917929984
+  },
+  "method": {
+    "primary": "deterministic operation counts (serialization visits, bytes, payload reads, provider calls)",
+    "secondary": "wall-clock ms via performance.now(); machine-specific, never compared; repetition 0 is cold, p50/p95 over warm repetitions",
+    "repetitions": 7,
+    "ioCounters": "/proc/self/io rchar/wchar deltas",
+    "heap": "not measured: counts and retained-size estimates only"
+  },
+  "baseline": {
+    "label": "baseline-e8fbf1d0",
+    "runId": "step-01",
+    "source": {
+      "commit": "e8fbf1d0cf60",
+      "appVersion": "2.17.0"
+    },
+    "runtime": {
+      "bun": "1.4.2",
+      "platform": "linux",
+      "arch": "x64"
+    },
+    "startedAt": "2026-09-27T14:20:47.010Z"
+  },
+  "candidate": {
+    "label": "head",
+    "runId": "step-01",
+    "source": {
+      "commit": "d8796c28972d",
+      "appVersion": "2.17.0"
+    },
+    "runtime": {
+      "bun": "1.4.2",
+      "platform": "linux",
+      "arch": "x64"
+    },
+    "startedAt": "2026-09-27T14:21:09.758Z"
+  },
+  "workloads": [
+    {
+      "id": "a-unchanged-read",
+      "title": "Unchanged transcript read: revision vs no revision",
+      "findings": [
+        "E03"
+      ],
+      "fixture": {
+        "messageCounts": "100,1000",
+        "contentBytes": 8192,
+        "prose": "ascii"
+      },
+      "method": "Second read with the first read's token; message visits counted by a non-enumerable toJSON (validation.md probe method).",
+      "cases": [
+        {
+          "id": "v1-no-revision-n100",
+          "baseline": {
+            "counters": {
+              "status": "unchanged",
+              "messageVisits": 100
+            },
+            "warmP50Ms": 6.255
+          },
+          "candidate": {
+            "counters": {
+              "status": "unchanged",
+              "messageVisits": 100
+            },
+            "warmP50Ms": 7.977
+          }
+        },
+        {
+          "id": "v1-revision-n100",
+          "baseline": {
+            "counters": {
+              "status": "unchanged",
+              "messageVisits": 0
+            },
+            "warmP50Ms": 1.182
+          },
+          "candidate": {
+            "counters": {
+              "status": "unchanged",
+              "messageVisits": 0
+            },
+            "warmP50Ms": 2.206
+          }
+        },
+        {
+          "id": "claude-route-v1-n100",
+          "baseline": {
+            "counters": {
+              "status": "unchanged",
+              "messageVisits": 100
+            },
+            "warmP50Ms": 6.561
+          },
+          "candidate": {
+            "counters": {
+              "status": "unchanged",
+              "messageVisits": 0
+            },
+            "warmP50Ms": 1.281
+          }
+        },
+        {
+          "id": "claude-route-v2-n100",
+          "baseline": {
+            "unsupported": "v2 summary route does not exist at this revision"
+          },
+          "candidate": {
+            "counters": {
+              "status": "unchanged",
+              "messageVisits": 0
+            },
+            "warmP50Ms": 1.211
+          }
+        },
+        {
+          "id": "rewritten-n100",
+          "baseline": {
+            "counters": {
+              "status": "snapshot",
+              "messageVisits": 100,
+              "messagesReturned": 63
+            },
+            "warmP50Ms": 1.049
+          },
+          "candidate": {
+            "counters": {
+              "status": "snapshot",
+              "messageVisits": 100,
+              "messagesReturned": 63
+            },
+            "warmP50Ms": 0.937
+          }
+        },
+        {
+          "id": "v1-no-revision-n1000",
+          "baseline": {
+            "counters": {
+              "status": "unchanged",
+              "messageVisits": 1000
+            },
+            "warmP50Ms": 56.831
+          },
+          "candidate": {
+            "counters": {
+              "status": "unchanged",
+              "messageVisits": 1000
+            },
+            "warmP50Ms": 63.788
+          }
+        },
+        {
+          "id": "v1-revision-n1000",
+          "baseline": {
+            "counters": {
+              "status": "unchanged",
+              "messageVisits": 0
+            },
+            "warmP50Ms": 1.762
+          },
+          "candidate": {
+            "counters": {
+              "status": "unchanged",
+              "messageVisits": 0
+            },
+            "warmP50Ms": 1.28
+          }
+        },
+        {
+          "id": "claude-route-v1-n1000",
+          "baseline": {
+            "counters": {
+              "status": "unchanged",
+              "messageVisits": 1000
+            },
+            "warmP50Ms": 57.396
+          },
+          "candidate": {
+            "counters": {
+              "status": "unchanged",
+              "messageVisits": 0
+            },
+            "warmP50Ms": 1.212
+          }
+        },
+        {
+          "id": "claude-route-v2-n1000",
+          "baseline": {
+            "unsupported": "v2 summary route does not exist at this revision"
+          },
+          "candidate": {
+            "counters": {
+              "status": "unchanged",
+              "messageVisits": 0
+            },
+            "warmP50Ms": 1.389
+          }
+        },
+        {
+          "id": "rewritten-n1000",
+          "baseline": {
+            "counters": {
+              "status": "snapshot",
+              "messageVisits": 100,
+              "messagesReturned": 63
+            },
+            "warmP50Ms": 0.851
+          },
+          "candidate": {
+            "counters": {
+              "status": "snapshot",
+              "messageVisits": 100,
+              "messagesReturned": 63
+            },
+            "warmP50Ms": 0.92
+          }
+        }
+      ]
+    },
+    {
+      "id": "b-trimming",
+      "title": "Trimming: bridge bound functions and the shared helper",
+      "findings": [
+        "E09"
+      ],
+      "fixture": {
+        "messagesCase": "100 messages × 8 KiB at 256 KiB (ACP: 100 × 16 KiB at its 1 MiB floor)",
+        "partsCase": "1 message × 400 parts × 1 KiB at 256 KiB (ACP: 480 × 4 KiB at 1 MiB)"
+      },
+      "method": "One bound pass over a fresh over-budget state; message and part visits counted by non-enumerable toJSON; retained ids digested for parity.",
+      "cases": [
+        {
+          "id": "cursor-messages",
+          "baseline": {
+            "counters": {
+              "messageVisits": 4585,
+              "partVisits": 0,
+              "keptMessages": 31,
+              "keptParts": 0,
+              "retainedMessageIds": "31:1y2g3i2",
+              "retainedPartIds": "0:ztntfp"
+            },
+            "warmP50Ms": 38.335
+          },
+          "candidate": {
+            "counters": {
+              "messageVisits": 100,
+              "partVisits": 0,
+              "keptMessages": 31,
+              "keptParts": 0,
+              "retainedMessageIds": "31:1y2g3i2",
+              "retainedPartIds": "0:ztntfp"
+            },
+            "warmP50Ms": 2.257
+          }
+        },
+        {
+          "id": "pi-messages",
+          "baseline": {
+            "counters": {
+              "messageVisits": 4585,
+              "partVisits": 0,
+              "keptMessages": 31,
+              "keptParts": 0,
+              "retainedMessageIds": "31:1y2g3i2",
+              "retainedPartIds": "0:ztntfp"
+            },
+            "warmP50Ms": 33.018
+          },
+          "candidate": {
+            "counters": {
+              "messageVisits": 100,
+              "partVisits": 0,
+              "keptMessages": 31,
+              "keptParts": 0,
+              "retainedMessageIds": "31:1y2g3i2",
+              "retainedPartIds": "0:ztntfp"
+            },
+            "warmP50Ms": 1.134
+          }
+        },
+        {
+          "id": "acp-messages",
+          "baseline": {
+            "counters": {
+              "messageVisits": 3097,
+              "partVisits": 0,
+              "keptMessages": 63,
+              "keptParts": 0,
+              "retainedMessageIds": "63:1te2jkn",
+              "retainedPartIds": "0:ztntfp"
+            },
+            "warmP50Ms": 45.615
+          },
+          "candidate": {
+            "counters": {
+              "messageVisits": 100,
+              "partVisits": 0,
+              "keptMessages": 63,
+              "keptParts": 0,
+              "retainedMessageIds": "63:1te2jkn",
+              "retainedPartIds": "0:ztntfp"
+            },
+            "warmP50Ms": 1.971
+          }
+        },
+        {
+          "id": "shared-messages",
+          "baseline": {
+            "counters": {
+              "messageVisits": 100,
+              "partVisits": 0,
+              "keptMessages": 31,
+              "keptParts": 0,
+              "retainedMessageIds": "31:1y2g3i2",
+              "retainedPartIds": "0:ztntfp"
+            },
+            "warmP50Ms": 1.186
+          },
+          "candidate": {
+            "counters": {
+              "messageVisits": 100,
+              "partVisits": 0,
+              "keptMessages": 31,
+              "keptParts": 0,
+              "retainedMessageIds": "31:1y2g3i2",
+              "retainedPartIds": "0:ztntfp"
+            },
+            "warmP50Ms": 1.169
+          }
+        },
+        {
+          "id": "cursor-parts",
+          "baseline": {
+            "counters": {
+              "messageVisits": 159,
+              "partVisits": 51197,
+              "keptMessages": 1,
+              "keptParts": 243,
+              "retainedMessageIds": "1:19wvcrg",
+              "retainedPartIds": "243:ouaaj5"
+            },
+            "warmP50Ms": 63.597
+          },
+          "candidate": {
+            "counters": {
+              "messageVisits": 1,
+              "partVisits": 800,
+              "keptMessages": 1,
+              "keptParts": 243,
+              "retainedMessageIds": "1:19wvcrg",
+              "retainedPartIds": "243:ouaaj5"
+            },
+            "warmP50Ms": 2.155
+          }
+        },
+        {
+          "id": "pi-parts",
+          "baseline": {
+            "counters": {
+              "messageVisits": 159,
+              "partVisits": 51197,
+              "keptMessages": 1,
+              "keptParts": 243,
+              "retainedMessageIds": "1:19wvcrg",
+              "retainedPartIds": "243:ouaaj5"
+            },
+            "warmP50Ms": 63.402
+          },
+          "candidate": {
+            "counters": {
+              "messageVisits": 1,
+              "partVisits": 800,
+              "keptMessages": 1,
+              "keptParts": 243,
+              "retainedMessageIds": "1:19wvcrg",
+              "retainedPartIds": "243:ouaaj5"
+            },
+            "warmP50Ms": 1.971
+          }
+        },
+        {
+          "id": "acp-parts",
+          "baseline": {
+            "counters": {
+              "messageVisits": 228,
+              "partVisits": 83335,
+              "keptMessages": 1,
+              "keptParts": 253,
+              "retainedMessageIds": "1:19wvcrg",
+              "retainedPartIds": "253:1eq98dh"
+            },
+            "warmP50Ms": 364.355
+          },
+          "candidate": {
+            "counters": {
+              "messageVisits": 1,
+              "partVisits": 960,
+              "keptMessages": 1,
+              "keptParts": 253,
+              "retainedMessageIds": "1:19wvcrg",
+              "retainedPartIds": "253:1eq98dh"
+            },
+            "warmP50Ms": 7.473
+          }
+        },
+        {
+          "id": "shared-parts",
+          "baseline": {
+            "counters": {
+              "messageVisits": 1,
+              "partVisits": 800,
+              "keptMessages": 1,
+              "keptParts": 243,
+              "retainedMessageIds": "1:19wvcrg",
+              "retainedPartIds": "243:ouaaj5"
+            },
+            "warmP50Ms": 2.115
+          },
+          "candidate": {
+            "counters": {
+              "messageVisits": 1,
+              "partVisits": 800,
+              "keptMessages": 1,
+              "keptParts": 243,
+              "retainedMessageIds": "1:19wvcrg",
+              "retainedPartIds": "243:ouaaj5"
+            },
+            "warmP50Ms": 1.6
+          }
+        }
+      ]
+    },
+    {
+      "id": "c-cursor-stream",
+      "title": "Background Cursor stream with no reader",
+      "findings": [
+        "E01"
+      ],
+      "fixture": {
+        "reasoningBlocks": 600,
+        "blockBytes": 1024,
+        "ceilingBytes": 262144
+      },
+      "method": "Real translator (applyInteractionUpdate) with no read route; parts sampled every update, bytes every 50 updates; then one read-side bound.",
+      "cases": [
+        {
+          "id": "unobserved-600x1KiB",
+          "baseline": {
+            "counters": {
+              "retainedPartsNoReader": 600,
+              "retainedBytesNoReader": 712206,
+              "peakPartsNoReader": 600,
+              "peakSampledBytesNoReader": 712206,
+              "droppedParts": 380,
+              "retainedPartsAfterReadBound": 220,
+              "retainedBytesAfterReadBound": 261256
+            },
+            "warmP50Ms": 2.927
+          },
+          "candidate": {
+            "counters": {
+              "retainedPartsNoReader": 378,
+              "retainedBytesNoReader": 448802,
+              "peakPartsNoReader": 440,
+              "peakSampledBytesNoReader": 473621,
+              "droppedParts": 380,
+              "retainedPartsAfterReadBound": 220,
+              "retainedBytesAfterReadBound": 261256
+            },
+            "warmP50Ms": 4.244
+          }
+        }
+      ]
+    },
+    {
+      "id": "d-display-tail-storage",
+      "title": "Display-tail storage: one update and one cold read",
+      "findings": [
+        "E04"
+      ],
+      "fixture": {
+        "records": "1,32,128",
+        "messagesPerTail": 20,
+        "messageBytes": 2048
+      },
+      "method": "Real StorageService on a temp data dir. KiB are /proc/self/io rchar/wchar deltas around the awaited call, rounded (Linux; -1 elsewhere), and include backups and index files. HEAD payload counts come from KeyedRecordStore.stats(); the baseline shared file is parsed whole, so its payload counts equal the record count (derived).",
+      "cases": [
+        {
+          "id": "records-1",
+          "baseline": {
+            "counters": {
+              "store": "shared-file",
+              "updateKiBRead": 131,
+              "updateKiBWritten": 87,
+              "updatePayloadReads": 1,
+              "updatePayloadWrites": 1,
+              "coldReadKiBRead": 44,
+              "coldReadPayloadReads": 1,
+              "diskKiB": 87
+            },
+            "warmP50Ms": 3.099
+          },
+          "candidate": {
+            "counters": {
+              "store": "keyed-records",
+              "updateKiBRead": 8,
+              "updateKiBWritten": 43,
+              "updatePayloadReads": 0,
+              "updatePayloadWrites": 1,
+              "coldReadKiBRead": 43,
+              "coldReadPayloadReads": 1,
+              "diskKiB": 43
+            },
+            "warmP50Ms": 2.282
+          }
+        },
+        {
+          "id": "records-32",
+          "baseline": {
+            "counters": {
+              "store": "shared-file",
+              "updateKiBRead": 4183,
+              "updateKiBWritten": 2788,
+              "updatePayloadReads": 32,
+              "updatePayloadWrites": 32,
+              "coldReadKiBRead": 1394,
+              "coldReadPayloadReads": 32,
+              "diskKiB": 7928
+            },
+            "warmP50Ms": 9.194
+          },
+          "candidate": {
+            "counters": {
+              "store": "keyed-records",
+              "updateKiBRead": 8,
+              "updateKiBWritten": 54,
+              "updatePayloadReads": 0,
+              "updatePayloadWrites": 1,
+              "coldReadKiBRead": 43,
+              "coldReadPayloadReads": 1,
+              "diskKiB": 1372
+            },
+            "warmP50Ms": 1.86
+          }
+        },
+        {
+          "id": "records-128",
+          "baseline": {
+            "counters": {
+              "store": "shared-file",
+              "updateKiBRead": 16734,
+              "updateKiBWritten": 11155,
+              "updatePayloadReads": 128,
+              "updatePayloadWrites": 128,
+              "coldReadKiBRead": 5578,
+              "coldReadPayloadReads": 128,
+              "diskKiB": 33028
+            },
+            "warmP50Ms": 32.333
+          },
+          "candidate": {
+            "counters": {
+              "store": "keyed-records",
+              "updateKiBRead": 8,
+              "updateKiBWritten": 86,
+              "updatePayloadReads": 0,
+              "updatePayloadWrites": 1,
+              "coldReadKiBRead": 43,
+              "coldReadPayloadReads": 1,
+              "diskKiB": 5487
+            },
+            "warmP50Ms": 1.858
+          },
+          "unstableCounters": {
+            "baseline": [
+              "coldReadKiBRead"
+            ],
+            "candidate": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "e-bridge-window",
+      "title": "Bridge live window: v1 raw vs v2 summary",
+      "findings": [
+        "E06"
+      ],
+      "fixture": {
+        "messages": 100,
+        "proseBytes": 2048,
+        "toolResults": "10 × 64 KiB",
+        "images": "2 × 192 KiB data URL",
+        "diffs": "3 × 600 changed lines",
+        "window": "100 messages / 512 KiB"
+      },
+      "method": "One snapshot read; decoded bytes = UTF-8 JSON of the envelope, gzip at level 6 as a transport indicator.",
+      "cases": [
+        {
+          "id": "v1-window",
+          "baseline": {
+            "counters": {
+              "decodedBytes": 517504,
+              "gzipBytes": 237900,
+              "messagesRetained": 27,
+              "omittedMessages": 73,
+              "omittedParts": 0,
+              "detailReferences": 0,
+              "deferredDetailBytes": 0
+            },
+            "warmP50Ms": 3.615
+          },
+          "candidate": {
+            "counters": {
+              "decodedBytes": 517512,
+              "gzipBytes": 237910,
+              "messagesRetained": 27,
+              "omittedMessages": 73,
+              "omittedParts": 0,
+              "detailReferences": 0,
+              "deferredDetailBytes": 0
+            },
+            "warmP50Ms": 3.584
+          }
+        },
+        {
+          "id": "v2-summary-window",
+          "baseline": {
+            "unsupported": "v2 summaries do not exist at this revision"
+          },
+          "candidate": {
+            "counters": {
+              "decodedBytes": 219127,
+              "gzipBytes": 34710,
+              "messagesRetained": 100,
+              "omittedMessages": 0,
+              "omittedParts": 0,
+              "detailReferences": 15,
+              "deferredDetailBytes": 1346932
+            },
+            "warmP50Ms": 2.631
+          }
+        }
+      ]
+    },
+    {
+      "id": "f-projection-changed-read",
+      "title": "Backend projection: changed read of a 100-message window with one changing tail",
+      "findings": [
+        "E05"
+      ],
+      "fixture": {
+        "messages": 100,
+        "contentBytes": 200,
+        "changedMessages": 1
+      },
+      "method": "getTranscriptUpdate with the previous token after the tail changed; JSON.stringify calls on projected assistant rows counted as in native-agent-projection-encoding.test.ts (source rows excluded).",
+      "cases": [
+        {
+          "id": "one-tail-change",
+          "baseline": {
+            "counters": {
+              "changedStatus": "delta",
+              "changedUpserts": 1,
+              "changedMessageSerializations": 400,
+              "unchangedStatus": "unchanged",
+              "unchangedMessageSerializations": 0
+            },
+            "warmP50Ms": 0.765
+          },
+          "candidate": {
+            "counters": {
+              "changedStatus": "delta",
+              "changedUpserts": 1,
+              "changedMessageSerializations": 100,
+              "unchangedStatus": "unchanged",
+              "unchangedMessageSerializations": 0
+            },
+            "warmP50Ms": 0.595
+          }
+        }
+      ]
+    },
+    {
+      "id": "g-frontend-accounting",
+      "title": "Frontend accounting: tail update with retained history",
+      "findings": [
+        "E10"
+      ],
+      "fixture": {
+        "historyMiB": "0,1,8",
+        "historyMessageBytes": 4096,
+        "liveMessages": 100,
+        "liveMessageBytes": 1024
+      },
+      "method": "Real nativeAgentProjectionStore.setProjection plus the hook's history measurement; message visits counted by non-enumerable toJSON; accounted bytes checked against an exact encode.",
+      "cases": [
+        {
+          "id": "history-0MiB",
+          "baseline": {
+            "counters": {
+              "historyMessages": 0,
+              "firstInstallMessageVisits": 100,
+              "tailUpdateMessageVisits": 100,
+              "accountedBytesExact": true
+            },
+            "warmP50Ms": 0.297
+          },
+          "candidate": {
+            "counters": {
+              "historyMessages": 0,
+              "firstInstallMessageVisits": 100,
+              "tailUpdateMessageVisits": 1,
+              "accountedBytesExact": true
+            },
+            "warmP50Ms": 0.015
+          }
+        },
+        {
+          "id": "history-1MiB",
+          "baseline": {
+            "counters": {
+              "historyMessages": 256,
+              "firstInstallMessageVisits": 612,
+              "tailUpdateMessageVisits": 612,
+              "accountedBytesExact": true
+            },
+            "warmP50Ms": 4.303
+          },
+          "candidate": {
+            "counters": {
+              "historyMessages": 256,
+              "firstInstallMessageVisits": 356,
+              "tailUpdateMessageVisits": 1,
+              "accountedBytesExact": true
+            },
+            "warmP50Ms": 0.031
+          }
+        },
+        {
+          "id": "history-8MiB",
+          "baseline": {
+            "counters": {
+              "historyMessages": 2048,
+              "firstInstallMessageVisits": 4196,
+              "tailUpdateMessageVisits": 4196,
+              "accountedBytesExact": true
+            },
+            "warmP50Ms": 21.156
+          },
+          "candidate": {
+            "counters": {
+              "historyMessages": 2048,
+              "firstInstallMessageVisits": 2148,
+              "tailUpdateMessageVisits": 1,
+              "accountedBytesExact": true
+            },
+            "warmP50Ms": 0.089
+          }
+        }
+      ]
+    },
+    {
+      "id": "h-codex-rollout",
+      "title": "Codex rollout reads under soft and hard cache budgets",
+      "findings": [
+        "E08"
+      ],
+      "fixture": {
+        "recordPaddingBytes": 400,
+        "small": "1 file × 64 records, default budgets, 10 whole-file reads",
+        "softCap": "2 files × 128 records, soft 16 KiB / hard 4 MiB, 10 alternating tail reads",
+        "hardCap": "1 file × 512 records, soft 16 KiB / hard 64 KiB, 20 tail reads"
+      },
+      "method": "HEAD: readTranscriptSince + getTranscriptCacheStats (coldScans, blockRereads, sourceBytesRead, estimated retained heap). Baseline: readCachedTranscript + timestamp filter; a full parse is a new cached object at unchanged size and reads the whole file; its budget counted source bytes, not heap.",
+      "cases": [
+        {
+          "id": "small",
+          "baseline": {
+            "counters": {
+              "fullParses": 1,
+              "coldScans": 1,
+              "blockRereads": 0,
+              "sourceBytesRead": 33078,
+              "retainedEstimateBytes": 33078,
+              "cachedEntries": 1,
+              "sourceBytes": 33078,
+              "recordsReturnedLastRead": 64
+            },
+            "warmP50Ms": 0.557
+          },
+          "candidate": {
+            "counters": {
+              "fullParses": 1,
+              "coldScans": 1,
+              "blockRereads": 0,
+              "sourceBytesRead": 33078,
+              "retainedEstimateBytes": 100418,
+              "cachedEntries": 1,
+              "sourceBytes": 33078,
+              "recordsReturnedLastRead": 64
+            },
+            "warmP50Ms": 0.779
+          }
+        },
+        {
+          "id": "above-soft-cap",
+          "baseline": {
+            "counters": {
+              "fullParses": 2,
+              "coldScans": 2,
+              "blockRereads": 0,
+              "sourceBytesRead": 132388,
+              "retainedEstimateBytes": 132388,
+              "cachedEntries": 2,
+              "sourceBytes": 132388,
+              "recordsReturnedLastRead": 8
+            },
+            "warmP50Ms": 1.402
+          },
+          "candidate": {
+            "counters": {
+              "fullParses": 2,
+              "coldScans": 2,
+              "blockRereads": 0,
+              "sourceBytesRead": 132388,
+              "retainedEstimateBytes": 401772,
+              "cachedEntries": 2,
+              "sourceBytes": 132388,
+              "recordsReturnedLastRead": 8
+            },
+            "warmP50Ms": 1.241
+          }
+        },
+        {
+          "id": "above-hard-cap",
+          "baseline": {
+            "counters": {
+              "fullParses": 20,
+              "coldScans": 20,
+              "blockRereads": 0,
+              "sourceBytesRead": 5302120,
+              "retainedEstimateBytes": 0,
+              "cachedEntries": 0,
+              "sourceBytes": 265106,
+              "recordsReturnedLastRead": 8
+            },
+            "warmP50Ms": 11.838
+          },
+          "candidate": {
+            "counters": {
+              "fullParses": 1,
+              "coldScans": 1,
+              "blockRereads": 0,
+              "sourceBytesRead": 265106,
+              "retainedEstimateBytes": 55872,
+              "cachedEntries": 1,
+              "sourceBytes": 265106,
+              "recordsReturnedLastRead": 8
+            },
+            "warmP50Ms": 1.642
+          }
+        },
+        {
+          "id": "interrupted-jsonl",
+          "baseline": {
+            "counters": {
+              "recordsReturned": 62,
+              "unreadableMarkers": 0,
+              "status": "not-reported"
+            },
+            "warmP50Ms": 0.135
+          },
+          "candidate": {
+            "counters": {
+              "recordsReturned": 62,
+              "unreadableMarkers": 1,
+              "status": "degraded"
+            },
+            "warmP50Ms": 0.256
+          }
+        }
+      ]
+    },
+    {
+      "id": "i-history-paging",
+      "title": "History paging: provider calls for loading all earlier history",
+      "findings": [
+        "E07"
+      ],
+      "fixture": {
+        "messages": 250,
+        "messageBytes": 400,
+        "liveWindow": 100,
+        "pageLimit": 60
+      },
+      "method": "Real NativeAgentService with a counting stub provider; the joined path mirrors the renderer's Load-earlier bootstrap (forced sync-v1 snapshot, then getMessagePage). Background reads are given 50 ms to land before counting.",
+      "cases": [
+        {
+          "id": "joined-refresh",
+          "baseline": {
+            "counters": {
+              "pages": 3,
+              "messages": 150,
+              "calls.transcriptSnapshot": 1,
+              "calls.interactiveSnapshot": 4,
+              "calls.messages": 0,
+              "calls.total": 5,
+              "providerMessagesReturned": 1100
+            },
+            "warmP50Ms": 7.53
+          },
+          "candidate": {
+            "counters": {
+              "pages": 3,
+              "messages": 150,
+              "calls.transcriptSnapshot": 1,
+              "calls.interactiveSnapshot": 4,
+              "calls.messages": 0,
+              "calls.total": 5,
+              "providerMessagesReturned": 1100
+            },
+            "warmP50Ms": 5.924
+          }
+        },
+        {
+          "id": "direct-page",
+          "baseline": {
+            "unsupported": "direct provider pages do not exist at this revision"
+          },
+          "candidate": {
+            "counters": {
+              "pagingPath": "direct",
+              "pages": 3,
+              "messages": 150,
+              "calls.transcriptSnapshot": 1,
+              "calls.transcriptDetail": 0,
+              "calls.transcriptPage": 3,
+              "calls.interactiveSnapshot": 0,
+              "calls.messages": 0,
+              "calls.total": 4,
+              "providerMessagesReturned": 250
+            },
+            "warmP50Ms": 1.787
+          }
+        }
+      ]
+    },
+    {
+      "id": "j-step14-delta-stream",
+      "title": "Step 14 gate: repeated unchanged part content in whole-message deltas",
+      "findings": [
+        "E05"
+      ],
+      "fixture": {
+        "prefixMessages": 20,
+        "prefixBytes": 1024,
+        "observations": 40,
+        "growthBytes": 256
+      },
+      "method": "Real getTranscriptUpdate over a fake summary provider (v1 raw where summaries do not exist). A client applies every delta; decoded bytes are the UTF-8 JSON of messageUpserts. identicalPartFraction = bytes of top-level parts byte-identical to the client's previous copy of the same part / decoded upsert bytes (the step-14 gate). anyRepeatedFraction adds grown-text prefixes, the content mirror and identical nested children.",
+      "cases": [
+        {
+          "id": "growing-prose",
+          "baseline": {
+            "counters": {
+              "provider": "v1-raw",
+              "observations": 40,
+              "deltas": 40,
+              "snapshots": 0,
+              "snapshotBytes": 0,
+              "upserts": 40,
+              "decodedUpsertBytes": 446320,
+              "identicalPartBytes": 0,
+              "grownPartPrefixBytes": 209920,
+              "contentPrefixBytes": 209920,
+              "nestedIdenticalChildBytes": 0,
+              "identicalPartFraction": 0,
+              "anyRepeatedFraction": 0.9407
+            },
+            "warmP50Ms": 24.026
+          },
+          "candidate": {
+            "counters": {
+              "provider": "v2-summary",
+              "observations": 40,
+              "deltas": 40,
+              "snapshots": 0,
+              "snapshotBytes": 0,
+              "upserts": 40,
+              "decodedUpsertBytes": 446320,
+              "identicalPartBytes": 0,
+              "grownPartPrefixBytes": 209920,
+              "contentPrefixBytes": 209920,
+              "nestedIdenticalChildBytes": 0,
+              "identicalPartFraction": 0,
+              "anyRepeatedFraction": 0.9407
+            },
+            "warmP50Ms": 20.925
+          }
+        },
+        {
+          "id": "completed-tools-plus-growing",
+          "baseline": {
+            "counters": {
+              "provider": "v1-raw",
+              "observations": 40,
+              "deltas": 40,
+              "snapshots": 0,
+              "snapshotBytes": 0,
+              "upserts": 40,
+              "decodedUpsertBytes": 704320,
+              "identicalPartBytes": 256800,
+              "grownPartPrefixBytes": 209920,
+              "contentPrefixBytes": 209920,
+              "nestedIdenticalChildBytes": 0,
+              "identicalPartFraction": 0.3646,
+              "anyRepeatedFraction": 0.9607
+            },
+            "warmP50Ms": 78.677
+          },
+          "candidate": {
+            "counters": {
+              "provider": "v2-summary",
+              "observations": 40,
+              "deltas": 40,
+              "snapshots": 0,
+              "snapshotBytes": 0,
+              "upserts": 40,
+              "decodedUpsertBytes": 704320,
+              "identicalPartBytes": 256800,
+              "grownPartPrefixBytes": 209920,
+              "contentPrefixBytes": 209920,
+              "nestedIdenticalChildBytes": 0,
+              "identicalPartFraction": 0.3646,
+              "anyRepeatedFraction": 0.9607
+            },
+            "warmP50Ms": 74.092
+          }
+        },
+        {
+          "id": "tool-stream",
+          "baseline": {
+            "counters": {
+              "provider": "v1-raw",
+              "observations": 40,
+              "deltas": 40,
+              "snapshots": 0,
+              "snapshotBytes": 0,
+              "upserts": 40,
+              "decodedUpsertBytes": 352760,
+              "identicalPartBytes": 338500,
+              "grownPartPrefixBytes": 0,
+              "contentPrefixBytes": 0,
+              "nestedIdenticalChildBytes": 0,
+              "identicalPartFraction": 0.9596,
+              "anyRepeatedFraction": 0.9596
+            },
+            "warmP50Ms": 87.736
+          },
+          "candidate": {
+            "counters": {
+              "provider": "v2-summary",
+              "observations": 40,
+              "deltas": 40,
+              "snapshots": 0,
+              "snapshotBytes": 0,
+              "upserts": 40,
+              "decodedUpsertBytes": 352760,
+              "identicalPartBytes": 338500,
+              "grownPartPrefixBytes": 0,
+              "contentPrefixBytes": 0,
+              "nestedIdenticalChildBytes": 0,
+              "identicalPartFraction": 0.9596,
+              "anyRepeatedFraction": 0.9596
+            },
+            "warmP50Ms": 83.568
+          }
+        },
+        {
+          "id": "nested-agent",
+          "baseline": {
+            "counters": {
+              "provider": "v1-raw",
+              "observations": 40,
+              "deltas": 40,
+              "snapshots": 0,
+              "snapshotBytes": 0,
+              "upserts": 40,
+              "decodedUpsertBytes": 237645,
+              "identicalPartBytes": 25440,
+              "grownPartPrefixBytes": 0,
+              "contentPrefixBytes": 0,
+              "nestedIdenticalChildBytes": 185075,
+              "identicalPartFraction": 0.1071,
+              "anyRepeatedFraction": 0.8858
+            },
+            "warmP50Ms": 48.149
+          },
+          "candidate": {
+            "counters": {
+              "provider": "v2-summary",
+              "observations": 40,
+              "deltas": 40,
+              "snapshots": 0,
+              "snapshotBytes": 0,
+              "upserts": 40,
+              "decodedUpsertBytes": 237645,
+              "identicalPartBytes": 25440,
+              "grownPartPrefixBytes": 0,
+              "contentPrefixBytes": 0,
+              "nestedIdenticalChildBytes": 185075,
+              "identicalPartFraction": 0.1071,
+              "anyRepeatedFraction": 0.8858
+            },
+            "warmP50Ms": 46.386
+          }
+        }
+      ]
+    }
+  ]
+}

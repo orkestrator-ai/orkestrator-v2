@@ -28,6 +28,7 @@ import {
   type JsonObject,
   type SessionState,
 } from "./acp-context.js";
+import { encodedJsonBytes, planOldestFirstTrim } from "@orkestrator/protocol/transcript-budget";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { terminalDisplayOutput } from "./acp-client-methods.js";
 
@@ -112,13 +113,18 @@ export function trimPartsTo(message: BridgeMessage, targetLength: number): numbe
   const keep = Math.max(0, targetLength - 1);
   const dropped = message.parts.splice(0, Math.max(1, message.parts.length - keep));
   rememberTrimmedToolCalls(message, dropped);
-  message.parts.unshift({
+  message.parts.unshift(trimNoticePart(message));
+  return dropped.length;
+}
+
+/** The notice `trimPartsTo` leaves in front of a trimmed message's parts. */
+function trimNoticePart(message: BridgeMessage): BridgeTextPart {
+  return {
     type: "text",
     content: TRANSCRIPT_TRIM_NOTICE,
     sourcePartId: trimNoticePartId(message),
     sourceMessageId: message.id,
-  });
-  return dropped.length;
+  };
 }
 
 /**
@@ -698,28 +704,38 @@ export function truncateUtf8(value: string, maximumBytes: number): string {
 export function boundTranscript(state: SessionState): boolean {
   state.uncheckedTranscriptBytes = 0;
   let truncatedCurrentMessage = false;
-  while (state.messages.length > MAX_MESSAGES) {
-    state.messages.shift();
-    state.droppedMessages += 1;
+  if (state.messages.length > MAX_MESSAGES) {
+    const removed = state.messages.length - MAX_MESSAGES;
+    state.messages.splice(0, removed);
+    state.droppedMessages += removed;
     state.transcriptTruncated = true;
   }
-  let bytes = Buffer.byteLength(JSON.stringify(state.messages));
-  while (bytes > MAX_TRANSCRIPT_BYTES && state.messages.length > 1) {
-    state.messages.shift();
-    state.droppedMessages += 1;
+  // Every retained message and, when one is left over budget, each of its
+  // parts is measured once; the notice that replaces trimmed parts is sized
+  // exactly, so this plans the same result the old measure-after-every-shift
+  // loop reached without re-serializing the shrinking transcript each pass.
+  const plan = planOldestFirstTrim(state.messages, MAX_TRANSCRIPT_BYTES, {
+    leadingReplacement: (message) => ({
+      bytes: encodedJsonBytes(trimNoticePart(message)),
+      present: isTrimNotice(message, message.parts[0]),
+    }),
+  });
+  if (plan.droppedMessages > 0) {
+    state.messages.splice(0, plan.droppedMessages);
+    state.droppedMessages += plan.droppedMessages;
     state.transcriptTruncated = true;
-    bytes = Buffer.byteLength(JSON.stringify(state.messages));
   }
   const onlyMessage = state.messages[0];
-  while (bytes > MAX_TRANSCRIPT_BYTES && onlyMessage && onlyMessage.parts.length > 1) {
-    // Strictly shorter every pass, so the loop still terminates once only the
-    // notice is left.
-    state.droppedParts += trimPartsTo(onlyMessage, onlyMessage.parts.length - 1);
+  if (plan.droppedParts > 0 && onlyMessage) {
+    // One call with the planned target: `trimPartsTo` removes any existing
+    // notice, drops exactly `droppedParts` real parts and re-inserts it.
+    const realParts =
+      onlyMessage.parts.length - (isTrimNotice(onlyMessage, onlyMessage.parts[0]) ? 1 : 0);
+    state.droppedParts += trimPartsTo(onlyMessage, 1 + realParts - plan.droppedParts);
     state.transcriptTruncated = true;
     truncatedCurrentMessage = true;
-    bytes = Buffer.byteLength(JSON.stringify(state.messages));
   }
-  if (bytes > MAX_TRANSCRIPT_BYTES) {
+  if (plan.overflowed) {
     // One part alone is over the whole-transcript budget, so nothing left to
     // drop can bring it back under and the bound is genuinely unenforceable.
     // Every part is individually capped well below 16 MiB, so this is a backstop

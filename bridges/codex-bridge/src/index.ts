@@ -21,11 +21,11 @@ import {
   boundTranscriptResponse,
   type TranscriptWindowMetadata,
 } from "@orkestrator/protocol/transcript-window";
-import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { streamSSE } from "hono/streaming";
-import { readCachedTranscript } from "./transcript-cache.js";
 import { registerMcpReloadRoute } from "./mcp-reload-route.js";
 import { registerSessionCloseRoute } from "./session-close-route.js";
+import { registerSessionActivityBatchRoute } from "./session-activity-batch-route.js";
+import { registerCodexTranscriptRoutes } from "./transcript-routes.js";
 import {
   applyCodexCollabStateToSubagentParts,
   CODEX_TIMELINE_ITEM_PREFIX,
@@ -1295,28 +1295,8 @@ app.get("/session/:id/messages", async (c) => {
   });
 });
 
-app.get("/session/:id/transcript", (c) => {
-  const sessionId = c.req.param("id");
-  const status = appServerRuntime.getStatus(sessionId, false);
-  const cached = appServerRuntime.getCachedMessages(sessionId);
-  if (!status || !cached) return c.json({ error: "Session not found" }, 404);
-  const limit = Number(c.req.query("limit"));
-  const targetBytes = Number(c.req.query("targetBytes"));
-  return c.json(
-    bridgeTranscriptUpdate(cached.messages, {
-      sessionIdentity: sessionId,
-      generation: status.engineGeneration,
-      contentEpoch: status.contentEpoch,
-      revision: status.messageRevision,
-      limit,
-      targetBytes,
-      knownToken: c.req.query("knownToken"),
-      complete: cached.complete,
-      freshness: cached.freshness,
-      title: status.title,
-    }),
-  );
-});
+// `GET /session/:id/transcript` and its detail and page reads.
+registerCodexTranscriptRoutes(app, appServerRuntime);
 
 app.get("/session/:id/status", (c) => {
   const status = appServerRuntime.getStatus(c.req.param("id"));
@@ -1354,6 +1334,8 @@ app.get("/session/:id/usage", async (c) => {
 app.get("/session/:id/activity", (c) => {
   return c.json(appServerRuntime.getActivitySnapshot(c.req.param("id")));
 });
+// The batched form of the route above, answered from the same no-touch read.
+registerSessionActivityBatchRoute(app, appServerRuntime);
 
 /**
  * Did this bridge ever take this request id?

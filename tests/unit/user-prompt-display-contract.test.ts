@@ -256,20 +256,27 @@ describe("backend prompt display contract", () => {
       status: "idle",
       startedAt: "2026-08-07T10:00:00.000Z",
       label: "Review Session",
-      messages: [
-        {
-          id: "user-1",
-          role: "user",
-          content: "Review the range boundary.",
-          createdAt: "2026-08-07T10:01:00.000Z",
-        },
-      ],
     };
     const handoff = buildReviewHandoffPrompt({
       environmentId: "env-1",
       sourceAgent: "codex",
       destinationAgent: "claude",
       sourceSession: session,
+      // The source transcript is an explicit bounded input, not an inline field.
+      sourceTranscript: {
+        entries: [
+          {
+            index: 0,
+            message: {
+              id: "user-1",
+              role: "user",
+              content: "Review the range boundary.",
+              createdAt: "2026-08-07T10:01:00.000Z",
+            },
+          },
+        ],
+        total: 1,
+      },
     });
     const source = prependReviewHandoff(handoff, addressPrompt(report));
     const presentation = userPromptPresentation(source);

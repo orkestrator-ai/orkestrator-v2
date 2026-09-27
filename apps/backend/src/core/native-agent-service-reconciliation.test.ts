@@ -4395,9 +4395,16 @@ describe("NativeAgentService shared observations", () => {
     let activity: ProviderActivityState = "working";
     const server = Bun.serve({
       port: 0,
-      fetch(request) {
+      async fetch(request) {
         const url = new URL(request.url);
         paths.push(`${request.method} ${url.pathname}`);
+        if (url.pathname === "/sessions/activity") {
+          const { sessionIds } = (await request.json()) as { sessionIds: string[] };
+          return Response.json({
+            version: 1,
+            observations: Object.fromEntries(sessionIds.map((id) => [id, { activity }])),
+          });
+        }
         if (url.pathname.endsWith("/activity")) return Response.json({ activity });
         return new Response("unexpected route", { status: 500 });
       },
@@ -4429,9 +4436,16 @@ describe("NativeAgentService shared observations", () => {
           await service.reconcileAgentActivity();
 
           expect(paths.length).toBeGreaterThanOrEqual(3);
-          // Only the no-touch observation route: no `/status`, no session
-          // resource (Claude hydrates it), no transcript, no attach.
-          expect(new Set(paths)).toEqual(new Set(["GET /session/provider-1/activity"]));
+          // Only the no-touch observation routes (the sweep batches; a single
+          // session read may use the per-session form): no `/status`, no
+          // session resource (Claude hydrates it), no transcript, no attach.
+          expect(paths).toContain("POST /sessions/activity");
+          expect(
+            paths.every(
+              (path) =>
+                path === "POST /sessions/activity" || path === "GET /session/provider-1/activity",
+            ),
+          ).toBe(true);
           // Only the read-only peek: never a start command.
           expect(new Set(commands)).toEqual(new Set(["peek_local_agent_bridge"]));
         },

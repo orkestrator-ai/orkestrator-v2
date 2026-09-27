@@ -70,6 +70,7 @@ import {
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
 import { eventEmitter } from "./event-emitter.js";
+import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
 import {
   deleteSessionPreferences,
   MAX_DISPATCHED_REQUEST_IDS,
@@ -353,6 +354,7 @@ function settlePendingApiRetry(
   const part = message?.parts[0];
   if (!message || part?.type !== "retry") return;
   part.toolState = outcome.state;
+  markTranscriptChanged(session);
   emit({ type: "message.updated", sessionId, data: { message } });
 }
 
@@ -378,6 +380,7 @@ function appendTranscriptNotice(
     createdAt: new Date().toISOString(),
   };
   session.messages.push(message);
+  markTranscriptChanged(session);
   emit({ type: "message.updated", sessionId, data: { message } });
   return message;
 }
@@ -547,6 +550,9 @@ export async function sendPrompt(
     session.claudeUsageBaseline === undefined &&
     (needsTranscriptHydration || session.messages.length > 0 || session.usage !== undefined);
   session.persistedMessagesLoaded = true;
+  // The flip from preview to loaded is itself a new history for readers, even
+  // before the read below installs its messages.
+  if (needsTranscriptHydration) resetTranscriptEpoch(session);
   // Set when the pre-turn read fails. The claim above is still correct for the
   // duration of the turn, but leaving it set afterwards would hide the on-disk
   // history until the bridge restarted, so the turn's `finally` clears it.
@@ -599,6 +605,7 @@ export async function sendPrompt(
         session.error = errorBeforeStartup;
         session.lastActivity = lastActivityBeforeStartup;
         session.persistedMessagesLoaded = persistedMessagesLoadedBeforeStartup;
+        if (needsTranscriptHydration) resetTranscriptEpoch(session);
         session.structuredOutput = structuredOutputBeforeStartup;
         session.structuredOutputRequestId = structuredOutputRequestIdBeforeStartup;
         session.inProgressUsage = inProgressUsageBeforeStartup;
@@ -630,6 +637,7 @@ export async function sendPrompt(
         session.messages = hydrated.messages;
         session.taskRegistry = hydrated.taskRegistry;
         session.backgroundTasks = hydrated.backgroundTasks;
+        resetTranscriptEpoch(session);
       }
     } catch (error) {
       // A turn that cannot read its own history is not a debug-level event: the
@@ -671,6 +679,7 @@ export async function sendPrompt(
     createdAt: new Date().toISOString(),
   };
   session.messages.push(userMessage);
+  markTranscriptChanged(session);
   eventEmitter.emit({
     type: "message.updated",
     sessionId,
@@ -2261,6 +2270,7 @@ export async function sendPrompt(
             if (existing) {
               existing.content = part.content;
               existing.parts = [part];
+              markTranscriptChanged(session);
               eventEmitter.emit({
                 type: "message.updated",
                 sessionId,
@@ -2302,6 +2312,7 @@ export async function sendPrompt(
               stream.accumulatedOrderedParts,
               toolTracker,
             );
+            markTranscriptChanged(session);
             stream.emitCurrentAssistantMessage();
           }
           if (marked) {
@@ -2503,6 +2514,7 @@ export async function sendPrompt(
             ...(typeof sdkMessageUuid === "string" ? { sdkUuid: sdkMessageUuid } : {}),
           };
           session.messages.push(stream.currentAssistantMessage);
+          markTranscriptChanged(session);
           debugLog("[session-manager] Created assistant message", {
             sessionId,
             messageId: stream.currentAssistantMessage.id,
@@ -2516,6 +2528,7 @@ export async function sendPrompt(
           if (typeof sdkMessageUuid === "string") {
             stream.currentAssistantMessage.sdkUuid = sdkMessageUuid;
           }
+          markTranscriptChanged(session);
           debugLog("[session-manager] Updated assistant message", {
             sessionId,
             messageId: stream.currentAssistantMessage.id,
@@ -2619,6 +2632,7 @@ export async function sendPrompt(
         if (stream.currentAssistantMessage) {
           const finalParts = buildMessageParts(stream.accumulatedOrderedParts, toolTracker);
           stream.currentAssistantMessage.parts = finalParts;
+          markTranscriptChanged(session);
 
           stream.emitCurrentAssistantMessage();
         }
@@ -2712,6 +2726,7 @@ export async function sendPrompt(
           userMessage.sdkUuid !== resultMsg.user_message_uuid
         ) {
           userMessage.sdkUuid = resultMsg.user_message_uuid;
+          markTranscriptChanged(session);
           eventEmitter.emit({
             type: "message.updated",
             sessionId,
@@ -2905,6 +2920,7 @@ export async function sendPrompt(
             createdAt: new Date().toISOString(),
           });
           stream.currentAssistantMessage.parts = parts;
+          markTranscriptChanged(session);
           stream.emitCurrentAssistantMessage();
         }
       } else if (message.type === "tool_use_summary") {
@@ -2922,6 +2938,7 @@ export async function sendPrompt(
         // the old messages would show history the model has no memory of and
         // will not answer questions about.
         session.messages = [];
+        resetTranscriptEpoch(session);
         // No bespoke "cleared" event: the backend re-reads the whole transcript
         // on every projection poll, so the authoritative snapshot already
         // reflects the clear. The status row below is what a live client needs.
@@ -3213,6 +3230,7 @@ export async function sendPrompt(
     // until the bridge restarted.
     if (transcriptHydrationFailed && sessions.get(sessionId) === session && !session.deleting) {
       session.persistedMessagesLoaded = false;
+      resetTranscriptEpoch(session);
     }
     stream.clearFlushTimer();
   }

@@ -90,10 +90,10 @@ import {
   DEFAULT_STALL_ABANDON_MS,
   DEFAULT_STALL_WARNING_MS,
   MultiReviewProgressTracker,
-  PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
   noProgressElapsedMs,
   stalledMinutes,
 } from "./multi-review-progress.js";
+import { readTranscriptProgressSample } from "./transcript-progress.js";
 import { recordEfficiency, type MultiReviewEfficiencyObserver } from "./multi-review-efficiency.js";
 import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
 import { multiReviewDuplicateReviewerCount } from "@orkestrator/protocol/multi-review-launch";
@@ -542,7 +542,6 @@ export class BuildPipelineReviewFanout {
       ...(fields.reasoningEffort ? { reasoningEffort: fields.reasoningEffort } : {}),
       ...(fields.tokenCount === undefined ? {} : { tokenCount: fields.tokenCount }),
       ...(typeof fields.fastMode === "boolean" ? { fastMode: fields.fastMode } : {}),
-      messages: [],
       messageRevision: 0,
     };
     pipeline.sessions.push(session);
@@ -891,9 +890,11 @@ export class BuildPipelineReviewFanout {
     const previousDigest = consolidation.progressDigest;
     const observation = await this.deps.progress.observe(
       consolidation.providerSessionId,
-      () =>
-        provider.messages(consolidation.providerSessionId, {
-          limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
+      (known) =>
+        readTranscriptProgressSample({
+          provider,
+          sessionId: consolidation.providerSessionId,
+          known,
         }),
       consolidation.progressDigest,
     );

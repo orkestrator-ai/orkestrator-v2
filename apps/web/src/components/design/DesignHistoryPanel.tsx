@@ -283,13 +283,13 @@ export function DesignHistoryPanel({
 
       <section
         aria-label="Undo and redo"
-        className="grid gap-1.5 border-b border-divider px-3 py-2"
+        className="grid grid-cols-1 gap-1.5 border-b border-divider px-3 py-2 [overflow-wrap:anywhere]"
       >
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex min-w-0 flex-wrap gap-1.5">
           <Button
             variant="outline"
             size="sm"
-            className="h-7 text-xs"
+            className="h-auto min-h-7 max-w-full justify-start py-1 text-left text-xs whitespace-normal"
             disabled={!history?.canUndo || canvasBusy}
             title={history?.undoLabel ? `Undo ${history.undoLabel}` : "Undo your last edit"}
             onClick={() => submitHistory("undo")}
@@ -300,7 +300,7 @@ export function DesignHistoryPanel({
           <Button
             variant="outline"
             size="sm"
-            className="h-7 text-xs"
+            className="h-auto min-h-7 max-w-full justify-start py-1 text-left text-xs whitespace-normal"
             disabled={!history?.canRedo || canvasBusy}
             title={history?.redoLabel ? `Redo ${history.redoLabel}` : "Redo"}
             onClick={() => submitHistory("redo")}

@@ -77,8 +77,9 @@ async function control(
   run: ReviewValidationRun,
   action = "start",
   extraEnv: Record<string, string> = {},
+  resultId?: string,
 ) {
-  const payload = Buffer.from(JSON.stringify({ root, run, action })).toString("base64");
+  const payload = Buffer.from(JSON.stringify({ root, run, action, resultId })).toString("base64");
   const child = Bun.spawn(
     [process.execPath, "-e", REVIEW_VALIDATION_CONTROL, payload, REVIEW_VALIDATION_WORKER],
     {
@@ -470,6 +471,120 @@ test("cancellation terminates children and a cancelled launch cannot start comma
   ).toMatchObject({ status: "incomplete", exitCode: null });
   // A cancelled launch must not start the command that was never dispatched.
   expect(existsSync(path.join(early.root, ".orkestrator", "unexpected"))).toBe(false);
+});
+
+test("stopping one command keeps its partial output and lets the rest of the run finish", async () => {
+  const { root, run } = await fixture([
+    command("slow", "printf 'partial output'; sleep 10; touch .orkestrator/slow-finished", {
+      resources: ["workspace:exclusive"],
+      timeoutMs: 60_000,
+    }),
+    command("after-slow", "touch .orkestrator/after-slow", { dependsOn: ["slow"] }),
+    command("blocked", "touch .orkestrator/blocked-ran", { resources: ["workspace:exclusive"] }),
+    command("independent", "printf independent"),
+  ]);
+  await control(root, run);
+  await observeUntil(root, run, (next) => next.results[0]!.status === "running", 3_000);
+  await observeUntil(root, run, (next) => next.results[3]!.status === "passed", 3_000);
+
+  // The command waiting behind the slow one is skipped before it starts.
+  const skipped = await control(root, run, "stop-command", {}, "blocked");
+  expect(skipped.results[2]).toMatchObject({
+    status: "incomplete",
+    stdoutPath: null,
+    limitation: "Stopped by the user before it started; validation is incomplete",
+  });
+  expect(skipped.results[0]!.status).toBe("running");
+
+  const stopped = await control(root, run, "stop-command", {}, "slow");
+  expect(stopped.results[0]).toMatchObject({
+    status: "incomplete",
+    limitation: "Stopped by the user before it completed; validation is incomplete",
+  });
+  const final = await completed(root, run);
+  expect(final.status).toBe("completed");
+  expect(final.results.map((result) => result.status)).toEqual([
+    "incomplete",
+    "skipped",
+    "incomplete",
+    "passed",
+  ]);
+  expect(await readFile(path.join(root, final.results[0]!.stdoutPath!), "utf8")).toBe(
+    "partial output",
+  );
+  expect(existsSync(path.join(root, ".orkestrator", "slow-finished"))).toBe(false);
+  expect(existsSync(path.join(root, ".orkestrator", "after-slow"))).toBe(false);
+  expect(existsSync(path.join(root, ".orkestrator", "blocked-ran"))).toBe(false);
+  const evidence = parseReviewPreparationValidation(
+    validationPreparation(final).validation,
+    final.id,
+  );
+  expect(evidence.map((entry) => entry.status)).toEqual([
+    "incomplete",
+    "skipped",
+    "incomplete",
+    "passed",
+  ]);
+
+  // A settled command is left alone; unknown commands are rejected.
+  expect(await control(root, run, "stop-command", {}, "independent")).toEqual(final);
+  await expect(control(root, run, "stop-command", {}, "missing")).rejects.toThrow(
+    "Validation control failed",
+  );
+});
+
+test("stopping a running cooperative command preserves incomplete evidence", async () => {
+  const { root, run } = await cooperativeFixture(
+    [
+      command("cooperative", "bun cooperative.ts", { timeoutMs: 30_000 }),
+      command("dependent", "touch .orkestrator/dependent-ran", { dependsOn: ["cooperative"] }),
+      command("independent", "printf independent"),
+    ],
+    {
+      "cooperative.ts": `const fs = require("node:fs");
+const publish = () => fs.writeFileSync(process.env.ORKESTRATOR_VALIDATION_SCHEDULER_STATE, JSON.stringify({ version: 1, state: "running", heartbeat: Date.now(), executionMs: 0, queuedMs: 0 }));
+publish(); const heartbeat = setInterval(publish, 100);
+console.log("partial cooperative output");
+await Bun.sleep(20_000);
+clearInterval(heartbeat);`,
+    },
+  );
+  await control(root, run);
+  await observeUntil(root, run, (next) => next.results[0]?.status === "running", 5_000);
+  const stopped = await control(root, run, "stop-command", {}, "cooperative");
+  expect(stopped.results[0]).toMatchObject({ status: "incomplete" });
+  const done = await completed(root, run);
+  expect(done.results.map((result) => result.status)).toEqual(["incomplete", "skipped", "passed"]);
+  expect(done.results[0]!.limitation).toContain("Stopped by the user");
+  expect(await readFile(path.join(root, done.results[0]!.stdoutPath!), "utf8")).toContain(
+    "partial cooperative output",
+  );
+  expect(existsSync(path.join(root, ".orkestrator/dependent-ran"))).toBe(false);
+});
+
+test("a covered command can be stopped while its covering command runs", async () => {
+  const { root, run } = await fixture([
+    command("covered", "touch .orkestrator/covered-ran"),
+    command("covering", "sleep 3"),
+  ]);
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { "sleep 3": { covers: ["touch .orkestrator/covered-ran"] } },
+    }),
+  );
+  await control(root, run);
+  await observeUntil(root, run, (next) => next.results[1]?.status === "running", 3_000);
+  const stopped = await control(root, run, "stop-command", {}, "covered");
+  expect(stopped.results[0]).toMatchObject({
+    status: "incomplete",
+    limitation: "Stopped by the user before it started; validation is incomplete",
+  });
+  const done = await completed(root, run);
+  expect(done.results.map((result) => result.status)).toEqual(["incomplete", "passed"]);
+  expect(existsSync(path.join(root, ".orkestrator/covered-ran"))).toBe(false);
 });
 
 test("timeout and output overflow become incomplete evidence, never assertion failures", async () => {

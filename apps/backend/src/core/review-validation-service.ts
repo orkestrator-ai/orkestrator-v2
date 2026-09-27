@@ -251,14 +251,26 @@ export async function readReviewValidationOutput(
   return parsed as ReviewValidationOutput;
 }
 
-/** All requests are short control operations; command execution lives in the environment. */
+/**
+ * All requests are short control operations; command execution lives in the
+ * environment. `stop-command` terminates one command (`resultId`) and lets the
+ * remaining commands continue; `cancel` stops the whole run.
+ */
 export async function controlReviewValidation(
   environmentId: string,
   value: unknown,
-  action: "start" | "status" | "cancel",
+  action: "start" | "status" | "cancel" | "stop-command",
   context: CommandContext,
+  resultIdValue?: string,
 ): Promise<ReviewValidationRun> {
   if (!isReviewValidationRun(value)) throw new Error("Invalid review validation run");
+  const resultId =
+    action === "stop-command"
+      ? validationIdentity(resultIdValue ?? "", "review validation result ID")
+      : undefined;
+  if (resultId !== undefined && !value.plan.commands.some((cmd) => cmd.id === resultId)) {
+    throw new Error("Review validation command is unavailable");
+  }
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error("Review validation environment is unavailable");
   if (action === "start" && (environment.status !== "running" || environment.deletionRequestedAt))
@@ -278,6 +290,7 @@ export async function controlReviewValidation(
       root,
       run: { ...newReviewValidationRun(value.id, value.plan), startedAt: value.startedAt },
       action,
+      ...(resultId === undefined ? {} : { resultId }),
     }),
   ).toString("base64");
   const args = ["-e", REVIEW_VALIDATION_CONTROL, payload, REVIEW_VALIDATION_WORKER];

@@ -111,6 +111,112 @@ describe("ReviewValidationStatus", () => {
     expect(screen.queryByRole("button", { name: "Stopping tests…" }) === null).toBe(true);
   });
 
+  test("stops one running command without opening its output or stopping the run", async () => {
+    const run = runningValidation();
+    const loadOutput = mock(async () => {
+      throw new Error("output must not load");
+    });
+    let finish!: () => void;
+    const stopCommand = mock(
+      () =>
+        new Promise<ReviewValidationRun>((resolve) => {
+          finish = () => resolve(run);
+        }),
+    );
+    const onStop = mock(() => undefined);
+    const view = render(
+      <ReviewValidationStatus
+        environmentId="env-1"
+        run={run}
+        loadOutput={loadOutput}
+        stopCommand={stopCommand}
+        onStop={onStop}
+      />,
+    );
+
+    // Only unsettled commands can be stopped individually.
+    expect(screen.queryByRole("button", { name: "Stop bun run build" }) === null).toBe(true);
+    const stop = screen.getByRole("button", { name: "Stop bun run check" });
+    fireEvent.keyDown(stop, { key: "Enter" });
+    fireEvent.click(stop);
+
+    expect(stopCommand).toHaveBeenCalledTimes(1);
+    expect(stopCommand).toHaveBeenCalledWith("env-1", run, "check");
+    expect(onStop).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog") === null).toBe(true);
+    expect(loadOutput).not.toHaveBeenCalled();
+    const status = () =>
+      view.container.querySelector('[data-slot="validation-status"]')?.textContent;
+    expect(status()).toBe("stopping");
+    expect(
+      (screen.getByRole("button", { name: "Stop bun run check" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await act(async () => finish());
+    // The request is accepted, but the snapshot still shows it running.
+    expect(status()).toBe("stopping");
+
+    const settled = runningValidation();
+    Object.assign(settled.results[0]!, {
+      status: "incomplete",
+      exitCode: 143,
+      limitation: "Stopped by the user before it completed; validation is incomplete",
+    });
+    view.rerender(
+      <ReviewValidationStatus
+        environmentId="env-1"
+        run={settled}
+        loadOutput={loadOutput}
+        stopCommand={stopCommand}
+      />,
+    );
+    expect(status()).toBe("incomplete");
+    expect(screen.getByText(/Stopped by the user before it completed/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Stop bun run check" }) === null).toBe(true);
+  });
+
+  test("restores a command's stop control when the stop request fails", async () => {
+    const run = runningValidation();
+    const stopCommand = mock(async () => {
+      throw new Error("worker unavailable");
+    });
+    const view = render(
+      <ReviewValidationStatus environmentId="env-1" run={run} stopCommand={stopCommand} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop bun run check" }));
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Stop bun run check" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    expect(view.container.querySelector('[data-slot="validation-status"]')?.textContent).toBe(
+      "running",
+    );
+  });
+
+  test("hides per-command stop controls for settled runs, whole-run stops, or when disabled", () => {
+    const run = runningValidation();
+    const view = render(
+      <ReviewValidationStatus environmentId="env-1" run={run} stopCommand={null} />,
+    );
+    expect(screen.queryByRole("button", { name: "Stop bun run check" }) === null).toBe(true);
+
+    view.rerender(
+      <ReviewValidationStatus
+        environmentId="env-1"
+        run={run}
+        onStop={mock(() => undefined)}
+        stopping
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Stop bun run check" }) === null).toBe(true);
+
+    const cancelled = runningValidation();
+    cancelled.status = "cancelled";
+    view.rerender(<ReviewValidationStatus environmentId="env-1" run={cancelled} />);
+    expect(screen.queryByRole("button", { name: "Stop bun run check" }) === null).toBe(true);
+  });
+
   test("rehydrates a queued result and later incomplete evidence after an inactive view", () => {
     const run = runningValidation();
     Object.assign(run.results[0]!, {
@@ -271,27 +377,63 @@ describe("ReviewValidationStatus", () => {
     expect(screen.getByRole("dialog", { name: "Terminal output" })).toBeTruthy();
   });
 
-  test("makes every output row focusable and activatable with Enter or Space", () => {
+  test("uses a dedicated output button outside the stop control", () => {
     const run = runningValidation();
     render(<ReviewValidationStatus environmentId="env-1" run={run} />);
 
-    const checkRow = screen.getByRole("button", {
+    const checkOutput = screen.getByRole("button", {
       name: "View terminal output for bun run check",
     });
-    const buildRow = screen.getByRole("button", {
+    const buildOutput = screen.getByRole("button", {
       name: "View terminal output for bun run build",
     });
-    expect(checkRow.tagName).toBe("TR");
-    expect(checkRow.tabIndex).toBe(0);
+    expect(checkOutput.tagName).toBe("BUTTON");
+    expect(checkOutput.closest("tr")?.hasAttribute("role")).toBe(false);
 
-    fireEvent.keyDown(checkRow, { key: "Enter" });
+    fireEvent.click(checkOutput);
     expect(screen.getByRole("dialog", { name: "Terminal output" })).toBeTruthy();
     expect(
       screen.getByText("bun run check", { selector: "[data-slot='dialog-description']" }),
     ).toBeTruthy();
 
-    expect(fireEvent.keyDown(buildRow, { key: " " })).toBe(false);
+    fireEvent.click(buildOutput);
     expect(screen.getByText("This step was skipped, so it has no terminal output.")).toBeTruthy();
+  });
+
+  test("does not offer command stops before a planned run starts", () => {
+    const run = runningValidation();
+    run.status = "planned";
+    render(<ReviewValidationStatus environmentId="env-1" run={run} />);
+    expect(screen.queryByRole("button", { name: "Stop bun run check" }) === null).toBe(true);
+  });
+
+  test("does not carry an in-flight stop into a replacement run with the same command IDs", async () => {
+    const oldRun = runningValidation();
+    let rejectOld!: (reason: Error) => void;
+    const stopCommand = mock((_: string, run: ReviewValidationRun) =>
+      run.id === oldRun.id
+        ? new Promise<ReviewValidationRun>((_, reject) => {
+            rejectOld = reject;
+          })
+        : Promise.resolve(run),
+    );
+    const view = render(
+      <ReviewValidationStatus environmentId="env-1" run={oldRun} stopCommand={stopCommand} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop bun run check" }));
+    expect(screen.getByText("stopping")).toBeTruthy();
+
+    const newRun = { ...runningValidation(), id: "validation-2" };
+    view.rerender(
+      <ReviewValidationStatus environmentId="env-1" run={newRun} stopCommand={stopCommand} />,
+    );
+    const stop = screen.getByRole("button", { name: "Stop bun run check" });
+    expect((stop as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(stop);
+    expect(stopCommand).toHaveBeenCalledWith("env-1", newRun, "check");
+    await act(async () => rejectOld(new Error("old run stopped")));
+    expect(screen.getByText("stopping")).toBeTruthy();
+    expect((stop as HTMLButtonElement).disabled).toBe(true);
   });
 
   test("opens a modal and loads the selected command's captured output", async () => {

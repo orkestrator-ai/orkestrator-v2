@@ -123,6 +123,8 @@ test("discovery avoids a duplicate build when the full test stage already builds
   expect(prompt).toContain("if the full test stage already runs the production build");
   expect(prompt).toContain("omit a separate build command instead of repeating it");
   expect(prompt.startsWith(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION)).toBe(true);
+  expect(prompt).toContain("First read the repository's agent instructions — AGENTS.md");
+  expect(prompt).toContain("include it only when this change meets that condition");
   expect(prompt).toContain(SYSTEM_INSTRUCTIONS_FRAME_OPEN);
 });
 

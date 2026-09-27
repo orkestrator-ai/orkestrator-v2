@@ -111,6 +111,9 @@ const retryInteractionFailureMock = mock(async (pipelineId: string) => ({
   backendRevision: useBuildPipelineStore.getState().pipelines.get(pipelineId)!.backendRevision + 1,
 }));
 const getBuildPipelineConditionalMock = mock(async (_pipelineId: string) => null as unknown);
+const stopReviewValidationCommandMock = mock(
+  async (_environmentId: string, run: NonNullable<BuildPipeline["validationRun"]>) => run,
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -123,6 +126,7 @@ mock.module("@/lib/backend", () => ({
   restartBuildPipelineStep: restartStepMock,
   retryBuildPipelineInteractionFailure: retryInteractionFailureMock,
   getBuildPipelineConditional: getBuildPipelineConditionalMock,
+  stopReviewValidationCommand: stopReviewValidationCommandMock,
 }));
 
 const { BuildChatTab, pipelineReviewRuntimeSummary, reviewIterationLabels, reviewLetter } =
@@ -271,6 +275,7 @@ describe("BuildChatTab backend projection", () => {
     retryStageMock.mockClear();
     restartStepMock.mockClear();
     retryInteractionFailureMock.mockClear();
+    stopReviewValidationCommandMock.mockClear();
     mockToastError.mockClear();
     mockToastSuccess.mockClear();
     getBuildPipelineConditionalMock.mockClear();
@@ -564,6 +569,48 @@ describe("BuildChatTab backend projection", () => {
     expect(screen.getByText("Implementation complete").closest("[hidden]")).toBeTruthy();
     expect(testsTabIconClass()).toContain("text-success");
     expect(screen.getByText("1 check")).toBeTruthy();
+  });
+
+  test("stops one running validation command from the Tests stage", async () => {
+    const run = validationRun({
+      id: "validation-stop-one",
+      status: "running",
+      completedAt: undefined,
+      results: [
+        {
+          ...validationResult("passed"),
+          status: "running",
+          exitCode: null,
+          startedAt: "2026-09-08T20:00:05.000Z",
+        },
+      ],
+    });
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      validationRun: run,
+      backendRevision: 9,
+    });
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Tests"));
+    fireEvent.click(screen.getByRole("button", { name: "Stop mise run test" }));
+
+    await waitFor(() => expect(stopReviewValidationCommandMock).toHaveBeenCalledTimes(1));
+    expect(stopReviewValidationCommandMock).toHaveBeenCalledWith(
+      pipeline.environmentId,
+      run,
+      "test",
+    );
+    expect(screen.queryByRole("dialog") === null).toBe(true);
   });
 
   test("shows a failure icon when a completed validation run has failed commands", () => {

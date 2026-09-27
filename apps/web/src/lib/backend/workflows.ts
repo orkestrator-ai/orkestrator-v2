@@ -19,6 +19,7 @@ import type {
   LoopedReviewWorkflow as BackendLoopedReviewWorkflow,
   ReviewValidationOutput,
   ReviewValidationOutputKnown,
+  ReviewValidationRun,
   StartLoopedReviewInput,
 } from "@orkestrator/protocol/review-workflow";
 import type {
@@ -79,6 +80,21 @@ export async function getReviewValidationOutput(
     runId,
     resultId,
     ...(known && (known.stdout || known.stderr) ? { known } : {}),
+  });
+}
+/**
+ * Stop one validation command. The environment-owned worker records it as
+ * incomplete with its partial output and keeps running the remaining commands.
+ */
+export async function stopReviewValidationCommand(
+  environmentId: string,
+  run: ReviewValidationRun,
+  resultId: string,
+): Promise<ReviewValidationRun> {
+  return invoke<ReviewValidationRun>("stop_review_validation_command", {
+    environmentId,
+    run,
+    resultId,
   });
 }
 import {

@@ -142,6 +142,48 @@ export async function getContainerLogs(containerId: string, tail?: string): Prom
   return invoke<string>("get_container_logs", { containerId, tail });
 }
 
+export interface ContainerLogRecord {
+  seq: number;
+  text: string;
+}
+
+export type ContainerLogRead =
+  | {
+      kind: "records";
+      sourceId: string;
+      records: ContainerLogRecord[];
+      cursor: number;
+      ended: boolean;
+    }
+  | {
+      kind: "gap";
+      sourceId: string;
+      records: ContainerLogRecord[];
+      cursor: number;
+      ended: boolean;
+    };
+
+/** Follows a container's log: one shared backend follower, a leased subscription. */
+export async function openContainerLogs(
+  containerId: string,
+): Promise<{ subscriptionId: string; sourceId: string; cursor: number }> {
+  return invoke("open_container_logs", { containerId });
+}
+
+/** Records after `cursor`; renews the subscription's lease. */
+export async function readContainerLogs(
+  subscriptionId: string,
+  sourceId: string,
+  cursor: number,
+): Promise<ContainerLogRead> {
+  return invoke<ContainerLogRead>("read_container_logs", { subscriptionId, sourceId, cursor });
+}
+
+/** Releases the subscription; the container and its processes are untouched. */
+export async function closeContainerLogs(subscriptionId: string): Promise<void> {
+  return invoke("close_container_logs", { subscriptionId });
+}
+
 /**
  * Legacy: opens a leased log subscription. Log lines are not pushed as events;
  * read them with `readContainerLogs`.

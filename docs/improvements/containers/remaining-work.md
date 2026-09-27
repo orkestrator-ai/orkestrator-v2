@@ -31,7 +31,7 @@ credentials this host does not have — named explicitly).
 | --- | --- | --- | --- |
 | 15 | 14 | No switch that refuses new rebuild/migration admissions while recovery continues | Done — `ORKESTRATOR_CONTAINER_REPLACEMENT=paused`; preview reports `admission-paused` |
 | 16 | 10 | No admission limit for concurrent expensive starts/migrations | Done — `container-admission.ts`: 4 starts, 2 copies, bounded FIFO waits |
-| 17 | 11 | No renderer log viewer on the subscription API (ended/gap/disconnected states, release when hidden) | Open |
+| 17 | 11 | No renderer log viewer on the subscription API (ended/gap/disconnected states, release when hidden) | Done — `ContainerLogViewer` in the Container section: cursor reads, gap and ended states, "Follow again", released when hidden |
 | 18 | 10 | Placeholder zeros (unknown memory/CPU/disk, `created: 0`) still reach the UI | Open |
 | 19 | 10 | No automatic refresh of usage; staleness only means "daemon unavailable" | Open |
 | 20 | 10 | Rootless flag computed but unused; memory vs `--shm-size` not validated; below-usage update cannot be confirmed from the UI | Open |
@@ -40,7 +40,7 @@ credentials this host does not have — named explicitly).
 | 23 | 07 | Recovery copies on volumes report no size | Open |
 | 24 | 06 | Port conflict on the candidate rolls back instead of a recoverable result | Open |
 | 25 | 06 | Queued work for the old runtime generation is not cancelled or rebound after commit | Open |
-| 26 | 11 | `get_container_logs` cuts by characters with no truncation marker | Open |
+| 26 | 11 | `get_container_logs` cuts by characters with no truncation marker | Done — byte-bounded with a truncation marker (`boundContainerLogTail`) |
 | 27 | 09 | Effective network report lacks gateway/subnet/DNS identity from Docker | Open |
 | 28 | 09 | AGENTS.md: sudo grant count, root-terminal `NET_ADMIN` in restricted mode, GitHub range source; all-ports allowlist and shared-IP caveat | Done — AGENTS.md corrected |
 | 29 | 12 | Manifest agent versions come from build args, not the installed binaries; bridges listed by directory presence | Open |

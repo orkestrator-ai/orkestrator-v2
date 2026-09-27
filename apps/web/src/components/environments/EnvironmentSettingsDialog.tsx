@@ -67,6 +67,7 @@ import { EnvironmentRebuildSection } from "./EnvironmentRebuildSection";
 import { EnvironmentRecoveryCopies } from "./EnvironmentRecoveryCopies";
 import { EnvironmentInputsSection } from "./EnvironmentInputsSection";
 import { EnvironmentResourcesSection } from "./EnvironmentResourcesSection";
+import { ContainerLogViewer } from "./ContainerLogViewer";
 import { EnvironmentNetworkPolicyStatus } from "./EnvironmentNetworkPolicyStatus";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -367,6 +368,7 @@ export function EnvironmentSettingsDialog({
   });
   const [portError, setPortError] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showContainerLog, setShowContainerLog] = useState(false);
   const [resetAcknowledged, setResetAcknowledged] = useState(false);
   // Resetting keeps the current container and files as a recovery copy
   // unless the user explicitly chooses to delete them.
@@ -1107,6 +1109,26 @@ export function EnvironmentSettingsDialog({
                 dockerAvailable={dockerAvailable}
               />
             )}
+            {environment.containerId && dockerAvailable ? (
+              <div className="flex flex-col gap-2 rounded-md border p-3 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-medium">Container log</p>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-expanded={showContainerLog}
+                    onClick={() => setShowContainerLog((value) => !value)}
+                  >
+                    {showContainerLog ? "Hide" : "Show"}
+                  </Button>
+                </div>
+                {/* Mounted only while shown: hiding it releases the subscription. */}
+                {showContainerLog ? (
+                  <ContainerLogViewer containerId={environment.containerId} />
+                ) : null}
+              </div>
+            ) : null}
             {environment.environmentType !== "local" && (
               <EnvironmentInputsSection
                 environmentId={environment.id}

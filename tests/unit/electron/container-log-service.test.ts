@@ -231,3 +231,17 @@ describe("bounded bridge output", () => {
     }
   });
 });
+
+describe("bounded log tails", () => {
+  test("keeps the end within the byte bound and marks the cut", async () => {
+    const { boundContainerLogTail, CONTAINER_LOG_TRUNCATED_MARKER } =
+      await import("../../../apps/backend/src/core/commands-registry-docker");
+    expect(boundContainerLogTail("short\n", 64)).toBe("short\n");
+    const long = "€".repeat(100) + "tail\n";
+    const bounded = boundContainerLogTail(long, 64);
+    expect(Buffer.byteLength(bounded)).toBeLessThanOrEqual(64);
+    expect(bounded.startsWith(CONTAINER_LOG_TRUNCATED_MARKER)).toBe(true);
+    expect(bounded.endsWith("tail\n")).toBe(true);
+    expect(bounded).not.toContain("�");
+  });
+});

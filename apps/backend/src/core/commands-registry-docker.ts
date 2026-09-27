@@ -12,8 +12,20 @@ import { dockerCapacity, sampleContainerUsage } from "./container-resources.js";
 import { containerLogService } from "./container-log-service.js";
 import { providerCredentialsAllowed } from "./portable-input-status.js";
 
-/** Largest `get_container_logs` answer, in characters. */
-const CONTAINER_LOG_TAIL_MAX_CHARS = 512 * 1024;
+/** Largest `get_container_logs` answer, in UTF-8 bytes. */
+const CONTAINER_LOG_TAIL_MAX_BYTES = 512 * 1024;
+export const CONTAINER_LOG_TRUNCATED_MARKER = "[earlier output truncated]\n";
+
+/** Keeps the end of a log within `max` bytes and says when anything was cut. */
+export function boundContainerLogTail(output: string, max = CONTAINER_LOG_TAIL_MAX_BYTES): string {
+  if (Buffer.byteLength(output, "utf8") <= max) return output;
+  const kept = Buffer.from(output, "utf8")
+    .subarray(-(max - Buffer.byteLength(CONTAINER_LOG_TRUNCATED_MARKER)))
+    .toString("utf8")
+    // A cut inside a multibyte character decodes as replacement characters.
+    .replace(/^\uFFFD+/, "");
+  return CONTAINER_LOG_TRUNCATED_MARKER + kept;
+}
 import {
   createOperationId,
   emptyContainerLifecycle,
@@ -321,9 +333,7 @@ export function registerDockerCommands(
     const requested = Number.parseInt(asOptionalString(tail) ?? "200", 10);
     const lines = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 2_000) : 200;
     const output = await readContainerLogs(asString(containerId, "containerId"), String(lines));
-    return output.length > CONTAINER_LOG_TAIL_MAX_CHARS
-      ? output.slice(output.length - CONTAINER_LOG_TAIL_MAX_CHARS)
-      : output;
+    return boundContainerLogTail(output);
   });
   // Follow subscriptions: one shared `docker logs -f` per container, a bounded
   // replay ring, leases and an explicit gap when a client falls behind.

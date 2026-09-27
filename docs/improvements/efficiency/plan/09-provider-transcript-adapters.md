@@ -1,6 +1,6 @@
 # 09 — Implement lightweight transcript and detail reads for every provider
 
-Status: Complete — all five HTTP bridges serve v2 and pass one shared contract (f83a6206); OpenCode is in-process (projection defers artifacts before windowing, no detail/page routes). Validated on real Claude, Codex and OpenCode sessions; Cursor, Pi and Grok not run live.
+Status: Complete — all five HTTP bridges serve v2 and pass one shared contract (f83a6206); OpenCode is in-process (projection defers artifacts before windowing, no detail/page routes). Validated on real Claude, Codex, OpenCode, Cursor and Pi sessions; Grok could not start a session (ACP "Invalid params", tracked separately).
 
 ## Outcome
 
@@ -250,4 +250,15 @@ Gap-closure real-stack run (2026-09-27; isolated profile eff-gap-7f09,
   Grok (ACP authenticate timed out) could not start in the profile. Live
   history paging was not exercised: no session exceeded the 100-message
   live window.
+Follow-up live run (same day, fresh isolated profile): Cursor
+  (composer-2.5; the saved app API key injected as CURSOR_API_KEY for the
+  dev profile only) and Pi (openai-codex/gpt-6-sol; the host Pi login copied
+  owner-only into the profile's isolated home and removed on reset) each ran
+  the same 14 KB tool call. Snapshot 2.3 KB / 2.0 KB; unchanged re-read
+  489 B / 485 B; the output deferred and expanded exactly (17.0 KB /
+  12.2 KB). Cursor runtime-health reported transcriptBounds live (24 checks,
+  0 trims, limits 128 parts / 4,161,536 B per sub-agent). Grok rejects ACP
+  session/new with "Invalid params" and its model catalogue is empty; the
+  bridge's session-creation code is unchanged from main, so this is tracked
+  separately as a Grok integration issue.
 ```

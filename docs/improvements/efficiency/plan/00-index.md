@@ -32,13 +32,13 @@ Status is summarized here; each step's execution record is authoritative.
 | --- | --- | --- | --- | --- |
 | 01 | [Baseline instrumentation and fixtures](01-baselines-and-instrumentation.md) | All | None | Partial (E11–E14, heap/RSS, browser, remote not measured) |
 | 02 | [Linear transcript size accounting and trimming](02-linear-transcript-budgets.md) | E09; supports E01/E05 | 01 | Complete |
-| 03 | [Cursor bounds during background streaming](03-cursor-background-bounds.md) | E01 | 02 | Complete (no live Cursor run) |
+| 03 | [Cursor bounds during background streaming](03-cursor-background-bounds.md) | E01 | 02 | Complete (live trim thresholds not reached) |
 | 04 | [Cursor persistence and dispatch barriers](04-cursor-durable-persistence.md) | E02 | 01; use 02 for sizing | Complete |
 | 05 | [Claude transcript revisions](05-claude-transcript-revisions.md) | E03 | 01 | Complete (inactive-tab QA unrun) |
 | 06 | [Keyed storage and migration primitives](06-keyed-storage-primitives.md) | E04/E14 | 01 | Complete |
 | 07 | [Independent display-tail records](07-display-tail-storage.md) | E04 | 06 | Complete |
 | 08 | [Transcript summary, detail, and history contracts](08-transcript-contracts.md) | E05/E06/E07/E13 | 01 | Complete |
-| 09 | [Provider summary/detail adapters](09-provider-transcript-adapters.md) | E06; supports E05/E07/E13 | 02, 05, 08 | Complete (shared contract; Cursor/Pi/Grok not run live) |
+| 09 | [Provider summary/detail adapters](09-provider-transcript-adapters.md) | E06; supports E05/E07/E13 | 02, 05, 08 | Complete (shared contract; Grok not run live) |
 | 10 | [Bounded Codex rollout reading and indexing](10-codex-rollout-reader.md) | E08 | 01; coordinate with 08 | Complete |
 | 11 | [Direct history paging](11-direct-history-paging.md) | E07 | 08, 09; 10 for Codex indexed pages | Complete (v2 providers, page cache; joined fallback kept) |
 | 12 | [Incremental backend projection work](12-incremental-backend-projection.md) | E05 | 05, 09 | Complete (row reuse; one comparison walk remains) |

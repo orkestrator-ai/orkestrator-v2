@@ -1,6 +1,6 @@
 # 03 — Bound Cursor transcripts while no UI is reading
 
-Status: Complete — nested sub-agent parts, todo lists and SDK-built arguments bounded and bound counters exposed (f833ebea); a live Cursor inactive-tab run was not performed (the gap-closure profile had no signed-in Cursor account). Prerequisite: 02. Finding: E01. Priority: urgent.
+Status: Complete — nested sub-agent parts, todo lists and SDK-built arguments bounded and bound counters exposed (f833ebea); a live Cursor session ran and reported its bound counters, but no live run reached the trim thresholds in an inactive tab. Prerequisite: 02. Finding: E01. Priority: urgent.
 
 ## Outcome and scope
 
@@ -143,6 +143,7 @@ Gap closure (commit f833ebea):
     the launch card; per-child byte ceiling; running grandchild trimmed then
     completes; open child block survives; trimmed open block forgotten;
     counters; todo and argument caps); http.test.ts (health read).
-  Still unrun: the live inactive-tab run (no signed-in Cursor account in the
-  gap-closure profile: HTTP 401).
+  Live: a real Cursor session (composer-2.5, isolated profile) reported
+  transcriptBounds through runtime-health (24 checks, 0 trims). Still unrun:
+  a live background run long enough to reach the trim thresholds.
 ```

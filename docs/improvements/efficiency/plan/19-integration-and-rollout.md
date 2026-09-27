@@ -1,6 +1,6 @@
 # 19 — Validate the full pipeline and roll out in measured waves
 
-Status: Complete for the function-level, repository-suite and isolated real-stack evidence below, including the 2026-09-27 gap-closure pass; steps 01 and 13 remain partial, and remote-proxy, live Cursor/Pi/Grok, iOS and profiling runs were not performed. Findings: all.
+Status: Complete for the function-level, repository-suite and isolated real-stack evidence below, including the 2026-09-27 gap-closure pass; steps 01 and 13 remain partial, and remote-proxy, live Grok, iOS and profiling runs were not performed. Findings: all.
 
 ## Outcome
 
@@ -275,9 +275,20 @@ Live providers (isolated profile eff-gap-7f09, bridges rebuilt): Claude
   100-message live window, so live history paging and the reviewer "load
   earlier" control were not exercised. Environments deleted; profile stopped
   and reset.
+Follow-up live run (same day, fresh isolated profile): Cursor
+  (composer-2.5; the saved app API key injected as CURSOR_API_KEY for the
+  dev profile only) and Pi (openai-codex/gpt-6-sol; the host Pi login copied
+  owner-only into the profile's isolated home and removed on reset) each ran
+  the same 14 KB tool call. Snapshot 2.3 KB / 2.0 KB; unchanged re-read
+  489 B / 485 B; the output deferred and expanded exactly (17.0 KB /
+  12.2 KB). Cursor runtime-health reported transcriptBounds live (24 checks,
+  0 trims, limits 128 parts / 4,161,536 B per sub-agent). Grok rejects ACP
+  session/new with "Invalid params" and its model catalogue is empty; the
+  bridge's session-creation code is unchanged from main, so this is tracked
+  separately as a Grok integration issue.
 Remaining limitations after this pass: step 01 (E11-E14 workloads, heap/RSS,
   browser long tasks, remote path) and step 13 (items 1, 4, 7; browser
-  profiling) remain partial; live Cursor/Pi/Grok sessions, live history
+  profiling) remain partial; a live Grok session, live history
   paging, a live multi-review run, the Claude inactive-tab QA, remote
   proxy/compression bytes, native iOS and p95 latency on real providers are
   unrun; per-pipeline control partitioning (E14) and a container watcher

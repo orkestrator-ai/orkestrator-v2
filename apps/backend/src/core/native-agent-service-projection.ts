@@ -671,6 +671,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   private readonly progressiveHydrations = new Map<string, ProgressiveHydrationEntry>();
   private readonly progressiveHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly progressiveMetrics = new ProgressiveReadMetrics();
+  /** In-flight provider reads of remote tool details, one per reference. */
+  private readonly remoteToolDetailReads = new Map<string, Promise<NativeAgentToolDetails>>();
 
   /**
    * Whether a parked dispatch is still reconciling or has become a final
@@ -3195,8 +3197,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       ? await provider.transcriptDetail(remote.providerSessionId, remote.locator)
       : undefined;
     if (!result || result.status === "missing" || result.status === "expired") {
-      this.toolDetailCache.delete(input.detailRef);
-      this.toolDetailCacheBytes -= entry.bytes;
+      // The cache may have evicted (and already un-counted) this entry while
+      // the read was in flight; only remove what is still ours.
+      if (this.toolDetailCache.get(input.detailRef) === entry) {
+        this.toolDetailCache.delete(input.detailRef);
+        this.toolDetailCacheBytes -= entry.bytes;
+      }
       throw new Error("Native agent tool details are no longer available");
     }
     const details: NativeAgentToolDetails =
@@ -3255,7 +3261,19 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
     this.toolDetailCache.delete(input.detailRef);
     this.toolDetailCache.set(input.detailRef, entry);
-    if (entry.remote && !entry.remote.resolved) return this.resolveRemoteToolDetails(input, entry);
+    if (entry.remote && !entry.remote.resolved) {
+      // Two views expanding the same row share one provider read. The key is
+      // the session-scoped reference, so sharing never crosses sessions.
+      const shared = this.remoteToolDetailReads.get(input.detailRef);
+      if (shared) return shared;
+      const read = this.resolveRemoteToolDetails(input, entry).finally(() => {
+        if (this.remoteToolDetailReads.get(input.detailRef) === read) {
+          this.remoteToolDetailReads.delete(input.detailRef);
+        }
+      });
+      this.remoteToolDetailReads.set(input.detailRef, read);
+      return read;
+    }
     if (!entry.localImagePath) return entry.details;
 
     // The renderer presents only the opaque, session-scoped reference. The

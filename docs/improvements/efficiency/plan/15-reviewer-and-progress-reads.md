@@ -203,3 +203,32 @@ Remaining limitations:
   - A snapshot answered from a bridge cache (`freshness: cached`) is digested
     like a current one.
 ```
+
+### Reviewer view: lightweight windows and on-demand details (orchestrator)
+
+```text
+Implementation commit: "perf(review): lightweight reviewer transcripts with on-demand tool details"
+Decisions:
+  - multi-review-reviewer-transcript.ts asks summary-capable providers (those
+    exposing transcriptDetail) for `representation: "summary"`; each summary
+    part's locator becomes the row's `detailRef` (nested parts included) and
+    the bridge-internal `detail` field is dropped. Raw providers keep inline
+    bodies exactly as before.
+  - New command get_multi_review_reviewer_tool_details(workflowId, reviewerId,
+    detailRef) resolves a reference only against that reviewer's own provider
+    session (locator shape validated, ≤ 2 KiB); a changed or trimmed body is
+    reported "no longer available", never swapped for a newer one; too-large
+    bodies render the existing deferred-limit message.
+  - MultiReviewReviewerTab provides the reviewer-scoped loader through
+    ToolDetailLoaderContext, so the shared NativeMessage rows expand exactly as
+    in native tabs. The pipeline transcript normalizer now keeps `detailRef`,
+    `imageDetailRef` and the diff `deferred` flag (bounded).
+Tests: multi-review-reviewer-transcript.test.ts (summaries requested and
+  locators exposed as detailRef; exact body on expansion; changed body and
+  forged reference refused; raw providers unchanged);
+  MultiReviewReviewerTab.test.tsx (expanding a deferred row calls the reviewer
+  loader with workflow, reviewer and reference).
+Remaining limitations: the reviewer view still has no "load earlier" control;
+  it shows the newest window (≤ 100 messages from a bridge, ≤ 500 / 2 MiB
+  backend cap), now measured in lightweight rows.
+```

@@ -295,3 +295,109 @@ describe("summary transcripts", () => {
     );
   });
 });
+
+describe("remote detail reads", () => {
+  function heavyHistory(count: number) {
+    return {
+      messages: Array.from({ length: count }, (_, index) =>
+        message(`m${index}`, [
+          {
+            type: "tool-invocation",
+            content: "Read",
+            sourcePartId: `m${index}:0`,
+            toolUseId: `call-${index}`,
+            toolOutput: String(index).repeat(10_000),
+          },
+        ]),
+      ),
+      epoch: 1,
+      revision: 1,
+    };
+  }
+
+  test("concurrent expansions of one row share a single provider read", async () => {
+    const history = heavyHistory(1);
+    const { stub } = summaryProvider(history);
+    await withService(
+      { prefix: "orkestrator-summary-shared-detail-", provider: async () => stub.provider },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const update = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected a snapshot");
+        const detailRef = (update.value.messages[0] as TestMessage).parts[0]!.detailRef as string;
+        const [first, second] = await Promise.all([
+          service.getProjectionToolDetails({ ...identity, detailRef }),
+          service.getProjectionToolDetails({ ...identity, detailRef }),
+        ]);
+        expect(first.toolOutput).toBe(second.toolOutput);
+        expect(stub.transcriptDetail).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  test("an entry evicted while its read is in flight is not removed or un-counted again", async () => {
+    const history = heavyHistory(6);
+    const { stub } = summaryProvider(history);
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const provider = {
+      ...stub.provider,
+      transcriptDetail: async () => {
+        await gate;
+        return { status: "expired" as const };
+      },
+    } as typeof stub.provider;
+    await withService(
+      {
+        prefix: "orkestrator-summary-evicted-detail-",
+        provider: async () => provider,
+        toolDetailCacheMaxEntries: 3,
+      },
+      async ({ service }) => {
+        await service.ensureSession(identity);
+        const first = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (first.status !== "snapshot") throw new Error("expected a snapshot");
+        // With room for three references, m3 is the oldest one still cached.
+        const detailRef = (first.value.messages[3] as TestMessage).parts[0]!.detailRef as string;
+        const pending = service.getProjectionToolDetails({ ...identity, detailRef });
+        // New bodies for m0–m2 mint new references ahead of m3, evicting it.
+        for (let index = 0; index < 3; index += 1) {
+          history.messages[index]!.parts[0]!.toolOutput = `changed ${index}`.repeat(1_000);
+        }
+        history.revision += 1;
+        await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        release!();
+        await expect(pending).rejects.toThrow("no longer available");
+        const cache = service as unknown as {
+          toolDetailCache: Map<string, { bytes: number }>;
+          toolDetailCacheBytes: number;
+        };
+        const counted = Array.from(cache.toolDetailCache.values()).reduce(
+          (total, entry) => total + entry.bytes,
+          0,
+        );
+        expect(cache.toolDetailCacheBytes).toBe(counted);
+        // The row was re-registered by the newer read; the stale read's
+        // failure must not remove that fresh reference.
+        expect(cache.toolDetailCache.has(detailRef)).toBe(true);
+      },
+    );
+  });
+});

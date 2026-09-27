@@ -3,16 +3,27 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
   INPUT_LIMITS,
+  INPUT_REVISION_PRUNE_GRACE_MS,
   portableInputSpec,
   pruneInputRevisions,
   readInputsManifest,
+  scrubStagedProvider,
   stagePortableInputs,
   stagedInputMountArguments,
   type InputSourceRoots,
 } from "../../../apps/backend/src/core/portable-inputs";
-import { selectedInputProviders } from "../../../apps/backend/src/core/portable-input-status";
+import {
+  providerCredentialsAllowed,
+  revokeProviderCredentials,
+  selectedInputProviders,
+} from "../../../apps/backend/src/core/portable-input-status";
 import { environmentStateDirectory } from "../../../apps/backend/src/core/environment-state-paths";
-import { tempDir } from "./container-lifecycle-fixtures";
+import {
+  lifecycleEnvironment,
+  memoryLifecycleContext,
+  tempDir,
+  withDockerScript,
+} from "./container-lifecycle-fixtures";
 
 const cleanup: string[] = [];
 afterEach(async () => {
@@ -172,7 +183,12 @@ describe("portable input staging", () => {
     const parent = environmentStateDirectory(dataDir, "portable-inputs", "env-inputs");
     await fs.mkdir(path.join(parent, ".r0-abcdef01.partial"));
     await fs.writeFile(path.join(parent, "unrelated.txt"), "keep");
-    expect(await pruneInputRevisions(dataDir, "env-inputs", new Set([second.revision]))).toBe(2);
+    // Nothing is old enough yet: a staging or creation may still be using them.
+    expect(await pruneInputRevisions(dataDir, "env-inputs", new Set([second.revision]))).toBe(0);
+    const later = Date.now() + INPUT_REVISION_PRUNE_GRACE_MS + 1_000;
+    expect(
+      await pruneInputRevisions(dataDir, "env-inputs", new Set([second.revision]), later),
+    ).toBe(2);
     expect((await fs.readdir(parent)).sort()).toEqual([second.revision, "unrelated.txt"].sort());
     expect(first.revision).not.toBe(second.revision);
   });
@@ -193,6 +209,76 @@ describe("provider selection", () => {
         ),
       ].sort(),
     ).toEqual(["codex"]);
+  });
+
+  test("scrubbing a provider empties its staged inputs in place and leaves others", async () => {
+    const { dataDir, roots } = await fixtureHome();
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-inputs",
+      new Set(["claude", "git"] as const),
+      roots,
+    );
+    const claudeMount = staged.mounts.find((mount) => mount.target === "/claude-config")!;
+    const configFile = staged.mounts.find((mount) => mount.target === "/claude-config.json")!;
+    const before = await fs.stat(configFile.source);
+    expect(await scrubStagedProvider(dataDir, "env-inputs", staged.revision, "claude")).toBe(true);
+    // The bound directory still exists (a bind mount keeps it) but is empty.
+    expect(await fs.readdir(claudeMount.source)).toEqual([]);
+    // A bound file keeps its inode, so the container sees it emptied.
+    const after = await fs.stat(configFile.source);
+    expect(after.ino).toBe(before.ino);
+    expect(after.size).toBe(0);
+    const git = staged.mounts.find((mount) => mount.target === "/tmp/gitconfig")!;
+    expect((await fs.readFile(git.source, "utf8")).length).toBeGreaterThan(0);
+    expect(await scrubStagedProvider(dataDir, "env-inputs", "r0-00000000", "claude")).toBe(false);
+    expect(await scrubStagedProvider(dataDir, "env-inputs", "../escape", "claude")).toBe(false);
+  });
+
+  test("revocation is recorded, empties the staged inputs and gates later credential syncs", async () => {
+    const { dataDir, roots } = await fixtureHome();
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-lifecycle",
+      new Set(["claude", "git"] as const),
+      roots,
+    );
+    const { context, environments } = memoryLifecycleContext(
+      [lifecycleEnvironment({ containerId: "container-1" })],
+      dataDir,
+    );
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  inspect) printf '${staged.revision}\\n' ;;
+esac
+exit 0
+`,
+      async (log) => {
+        const result = await revokeProviderCredentials("env-lifecycle", "claude", context);
+        expect(result).toEqual({
+          provider: "claude",
+          removed: true,
+          pendingRebuild: false,
+          processesStopped: true,
+        });
+        const calls = await log.read();
+        expect(calls).toContain("/home/node/.claude/.credentials.json");
+        expect(calls).toContain("pkill -TERM -f '[/]opt/claude-bridge/'");
+      },
+    );
+    expect(environments.get("env-lifecycle")?.revokedInputProviders).toEqual(["claude"]);
+    const claudeMount = staged.mounts.find((mount) => mount.target === "/claude-config")!;
+    expect(await fs.readdir(claudeMount.source)).toEqual([]);
+    const environment = environments.get("env-lifecycle")!;
+    expect(providerCredentialsAllowed({}, ["claude", "codex"], environment, "claude")).toBe(false);
+    expect(providerCredentialsAllowed({}, ["claude", "codex"], environment, "codex")).toBe(true);
+    expect([
+      ...selectedInputProviders({}, ["claude", "codex"], environment.revokedInputProviders),
+    ]).toEqual(["codex", "git"]);
+    // Disabled is never allowed, revoked or not.
+    expect(providerCredentialsAllowed({}, ["codex"], null, "claude")).toBe(false);
   });
 
   test("the allowlist mirrors every mount point the entrypoint reads", async () => {

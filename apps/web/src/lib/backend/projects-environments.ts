@@ -333,6 +333,14 @@ export async function revokeProviderCredentials(
   });
 }
 
+/** Allows a revoked provider again; its configuration returns with the next rebuild. */
+export async function restoreProviderCredentials(
+  environmentId: string,
+  provider: string,
+): Promise<{ provider: string; pendingRebuild: boolean }> {
+  return invoke("restore_provider_credentials", { environmentId, provider });
+}
+
 /** The configured network policy and what the container's firewall applied. */
 export async function getEnvironmentNetworkPolicy(
   environmentId: string,

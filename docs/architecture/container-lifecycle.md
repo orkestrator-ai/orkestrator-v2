@@ -385,11 +385,24 @@ name appears in `entrypoint.sh`.
 - Older images keep the read-only home mounts their entrypoint expects, and a
   running legacy container keeps them until it is rebuilt; `get_environment_inputs`
   reports that as `host-mounts`, never as narrowed.
+- Credentials (staged inputs, the Anthropic key in the creation environment,
+  the Cursor key and the start-time Claude credential sync) go only to
+  providers that are enabled, authorized for agent-test profiles and not
+  revoked for the environment (`providerCredentialsAllowed`).
 - Enabling a provider later is a rebuild, reported as `missingProviders`.
-  `revoke_provider_credentials` removes a provider's imported credential files
-  from the running container and reports `pendingRebuild` while an immutable
-  mount still exposes them. It never touches the host's credentials or revokes
-  an account-wide key.
+  `revoke_provider_credentials` is durable: it records the provider in the
+  environment's `revokedInputProviders` first (so no later staging or sync
+  hands it back), empties the provider's staged subtrees in the revision the
+  container binds (directories in place, bound files truncated so the mount
+  sees it), removes the imported files from the running container and stops
+  the provider's bridge, which restarts without them. `pendingRebuild` is set
+  only when the container binds something the backend cannot empty (whole-home
+  mounts of an older runtime). Terminals the user started may hold what they
+  already read. `restore_provider_credentials` allows the provider again; its
+  configuration returns with the next rebuild. Neither touches the host's
+  credentials or revokes an account-wide key.
+- Unreferenced input revisions are pruned only after 30 minutes, so a staging
+  or container creation still in progress keeps its revision.
 
 ## Environment networks (`network-policy=2`)
 

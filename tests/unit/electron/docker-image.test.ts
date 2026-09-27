@@ -355,6 +355,19 @@ esac
         expect(create).toContain("orkestrator-runtime-generation=2");
         expect(create).toContain("orkestrator-operation-id=0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b");
         expect(create).toMatch(/--name ork-[0-9a-f]{16}-env-lifecycle-g2 /);
+        // Restricted runtimes get the capability the firewall needs...
+        expect(create).toContain("--cap-add NET_ADMIN");
+        await fs.writeFile(log.path, "");
+        await createDockerContainer(lifecycleEnvironment({ networkAccessMode: "full" }), context, {
+          imageId: IMAGE_ID,
+          runtimeGeneration: 3,
+        });
+        const full = (await log.read())
+          .split("\n")
+          .find((line) => line.startsWith("create --name"));
+        // ...and full access, which never runs it, does not.
+        expect(full).toBeTruthy();
+        expect(full).not.toContain("NET_ADMIN");
       },
     );
   });

@@ -9,6 +9,7 @@ import {
   realpath,
   rename,
   rm,
+  truncate,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -671,18 +672,73 @@ export async function pruneInputRevisions(
   dataDir: string,
   environmentId: string,
   referenced: ReadonlySet<string>,
+  now = Date.now(),
 ): Promise<number> {
   const parent = portableInputsDirectory(dataDir, environmentId);
   const names = await readdir(parent).catch(() => [] as string[]);
   let removed = 0;
   for (const name of names) {
     if (referenced.has(name)) continue;
-    // A partial revision is only abandoned work from an interrupted staging.
     if (!/^\.?r[0-9a-z]+-[0-9a-f]{8}(\.partial)?$/.test(name)) continue;
+    // A revision (or a partial one) this recent may belong to a staging or a
+    // container creation still in progress, whose label does not exist yet.
+    const modified = await lstat(path.join(parent, name)).then(
+      (info) => info.mtimeMs,
+      () => null,
+    );
+    if (modified === null || now - modified < INPUT_REVISION_PRUNE_GRACE_MS) continue;
     await rm(path.join(parent, name), { recursive: true, force: true });
     removed += 1;
   }
   return removed;
+}
+
+/** Unreferenced revisions younger than this are kept. */
+export const INPUT_REVISION_PRUNE_GRACE_MS = 30 * 60_000;
+
+/**
+ * Empties one provider's staged inputs inside an existing revision, so a
+ * container that binds the revision sees nothing of that provider from now
+ * on, including after a restart (its entrypoint imports from these mounts).
+ * Directory mounts are emptied in place; a file mount keeps its inode (a bind
+ * mount would otherwise go on showing the deleted file) and is truncated.
+ * Returns false when the revision does not exist.
+ */
+export async function scrubStagedProvider(
+  dataDir: string,
+  environmentId: string,
+  revision: string,
+  provider: ProviderInputSpec["provider"],
+): Promise<boolean> {
+  if (!/^r[0-9a-z]+-[0-9a-f]{8}$/.test(revision)) return false;
+  const directory = path.join(portableInputsDirectory(dataDir, environmentId), revision);
+  const exists = await lstat(directory).then(
+    (info) => info.isDirectory(),
+    () => false,
+  );
+  if (!exists) return false;
+  // Stage names do not depend on where the sources live.
+  const spec = portableInputSpec({ home: "/", agentTest: false }).find(
+    (entry) => entry.provider === provider,
+  );
+  if (!spec) return true;
+  for (const source of spec.directories) {
+    const stageRoot = path.join(directory, source.stage);
+    const entries = await readdir(stageRoot).catch(() => [] as string[]);
+    for (const entry of entries) {
+      await rm(path.join(stageRoot, entry), { recursive: true, force: true });
+    }
+  }
+  for (const file of spec.files) {
+    const stageDirectory = path.join(directory, "files", file.stage);
+    const entries = await readdir(stageDirectory).catch(() => [] as string[]);
+    for (const entry of entries) {
+      const target = path.join(stageDirectory, entry);
+      const info = await lstat(target).catch(() => null);
+      if (info?.isFile()) await truncate(target, 0);
+    }
+  }
+  return true;
 }
 
 export interface EnvironmentInputsManifest {

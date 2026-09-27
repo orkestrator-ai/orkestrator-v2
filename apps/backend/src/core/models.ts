@@ -283,6 +283,11 @@ export interface Environment {
   delegationBaseCommit?: string;
   networkAccessMode: NetworkAccessMode;
   allowedDomains?: string[];
+  /**
+   * Providers whose credentials the user removed from this environment. They
+   * are left out of staged inputs and credential syncs until allowed again.
+   */
+  revokedInputProviders?: AgentPlatform[];
   order: number;
   portMappings?: PortMapping[];
   entryPort?: number;

@@ -12,7 +12,7 @@ import {
 } from "./commands-dependencies.js";
 import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentInputStatus } from "@orkestrator/protocol/container-recovery";
-import { pruneInputRevisions, readInputsManifest } from "./portable-inputs.js";
+import { pruneInputRevisions, readInputsManifest, scrubStagedProvider } from "./portable-inputs.js";
 import { CONTAINER_CURSOR_API_KEY_FILE } from "./commands-runtime-state.js";
 import { CONTAINER_CURSOR_SDK_AUTH_FILE } from "./cursor-sdk-bridge.js";
 import { dockerExec } from "./commands-container-exec.js";
@@ -20,12 +20,14 @@ import { dockerExec } from "./commands-container-exec.js";
 /**
  * Which providers' portable inputs a new container receives: the enabled
  * platforms, narrowed further in agent-test profiles to the providers whose
- * credentials the profile explicitly authorized. Git identity is always
- * staged outside agent-test profiles.
+ * credentials the profile explicitly authorized, and never a provider the
+ * user revoked for this environment. Git identity is always staged outside
+ * agent-test profiles.
  */
 export function selectedInputProviders(
   context: Pick<CommandContext, "runtimeFlavor" | "credentialSources">,
   enabledAgentPlatforms: unknown,
+  revoked: readonly string[] = [],
 ): Set<AgentPlatform | "git"> {
   const enabled = normalizeAgentPlatforms(enabledAgentPlatforms);
   const selected = new Set<AgentPlatform | "git">();
@@ -33,10 +35,29 @@ export function selectedInputProviders(
     if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has(platform)) {
       continue;
     }
+    if (revoked.includes(platform)) continue;
     selected.add(platform);
   }
   if (context.runtimeFlavor !== "agent-test") selected.add("git");
   return selected;
+}
+
+/**
+ * Whether a provider's credential may be handed to this environment's
+ * container (created, staged or synced): enabled, authorized for agent-test
+ * profiles, and not revoked for the environment.
+ */
+export function providerCredentialsAllowed(
+  context: Pick<CommandContext, "runtimeFlavor" | "credentialSources">,
+  enabledAgentPlatforms: unknown,
+  environment: { revokedInputProviders?: readonly string[] } | null | undefined,
+  provider: AgentPlatform,
+): boolean {
+  return selectedInputProviders(
+    context,
+    enabledAgentPlatforms,
+    environment?.revokedInputProviders ?? [],
+  ).has(provider);
 }
 
 async function containerLabel(containerId: string, label: string): Promise<string | null> {
@@ -106,10 +127,12 @@ export async function environmentInputStatus(
     providers: [],
     missingProviders: [],
     disabledProviders: [],
+    revokedProviders: [...(environment.revokedInputProviders ?? [])],
   };
   if (environment.environmentType !== "containerized" || !environment.containerId) return base;
   const config = await context.storage.loadConfig();
-  const selected = selectedInputProviders(context, config.global.enabledAgentPlatforms);
+  const revoked = environment.revokedInputProviders ?? [];
+  const selected = selectedInputProviders(context, config.global.enabledAgentPlatforms, revoked);
   const revision = await containerLabel(environment.containerId, DOCKER_LABEL_INPUTS_REVISION);
   if (!revision) return { ...base, mode: "host-mounts" };
   const manifest = await readInputsManifest(context.storage.getDataDir(), environmentId, revision);
@@ -123,8 +146,9 @@ export async function environmentInputStatus(
     providers: manifest.providers,
     missingProviders: [...selected].filter((provider) => !staged.has(provider)),
     disabledProviders: [...staged].filter(
-      (provider) => provider !== "git" && !selected.has(provider),
+      (provider) => provider !== "git" && !selected.has(provider) && !revoked.includes(provider),
     ),
+    revokedProviders: [...revoked],
   };
 }
 
@@ -143,17 +167,34 @@ export interface RevocationResult {
   /** Imported credential files were removed from the running container. */
   removed: boolean;
   /**
-   * The runtime still exposes the provider's inputs through an immutable
-   * mount (whole-home mounts or a staged revision): a rebuild completes the
-   * revocation. Processes already running may also hold the credential.
+   * The runtime still exposes the provider's inputs through a mount the
+   * backend cannot empty (whole-home mounts of an older runtime, or an
+   * unreadable record): a rebuild completes the revocation.
    */
   pendingRebuild: boolean;
+  /** The provider's bridge process was stopped (it restarts without the credential). */
+  processesStopped: boolean;
 }
 
+/** In-container processes the backend launched for a provider. */
+const PROVIDER_PROCESS_PATTERNS: Record<AgentPlatform, string> = {
+  claude: "[/]opt/claude-bridge/",
+  codex: "[/]opt/codex-bridge/",
+  cursor: "[/]opt/cursor-bridge/",
+  pi: "[/]opt/pi-bridge/",
+  grok: "[/]opt/acp-bridge/",
+  opencode: "[o]pencode serve",
+};
+
 /**
- * Removes one provider's imported credentials from an environment's running
- * container. It never touches the host's own credentials or revokes an
- * account-wide key: rotating that is the user's action with the provider.
+ * Revokes one provider's credentials for an environment, durably: the
+ * environment records the revocation (so no later staging or credential sync
+ * hands them back), the provider's staged inputs are emptied (so a restart
+ * imports nothing), the imported files are removed from the running
+ * container and the provider's bridge is stopped. Terminals the user started
+ * may still hold what they already read. It never touches the host's own
+ * credentials or an account-wide key: rotating that is the user's action with
+ * the provider.
  */
 export async function revokeProviderCredentials(
   environmentId: string,
@@ -163,6 +204,14 @@ export async function revokeProviderCredentials(
   if (!AGENT_PLATFORMS.includes(provider)) throw new Error("Unknown provider");
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment?.containerId) throw new Error(`Environment has no container: ${environmentId}`);
+  // Recorded first: whatever happens below, nothing hands the credential back.
+  await context.storage.updateEnvironment(environmentId, {
+    revokedInputProviders: [...new Set([...(environment.revokedInputProviders ?? []), provider])],
+  });
+  const revision = await containerLabel(environment.containerId, DOCKER_LABEL_INPUTS_REVISION);
+  const scrubbed = revision
+    ? await scrubStagedProvider(context.storage.getDataDir(), environmentId, revision, provider)
+    : false;
   const files = IMPORTED_CREDENTIAL_FILES[provider];
   let removed = false;
   try {
@@ -174,10 +223,43 @@ export async function revokeProviderCredentials(
   } catch {
     removed = false;
   }
-  const status = await environmentInputStatus(environmentId, context);
-  const pendingRebuild =
-    status.mode === "host-mounts" ||
-    status.mode === "unknown" ||
-    status.providers.some((entry) => entry.provider === provider);
-  return { provider, removed, pendingRebuild };
+  let processesStopped = false;
+  try {
+    await runCommand(
+      "docker",
+      [
+        "exec",
+        "--user",
+        "root",
+        environment.containerId,
+        "sh",
+        "-c",
+        `pkill -TERM -f '${PROVIDER_PROCESS_PATTERNS[provider]}' || true`,
+      ],
+      { timeoutMs: 15_000 },
+    );
+    processesStopped = true;
+  } catch {
+    processesStopped = false;
+  }
+  return { provider, removed, pendingRebuild: !scrubbed, processesStopped };
+}
+
+/**
+ * Allows a revoked provider again. Its credential sync resumes at the next
+ * start; its staged configuration returns with the next rebuild.
+ */
+export async function restoreProviderCredentials(
+  environmentId: string,
+  provider: AgentPlatform,
+  context: Pick<CommandContext, "storage">,
+): Promise<{ provider: AgentPlatform; pendingRebuild: boolean }> {
+  const environment = await context.storage.getEnvironment(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  await context.storage.updateEnvironment(environmentId, {
+    revokedInputProviders: (environment.revokedInputProviders ?? []).filter(
+      (entry) => entry !== provider,
+    ),
+  });
+  return { provider, pendingRebuild: true };
 }

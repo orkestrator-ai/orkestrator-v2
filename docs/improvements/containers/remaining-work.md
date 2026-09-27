@@ -15,15 +15,15 @@ credentials this host does not have — named explicitly).
 | 3 | 11 | Container log lines were broadcast to every client and filled the shared replay ring | Done — log content is read by cursor only |
 | 4 | 11 | Records bounded by characters not bytes; huge-line cut could split a surrogate pair | Done — `recordCut` |
 | 5 | 11 | A stopped container's restart reused the ended source; a gap carried no tail | Done — new source per follower; gap returns the bounded tail |
-| 6 | 09 | An explicit empty allowlist widened to the image's broad default list | Open |
-| 7 | 08 | Claude credential sync and `ANTHROPIC_API_KEY` ignore whether Claude is enabled | Open |
-| 8 | 08 | Revocation is not durable: next boot re-imports; no pending state, no process stop | Open |
+| 6 | 09 | An explicit empty allowlist widened to the image's broad default list | Done — an empty environment list means the global one; an empty result is sent as `none` (nothing beyond GitHub) |
+| 7 | 08 | Claude credential sync and `ANTHROPIC_API_KEY` ignore whether Claude is enabled | Done — `providerCredentialsAllowed` gates creation, staging and syncs |
+| 8 | 08 | Revocation is not durable: next boot re-imports; no pending state, no process stop | Done — durable `revokedInputProviders`, staged subtrees emptied, bridge stopped, "Allow again" |
 | 9 | 06 | Rebuild fences only terminals/bridges/exec: prompts, native dispatch, pending approvals not fenced | Open |
 | 10 | 07 | `cleanup_orphaned_containers` / `docker_system_prune` remove without a reviewed preview; ownerless legacy containers can be eligible | Open |
 | 11 | 07 | Deletion revokes tool access last and force-removes without a drain | Open |
 | 12 | 06 | Copy helper does not verify ownership or directory counts; xattrs, hardlinks, devices have no policy | Open |
-| 13 | 08 | Input pruning ignores in-flight staging (can delete an active `.partial`) | Open |
-| 14 | 09 | `NET_ADMIN` added to full-mode containers that never run the firewall | Open |
+| 13 | 08 | Input pruning ignores in-flight staging (can delete an active `.partial`) | Done — 30-minute grace before an unreferenced revision is pruned |
+| 14 | 09 | `NET_ADMIN` added to full-mode containers that never run the firewall | Done — only restricted runtimes get `NET_ADMIN` |
 
 ## Tier 2 — contracts and product behaviour
 
@@ -42,7 +42,7 @@ credentials this host does not have — named explicitly).
 | 25 | 06 | Queued work for the old runtime generation is not cancelled or rebound after commit | Open |
 | 26 | 11 | `get_container_logs` cuts by characters with no truncation marker | Open |
 | 27 | 09 | Effective network report lacks gateway/subnet/DNS identity from Docker | Open |
-| 28 | 09 | AGENTS.md: sudo grant count, root-terminal `NET_ADMIN` in restricted mode, GitHub range source; all-ports allowlist and shared-IP caveat | Open |
+| 28 | 09 | AGENTS.md: sudo grant count, root-terminal `NET_ADMIN` in restricted mode, GitHub range source; all-ports allowlist and shared-IP caveat | Done — AGENTS.md corrected |
 | 29 | 12 | Manifest agent versions come from build args, not the installed binaries; bridges listed by directory presence | Open |
 | 30 | 12 | CI never runs the built image (bridge `/global/health`, CLI versions, dynamic assets) | Open |
 | 31 | 14 | Manifest `stateFormats` never enforced against storage | Open |

@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
+  allowedDomainsArgument,
   allowedDomainsRevision,
   applyEnvironmentAllowedDomains,
   configuredAllowedDomains,
@@ -259,6 +260,16 @@ describe("allowlist edits in place", () => {
         global: { allowedDomains: ["global.example"], enabledAgentPlatforms: [] },
       } as never),
     ).toEqual(["global.example"]);
+    // An empty environment list means the global list, as the dialog saves it.
+    expect(
+      configuredAllowedDomains({ allowedDomains: [] }, {
+        global: { allowedDomains: ["global.example"], enabledAgentPlatforms: [] },
+      } as never),
+    ).toEqual(["global.example"]);
+    // An empty result is sent as none to images that understand it.
+    expect(allowedDomainsArgument([], true)).toBe("none");
+    expect(allowedDomainsArgument([], false)).toBe("");
+    expect(allowedDomainsArgument(["a.example", "b.example"], true)).toBe("a.example,b.example");
     expect(allowedDomainsRevision(["a.example", "b.example"])).toMatch(/^[0-9a-f]{16}$/);
     expect(allowedDomainsRevision(["a.example", "b.example"])).not.toBe(
       allowedDomainsRevision(["b.example", "a.example"]),

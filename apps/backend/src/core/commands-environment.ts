@@ -39,6 +39,7 @@ import {
 } from "./container-lifecycle-service.js";
 import { quiesceRuntime, replaceRuntimePreservingState } from "./container-replacement.js";
 import { applyEnvironmentAllowedDomains } from "./container-network.js";
+import { providerCredentialsAllowed } from "./portable-input-status.js";
 import {
   assertRecoveryCapacity,
   discardRecoveryCopy,
@@ -1553,7 +1554,14 @@ export async function startEnvironmentOnce(
       const githubToken = await resolveContainerGitHubToken(config.global);
       await syncContainerGitHubCredential(containerId, githubToken);
     }
-    if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude")) {
+    if (
+      providerCredentialsAllowed(
+        context,
+        config.global.enabledAgentPlatforms,
+        environment,
+        "claude",
+      )
+    ) {
       await syncContainerClaudeCredentialBestEffort(containerId, config.global);
     }
     const hostEntryPort = environment.entryPort

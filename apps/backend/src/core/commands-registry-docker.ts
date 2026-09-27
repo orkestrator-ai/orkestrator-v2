@@ -12,6 +12,7 @@ import {
 import { executeDockerCleanup, previewDockerCleanup } from "./docker-cleanup-preview.js";
 import { dockerCapacity, sampleContainerUsage } from "./container-resources.js";
 import { containerLogService } from "./container-log-service.js";
+import { providerCredentialsAllowed } from "./portable-input-status.js";
 
 /** Largest `get_container_logs` answer, in characters. */
 const CONTAINER_LOG_TAIL_MAX_CHARS = 512 * 1024;
@@ -232,7 +233,14 @@ export function registerDockerCommands(
     if (context.runtimeFlavor !== "agent-test") {
       await syncContainerGitHubCredential(id, await resolveContainerGitHubToken(config.global));
     }
-    if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude")) {
+    if (
+      providerCredentialsAllowed(
+        context,
+        config.global.enabledAgentPlatforms,
+        assigned ?? null,
+        "claude",
+      )
+    ) {
       await syncContainerClaudeCredentialBestEffort(id, config.global);
     }
   });

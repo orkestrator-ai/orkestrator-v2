@@ -80,7 +80,7 @@ refresh_status() {
     printf '%s\n' "$failures" > "$ORK_FAILURES_FILE"
     local expiry=null
     [ "$ORK_EARLIEST_EXPIRY" -gt 0 ] && expiry="\"$(ork_iso "$ORK_EARLIEST_EXPIRY")\""
-    ork_merge_status "\"state\":\"applied\",\"refreshedAt\":\"$(ork_iso "$now")\",\"nextRefreshAt\":\"$(ork_iso $((now + delay)))\",\"domainsRevision\":\"$(ork_domains_revision "$csv")\",\"resolvedDomains\":$ORK_RESOLVED_DOMAINS,\"unresolvedDomains\":$ORK_UNRESOLVED_DOMAINS,\"carriedDomains\":$ORK_CARRIED_DOMAINS,\"invalidDomains\":$ORK_INVALID_DOMAINS,\"carriedUntil\":$expiry,\"refreshFailures\":$failures,\"revokedEntries\":$ORK_REVOKED_ENTRIES,\"revocation\":\"$ORK_REVOCATION\",\"allowedEntries\":$(ork_members "$ORK_SET" | awk 'NF { n++ } END { print n + 0 }')"
+    ork_merge_status "\"state\":\"applied\",\"refreshedAt\":\"$(ork_iso "$now")\",\"nextRefreshAt\":\"$(ork_iso $((now + delay)))\",\"domainsRevision\":\"$(ork_domains_revision "$(ork_revision_list "$csv")")\",\"resolvedDomains\":$ORK_RESOLVED_DOMAINS,\"unresolvedDomains\":$ORK_UNRESOLVED_DOMAINS,\"carriedDomains\":$ORK_CARRIED_DOMAINS,\"invalidDomains\":$ORK_INVALID_DOMAINS,\"carriedUntil\":$expiry,\"refreshFailures\":$failures,\"revokedEntries\":$ORK_REVOKED_ENTRIES,\"revocation\":\"$ORK_REVOCATION\",\"allowedEntries\":$(ork_members "$ORK_SET" | awk 'NF { n++ } END { print n + 0 }')"
 }
 
 # Replaces the stored list and the live allowlist. The live set is swapped
@@ -99,8 +99,8 @@ set_domains() {
         return 0
     fi
     ipset list "$ORK_SET" >/dev/null 2>&1 || fail "the firewall is not initialized"
-    local effective="$csv"
-    [ -n "$effective" ] || effective=$(default_domains_csv)
+    local effective
+    effective=$(ork_effective_domains "$csv")
     ork_rebuild_allowlist "$effective" || fail "the allowlist could not be rebuilt; the previous one is still active"
     store_domains "$csv"
     refresh_status "$csv" 0
@@ -116,7 +116,7 @@ default_domains_csv() {
 edit_domains() {
     local operation="$1" csv="$2" current entry
     local -a next=()
-    current=$(stored_domains)
+    current=$(ork_revision_list "$(stored_domains)")
     ork_split_domains "$current"
     local -a existing=("${ORK_DOMAIN_LIST[@]}")
     ork_split_domains "$csv"
@@ -131,7 +131,12 @@ edit_domains() {
             printf '%s\n' "${changes[@]}" | grep -Fxq -- "$entry" || next+=("$entry")
         done
     fi
-    set_domains "$(IFS=','; printf '%s' "${next[*]}")"
+    # Removing the last domain leaves nothing beyond GitHub, not the defaults.
+    if [ "${#next[@]}" -eq 0 ]; then
+        set_domains none
+    else
+        set_domains "$(IFS=','; printf '%s' "${next[*]}")"
+    fi
 }
 
 # One refresh: re-resolve the stored list and swap. A failure keeps the live
@@ -142,8 +147,7 @@ refresh_once() {
     ipset list "$ORK_SET" >/dev/null 2>&1 || return 0
     local csv effective failures=0
     csv=$(stored_domains)
-    effective="$csv"
-    [ -n "$effective" ] || effective=$(default_domains_csv)
+    effective=$(ork_effective_domains "$csv")
     IFS= read -r failures < "$ORK_FAILURES_FILE" 2>/dev/null || failures=0
     [[ "$failures" =~ ^[0-9]+$ ]] || failures=0
     if ork_rebuild_allowlist "$effective"; then

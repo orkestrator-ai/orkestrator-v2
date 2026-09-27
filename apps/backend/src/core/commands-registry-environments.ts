@@ -13,7 +13,11 @@ import {
   parseResourceLimits,
   type ContainerResourceLimits,
 } from "@orkestrator/protocol/container-resources";
-import { environmentInputStatus, revokeProviderCredentials } from "./portable-input-status.js";
+import {
+  environmentInputStatus,
+  restoreProviderCredentials,
+  revokeProviderCredentials,
+} from "./portable-input-status.js";
 import {
   isEmptyAgentSettings,
   normalizeAgentSettings,
@@ -584,6 +588,16 @@ export function registerEnvironmentCommands(
     const provider = args.provider;
     if (!isAgentPlatform(provider)) throw new Error("Expected provider to be an agent platform");
     return revokeProviderCredentials(
+      asString(args.environmentId, "environmentId"),
+      provider,
+      context,
+    );
+  });
+  register("restore_provider_credentials", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "provider"], "arguments");
+    const provider = args.provider;
+    if (!isAgentPlatform(provider)) throw new Error("Expected provider to be an agent platform");
+    return restoreProviderCredentials(
       asString(args.environmentId, "environmentId"),
       provider,
       context,

@@ -42,23 +42,49 @@ export function EnvironmentInputsSection({
   }, [load]);
 
   if (!status || status.mode === "none") return null;
+  const revoked = status.revokedProviders ?? [];
+
+  const allowAgain = async (provider: string) => {
+    setRevoking(provider);
+    try {
+      await backend.restoreProviderCredentials(environmentId, provider);
+      toast.success(`${providerLabel(provider)} allowed again`, {
+        description: "Its credentials return when the container is next started or rebuilt.",
+      });
+    } catch {
+      toast.error(`Could not allow ${providerLabel(provider)} again`);
+    } finally {
+      setRevoking(null);
+      void load();
+    }
+  };
 
   const revoke = async (provider: string) => {
     setRevoking(provider);
     try {
       const result = await backend.revokeProviderCredentials(environmentId, provider);
       if (!result.removed) {
-        toast.error(`Could not remove ${providerLabel(provider)} credentials`, {
-          description: "The container could not be reached. Nothing was reported as removed.",
-        });
+        toast.error(
+          `${providerLabel(provider)} is revoked, but the container could not be reached`,
+          {
+            description:
+              "It will not be given these credentials again. Files already in the container are removed when it is next reachable or rebuilt.",
+          },
+        );
       } else if (result.pendingRebuild) {
         toast.warning(`${providerLabel(provider)} credentials removed from the container`, {
           description:
-            "The container still has them available read-only until it is rebuilt, and running agents may hold them until they restart.",
+            "This older container still has them available read-only until it is rebuilt, and terminals you started may hold them until they exit.",
         });
       } else {
-        toast.success(`${providerLabel(provider)} credentials removed from the container`);
+        toast.success(`${providerLabel(provider)} credentials removed from the container`, {
+          description: result.processesStopped
+            ? "Its agent process was stopped and restarts without them. Terminals you started may hold them until they exit."
+            : "Terminals and agents already running may hold them until they exit.",
+        });
       }
+    } catch {
+      toast.error(`Could not revoke ${providerLabel(provider)} credentials`);
     } finally {
       setRevoking(null);
       void load();
@@ -79,33 +105,56 @@ export function EnvironmentInputsSection({
         </p>
       ) : (
         <ul className="flex flex-col gap-1">
-          {status.providers.map((entry) => {
-            const skipped = Object.values(entry.skipped).reduce(
-              (sum, count) => sum + (count ?? 0),
-              0,
-            );
-            return (
-              <li key={entry.provider} className="flex items-center justify-between gap-2">
-                <span>
-                  {providerLabel(entry.provider)} · {entry.files} files · {formatBytes(entry.bytes)}
-                  {skipped > 0 ? ` · ${skipped} skipped (links, oversized or unreadable)` : ""}
-                </span>
-                {entry.provider !== "git" ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={!dockerAvailable || revoking !== null}
-                    onClick={() => void revoke(entry.provider)}
-                  >
-                    Remove credentials
-                  </Button>
-                ) : null}
-              </li>
-            );
-          })}
+          {status.providers
+            .filter((entry) => !revoked.includes(entry.provider))
+            .map((entry) => {
+              const skipped = Object.values(entry.skipped).reduce(
+                (sum, count) => sum + (count ?? 0),
+                0,
+              );
+              return (
+                <li key={entry.provider} className="flex items-center justify-between gap-2">
+                  <span>
+                    {providerLabel(entry.provider)} · {entry.files} files ·{" "}
+                    {formatBytes(entry.bytes)}
+                    {skipped > 0 ? ` · ${skipped} skipped (links, oversized or unreadable)` : ""}
+                  </span>
+                  {entry.provider !== "git" ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={!dockerAvailable || revoking !== null}
+                      onClick={() => void revoke(entry.provider)}
+                    >
+                      Remove credentials
+                    </Button>
+                  ) : null}
+                </li>
+              );
+            })}
         </ul>
       )}
+      {revoked.length > 0 ? (
+        <ul className="flex flex-col gap-1">
+          {revoked.map((provider) => (
+            <li key={provider} className="flex items-center justify-between gap-2">
+              <span className="text-muted-foreground">
+                {providerLabel(provider)} · revoked for this environment
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={revoking !== null}
+                onClick={() => void allowAgain(provider)}
+              >
+                Allow again
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {status.missingProviders.length > 0 ? (
         <p className="text-yellow-700 dark:text-yellow-400">
           Enabled since this container was created:{" "}

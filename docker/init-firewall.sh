@@ -202,9 +202,12 @@ fi
 ork_remember_github_ranges "$GITHUB_FILE"
 echo "GitHub ranges from: $GITHUB_SOURCE"
 
-# The stored ALLOWED_DOMAINS list (comma-separated), or the image defaults when
-# none was configured.
-if [ -n "${ALLOWED_DOMAINS:-}" ]; then
+# The stored ALLOWED_DOMAINS list (comma-separated); `none` for an empty list
+# (only GitHub); or the image defaults when nothing was configured at all.
+if [ "${ALLOWED_DOMAINS:-}" = "none" ]; then
+    echo "No allowed domains beyond GitHub"
+    DOMAINS_CSV=""
+elif [ -n "${ALLOWED_DOMAINS:-}" ]; then
     echo "Using custom allowed domains from ALLOWED_DOMAINS environment variable"
     DOMAINS_CSV="$ALLOWED_DOMAINS"
 else
@@ -366,7 +369,7 @@ NOW=$(ork_now)
 NEXT_DELAY=$(ork_next_delay 0)
 printf '%s\n' "$NEXT_DELAY" > "$ORK_DELAY_FILE"
 printf '0\n' > "$ORK_FAILURES_FILE"
-write_status "{\"policy\":$NETWORK_POLICY,\"mode\":\"restricted\",\"state\":\"applied\",\"appliedAt\":\"$(ork_iso "$NOW")\",\"refreshedAt\":\"$(ork_iso "$NOW")\",\"nextRefreshAt\":\"$(ork_iso $((NOW + NEXT_DELAY)))\",\"domainsRevision\":\"$(ork_domains_revision "${ALLOWED_DOMAINS:-}")\",\"resolvedDomains\":$RESOLVED_DOMAINS,\"unresolvedDomains\":$UNRESOLVED_DOMAINS,\"carriedDomains\":$ORK_CARRIED_DOMAINS,\"invalidDomains\":$ORK_INVALID_DOMAINS,\"refreshFailures\":0,\"allowedEntries\":$(ork_members allowed-domains | awk 'NF { count++ } END { print count + 0 }'),\"hostServicePorts\":\"$HOST_SERVICE_PORTS\",\"ipv6\":\"$IPV6_STATE\",\"githubRanges\":\"$GITHUB_SOURCE\"}"
+write_status "{\"policy\":$NETWORK_POLICY,\"mode\":\"restricted\",\"state\":\"applied\",\"appliedAt\":\"$(ork_iso "$NOW")\",\"refreshedAt\":\"$(ork_iso "$NOW")\",\"nextRefreshAt\":\"$(ork_iso $((NOW + NEXT_DELAY)))\",\"domainsRevision\":\"$(ork_domains_revision "$(ork_revision_list "${ALLOWED_DOMAINS:-}")")\",\"resolvedDomains\":$RESOLVED_DOMAINS,\"unresolvedDomains\":$UNRESOLVED_DOMAINS,\"carriedDomains\":$ORK_CARRIED_DOMAINS,\"invalidDomains\":$ORK_INVALID_DOMAINS,\"refreshFailures\":0,\"allowedEntries\":$(ork_members allowed-domains | awk 'NF { count++ } END { print count + 0 }'),\"hostServicePorts\":\"$HOST_SERVICE_PORTS\",\"ipv6\":\"$IPV6_STATE\",\"githubRanges\":\"$GITHUB_SOURCE\"}"
 trap - ERR
 
 # Keep resolved addresses current. The refresher runs as root, so the

@@ -653,6 +653,12 @@ export abstract class StorageProjects extends StorageBase {
         else if (typeof updates.hasMergeConflicts === "boolean")
           environment.hasMergeConflicts = updates.hasMergeConflicts;
       }
+      if ("revokedInputProviders" in updates) {
+        const revoked = Array.isArray(updates.revokedInputProviders)
+          ? [...new Set(updates.revokedInputProviders.filter(isAgentPlatform))]
+          : [];
+        environment.revokedInputProviders = revoked.length > 0 ? revoked : undefined;
+      }
       if ("allowedDomains" in updates)
         environment.allowedDomains = Array.isArray(updates.allowedDomains)
           ? updates.allowedDomains.filter((value): value is string => typeof value === "string")

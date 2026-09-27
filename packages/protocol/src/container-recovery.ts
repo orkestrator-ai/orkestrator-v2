@@ -133,6 +133,8 @@ export interface EnvironmentInputStatus {
   missingProviders: string[];
   /** Staged into this runtime but no longer enabled: revoke or rebuild. */
   disabledProviders: string[];
+  /** Revoked for this environment: never staged or synced until allowed again. */
+  revokedProviders: string[];
 }
 
 export interface CredentialRevocationResult {
@@ -140,6 +142,8 @@ export interface CredentialRevocationResult {
   removed: boolean;
   /** An immutable mount still exposes the provider's inputs; rebuild to finish. */
   pendingRebuild: boolean;
+  /** The provider's bridge was stopped; it restarts without the credential. */
+  processesStopped: boolean;
 }
 
 // ---------------------------------------------------------------------------

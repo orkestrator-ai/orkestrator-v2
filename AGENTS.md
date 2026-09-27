@@ -1033,10 +1033,12 @@ Users and isolation:
   terminals with `docker exec --user orkroot`; `node` has no sudoers path to
   become `orkroot`.
 - Network firewall (iptables/ipset) for security isolation. `node` has
-  passwordless sudo for exactly two things: `/usr/local/bin/init-firewall.sh`
-  and `/usr/local/bin/run-root-setup.sh` (the latter only when PID 1's
-  `NETWORK_MODE` is `full`). The container boundary, not a reusable root
-  shell, is what isolates an agent. Runtime allowlist edits use
+  passwordless sudo for exactly three things: the image entrypoint
+  (`/usr/local/bin/network-policy-entrypoint.sh`, which records the network
+  policy once, root-owned, before dropping to `node`),
+  `/usr/local/bin/init-firewall.sh`, and `/usr/local/bin/run-root-setup.sh`
+  (the latter only when the recorded mode is `full`). The container boundary,
+  not a reusable root shell, is what isolates an agent. Runtime allowlist edits use
   `docker exec --user root /usr/local/bin/update-firewall.sh`.
 
 ### Playwright
@@ -1103,7 +1105,10 @@ The living reference is
 Containers in `restricted` mode (the default) reach only an allowlist; anything
 else is rejected outright. `full` mode skips the firewall entirely.
 
-- GitHub's own ranges are always resolved from `api.github.com/meta` at startup.
+- GitHub's own published ranges are always allowed: from the backend's hourly
+  seed (`github-ranges-cache.ts`) when it is under a day old, else a live
+  fetch of `api.github.com/meta`, else a cached copy under a week old; with
+  none the firewall fails closed.
 - Everything else comes from the environment's `ALLOWED_DOMAINS`, which the
   backend builds from the per-environment or global `allowedDomains` plus the
   hosts the enabled agent platforms require (`requiredAgentNetworkDomains`
@@ -1124,6 +1129,11 @@ else is rejected outright. `full` mode skips the firewall entirely.
   and localhost are always allowed. There is no general outbound SSH
   exception: SSH reaches only hosts whose addresses are allowlisted (GitHub's
   published ranges, allowed domains).
+- An allowed address is allowed on every port and protocol, and the list is
+  of addresses, not names: a domain on a shared CDN address also opens every
+  other site served from that address. An empty allowlist means nothing
+  beyond GitHub (`ALLOWED_DOMAINS=none`); an environment whose own list is
+  empty uses the global list.
 - Host access depends on the container's network policy. A container created
   from an image with `network-policy=2` runs on its own labelled Docker
   network with IPv6 disabled; it may reach the host only on the backend's
@@ -1139,7 +1149,10 @@ else is rejected outright. `full` mode skips the firewall entirely.
   removed addresses and storing the list for the next boot. Keep that state in
   root-only `/run/orkestrator-firewall/`; node owns `/run/orkestrator`.
 - The firewall limits destinations. It does not stop data leaving through an
-  allowed service, and a workload with root in full mode can change it.
+  allowed service. A root terminal (`orkroot`) has `NET_ADMIN` in restricted
+  mode too and can change the firewall; restricted mode constrains agents and
+  `node` terminals, not a user who opens a root shell. Full-mode containers
+  are not given `NET_ADMIN`.
 
 ## Configuration Storage
 

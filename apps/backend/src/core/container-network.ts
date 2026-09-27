@@ -191,11 +191,36 @@ export function configuredAllowedDomains(
 ): string[] {
   return [
     ...new Set([
-      ...(environment.allowedDomains ?? config.global.allowedDomains ?? []),
+      ...savedAllowedDomains(environment, config),
       ...requiredAgentNetworkDomains(config.global.enabledAgentPlatforms),
     ]),
   ];
 }
+
+/**
+ * The user's saved list: the environment's own when it names any domain,
+ * otherwise the global one. The settings dialog saves an empty list to mean
+ * "use the global defaults".
+ */
+export function savedAllowedDomains(
+  environment: Pick<Environment, "allowedDomains">,
+  config: Pick<AppConfig, "global">,
+): string[] {
+  return environment.allowedDomains?.length
+    ? environment.allowedDomains
+    : (config.global.allowedDomains ?? []);
+}
+
+/**
+ * The `ALLOWED_DOMAINS` value for a list. An empty list is sent as `none`
+ * to images that understand it: an empty value means "the image's default
+ * list", which is broader than anything the user configured.
+ */
+export function allowedDomainsArgument(domains: readonly string[], explicitNone: boolean): string {
+  return domains.length === 0 && explicitNone ? ALLOWED_DOMAINS_NONE : domains.join(",");
+}
+
+export const ALLOWED_DOMAINS_NONE = "none";
 
 /** Same digest as `ork_domains_revision` in docker/firewall-domains.sh. */
 export function allowedDomainsRevision(domains: readonly string[]): string {
@@ -305,7 +330,7 @@ export async function environmentNetworkPolicy(
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   const config = await context.storage.loadConfig();
-  const domains = environment.allowedDomains ?? config.global.allowedDomains ?? [];
+  const domains = savedAllowedDomains(environment, config);
   const result: EnvironmentNetworkPolicy = {
     environmentId,
     configured: {
@@ -399,7 +424,7 @@ async function applyAllowedDomainsNow(
         environment.containerId,
         "/usr/local/bin/update-firewall.sh",
         "--set-domains",
-        domains.join(","),
+        allowedDomainsArgument(domains, true),
       ],
       { timeoutMs: 180_000 },
     );

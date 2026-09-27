@@ -228,6 +228,26 @@ describe("firewall allowlist refresh and edits", () => {
     });
   });
 
+  test("none is an empty list, never the image defaults", () => {
+    withFixture((fixture) => {
+      fixtureScript(fixture.dir, "init-firewall.sh");
+      const answers = "registry.npmjs.org 192.0.2.40 600\n";
+      expect(fixture.run(["--set-domains", "none"], answers).exitCode).toBe(0);
+      const members = fixture.members();
+      expect(members.has("192.0.2.40")).toBe(false);
+      expect(members.has("192.0.2.10")).toBe(false);
+      expect(members.get("203.0.113.0/24")).toBe(0);
+      expect(fixture.status().domainsRevision).toBe(allowedDomainsRevision([]));
+      // Removing the last domain also means none.
+      expect(
+        fixture.run(["--set-domains", "a.example"], "a.example 192.0.2.10 600\n").exitCode,
+      ).toBe(0);
+      expect(fixture.run(["--remove", "a.example"], answers).exitCode).toBe(0);
+      expect(readFileSync(join(fixture.dir, "policy", "allowed-domains"), "utf8")).toBe("none\n");
+      expect(fixture.members().has("192.0.2.40")).toBe(false);
+    });
+  });
+
   test("the refresher and every root mutation stay out of node's runtime directory", () => {
     const library = read("docker/firewall-domains.sh");
     expect(library).toContain("ORK_STATUS_DIR=/run/orkestrator-firewall");

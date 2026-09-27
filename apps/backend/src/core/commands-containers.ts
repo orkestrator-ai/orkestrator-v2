@@ -86,6 +86,7 @@ import { ContainerLifecycleError, findOperationContainers } from "./container-li
 import { detectDockerTopology, imageCapabilities } from "./docker-image.js";
 import { storageMountArguments } from "./container-storage.js";
 import {
+  allowedDomainsArgument,
   configuredAllowedDomains,
   ensureEnvironmentNetwork,
   ingressPorts,
@@ -232,8 +233,9 @@ export async function createDockerContainer(
     (await imageCapabilities(identity.imageId, context))?.["graceful-shutdown"]
       ? ["--init"]
       : []),
-    "--cap-add",
-    "NET_ADMIN",
+    // The firewall needs NET_ADMIN; full access never runs it, so a full-mode
+    // container is not handed the capability.
+    ...(environment.networkAccessMode === "full" ? [] : ["--cap-add", "NET_ADMIN"]),
     // The image ships Chromium for Playwright, and Chromium puts its renderer
     // shared memory in /dev/shm. Docker's 64MB default is far below what a real
     // page needs, and the failure mode is a renderer crash mid-run ("Target
@@ -285,8 +287,14 @@ export async function createDockerContainer(
   );
   const dockerEnvironment: NodeJS.ProcessEnv = { ...process.env };
   const redactValues: string[] = [];
-  const allowClaudeCredentials =
-    context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude");
+  // Credentials go only to providers that are enabled, authorized for
+  // agent-test profiles and not revoked for this environment.
+  const inputProviders = selectedInputProviders(
+    context,
+    config.global.enabledAgentPlatforms,
+    environment.revokedInputProviders ?? [],
+  );
+  const allowClaudeCredentials = inputProviders.has("claude");
   const anthropicApiKey = allowClaudeCredentials
     ? resolveAnthropicApiKey(config.global).apiKey
     : undefined;
@@ -299,10 +307,9 @@ export async function createDockerContainer(
   // fallback inside `resolveCursorApiKey` is deliberate for headless runs, and
   // the same helper reports its `source` to Settings so an inherited key is
   // never forwarded invisibly.
-  const { apiKey: cursorApiKey } =
-    context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("cursor")
-      ? { apiKey: undefined }
-      : resolveCursorApiKey(config.global);
+  const { apiKey: cursorApiKey } = !inputProviders.has("cursor")
+    ? { apiKey: undefined }
+    : resolveCursorApiKey(config.global);
   if (cursorApiKey && !stagedInputCapable) {
     dockerEnvironment.CURSOR_API_KEY = cursorApiKey;
     redactValues.push(cursorApiKey);
@@ -317,7 +324,15 @@ export async function createDockerContainer(
     // environment that runs neither Cursor nor Grok keeps exactly the allowlist
     // the user configured; widening it would quietly undo their isolation.
     const domains = configuredAllowedDomains(environment, config);
-    args.push("-e", "NETWORK_MODE=restricted", "-e", `ALLOWED_DOMAINS=${domains.join(",")}`);
+    const explicitNone = Boolean(
+      identity.imageId && (await imageCapabilities(identity.imageId, context))?.["network-refresh"],
+    );
+    args.push(
+      "-e",
+      "NETWORK_MODE=restricted",
+      "-e",
+      `ALLOWED_DOMAINS=${allowedDomainsArgument(domains, explicitNone)}`,
+    );
   }
 
   const bindIfExists = async (source: string, target: string, readonly = true) => {
@@ -334,7 +349,7 @@ export async function createDockerContainer(
       ? await stagePortableInputs(
           context.storage.getDataDir(),
           environment.id,
-          selectedInputProviders(context, config.global.enabledAgentPlatforms),
+          inputProviders,
           defaultInputSourceRoots(context.runtimeFlavor, AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV),
         )
       : null;

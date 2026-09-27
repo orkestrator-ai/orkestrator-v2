@@ -61,6 +61,22 @@ ork_domains_revision() {
     printf '%s' "$1" | sha256sum | cut -c1-16
 }
 
+# The list a stored value stands for when computing its revision: `none` is
+# the empty list.
+ork_revision_list() {
+    if [ "$1" = "none" ]; then printf ''; else printf '%s' "$1"; fi
+}
+
+# The domains a stored value applies: `none` is nothing beyond GitHub, empty
+# is the image defaults.
+ork_effective_domains() {
+    case "$1" in
+        none) printf '' ;;
+        '') default_domains_csv ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
 ork_create_set() {
     ipset create "$1" hash:net timeout 0 maxelem "$ORK_MAX_ENTRIES"
 }

@@ -738,20 +738,28 @@ describe("GET /session/:id/transcript serialization cost", () => {
 });
 
 describe("Claude transcript routes", () => {
-  test("every conditional transcript update in the routes passes a revision", () => {
-    // The shared helper falls back to hashing the whole history when no
+  test("every conditional transcript read in the routes passes a revision", () => {
+    // The shared helpers fall back to hashing the whole history when no
     // revision is given. That branch exists for legacy callers only; a Claude
     // route reaching it would silently reintroduce the linear unchanged read.
+    // So every route builds its body from the one revisioned read source.
     const routesDirectory = join(import.meta.dir, "..", "routes");
-    const calls: string[] = [];
+    const direct: string[] = [];
+    const bodies: string[] = [];
     for (const file of readdirSync(routesDirectory)) {
       if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
       const source = readFileSync(join(routesDirectory, file), "utf8");
-      for (const match of source.matchAll(/bridgeTranscriptUpdate\(([\s\S]*?)\n\s*\}\),?\n/g)) {
-        calls.push(`${file}: ${match[1]}`);
+      if (/\bbridgeTranscript(?:Summary)?Update\(/.test(source)) direct.push(file);
+      for (const match of source.matchAll(
+        /bridgeTranscript(?:Detail|Page)?RouteBody\(\s*([^,]+),/g,
+      )) {
+        bodies.push(`${file}: ${match[1]}`);
       }
     }
-    expect(calls.length).toBeGreaterThan(0);
-    for (const call of calls) expect(call).toMatch(/\brevision:/);
+    expect(direct).toEqual([]);
+    expect(bodies.length).toBe(3);
+    for (const body of bodies) expect(body).toMatch(/read\.source|claudeTranscriptSource\(/);
+    const sourceModule = readFileSync(join(routesDirectory, "session-transcript.ts"), "utf8");
+    expect(sourceModule).toMatch(/\brevision: version\.revision,/);
   });
 });

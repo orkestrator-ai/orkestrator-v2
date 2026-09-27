@@ -885,6 +885,12 @@ When touching any of them:
 - **The last owner closes.** Two tabs can map to one provider session. Backend
   teardown is serialized per (environment, agent, provider session) and only
   the tab that finds no other mapping performs the provider close.
+- **Transcript v2 reads share one source and answer in band.** Every HTTP
+  bridge serves `GET /session/:id/transcript?version=2` (summaries with detail
+  locators, `@orkestrator/protocol/bridge-transcript-summary`) plus
+  `/transcript/detail` and `/transcript/page`, all built from one per-bridge
+  read source via `bridge-transcript-routes`. Detail/page answer an unknown
+  session 200 `missing`/`expired`, never 404; absent `version` stays v1.
 
 ### Native slash commands
 

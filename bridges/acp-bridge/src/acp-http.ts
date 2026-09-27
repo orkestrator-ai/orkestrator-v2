@@ -63,7 +63,12 @@ import {
   type SessionState,
 } from "./acp-context.js";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
-import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
+import {
+  bridgeTranscriptRouteBody,
+  bridgeTranscriptSubReadBody,
+  isBridgeTranscriptSubRead,
+} from "@orkestrator/protocol/bridge-transcript-routes";
+import { acpTranscriptSource } from "./acp-transcript-source.js";
 import { boundTranscript } from "./acp-transcript.js";
 import {
   boundTranscriptForRead,
@@ -215,10 +220,14 @@ export async function route(
     return json(response, answer.status, answer.body);
   }
   const match =
-    /^\/session\/([^/]+)(?:\/(close|messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
+    /^\/session\/([^/]+)(?:\/(close|messages|transcript(?:\/(?:detail|page))?|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
       url.pathname,
     );
   if (!match) return json(response, 404, { error: "Not found" });
+  // `detail` or `page` for `/transcript/detail` and `/transcript/page`.
+  const transcriptSubRead = match[2]?.startsWith("transcript/")
+    ? match[2].slice("transcript/".length)
+    : undefined;
   const state = sessions.get(match[1]!);
   if (!state) {
     if (match[2] === "activity") return json(response, 200, sessionActivityObservation(match[1]!));
@@ -237,6 +246,17 @@ export async function route(
     // only ever mean "this bridge predates it".
     if (match[2] === "close" && request.method === "POST") {
       return json(response, 200, { closed: true, missing: true });
+    }
+    // Transcript detail and page reads, likewise: `missing` / `expired` in
+    // band. The summary route itself keeps its 404.
+    if (isBridgeTranscriptSubRead(transcriptSubRead) && request.method === "GET") {
+      return json(
+        response,
+        200,
+        bridgeTranscriptSubReadBody(undefined, transcriptSubRead, (name) =>
+          url.searchParams.get(name),
+        ),
+      );
     }
     return json(response, 404, { error: "Session not found" });
   }
@@ -268,21 +288,17 @@ export async function route(
       messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))),
     );
   }
-  if (action === "transcript" && request.method === "GET") {
+  if ((action === "transcript" || transcriptSubRead) && request.method === "GET") {
     boundTranscriptForRead(state);
+    // Summary, detail and page read one source (see `acp-transcript-source.ts`).
+    const source = acpTranscriptSource(state, `${provider}:${TRANSCRIPT_GENERATION}`);
+    const query = (name: string) => url.searchParams.get(name);
     return json(
       response,
       200,
-      bridgeTranscriptUpdate(state.messages, {
-        sessionIdentity: state.id,
-        generation: `${provider}:${TRANSCRIPT_GENERATION}`,
-        contentEpoch: state.droppedMessages,
-        revision: state.revision,
-        limit: Number(url.searchParams.get("limit")),
-        targetBytes: Number(url.searchParams.get("targetBytes")),
-        knownToken: url.searchParams.get("knownToken") ?? undefined,
-        complete: !state.transcriptTruncated && state.droppedMessages === 0,
-      }),
+      isBridgeTranscriptSubRead(transcriptSubRead)
+        ? bridgeTranscriptSubReadBody(source, transcriptSubRead, query)
+        : bridgeTranscriptRouteBody(source, query),
     );
   }
   if (action === "status" && request.method === "GET") {

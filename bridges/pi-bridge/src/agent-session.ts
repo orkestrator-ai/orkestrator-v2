@@ -1290,6 +1290,8 @@ function resolveUserEntryId(
 
 function resetRenderedHistory(state: SessionState): void {
   state.messages = [];
+  // A different history now starts at index 0 again; old positions must expire.
+  state.transcriptEpoch = (state.transcriptEpoch ?? 0) + 1;
   state.droppedMessages = 0;
   state.droppedParts = 0;
   state.transcriptTruncated = false;

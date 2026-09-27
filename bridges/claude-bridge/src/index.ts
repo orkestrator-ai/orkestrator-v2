@@ -8,6 +8,7 @@ import health from "./routes/health.js";
 import config from "./routes/config.js";
 import session from "./routes/session.js";
 import { sessionActivityBatch } from "./routes/session-activity.js";
+import { compressTranscriptReads } from "./routes/session-transcript.js";
 import events from "./routes/events.js";
 import mcp from "./routes/mcp.js";
 import plugins from "./routes/plugins.js";
@@ -156,6 +157,7 @@ app.use("/session/:id/transcript", async (c, next) => {
   c.res.headers.append("Vary", "Accept-Encoding");
 });
 app.use("/session/:id/transcript", compress({ encoding: "gzip" }));
+compressTranscriptReads(app);
 
 /**
  * Lightweight authenticated probe used to reject a cached client after token

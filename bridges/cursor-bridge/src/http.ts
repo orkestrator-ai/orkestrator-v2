@@ -71,7 +71,12 @@ import {
   publicSessionReference,
 } from "./public.js";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
-import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
+import {
+  bridgeTranscriptRouteBody,
+  bridgeTranscriptSubReadBody,
+  isBridgeTranscriptSubRead,
+} from "@orkestrator/protocol/bridge-transcript-routes";
+import { cursorTranscriptSource } from "./transcript-source.js";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import {
@@ -395,6 +400,15 @@ async function routeSession(
     if (isCloseRequest(action, request) && !subject) {
       return json(response, 200, { closed: true, missing: true });
     }
+    // Transcript detail and page reads, likewise: `missing` / `expired` in
+    // band. The summary route itself keeps its 404.
+    if (action === "transcript" && isBridgeTranscriptSubRead(subject) && request.method === "GET") {
+      return json(
+        response,
+        200,
+        bridgeTranscriptSubReadBody(undefined, subject, (name) => url.searchParams.get(name)),
+      );
+    }
     return json(response, 404, { error: "Session not found" });
   }
 
@@ -427,23 +441,16 @@ async function routeSession(
   }
   if (action === "transcript" && request.method === "GET") {
     boundTranscriptForRead(state);
+    // Summary, detail and page read one source (see `transcript-source.ts`).
+    // Any other sub-path keeps answering the summary, as it always has.
+    const source = cursorTranscriptSource(state, TRANSCRIPT_GENERATION);
+    const query = (name: string) => url.searchParams.get(name);
     return json(
       response,
       200,
-      bridgeTranscriptUpdate(state.messages, {
-        sessionIdentity: state.id,
-        generation: TRANSCRIPT_GENERATION,
-        // Front trimming and wholesale replacement both move absolute
-        // positions, so either one starts a new epoch.
-        contentEpoch: state.transcriptEpoch
-          ? `${state.transcriptEpoch}:${state.droppedMessages}`
-          : state.droppedMessages,
-        revision: state.revision,
-        limit: Number(url.searchParams.get("limit")),
-        targetBytes: Number(url.searchParams.get("targetBytes")),
-        knownToken: url.searchParams.get("knownToken") ?? undefined,
-        complete: !state.transcriptTruncated && state.droppedMessages === 0,
-      }),
+      isBridgeTranscriptSubRead(subject)
+        ? bridgeTranscriptSubReadBody(source, subject, query)
+        : bridgeTranscriptRouteBody(source, query),
     );
   }
   if (action === "status" && request.method === "GET") {

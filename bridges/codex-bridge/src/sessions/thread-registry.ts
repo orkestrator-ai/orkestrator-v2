@@ -380,6 +380,10 @@ export class ThreadRegistry {
     if (excess > 0) {
       session.localMessages.splice(0, excess);
       session.localMessagesTrimmed = true;
+      // Dropping the oldest rows moves every absolute transcript position, so
+      // a history cursor or `startIndex` from before the trim names another
+      // message now. A new epoch makes such a position expire instead.
+      this.bumpContentEpoch(session);
     }
     appendAsyncQuestionItemIds(session.asyncQuestionItemIds, messages);
     session.messageRevision += 1;

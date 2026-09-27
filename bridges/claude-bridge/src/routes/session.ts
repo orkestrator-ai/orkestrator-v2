@@ -62,11 +62,10 @@ import {
   type TranscriptWindowMetadata,
 } from "@orkestrator/protocol/transcript-window";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
-import { readTranscriptVersion } from "../services/transcript-revision.js";
 import { effectiveExecutionPolicy } from "../services/read-only-policy.js";
 import { registerSessionCloseRoute } from "./session-close.js";
 import { readSessionActivityObservation } from "./session-activity.js";
+import { registerSessionTranscriptRoutes } from "./session-transcript.js";
 
 const session = new Hono();
 const TRANSCRIPT_GENERATION = randomUUID();
@@ -573,53 +572,8 @@ session.get("/:id/messages", async (c) => {
   return c.json(boundClaudeTranscriptResponse(messages));
 });
 
-// Transcript-first display route. Persisted hydration continues in the
-// background; callers keep the preview visible and poll its conditional token.
-//
-// The token is built from the session's transcript revision and epoch rather
-// than a hash of the history, so an unchanged poll touches no message. That is
-// only sound because every mutation of `messages` marks the revision
-// (`services/transcript-revision.ts`). Messages, loaded state and version are
-// read together, and the response is serialized before hydration is started,
-// so the token always describes exactly the content it was sent with.
-session.get("/:id/transcript", (c) => {
-  const id = c.req.param("id");
-  const sessionData = peekSession(id);
-  if (!sessionData) return c.json({ error: "Session not found" }, 404);
-  const needsHydration = sessionData.persistedMessagesLoaded === false;
-  // A prompt claims the transcript (`persistedMessagesLoaded = true`) before
-  // its own pre-turn read has installed the history; while that read is in
-  // flight `messages` is still the preview and must not read as a complete,
-  // current (and possibly empty) conversation.
-  const loaded = !needsHydration && sessionData.persistedHydration === undefined;
-  const messages = getSessionMessages(id);
-  const version = readTranscriptVersion(sessionData);
-  const response = c.json(
-    bridgeTranscriptUpdate(messages, {
-      sessionIdentity: id,
-      generation: TRANSCRIPT_GENERATION,
-      // The prefix keeps the long-standing preview/hydrated distinction
-      // visible to readers; the epoch separates successive histories of each.
-      contentEpoch: `${loaded ? "hydrated" : "preview"}:${version.epoch}`,
-      revision: version.revision,
-      limit: Number(c.req.query("limit")),
-      targetBytes: Number(c.req.query("targetBytes")),
-      knownToken: c.req.query("knownToken"),
-      complete: loaded,
-      freshness: loaded ? "current" : "cached",
-      title: sessionData.title,
-    }),
-  );
-  if (needsHydration) {
-    void hydratePersistedSessionMessages(id).catch((error) => {
-      console.warn(
-        "[session] Background transcript hydration failed:",
-        error instanceof Error ? error.message : "unknown error",
-      );
-    });
-  }
-  return response;
-});
+// `GET /:id/transcript` and its detail and page reads (`session-transcript.ts`).
+registerSessionTranscriptRoutes(session, TRANSCRIPT_GENERATION);
 
 // Send a prompt to a session
 session.post("/:id/prompt", async (c) => {

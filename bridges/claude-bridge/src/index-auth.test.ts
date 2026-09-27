@@ -110,6 +110,8 @@ describe("bridge authentication and origin policy", () => {
         ).status,
       ).toBe(200);
       expect((await app.request("/session/list")).status).toBe(401);
+      expect((await app.request("/session/s-1/transcript/detail?locator=x")).status).toBe(401);
+      expect((await app.request("/session/s-1/transcript/page?cursor=x")).status).toBe(401);
       expect((await app.request("/")).status).toBe(401);
 
       const health = await app.request("/global/health");

@@ -1,7 +1,6 @@
 # 09 — Implement lightweight transcript and detail reads for every provider
 
-Status: Complete (isolated real-stack QA unrun).
-Prerequisites: 02, 05, 08. Finding: E06.
+Status: Complete — all five HTTP bridges serve v2; OpenCode is in-process (projection defers artifacts before windowing). Validated on real Codex and Claude sessions (step 19).
 
 ## Outcome
 

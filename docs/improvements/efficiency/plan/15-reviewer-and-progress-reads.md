@@ -1,6 +1,6 @@
 # 15 — Reuse conditional transcripts for reviewers and workflow progress
 
-Status: Implemented, validation pending. Progress probes are conditional and bounded; the reviewer display was already conditional (8c262ba0, 0ba8628e) and now has a bounded fallback; reviewer summary windows, detail expansion and history paging are not adopted. Prerequisites: 09, 11. Finding: E13.
+Status: Complete — conditional, bounded progress probes; lightweight reviewer windows with on-demand details. Prerequisites: 09, 11. Finding: E13.
 
 ## Outcome
 

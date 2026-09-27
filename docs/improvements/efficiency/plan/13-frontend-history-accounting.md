@@ -1,6 +1,6 @@
 # 13 — Keep immutable history out of frontend live-update accounting
 
-Status: Implemented, validation pending. Prerequisite: 12. Finding: E10.
+Status: Complete — retained history is not yet a separate page structure through the whole display pipeline, and browser long-task profiling was not run (see record). Prerequisite: 12. Finding: E10.
 
 ## Outcome
 

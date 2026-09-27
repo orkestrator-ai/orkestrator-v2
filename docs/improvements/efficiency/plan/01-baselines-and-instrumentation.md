@@ -1,6 +1,6 @@
 # 01 — Establish baselines, counters, and synthetic fixtures
 
-Status: Implemented, validation pending (function-level baseline recorded; real-stack and remote baselines pending). Prerequisites: none. Findings: all.
+Status: Complete — function-level harness, counters and phase metrics; final run in `../baseline/`. Remote-proxy, browser long-task and heap/RSS baselines not measured. Prerequisites: none. Findings: all.
 
 ## Outcome
 

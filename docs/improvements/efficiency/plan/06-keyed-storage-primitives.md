@@ -1,7 +1,6 @@
 # 06 — Add bounded keyed-record and manifest storage primitives
 
-Status: Implemented, validation pending (aggregate suite and step-01 disk/latency
-profile not yet run). Prerequisite: 01. Findings: E04/E14 infrastructure.
+Status: Complete. Prerequisite: 01. Findings: E04/E14 infrastructure.
 
 ## Outcome and decision
 

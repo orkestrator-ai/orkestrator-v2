@@ -1,8 +1,6 @@
 # 04 — Make Cursor persistence bounds and dispatch barriers trustworthy
 
-Status: Implemented, validation pending (full `mise run test` and isolated QA
-not run by this change). Prerequisite: 01; use step 02 accounting when available.
-Finding: E02. Priority: urgent.
+Status: Complete — the encoding cache across writes was declined (no trustworthy mutation key); see the record. Prerequisite: 01; use step 02 accounting when available. Finding: E02. Priority: urgent.
 
 ## Outcome
 

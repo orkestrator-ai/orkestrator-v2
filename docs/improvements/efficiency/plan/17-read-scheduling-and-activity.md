@@ -1,7 +1,6 @@
 # 17 — Coordinate visible reads and batch backend activity observations
 
-Status: Implemented, validation pending. Prerequisites: 08, 09; coordinate
-reviewer integration with 15. Finding: E11.
+Status: Complete — frontend half shipped in 0ba8628e; batched no-touch activity added here. Prerequisites: 08, 09; coordinate reviewer integration with 15. Finding: E11.
 
 ## Outcome
 

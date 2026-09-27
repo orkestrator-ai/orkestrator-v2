@@ -15,6 +15,7 @@ reproduces them exactly at the baseline commit.
 
 | File | Contents |
 | --- | --- |
+| `final-summary.json` | The same comparison after every step landed (step 19): baseline `e8fbf1d0` against the final branch head, including the step-14 patched stream. |
 | `step-01-summary.json` | Both runs side by side: every workload's fixture dimensions and method, each case's counters at the baseline and at the candidate, and the warm p50 per case. Generated with `--summary-out`; small enough to commit. |
 
 Full per-run reports (all repetitions' timing percentiles and metadata) go to
@@ -165,3 +166,32 @@ delta); the bridge-to-backend hop is not included.
   `KeyedRecordStore.stats()`.
 - The frontend workload reproduces the mounted hook's per-install calls
   (history measurement, then `setProjection`) rather than rendering React.
+
+## Final run (step 19)
+
+Same machine (AMD Ryzen 5 PRO 5650U, 12 logical CPUs, 30.7 GiB, Bun 1.4.2),
+baseline `e8fbf1d0` against the final branch head, `--run-id final`, recorded
+in `final-summary.json`. Deterministic counts only; wall-clock values in the
+JSON are machine-specific.
+
+| Finding | Workload | Baseline | Final |
+| --- | --- | --- | --- |
+| E01 | Cursor stream, 600 × 1 KiB reasoning, no reader | 600 parts, 712,206 B | 378 parts (peak 440), 448,802 B — within the documented transient bound |
+| E03 | Claude route, unchanged read, 1,000 messages | 1,000 message visits | 0 |
+| E04 | Update one of 128 display tails | 16,734 KiB read / 11,155 KiB written, 128 payloads | 8 KiB / 86 KiB, 1 payload |
+| E04 | Cold read of one tail (128 cached) | 128 payload reads, 5,579 KiB | 1 payload read, 43 KiB |
+| E05 | Backend changed read, 100-message window | 400 projected-row serializations | 100 |
+| E05 | Streamed deltas, 40 observations (part patches negotiated) | prose 446,320 B; tools+text 704,320 B; tool turn 352,760 B; nested agent 237,645 B | 27,316 B; 41,356 B; 32,840 B; 34,985 B — client view equals a fresh snapshot in every case |
+| E06 | Live window with large tool results | v1: 517,504 B, 27 of 100 messages | v2: 219,127 B (34,710 B gzip), 100 of 100, 15 detail references (1.35 MB deferred) |
+| E07 | Load 150 earlier messages | 4 interactive snapshots, 1,100 provider messages | 0 interactive snapshots, 3 direct page reads, 150 messages |
+| E08 | Rollout above the hard cache cap, 20 reads | 20 full parses, 5.3 MB read | 1 parse, 265 KB read |
+| E08 | Interrupted JSONL record | silently skipped | explicit unreadable marker, status `degraded` |
+| E09 | Trim 100 × 8 KiB messages (Cursor / Pi / ACP) | 4,585 / 4,585 / 3,097 message visits | 100 each, identical retained ids |
+| E09 | Trim a many-part message (Cursor / ACP) | 51,197 / 83,335 part visits | 800 / 960 |
+| E10 | Tail update with 8 MiB of retained history | 4,196 message visits | 1 |
+
+E02, E11, E12, E13 and E14 are covered by their owning test suites rather
+than this harness; the step execution records give their operation counts
+(for example E11: a 100-session group reads activity in 2 bridge requests
+instead of 100; E14: an active pipeline tail checkpoint writes ≈ 42 KB instead
+of rewriting a 25.9 MB shared file).

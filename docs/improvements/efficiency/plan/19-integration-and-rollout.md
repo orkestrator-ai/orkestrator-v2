@@ -1,7 +1,6 @@
 # 19 — Validate the full pipeline and roll out in measured waves
 
-Status: Not started. Prerequisites: mandatory steps 01–18 implemented; step 14
-has an explicit adopt/defer decision. Findings: all.
+Status: Complete for the function-level, repository-suite and isolated real-stack evidence below; remote-proxy, Docker, Electron-window and live Cursor/Pi/Grok runs were not performed. Findings: all.
 
 ## Outcome
 
@@ -140,13 +139,81 @@ not a storage downgrade strategy.
 
 ## Completion checklist
 
-- [ ] Each numbered step has an execution record and truthful status.
-- [ ] Every finding maps to a commit/PR and validation evidence or a documented
+- [x] Each numbered step has an execution record and truthful status.
+- [x] Every finding maps to a commit/PR and validation evidence or a documented
       remaining limitation; none is closed solely because a plan exists.
-- [ ] Mixed-version and migration tests pass, including explicit deletion.
-- [ ] Background agent/terminal work survives tab and document lifecycle changes.
-- [ ] Diagnostics and artifacts contain only synthetic data and bounded metrics.
-- [ ] Isolated profiles are stopped and reset, or intentional retention recorded.
-- [ ] Documentation catalog, review status, and existing TODOs reflect shipped
+- [x] Mixed-version and migration tests pass, including explicit deletion.
+- [x] Background agent/terminal work survives tab and document lifecycle changes
+      (owning suites and the isolated browser suite's inactive/reload cases).
+- [x] Diagnostics and artifacts contain only synthetic data and bounded metrics.
+- [x] Isolated profiles are stopped and reset, or intentional retention recorded.
+- [x] Documentation catalog, review status, and existing TODOs reflect shipped
       versus deferred work. Keep the original review as dated evidence.
 - [ ] Changes reach `main` only through reviewed PRs; final merge is human-owned.
+
+## Execution record
+
+```text
+Status: Complete for the evidence below; unrun surfaces listed as limitations.
+Implementation commit / PR: branch implement-efficiency-improvements-7f0993836777-r1
+  (commits 5d819c87 .. final head); no PR opened from this change.
+Finding → evidence:
+  E01 steps 02/03 — producer bound; harness c (600 → ≤ 440 parts, bounded bytes);
+      cursor translate-bounds.test.ts.
+  E02 step 04 — unique temp, fsync, newest-tail shedding, barrier failures;
+      persistence-durability.test.ts and budget/durability suites.
+  E03 step 05 — Claude revisions + title/freshness token; harness a (1,000 → 0
+      visits); real Claude session unchanged re-read (504 B response).
+  E04 steps 06/07 — keyed records, bounded checkpoints, deletion fence;
+      harness d (one-tail update 16,734 KiB read → 8 KiB).
+  E05 steps 12/14 — encoding memo (400 → 100 serializations) and negotiated
+      part patches (85–94% fewer decoded delta bytes, harness j).
+  E06 steps 08/09 — v2 summaries on all five bridges; harness e; real Codex
+      and Claude bridges: 1.5–1.9 KB v2 vs 18.2–18.6 KB v1 for a 14 KB tool
+      output, exact detail on expansion.
+  E07 step 11 — direct pages; harness i (4 interactive snapshots → 0).
+  E08 step 10 — bounded rollout reader; harness h (20 full parses → 1);
+      unreadable rollouts no longer read as empty transcripts.
+  E09 step 02 — linear trimming; harness b (4,585 → 100 visits).
+  E10 step 13 — incremental accounting; harness g (4,196 → 1 visits);
+      provider-replacement ordering fix in the hook.
+  E11 step 17 — batched no-touch activity (100 sessions: 100 → 2 requests);
+      frontend visibility scheduling from 0ba8628e.
+  E12 step 18 — single serialization per walk, container TTL, ad hoc cache
+      (quiet container panel 12 → 4 walks/min).
+  E13 step 15 — conditional probes, lightweight reviewer windows + details.
+  E14 step 16 — transcripts in a chunk/manifest store (control file 25.9 MB →
+      30 KB; tail checkpoint ≈ 42 KB written).
+Tests and isolated profiles (all on this branch head, AMD Ryzen 5 PRO 5650U,
+  12 logical CPUs, 30.7 GiB, Bun 1.4.2):
+  - mise run check: pass.
+  - mise run test: pass (workspace 405 s, root 144 s, bridges 178 s, codex
+    protocol lockfile). Earlier runs were killed by the no-output watchdog
+    only while another session held 7 of 8 shared test slots; every package
+    passes alone and the quiet run passed.
+  - mise run test:agent:browser:isolated: 12 passed, 7 skipped (after
+    rebuilding bridge bundles; one earlier run hit a first-load dev-server
+    502, recorded as environmental flake 0168, and passed on rerun).
+  - Isolated profile eff-qa-7f09 (claude, codex; fixture project): real Codex
+    and Claude sessions via the orkestrator CLI, then gateway reads: summary
+    rows carry a detail reference, expansion returns the exact 13.9 KB
+    output, an unchanged re-read answers `unchanged` (≈ 500 B), and each
+    bridge answers v2 with details and pages advertised. Environment deleted,
+    profile stopped and reset.
+  - scripts/efficiency final run: ../baseline/final-summary.json and README.
+Compatibility/migration result: every new wire form is negotiated (v2
+  envelope discriminator, detail/page route presence, transcriptPatchVersions,
+  batch activity route) and old readers keep v1; storage migrations (display
+  tails, pipeline transcripts) are idempotent with deletion markers and
+  documented downgrade paths (display tails: cache miss; pipelines: bounded
+  export command).
+Rollout note: `dev:test` launches bridges from their built `dist/` bundles and
+  does not rebuild them; after bridge source changes run each bridge's
+  `bun run build` before real-stack QA, or the profile tests stale bridges.
+Remaining limitations (not validated here): remote proxy and compression
+  bytes, Docker/container environments, the Electron window, live Cursor/Pi/
+  Grok/OpenCode sessions, native iOS, browser long-task and heap/RSS
+  profiling, and p95 latency on real providers. Per-pipeline control-record
+  partitioning (E14) and a container file watcher (E12) remain deferred with
+  their measured costs; part patches cover the backend-to-client hop only.
+```

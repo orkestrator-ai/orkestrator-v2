@@ -2,10 +2,11 @@
 
 Date: 2026-09-21. Source baseline: `88c2f9cc`.
 
-Status: **Planned; no implementation steps completed.** This directory is the
-implementation specification for the [efficiency review](../README.md). Creating
-this plan does not mark any finding fixed. The original findings remain the
-evidence record; update this index as implementation and validation land.
+Status: **All 19 steps implemented (2026-09-27)**; see the status column and
+[step 19](19-integration-and-rollout.md) for the consolidated evidence and the
+surfaces that were not validated. This directory is the implementation
+specification for the [efficiency review](../README.md); the original findings
+remain the dated evidence record.
 
 ## Intended result
 
@@ -23,29 +24,29 @@ baseline, but shared protocol/storage changes should land before their callers.
 
 ## Numbered steps
 
-All steps initially have status **Not started**.
+Status is summarized here; each step's execution record is authoritative.
 
-| Step | Plan | Findings | Hard prerequisites |
-| --- | --- | --- | --- |
-| 01 | [Baseline instrumentation and fixtures](01-baselines-and-instrumentation.md) | All | None |
-| 02 | [Linear transcript size accounting and trimming](02-linear-transcript-budgets.md) | E09; supports E01/E05 | 01 |
-| 03 | [Cursor bounds during background streaming](03-cursor-background-bounds.md) | E01 | 02 |
-| 04 | [Cursor persistence and dispatch barriers](04-cursor-durable-persistence.md) | E02 | 01; use 02 for sizing |
-| 05 | [Claude transcript revisions](05-claude-transcript-revisions.md) | E03 | 01 |
-| 06 | [Keyed storage and migration primitives](06-keyed-storage-primitives.md) | E04/E14 | 01 |
-| 07 | [Independent display-tail records](07-display-tail-storage.md) | E04 | 06 |
-| 08 | [Transcript summary, detail, and history contracts](08-transcript-contracts.md) | E05/E06/E07/E13 | 01 |
-| 09 | [Provider summary/detail adapters](09-provider-transcript-adapters.md) | E06; supports E05/E07/E13 | 02, 05, 08 |
-| 10 | [Bounded Codex rollout reading and indexing](10-codex-rollout-reader.md) | E08 | 01; coordinate with 08 |
-| 11 | [Direct history paging](11-direct-history-paging.md) | E07 | 08, 09; 10 for Codex indexed pages |
-| 12 | [Incremental backend projection work](12-incremental-backend-projection.md) | E05 | 05, 09 |
-| 13 | [Frontend history and cache accounting](13-frontend-history-accounting.md) | E10 | 12 |
-| 14 | [Measured part-level streaming deltas](14-part-level-deltas.md) | E05 | 08, 09, 12, 13; benchmark gate |
-| 15 | [Conditional review/workflow transcript reads](15-reviewer-and-progress-reads.md) | E13 | 09, 11 |
-| 16 | [Separate pipeline transcripts from control state](16-pipeline-transcript-storage.md) | E14 | 06, 09, 11 |
-| 17 | [Visibility-aware reads and batched activity](17-read-scheduling-and-activity.md) | E11 | 08, 09; coordinate with 15 |
-| 18 | [Cached file trees with reconciliation](18-file-tree-caching.md) | E12 | 01 |
-| 19 | [Integration, measurement, migration, and rollout](19-integration-and-rollout.md) | All | All mandatory steps; explicit 14 decision |
+| Step | Plan | Findings | Hard prerequisites | Status |
+| --- | --- | --- | --- | --- |
+| 01 | [Baseline instrumentation and fixtures](01-baselines-and-instrumentation.md) | All | None | Complete |
+| 02 | [Linear transcript size accounting and trimming](02-linear-transcript-budgets.md) | E09; supports E01/E05 | 01 | Complete |
+| 03 | [Cursor bounds during background streaming](03-cursor-background-bounds.md) | E01 | 02 | Complete (no live Cursor run) |
+| 04 | [Cursor persistence and dispatch barriers](04-cursor-durable-persistence.md) | E02 | 01; use 02 for sizing | Complete |
+| 05 | [Claude transcript revisions](05-claude-transcript-revisions.md) | E03 | 01 | Complete |
+| 06 | [Keyed storage and migration primitives](06-keyed-storage-primitives.md) | E04/E14 | 01 | Complete |
+| 07 | [Independent display-tail records](07-display-tail-storage.md) | E04 | 06 | Complete |
+| 08 | [Transcript summary, detail, and history contracts](08-transcript-contracts.md) | E05/E06/E07/E13 | 01 | Complete |
+| 09 | [Provider summary/detail adapters](09-provider-transcript-adapters.md) | E06; supports E05/E07/E13 | 02, 05, 08 | Complete |
+| 10 | [Bounded Codex rollout reading and indexing](10-codex-rollout-reader.md) | E08 | 01; coordinate with 08 | Complete |
+| 11 | [Direct history paging](11-direct-history-paging.md) | E07 | 08, 09; 10 for Codex indexed pages | Complete (v2 providers; joined fallback kept) |
+| 12 | [Incremental backend projection work](12-incremental-backend-projection.md) | E05 | 05, 09 | Complete |
+| 13 | [Frontend history and cache accounting](13-frontend-history-accounting.md) | E10 | 12 | Complete (see limitations) |
+| 14 | [Measured part-level streaming deltas](14-part-level-deltas.md) | E05 | 08, 09, 12, 13; benchmark gate | Adopted, negotiated |
+| 15 | [Conditional review/workflow transcript reads](15-reviewer-and-progress-reads.md) | E13 | 09, 11 | Complete |
+| 16 | [Separate pipeline transcripts from control state](16-pipeline-transcript-storage.md) | E14 | 06, 09, 11 | Complete (control partitioning deferred) |
+| 17 | [Visibility-aware reads and batched activity](17-read-scheduling-and-activity.md) | E11 | 08, 09; coordinate with 15 | Complete |
+| 18 | [Cached file trees with reconciliation](18-file-tree-caching.md) | E12 | 01 | Complete (no container watcher) |
+| 19 | [Integration, measurement, migration, and rollout](19-integration-and-rollout.md) | All | All mandatory steps; explicit 14 decision | Complete (unrun surfaces listed) |
 
 Steps 02–05 form the first urgent release: bounded streaming, trustworthy
 durability barriers, and cheap unchanged reads. Do not delay those fixes for

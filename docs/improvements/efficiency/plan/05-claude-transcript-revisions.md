@@ -1,6 +1,6 @@
 # 05 — Give Claude a content revision for conditional transcript reads
 
-Status: Implemented, validation pending (isolated native chat QA not run). Prerequisite: 01. Finding: E03. Priority: urgent.
+Status: Complete — validated on a real Claude session through an isolated profile (step 19). Prerequisite: 01. Finding: E03. Priority: urgent.
 
 ## Outcome
 

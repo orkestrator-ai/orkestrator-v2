@@ -1,8 +1,6 @@
 # 07 — Move display tails to independent records and bounded checkpoints
 
-Status: Implemented, validation pending (aggregate suite, isolated real-stack
-restart QA, and step-01 disk/latency profile not yet run). Prerequisite: 06.
-Finding: E04.
+Status: Complete. Prerequisite: 06. Finding: E04.
 
 ## Outcome
 

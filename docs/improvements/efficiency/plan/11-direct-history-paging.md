@@ -1,7 +1,6 @@
 # 11 — Serve history pages without rebuilding interactive projections
 
-Status: Complete for providers serving v2 pages; joined fallback retained for others (isolated real-stack QA unrun).
-Finding: E07.
+Status: Complete for providers serving v2 pages; the bounded joined fallback remains for older bridges and OpenCode. Prerequisites: 08, 09; 10 for Codex indexed pages. Finding: E07.
 
 ## Outcome
 

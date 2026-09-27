@@ -1,6 +1,6 @@
 # 03 — Bound Cursor transcripts while no UI is reading
 
-Status: Complete (isolated real-stack run not performed). Prerequisite: 02. Finding: E01. Priority: urgent.
+Status: Complete — a live Cursor inactive-tab run with a real account was not performed. Prerequisite: 02. Finding: E01. Priority: urgent.
 
 ## Outcome and scope
 

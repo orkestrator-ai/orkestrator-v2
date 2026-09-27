@@ -67,8 +67,8 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 
 | Document | Status | Notes |
 | --- | --- | --- |
-| [efficiency/README.md](improvements/efficiency/README.md) | Active | 2026-09-20–21 source review: 14 prioritized findings on transcripts, storage, rendering, polling, and workflow consumers. Includes synthetic probes; implementation not started. |
-| [efficiency/plan/00-index.md](improvements/efficiency/plan/00-index.md) | Active | Detailed 19-step implementation plan with dependencies, compatibility, migrations, tests, and rollout gates. All implementation steps not started. |
+| [efficiency/README.md](improvements/efficiency/README.md) | Active | 2026-09-20–21 source review: 14 prioritized findings on transcripts, storage, rendering, polling, and workflow consumers. All findings implemented (2026-09-27); measured before/after in [efficiency/baseline/](improvements/efficiency/baseline/README.md). |
+| [efficiency/plan/00-index.md](improvements/efficiency/plan/00-index.md) | Active | 19-step implementation plan. All steps implemented; step 14 part deltas adopted behind negotiation. Deferred with measured cost: per-pipeline control-record partitioning, container file watcher. Remote-proxy, Docker, Electron-window and live Cursor/Pi/Grok runs not performed (step 19). |
 
 ## Plans
 

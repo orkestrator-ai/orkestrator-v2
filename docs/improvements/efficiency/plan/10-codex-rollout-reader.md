@@ -1,6 +1,6 @@
 # 10 — Bound Codex rollout parsing, retention, and repeated reads
 
-Status: Implemented, validation pending (focused suites green; full `mise run test` and isolated QA unrun). Prerequisite: 01; coordinate interfaces with 08. Finding: E08.
+Status: Complete. Prerequisite: 01; coordinate interfaces with 08. Finding: E08.
 
 ## Outcome
 

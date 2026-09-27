@@ -1,9 +1,6 @@
 # 16 — Separate pipeline transcripts from durable workflow control records
 
-Status: Implemented, validation pending (aggregate `mise run test` and isolated
-real-stack QA not run; per-pipeline control-record partitioning deferred, see
-the execution record). Prerequisites: 06, 09, 11; coordinate with 15.
-Finding: E14. Priority: high after storage prerequisites.
+Status: Complete — transcripts moved out of the shared control file; per-pipeline control-record partitioning deferred with its measured remaining cost (see record). Prerequisites: 06, 09, 11. Finding: E14.
 
 ## Outcome
 

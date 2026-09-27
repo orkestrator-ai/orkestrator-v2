@@ -1,8 +1,6 @@
 # 18 — Cache file trees with watcher and TTL reconciliation
 
-Status: Implemented, validation pending (cached values/digests, request
-sharing and watcher integration in `0ba8628e`; container/ad hoc residuals
-recorded below). Prerequisite: 01. Finding: E12.
+Status: Complete — containers use bounded TTL plus shared scans (no container watcher); see the record for the 10 s container tree age trade-off. Prerequisite: 01. Finding: E12.
 
 ## Outcome
 

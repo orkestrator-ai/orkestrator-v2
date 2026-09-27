@@ -63,6 +63,7 @@ import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
 import type { DomainTestResult, Environment, PortMapping, PortProtocol } from "@/types";
 import { EnvironmentPreviewServices } from "./EnvironmentPreviewServices";
+import { EnvironmentRebuildSection } from "./EnvironmentRebuildSection";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import {
   LEGACY_CONTAINER_DISCARD_WARNING,
@@ -1121,9 +1122,23 @@ export function EnvironmentSettingsDialog({
                 <AlertCircle className="h-4 w-4 shrink-0" />
                 <span>
                   Saved port changes apply when this container is rebuilt. The current container
-                  keeps its ports and files until then.
+                  keeps its ports until then.
                 </span>
               </div>
+            )}
+            {environment.containerId && onRestart && (
+              <EnvironmentRebuildSection
+                environment={environment}
+                dockerAvailable={dockerAvailable}
+                onRestart={onRestart}
+                beforeRebuild={async () => {
+                  if (portMappingsChanged) {
+                    await backend.updatePortMappings(environment.id, portMappings);
+                  }
+                }}
+                onUpdate={onUpdate}
+                onClose={() => onOpenChange(false)}
+              />
             )}
             {environment.containerId && onRestart && (
               <div className="flex flex-col gap-2 rounded-md border border-destructive/40 p-3">

@@ -5,6 +5,7 @@ import {
   parseRecreateEnvironmentRequest,
 } from "@orkestrator/protocol/container-lifecycle";
 import { resolveNeedsAttentionOperation } from "./container-lifecycle-service.js";
+import { rebuildPreview, requestReplacementCancellation } from "./container-replacement.js";
 import {
   isEmptyAgentSettings,
   normalizeAgentSettings,
@@ -466,6 +467,32 @@ export function registerEnvironmentCommands(
       ),
     );
     return updated ? toClientEnvironment(updated) : undefined;
+  });
+  register("get_rebuild_preview", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId"], "arguments");
+    return rebuildPreview(asString(args.environmentId, "environmentId"), context);
+  });
+  register("cancel_container_operation", async (args, { storage }) => {
+    assertOnlyKeys(args, ["environmentId", "operationId"], "arguments");
+    const environmentId = asString(args.environmentId, "environmentId");
+    const operationId = asString(args.operationId, "operationId");
+    const environment = await storage.getEnvironment(environmentId);
+    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    const parsed = parseContainerLifecycle(environment.containerLifecycle);
+    const operation = parsed.supported ? parsed.record.operation : undefined;
+    // Not queued: the rebuild holds the lifecycle queue. Only a replacement
+    // that has not committed can be cancelled; it stops at its next phase
+    // boundary and rolls back exactly as a failure would.
+    if (
+      !operation ||
+      operation.operationId !== operationId ||
+      (operation.kind !== "migrate" && operation.kind !== "rebuild") ||
+      operation.phase === "committed"
+    ) {
+      return { cancelled: false };
+    }
+    requestReplacementCancellation(operationId);
+    return { cancelled: true, pending: true };
   });
   register("recreate_environment", async (args, context) => {
     const result = await recreateEnvironmentTask(

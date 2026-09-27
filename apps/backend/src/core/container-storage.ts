@@ -90,7 +90,13 @@ export function planStorageSet(
 
 export type StorageFormatDecision =
   | { format: "volume-v1" }
-  | { format: "legacy-layer"; reason: string };
+  | {
+      format: "legacy-layer";
+      reason:
+        | "disabled-by-configuration"
+        | "image-without-storage-contract"
+        | "engine-without-volume-subpath";
+    };
 
 /**
  * New runtimes use persistent volumes only when the image implements the
@@ -131,12 +137,12 @@ function volumeLabels(
   };
 }
 
-type VolumeProbe =
+export type VolumeProbe =
   | { kind: "present"; labels: Record<string, string> }
   | { kind: "missing" }
   | { kind: "unreachable" };
 
-async function inspectVolume(name: string): Promise<VolumeProbe> {
+export async function inspectVolume(name: string): Promise<VolumeProbe> {
   try {
     const { stdout } = await runCommand(
       "docker",

@@ -16,6 +16,7 @@ import { terminalProcesses } from "./commands-runtime-state.js";
 import { setupTerminalSessionId } from "./commands-terminal.js";
 import type { PtyProcess } from "./pty.js";
 import { runCommand } from "./shell.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
 
 function environment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -157,9 +158,13 @@ describe("delete_environment host cleanup", () => {
         const bin = path.join(storage.getDataDir(), "bin");
         await fs.mkdir(bin);
         const log = path.join(storage.getDataDir(), "docker-args");
+        // The deletion verifies ownership before removing: answer the probe
+        // as this registry's container.
+        const owner = dockerOwnerNamespace(storage.getDataDir());
         await fs.writeFile(
           path.join(bin, "docker"),
-          `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\n`,
+          `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\n` +
+            `[ "$1" = inspect ] && printf '${owner}\\texited\\torkestrator-v2\\ttest-container\\n'\nexit 0\n`,
         );
         await fs.chmod(path.join(bin, "docker"), 0o700);
         const oldPath = process.env.PATH;

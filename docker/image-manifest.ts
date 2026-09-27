@@ -36,6 +36,7 @@ export const CONTRACT_FILES: ReadonlyArray<{ installed: string; source: string }
   { installed: "/usr/local/bin/init-firewall.sh", source: "docker/init-firewall.sh" },
   { installed: "/usr/local/bin/orkestrator-drain.sh", source: "docker/orkestrator-drain.sh" },
   { installed: "/usr/local/bin/orkestrator-storage.sh", source: "docker/orkestrator-storage.sh" },
+  { installed: "/usr/local/bin/orkestrator-migrate.sh", source: "docker/orkestrator-migrate.sh" },
   {
     installed: "/usr/local/bin/orkestrator-log-writer",
     source: "docker/orkestrator-log-writer.sh",

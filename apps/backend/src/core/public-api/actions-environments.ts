@@ -252,17 +252,12 @@ function lifecycleHandler(
           "Local worktree environments cannot be recreated",
         );
       }
-      // Recreating a legacy container deletes its writable layer. The request
-      // must say so explicitly; the command below refuses a preserving
-      // request as well, so an older client cannot reach the destructive path.
-      if (verb === "recreate" && environment.containerId && !input.discard) {
-        throw new PublicActionError(
-          "capability-unavailable",
-          "Recreating this container would delete its files. Pass --discard to reset it explicitly.",
-        );
-      }
-      // Bound to the runtime seen at admission: a replacement that appears
-      // before execution is not what the caller asked to discard.
+      // Without `discard` the command performs a preserving rebuild: the
+      // workspace and provider state are copied and verified before the new
+      // runtime is committed, and it is refused (nothing changed) where the
+      // image or engine cannot preserve them. Both forms are bound to the
+      // runtime seen at admission: a replacement that appears before
+      // execution is not what the caller reviewed.
       const reviewedContainerId = environment.containerId;
       return {
         resources: { environmentId: environment.id, projectId: environment.projectId },

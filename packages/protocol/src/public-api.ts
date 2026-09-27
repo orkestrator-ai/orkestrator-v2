@@ -183,7 +183,7 @@ export const PUBLIC_ACTIONS = {
     milestone: "B",
     waitConditions: ["running", "ready"],
     summary:
-      "Reset the environment's container; requires explicit discard because its local files are deleted.",
+      "Rebuild the environment's container, preserving its workspace and agent sessions; with discard, reset it and delete its local files.",
   },
   "environment.delete": {
     version: 1,

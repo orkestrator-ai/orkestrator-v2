@@ -1,5 +1,9 @@
 import { invoke } from "@/lib/native/backend";
-import type { RecreateEnvironmentIntent } from "@orkestrator/protocol/container-lifecycle";
+import type {
+  ContainerLifecycleSnapshot,
+  RebuildPreview,
+  RecreateEnvironmentIntent,
+} from "@orkestrator/protocol/container-lifecycle";
 import type {
   Project,
   Environment,
@@ -196,13 +200,40 @@ export async function stopEnvironment(environmentId: string): Promise<void> {
 
 export interface RecreateEnvironmentOptions {
   /**
-   * `discard` deletes the container and everything in its filesystem. The
-   * default, `preserve`, is refused with a `preservation-required` lifecycle
-   * error while the environment keeps its workspace inside the container.
+   * `preserve` copies the workspace and provider state into a new container
+   * and commits it only after verification; it is refused, with nothing
+   * changed, where the image or engine cannot preserve them. `discard`
+   * deletes the container and everything in its filesystem.
    */
   intent: RecreateEnvironmentIntent;
   /** The container the user reviewed; a different runtime conflicts. */
   expectedContainerId: string | null;
+  /** Preserve only: proceed when Docker host free space cannot be measured. */
+  allowUnknownCapacity?: boolean;
+}
+
+/** The authoritative container lifecycle state, for rehydrating progress. */
+export async function getContainerLifecycleSnapshot(
+  environmentId: string,
+): Promise<ContainerLifecycleSnapshot> {
+  return invoke<ContainerLifecycleSnapshot>("get_container_lifecycle_snapshot", { environmentId });
+}
+
+/** What a preserving rebuild would keep, and whether it is possible now. */
+export async function getRebuildPreview(environmentId: string): Promise<RebuildPreview> {
+  return invoke<RebuildPreview>("get_rebuild_preview", { environmentId });
+}
+
+/**
+ * Asks an uncommitted rebuild to stop at its next phase boundary. The
+ * original container stays authoritative; the lifecycle snapshot reports the
+ * outcome.
+ */
+export async function cancelContainerOperation(
+  environmentId: string,
+  operationId: string,
+): Promise<{ cancelled: boolean; pending?: boolean }> {
+  return invoke("cancel_container_operation", { environmentId, operationId });
 }
 
 /**

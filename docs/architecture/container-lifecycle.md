@@ -228,7 +228,7 @@ A new environment — or one whose legacy runtime was explicitly discarded — g
 a storage set when the image declares `persistent-workspace`, the daemon is
 Engine 26+ (volume sub-path mounts) and `ORKESTRATOR_CONTAINER_STORAGE` is not
 `legacy-layer`. An existing legacy runtime is never migrated by a start, read,
-status refresh or UI mount; that is an explicit operation (step 06).
+status refresh or UI mount; that is the explicit preserving rebuild below.
 
 | Volume | Mount | Holds |
 | --- | --- | --- |
@@ -264,3 +264,49 @@ full; Codex (thread-name index not preserved, relocated databases pending
 qualification), OpenCode (revert snapshots not preserved) and Grok (root-level
 registries not preserved) are partial and say so. Named volumes are
 persistence, not backup: a Docker administrator can still remove them.
+
+## Preserving rebuild (`migrate` / `rebuild`)
+
+`recreate_environment` with intent `preserve` and the reviewed
+`expectedContainerId` replaces the runtime without losing the workspace
+(`container-replacement.ts`). A legacy source is a `migrate`, a volume-backed
+source a `rebuild`; both always copy into a **new** storage set, so candidate
+setup can never damage the only pre-rebuild copy. A preserving request without
+a reviewed container id is still refused `preservation-required`.
+
+| Phase | Effect | Before commit, on failure/cancel/restart |
+| --- | --- | --- |
+| `preflight` | Pinned image has `persistent-workspace`, local Engine 26+, retention below 16 copies, candidate set planned (persisted as `candidateStorage`) and created, free space measured on the daemon | Candidate removed; nothing else touched |
+| `quiescing` | Review validation and exec workers cancelled, previews detached, drain fence + drain, source stopped | Source left stopped; the caller restarts it through the normal start path |
+| `copying` → `verified` | `orkestrator-migrate.sh` per step: `docker cp` of the stopped source (never restarted to export it) piped into a no-network helper, or a read-only source volume; per-file SHA-256/mode/size, symlink targets, `git fsck` | Candidate removed |
+| `candidate-prepared` → `candidate-healthy` | Generation `n+1` created from the pinned image id, started, current-boot readiness and a mounted `/workspace` checked, stopped again — no setup, agent launch or prompt | Candidate container and volumes removed |
+| `committed` | One write moves runtime **and** storage pointers, records the source runtime (and, for `rebuild`, the old set) as retained recovery copies, clears terminal ids | Authoritative; never automatically reverted |
+
+After the commit the normal start path runs setup against the preserved
+checkout (the clone is skipped; `createdFromCommit` is kept) and relaunches
+agents. Restart reconciliation of an unresolved `migrate`/`rebuild` removes
+the candidate by its operation label and keeps the original stopped: the
+commit is the write that completes the operation, so an unresolved one never
+committed. A candidate volume that will not remove is kept as a
+`failed-candidate` retained set rather than orphaned.
+
+Copy policy: bytes, modes, ownership and link targets are preserved and
+verified; sockets are skipped; extended attributes are not preserved; sparse
+files are copied densely. A copied root that is itself a symlink is refused
+(`root-symlink`) because Docker would otherwise deliver nothing for it. Codex
+databases (`~/.codex/*.sqlite*`) and OpenCode's `opencode.db*` are relocated
+into their state sub-directories; the rest of those homes (configuration,
+credentials, caches, OpenCode snapshots) is not copied. Hashes and paths never
+leave the helper — its result line carries counts only.
+
+Capacity: the estimate is the source's writable-layer size (`docker ps
+--size`) or the measured source volumes, plus 10% and 512 MiB headroom, checked
+against free space measured inside a helper on the daemon's filesystem.
+Unmeasurable capacity is refused unless the request sets
+`allowUnknownCapacity`; a measured shortfall is always refused.
+
+`get_rebuild_preview` describes, before confirmation, whether a rebuild is
+possible and exactly which paths and provider formats survive.
+`cancel_container_operation` asks an uncommitted replacement to stop at its
+next phase boundary (it does not take the lifecycle queue the rebuild holds);
+the outcome is recorded as `cancelled` and rolled back like a failure.

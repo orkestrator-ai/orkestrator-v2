@@ -28,6 +28,7 @@ import {
 } from "./commands-dependencies.js";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
+import { removeStorageVolumes } from "./container-storage.js";
 
 /**
  * The container lifecycle authority.
@@ -215,6 +216,18 @@ export interface OperationPatch {
   storage?: EnvironmentContainerLifecycle["storage"];
   /** Readiness observation; `observedAt` is filled in. */
   boot?: Omit<NonNullable<EnvironmentContainerLifecycle["boot"]>, "observedAt">;
+  candidateStorage?: EnvironmentContainerLifecycle["storage"];
+  /** Keep a replaced runtime as a recovery copy (never evicted to fit a bound). */
+  retainRuntime?: ContainerRuntimeIdentity;
+  /** Keep a replaced storage set as a recovery copy. */
+  retainStorage?: NonNullable<EnvironmentContainerLifecycle["retainedStorage"]>[number];
+  /**
+   * Stop referencing recovery copies whose resources are gone (or that became
+   * current again). Applied before `retainRuntime` / `retainStorage`.
+   */
+  releaseRetained?: { containerIds?: string[]; storageSetIds?: string[] };
+  /** Replace a released copy's volume list with the volumes that survived. */
+  keepRetainedVolumes?: { storageSetId: string; volumes: { role: string; name: string }[] }[];
 }
 
 function applyPatch(
@@ -237,6 +250,33 @@ function applyPatch(
     );
   }
   if (patch.storage) record.storage = patch.storage;
+  if (patch.candidateStorage) operation.candidateStorage = patch.candidateStorage;
+  if (patch.releaseRetained) {
+    const containers = new Set(patch.releaseRetained.containerIds ?? []);
+    const sets = new Set(patch.releaseRetained.storageSetIds ?? []);
+    const runtimes = (record.retainedRuntimes ?? []).filter(
+      (runtime) => !containers.has(runtime.containerId),
+    );
+    const storage = (record.retainedStorage ?? []).filter(
+      (retained) => !sets.has(retained.storageSetId),
+    );
+    if (runtimes.length > 0) record.retainedRuntimes = runtimes;
+    else delete record.retainedRuntimes;
+    if (storage.length > 0) record.retainedStorage = storage;
+    else delete record.retainedStorage;
+  }
+  for (const kept of patch.keepRetainedVolumes ?? []) {
+    const retained = record.retainedStorage?.find(
+      (entry) => entry.storageSetId === kept.storageSetId,
+    );
+    if (retained) retained.volumes = kept.volumes;
+  }
+  if (patch.retainRuntime) {
+    record.retainedRuntimes = [...(record.retainedRuntimes ?? []), patch.retainRuntime];
+  }
+  if (patch.retainStorage) {
+    record.retainedStorage = [...(record.retainedStorage ?? []), patch.retainStorage];
+  }
   if (patch.boot) {
     record.boot = {
       ...patch.boot,
@@ -692,6 +732,54 @@ export async function reconcileContainerOperation(
       );
       return "adopted";
     }
+  }
+
+  if (operation.kind === "migrate" || operation.kind === "rebuild") {
+    // The commit is the write that completes the operation, so an unresolved
+    // replacement never committed: the original runtime and storage are still
+    // authoritative. Remove the incomplete candidate; the original stays
+    // stopped until the user starts it.
+    const search = await findOperationContainers(context, operation.operationId);
+    if (search.kind === "unreachable") {
+      activeOperations.delete(activeKey(context, operation.operationId));
+      return "unreachable";
+    }
+    const candidates =
+      search.kind === "one"
+        ? [search.containerId]
+        : search.kind === "many"
+          ? search.containerIds
+          : [];
+    for (const id of candidates) {
+      await runCommand("docker", ["rm", "-f", id], { timeoutMs: 60_000 }).catch(() => undefined);
+    }
+    const kept = operation.candidateStorage
+      ? await removeStorageVolumes(context, environment.id, operation.candidateStorage)
+      : [];
+    const quiesced = !["requested", "preflight"].includes(operation.phase ?? "requested");
+    await completeContainerOperation(
+      context,
+      environment.id,
+      operation.operationId,
+      "interrupted",
+      {
+        failureCode: "interrupted",
+        ...(kept && kept.length > 0 && operation.candidateStorage
+          ? {
+              retainStorage: {
+                storageSetId: operation.candidateStorage.storageSetId ?? "unknown",
+                workspaceGeneration: operation.candidateStorage.workspaceGeneration,
+                volumes: kept,
+                retainedAt: new Date().toISOString(),
+                reason: "failed-candidate" as const,
+                operationId: operation.operationId,
+              },
+            }
+          : {}),
+        ...(quiesced ? { environment: { status: "stopped" as const } } : {}),
+      },
+    );
+    return "settled";
   }
 
   if (operation.phase === "removing" && operation.source) {

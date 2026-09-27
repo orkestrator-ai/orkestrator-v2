@@ -26,7 +26,8 @@ in [`agent-testing.md`](agent-testing.md).
   `ORKESTRATOR_CLI_CONFIG_DIR` to a directory of your own for the run.
 - `environment delete` and `environment recreate --discard` are destructive.
   Use them only on environments your test created. `recreate` without
-  `--discard` is refused rather than deleting the container's files.
+  `--discard` is a preserving rebuild: it keeps the files, but it still stops
+  and replaces the container.
 - Live sessions send real prompts and cost real tokens. Keep prompts small and
   scoped to the fixture.
 

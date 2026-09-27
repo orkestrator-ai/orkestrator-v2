@@ -37,6 +37,7 @@ import {
   resolveContainerOwnership,
   runContainerOperation,
 } from "./container-lifecycle-service.js";
+import { replaceRuntimePreservingState } from "./container-replacement.js";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import {
@@ -1812,15 +1813,53 @@ export async function recreateEnvironmentOnce(
   // start/recreate that replaced the runtime the user reviewed.
   assertEnvironmentNotDeleting(environment.id);
   assertEnvironmentDeletionNotRequested(environment, environment.id);
+  if (request.intent !== "discard" && request.expectedContainerId) {
+    // A preserving rebuild copies the workspace and provider state into a new
+    // storage set and commits the new runtime only after it verified. Any
+    // failure before the commit leaves the original authoritative.
+    const wasRunning = environment.status === "running";
+    invalidateEnvironmentStartDedupe(environment.id);
+    try {
+      await replaceRuntimePreservingState(
+        {
+          ...request,
+          environmentId: environment.id,
+          expectedContainerId: request.expectedContainerId,
+          ...(request.allowUnknownCapacity ? { allowUnknownCapacity: true } : {}),
+        },
+        context,
+      );
+    } catch (error) {
+      const after = await context.storage.getEnvironment(environment.id);
+      if (
+        wasRunning &&
+        after?.containerId === environment.containerId &&
+        after.status !== "running"
+      ) {
+        await startEnvironmentOnce(environment.id, context, schedulePendingRename).catch(
+          (restart) =>
+            logEnvironmentLifecycleFailure("rebuild (restoring original)", environment.id, restart),
+        );
+      }
+      throw error;
+    }
+    invalidateDiscovery(environment.id);
+    cancelOpenCodeAgentToolsConfiguration(`container:${environment.containerId}`);
+    cleanupEnvironmentSetupState(environment.id);
+    // Setup belongs to a runtime: the new one runs it again (the preserved
+    // checkout is kept, so the clone step is skipped). The workspace itself,
+    // and the commit it was created from, carry over unchanged.
+    const { createdFromCommit: _kept, ...setupReset } = discardedRuntimeSetupUpdates();
+    await context.storage.updateEnvironment(environment.id, setupReset);
+    return startEnvironmentOnce(environment.id, context, schedulePendingRename);
+  }
   if (request.intent !== "discard") {
-    // A legacy container keeps its workspace in the writable layer, which
-    // `docker rm` destroys. Until a verified migration exists for this
-    // environment the only safe answer to a preserving (or pre-intent)
-    // request is to refuse.
+    // A preserving request that did not bind the runtime it reviewed cannot
+    // be replayed safely against whichever container is current now.
     throw containerLifecycleError(
       "preservation-required",
-      "This environment keeps its files inside the container, so recreating it would delete " +
-        "them. Save the settings to apply them later, or explicitly reset the container.",
+      "Rebuilding keeps this environment's files only when it names the container that was " +
+        "reviewed. Review the environment and rebuild it, or explicitly reset the container.",
     );
   }
   if (request.expectedContainerId !== environment.containerId) {
@@ -1900,8 +1939,9 @@ export function recreateEnvironmentTask(
   schedulePendingRename: (environmentId: string, context: CommandContext) => void,
   invalidateDiscovery: (environmentId: string) => void,
 ): Promise<EnvironmentSetupStartResult | undefined> {
-  // Only a discard replaces the runtime. A preserving request that is refused
-  // must not detach a later start from one already in flight.
+  // Only a discard replaces the runtime here; a preserving rebuild detaches
+  // start dedupe once it is admitted. A refused request must not detach a
+  // later start from one already in flight.
   if (request.intent === "discard") invalidateEnvironmentStartDedupe(request.environmentId);
   return enqueueEnvironmentLifecycleOperation(request.environmentId, context, () =>
     recreateEnvironmentOnce(request, context, schedulePendingRename, invalidateDiscovery),

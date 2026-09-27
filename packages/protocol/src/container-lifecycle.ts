@@ -97,6 +97,11 @@ export interface RecreateEnvironmentRequest extends ContainerMutationIdentity {
    * on the strength of a confirmation that described a different container.
    */
   expectedContainerId: string | null;
+  /**
+   * Preserving rebuilds only: proceed when free space on the Docker host
+   * cannot be measured. A measured shortfall is always refused.
+   */
+  allowUnknownCapacity?: boolean;
 }
 
 const MAX_ID_LENGTH = 256;
@@ -140,7 +145,18 @@ export function parseRecreateEnvironmentRequest(
       ),
     );
   }
-  return { environmentId, intent, expectedContainerId, ...parseContainerMutationIdentity(args) };
+  if (args.allowUnknownCapacity !== undefined && typeof args.allowUnknownCapacity !== "boolean") {
+    throw new Error(
+      formatContainerLifecycleError("invalid-request", "allowUnknownCapacity must be a boolean"),
+    );
+  }
+  return {
+    environmentId,
+    intent,
+    expectedContainerId,
+    ...(args.allowUnknownCapacity === true ? { allowUnknownCapacity: true } : {}),
+    ...parseContainerMutationIdentity(args),
+  };
 }
 
 /** Plain-language consequence of discarding a legacy container. */
@@ -233,6 +249,12 @@ export interface ContainerRuntimeIdentity {
   bootId?: string;
   /** Operation that created this runtime. */
   createdByOperationId?: string;
+  /** Storage set this runtime mounts; absent for a legacy writable layer. */
+  storageSetId?: string;
+  /** Set when the runtime is kept as a recovery copy. */
+  retainedAt?: string;
+  retainedByOperationId?: string;
+  retainedReason?: RetainedStorageSet["reason"] | "migrate-source";
 }
 
 export interface ContainerVolumeReference {
@@ -260,6 +282,8 @@ export interface ContainerOperationRecord {
   updatedAt: string;
   source?: ContainerRuntimeIdentity;
   candidate?: ContainerRuntimeIdentity;
+  /** Storage set being prepared for the candidate (replacement operations). */
+  candidateStorage?: ContainerStorageIdentity;
   /** Fixed, content-free failure category. */
   failureCode?: ContainerLifecycleErrorCode | "interrupted" | "setup-failed" | "unknown";
   /** Bounded, kind-specific resumable details (no paths, no content). */
@@ -400,9 +424,21 @@ function parseRuntime(value: unknown): ContainerRuntimeIdentity | undefined {
     "registryDigest",
     "bootId",
     "createdByOperationId",
+    "storageSetId",
+    "retainedAt",
+    "retainedByOperationId",
   ] as const) {
     const field = boundedString(value[key], 512);
     if (field) runtime[key] = field;
+  }
+  if (
+    value.retainedReason === "rebuild-source" ||
+    value.retainedReason === "workspace-reset" ||
+    value.retainedReason === "restore-source" ||
+    value.retainedReason === "failed-candidate" ||
+    value.retainedReason === "migrate-source"
+  ) {
+    runtime.retainedReason = value.retainedReason;
   }
   return runtime;
 }
@@ -495,6 +531,8 @@ function parseOperation(value: unknown): ContainerOperationRecord | undefined {
   if (source) record.source = source;
   const candidate = parseRuntime(value.candidate);
   if (candidate) record.candidate = candidate;
+  if (isRecord(value.candidateStorage))
+    record.candidateStorage = parseStorage(value.candidateStorage);
   const failureCode = boundedString(value.failureCode, 64);
   if (failureCode) record.failureCode = failureCode as ContainerOperationRecord["failureCode"];
   const details = parseDetails(value.details);
@@ -754,4 +792,46 @@ export function parseContainerMutationIdentity(
     identity.expectedRevision = revision;
   }
   return identity;
+}
+
+// ---------------------------------------------------------------------------
+// Preserving rebuild preview (step 06)
+// ---------------------------------------------------------------------------
+
+export type RebuildUnavailableReason =
+  | "not-containerized"
+  | "no-container"
+  | "operation-in-progress"
+  | "image-unavailable"
+  | "image-without-storage-contract"
+  | "engine-without-volume-subpath"
+  | "disabled-by-configuration"
+  | "unsupported-topology"
+  | "retention-limit"
+  | "unsupported-format";
+
+export interface RebuildProviderPreservation {
+  provider: string;
+  level: "full" | "partial";
+  /** Plain-language description of what is not preserved, if anything. */
+  limitations: string | null;
+}
+
+/**
+ * What a preserving rebuild would do for one environment, read before the
+ * user confirms. Content-free: paths are the fixed layout, never file names.
+ */
+export interface RebuildPreview {
+  environmentId: string;
+  /** The runtime the preview describes; the confirmation binds to it. */
+  containerId: string | null;
+  available: boolean;
+  unavailableReason?: RebuildUnavailableReason;
+  /** `migrate` moves a legacy writable layer onto volumes; `rebuild` copies volumes. */
+  kind: "migrate" | "rebuild";
+  preservedPaths: string[];
+  notPreserved: string[];
+  providers: RebuildProviderPreservation[];
+  retainedCopies: number;
+  retainedCopyLimit: number;
 }

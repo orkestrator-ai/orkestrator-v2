@@ -31,7 +31,7 @@ combine the whole row into one large change.
 | 03 | [Image contracts and daemon preflight](03-image-contracts-and-daemon-preflight.md) | 02 | Implemented, in review | Immutable image identity, capabilities and supported topology checks |
 | 04 | [Runtime readiness and graceful shutdown](04-runtime-readiness-and-graceful-shutdown.md) | 02, 03 | Implemented, in review | Generation-bound readiness, process draining and safe setup retries |
 | 05 | [Persistent workspace and agent state](05-persistent-workspace-and-agent-state.md) | 02, 03, 04 | Implemented, in review | Versioned, owner-labeled storage for new environments |
-| 06 | [Migration and transactional replacement](06-migration-and-transactional-replacement.md) | 04, 05 | Not started | Verified migration, replacement commit point and rollback rules |
+| 06 | [Migration and transactional replacement](06-migration-and-transactional-replacement.md) | 04, 05 | Implemented, in review | Verified migration, replacement commit point and rollback rules |
 | 07 | [Recovery, deletion and cleanup UX](07-recovery-deletion-and-cleanup-ux.md) | 02, 05, 06 | Not started | Exact cleanup inventory and resumable, intentional data deletion |
 | 08 | [Portable inputs and credential lifecycle](08-portable-inputs-and-credential-lifecycle.md) | 02, 03, 04 | Not started | Bounded staging, provider scope and refresh/revocation behavior |
 | 09 | [Environment networks and egress policy](09-environment-networks-and-egress-policy.md) | 02, 03, 04 | Not started | Separate networks, narrow host access and tested effective policy |

@@ -140,3 +140,11 @@ out of scope until measurements show a worthwhile benefit.
 - **Limitations.** arm64 was not built on this host (CI covers it natively);
   registry compressed size and cold pull time were not measured here. Cache
   mounts for Bun's download cache were not added.
+
+## Audit follow-up (2026-09-27)
+
+An item-by-item audit of this step's checklist against the code found gaps
+the record above did not state. They were closed and are tracked with their
+evidence in [remaining-work.md](../remaining-work.md) (items 29, 30, 32);
+what could not be done on this host is listed there as environment-limited.
+

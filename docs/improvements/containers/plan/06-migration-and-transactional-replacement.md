@@ -183,3 +183,11 @@ data and the UI describes precisely which paths and session formats survive.
   covered by the capacity preflight and rollback path but not injected live;
   kill-at-every-phase is exercised through unit reconciliation, not a live
   process kill. Retained recovery copies are listed and retired in step 07.
+
+## Audit follow-up (2026-09-27)
+
+An item-by-item audit of this step's checklist against the code found gaps
+the record above did not state. They were closed and are tracked with their
+evidence in [remaining-work.md](../remaining-work.md) (items 9, 12, 24, 25, 34, 35);
+what could not be done on this host is listed there as environment-limited.
+

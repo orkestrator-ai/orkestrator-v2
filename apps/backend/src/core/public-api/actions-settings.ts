@@ -17,6 +17,7 @@ import {
   type PublicSettingValue,
 } from "@orkestrator/protocol/public-api-resources";
 import { syncDiffStatsTracking } from "../commands-runtime-state.js";
+import { applyEnvironmentAllowedDomains } from "../container-network.js";
 import type { AppConfig, Environment, PortMapping, RepositoryConfig } from "../models.js";
 import { defaultRepositoryConfig, isPortMapping } from "../storage-shared.js";
 import { requireEnvironment, requireProject } from "./actions-discovery.js";
@@ -487,18 +488,29 @@ const environmentConfigSet: MutationActionHandler<SettingsPatch & { environmentI
             return next;
           },
         );
+        // A running container whose image can change its allowlist in place
+        // adopts the saved list now; anything else takes it at the next start.
+        const domainsApplied =
+          ("allowedDomains" in input.set || input.unset.includes("allowedDomains")) &&
+          updated.environmentType === "containerized" &&
+          updated.status === "running"
+            ? (await applyEnvironmentAllowedDomains(updated.id, context.command).catch(() => null))
+                ?.kind === "applied"
+            : false;
         return {
           state: "succeeded",
           result: {
             settings: await environmentSnapshot(updated, context),
             changes: changes("environment", input).map((change) =>
-              change.key === "portMappings" || change.key === "allowedDomains"
-                ? {
-                    ...change,
-                    application:
-                      updated.status === "running" ? ("next-start" as const) : change.application,
-                  }
-                : change,
+              change.key === "allowedDomains" && domainsApplied
+                ? { ...change, application: "applied" as const }
+                : change.key === "portMappings" || change.key === "allowedDomains"
+                  ? {
+                      ...change,
+                      application:
+                        updated.status === "running" ? ("next-start" as const) : change.application,
+                    }
+                  : change,
             ),
           },
         };

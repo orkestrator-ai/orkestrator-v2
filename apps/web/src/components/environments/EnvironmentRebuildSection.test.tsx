@@ -91,7 +91,9 @@ describe("environment rebuild section", () => {
     await screen.findByText("Rebuild container and keep its files?");
     expect(screen.getByText(/partly: Revert snapshots are not kept/)).toBeTruthy();
     expect(screen.getByText("Running processes")).toBeTruthy();
-    expect(screen.getByText(/resuming those sessions after a rebuild/)).toBeTruthy();
+    expect(
+      screen.getByText(/Continuing a conversation\s+after a rebuild has been verified for/),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
     await waitFor(() => expect(onRestart).toHaveBeenCalledTimes(1));
     expect(beforeRebuild).toHaveBeenCalledTimes(1);

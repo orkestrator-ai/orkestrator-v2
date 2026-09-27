@@ -148,3 +148,11 @@ has a reviewable inventory, a durable owner and an accurate terminal outcome.
 - **Limitations.** No real-browser cycle was run for the new dialogs (component
   tests only). Restoring swaps back to the retained runtime's older generation
   number when that runtime still exists.
+
+## Audit follow-up (2026-09-27)
+
+An item-by-item audit of this step's checklist against the code found gaps
+the record above did not state. They were closed and are tracked with their
+evidence in [remaining-work.md](../remaining-work.md) (items 10, 11, 22, 23, 36);
+what could not be done on this host is listed there as environment-limited.
+

@@ -24,8 +24,10 @@ case "$max$keep" in *[!0-9]*) echo "orkestrator-log-writer: sizes must be number
 trap '' HUP
 umask 077
 # `fold` bounds a line before awk reads it: a producer that never writes a
-# newline would otherwise have awk hold its whole output in memory.
-fold -b -w 65536 | LC_ALL=C awk -v file="$file" -v max="$max" -v keep="$keep" '
+# newline would otherwise have awk hold its whole output in memory. It is
+# line-buffered, or a pipe would hold back the last few KiB of output — the
+# lines a failure diagnosis needs.
+stdbuf -oL fold -b -w 65536 | LC_ALL=C awk -v file="$file" -v max="$max" -v keep="$keep" '
 function shell_quote(s) { gsub(/\047/, "\047\\\047\047", s); return "\047" s "\047" }
 function rotate(   i, from, to) {
     close(file)

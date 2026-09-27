@@ -65,7 +65,9 @@ credentials this host does not have — named explicitly).
 - arm64 image run (C27) — needs an arm64 host; CI builds it natively.
 - Docker Desktop and rootless Engine qualification.
 - Registry compressed size and cold pull time — needs a registry push.
-- Provider session resume after a rebuild (C13) and live credential
-  rotation (C21 live half) — need real provider credentials; the rebuild
-  preview keeps resume gated (`resumeQualified: false`).
+- Provider session resume after a rebuild (C13): qualified for Claude with
+  real credentials; Codex, OpenCode, Pi, Cursor and Grok could not complete a
+  first turn in the test profile (provider-side, before any rebuild) and stay
+  gated in the preview. Live credential rotation (C21 live half) needs a
+  provider whose running process can be observed re-reading its credential.
 - Human pull-request review.

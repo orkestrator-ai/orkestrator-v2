@@ -876,6 +876,14 @@ const NOT_PRESERVED = [
  * repeated by the operation itself; this only lets the user see, before
  * confirming, what survives and whether it is possible at all.
  */
+/**
+ * Providers qualified for resuming a conversation after a preserving rebuild
+ * (C13): Claude, 2026-09-27, native session recalled its pre-rebuild context
+ * on a new runtime generation, twice. The others are unqualified until the
+ * same script passes for them against authorized credentials.
+ */
+export const RESUME_QUALIFIED_PROVIDERS: ReadonlySet<string> = new Set(["claude"]);
+
 export async function rebuildPreview(
   environmentId: string,
   context: Pick<CommandContext, "storage" | "dockerImage">,
@@ -899,9 +907,9 @@ export async function rebuildPreview(
       provider,
       level: entry.level,
       limitations: entry.limitations,
-      // No provider has been exercised resuming a preserved session against
-      // its real CLI/SDK after a rebuild yet (qualification C13).
-      resumeQualified: false,
+      // Only providers whose native session was resumed with its history
+      // after a real rebuild (scripts/qualify-session-resume.sh, C13).
+      resumeQualified: RESUME_QUALIFIED_PROVIDERS.has(provider),
     })),
     retainedCopies,
     retainedCopyLimit: MAX_RETAINED_STORAGE_SETS,

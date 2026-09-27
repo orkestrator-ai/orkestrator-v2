@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { AGENT_PLATFORM_LABELS, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   parseContainerLifecycleError,
   type ContainerLifecycleSnapshot,
@@ -50,6 +51,10 @@ const PHASE_LABELS: Record<string, string> = {
   "candidate-prepared": "Creating the new container",
   "candidate-healthy": "New container is healthy",
 };
+
+function providerName(provider: string): string {
+  return isAgentPlatform(provider) ? AGENT_PLATFORM_LABELS[provider] : provider;
+}
 
 function activeRebuild(snapshot: ContainerLifecycleSnapshot | null) {
   const operation = snapshot?.operation;
@@ -266,8 +271,15 @@ export function EnvironmentRebuildSection({
                     </div>
                     {preview.providers.some((provider) => !provider.resumeQualified) ? (
                       <p className="text-xs">
-                        Agent session files are copied, but resuming those sessions after a rebuild
-                        has not yet been verified for every agent.
+                        Agent session files are copied for every agent. Continuing a conversation
+                        after a rebuild has been verified for{" "}
+                        {preview.providers.filter((provider) => provider.resumeQualified).length > 0
+                          ? preview.providers
+                              .filter((provider) => provider.resumeQualified)
+                              .map((provider) => providerName(provider.provider))
+                              .join(", ")
+                          : "no agent yet"}
+                        ; for the others it has not been verified.
                       </p>
                     ) : null}
                     <div>

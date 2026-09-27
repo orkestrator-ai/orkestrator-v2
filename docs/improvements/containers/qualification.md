@@ -42,7 +42,7 @@ process of an isolated `dev:test` profile.
 | C10 | Pass (unit) | Unit: `container-readiness.test.ts` (a legacy-layer completion does not survive a runtime replacement; failed boot and timeout are typed), setup completion bound to runtime generation |
 | C11 | Pass | Live: C11 (bounded drain under `--init`, forced stop recorded) |
 | C12 | Pass | Live: C12 (tracked/untracked/ignored/binary files, modes, symlinks, branches, unpushed commit survive stop/start and runtime replacement; all state paths node-owned) |
-| C13 | Partial — gated | Live C14 copies Claude and Codex transcripts, relocated Codex SQLite with WAL and the OpenCode DB. Resuming a preserved session in the real provider CLI/SDK was **not** run; the rebuild preview says session files are copied but resume is not yet verified (`resumeQualified: false`), and Codex/OpenCode/Grok are declared partial |
+| C13 | Pass (Claude) / others unqualified, gated | Real stack with authorized credentials (`scripts/qualify-session-resume.sh`): a Claude Code native session was given a random codeword, the container was rebuilt onto a new runtime generation (1→2, and again 3→4 after an image change), and the resumed session answered with the codeword. Rebuild previews mark only Claude resume-qualified (`RESUME_QUALIFIED_PROVIDERS`). The other providers could not be exercised in this profile for reasons outside preservation: Codex app-server turns completed with no assistant message (while `codex exec` answered in the same container), the OpenCode model was not connected, Pi's first turn did not finish, Cursor and Grok sessions did not start. Live C14 copies every provider's session files, and the preview says resume is unverified for them |
 | C14 | Pass | Live: legacy migration and volume rebuild (Git refs/status, bytes, modes, symlinks, relocations; config and snapshots not copied). Real stack: `orkestrator environment recreate` on the fixture container kept an untracked file on a new `-g2` runtime |
 | C15 | Pass | Live: cancellation during copy, changed-runtime refusal. Unit: restart reconciliation of `migrate`/`rebuild`/`restore` at every phase removes only the candidate; the commit is one write |
 | C16 | Pass | Live: candidate volumes that run out of inodes and out of bytes mid-copy (tmpfs-backed), a symlinked session root, and a candidate name held by another container all roll back with the original intact and startable. Unit: capacity verdicts on bytes and inodes, unknown capacity refused unless accepted, truncated archives, escaping hard links and device nodes refused, reconciliation at every pre-commit phase and just after the commit write |
@@ -107,6 +107,10 @@ further gaps; they are tracked to closure in
   pre-existing and unrelated to the container sections; Tools → Environment
   settings works. Fixing it means moving the dialog's state out of the sidebar
   row.
-- Provider session resume after a rebuild (C13) and credential refresh against
-  live providers (C21) need authorized real-provider runs.
+- Provider session resume after a rebuild is qualified for Claude only (C13);
+  the script re-qualifies another provider once its sessions work in a test
+  profile. Credential rotation while a provider process is live (C21) was not
+  run against a real provider.
+- Codex's default allowlist lacks `chatgpt.com`, which Codex needs when signed
+  in with ChatGPT; restricted containers must add it (now applied in place).
 - Docker Desktop, rootless Engine and arm64 were not available on this host.

@@ -154,3 +154,11 @@ the compatible image; it must never silently restore whole-home exposure.
   not exercised against real providers (credential-free fixtures only). Live
   credential sync paths (`syncContainerClaudeCredential`, Cursor file sync)
   are unchanged and still refresh a running container.
+
+## Audit follow-up (2026-09-27)
+
+An item-by-item audit of this step's checklist against the code found gaps
+the record above did not state. They were closed and are tracked with their
+evidence in [remaining-work.md](../remaining-work.md) (items 7, 8, 13, 37);
+what could not be done on this host is listed there as environment-limited.
+

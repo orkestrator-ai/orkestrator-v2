@@ -149,3 +149,11 @@ limits are enforced independently and missing diagnostic output is explicit.
   the source-ended/disconnected/truncated UI states are exposed by the API but
   not drawn. Aggregate per-environment diagnostic byte accounting is implied by
   the per-file bounds (6 bridges × 15 MiB) rather than tracked.
+
+## Audit follow-up (2026-09-27)
+
+An item-by-item audit of this step's checklist against the code found gaps
+the record above did not state. They were closed and are tracked with their
+evidence in [remaining-work.md](../remaining-work.md) (items 3, 4, 5, 17, 26);
+what could not be done on this host is listed there as environment-limited.
+

@@ -146,3 +146,11 @@ verified and all displayed usage has an honest scope and freshness indicator.
   migrations are not added (the lifecycle queue serializes per environment
   only). Two-environment contention under CPU stress and Docker Desktop/rootless
   enforcement were not exercised on this host.
+
+## Audit follow-up (2026-09-27)
+
+An item-by-item audit of this step's checklist against the code found gaps
+the record above did not state. They were closed and are tracked with their
+evidence in [remaining-work.md](../remaining-work.md) (items 16, 18, 19, 20, 21, 38);
+what could not be done on this host is listed there as environment-limited.
+

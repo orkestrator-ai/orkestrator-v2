@@ -237,6 +237,12 @@ Scenarios without a client are unchanged (identical counters).
   counts (the 40 "cache hits" of step 01 became 40 skipped periodic scans).
   Two clients share one scan and one tree walk per tick (`env1-container-c2`:
   120 scans for 240 reads) instead of each paying for its own.
+  *Later change (2026-09-27, efficiency plan step 18):* container **tree
+  walks** now use a 10 s age limit while the container's file list is recent
+  and complete, and are re-walked at once when the file list's membership
+  changes; file-list scans still follow the 3 s limit above. An open quiet
+  container panel drops from 12 to 4 tree walks a minute. See
+  [the step 18 record](../../efficiency/plan/18-file-tree-caching.md).
 - Not modelled here (see Limitations): edit bursts, where each hint now also
   re-walks the tree once while a panel shows it, and real client clocks,
   where two unsynchronised clients join less often than in this lockstep

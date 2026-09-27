@@ -542,7 +542,6 @@ export class BuildPipelineReviewFanout {
       ...(fields.reasoningEffort ? { reasoningEffort: fields.reasoningEffort } : {}),
       ...(fields.tokenCount === undefined ? {} : { tokenCount: fields.tokenCount }),
       ...(typeof fields.fastMode === "boolean" ? { fastMode: fields.fastMode } : {}),
-      messages: [],
       messageRevision: 0,
     };
     pipeline.sessions.push(session);

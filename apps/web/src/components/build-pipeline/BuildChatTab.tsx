@@ -33,7 +33,11 @@ import {
 } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as backend from "@/lib/backend";
-import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
+import {
+  hydrateBuildPipeline,
+  isBuildPipelineTranscriptStale,
+  isBuildPipelineTranscriptUnavailable,
+} from "@/lib/build-pipeline-persistence";
 import {
   hideMachineOutputText,
   hideReviewPackagePlanText,
@@ -536,6 +540,26 @@ export function BuildChatTab({
   );
   const selectedSessionIndex =
     pipeline?.sessions.findIndex((session) => session.sdkSessionId === selectedSessionId) ?? -1;
+  // The pipeline record references stage transcripts instead of embedding
+  // them. Fetch the viewed stage's committed body when this renderer does not
+  // hold it at that revision — once per revision, so an unreadable transcript
+  // is reported rather than re-requested on every render.
+  const transcriptStale = isBuildPipelineTranscriptStale(selectedSession);
+  const transcriptUnavailable = isBuildPipelineTranscriptUnavailable(selectedSession);
+  const transcriptRequestRef = useRef<string | null>(null);
+  const selectedSessionKey = selectedSession?.sessionKey;
+  const selectedMessageRevision = selectedSession?.messageRevision ?? 0;
+  useEffect(() => {
+    if (!isActive || !transcriptStale || !selectedSessionKey) return;
+    const request = `${data.pipelineId}\0${selectedSessionKey}\0${selectedMessageRevision}`;
+    if (transcriptRequestRef.current === request) return;
+    transcriptRequestRef.current = request;
+    void hydrateBuildPipeline(data.pipelineId, undefined, {
+      prioritySessionKey: selectedSessionKey,
+    }).catch((error) => {
+      console.warn("[BuildChatTab] Failed to load the stage transcript:", error);
+    });
+  }, [data.pipelineId, isActive, selectedMessageRevision, selectedSessionKey, transcriptStale]);
   const reportSession = pipeline ? reviewReportSession(pipeline) : undefined;
   const fanoutReviewerBySessionKey = useMemo(
     () =>
@@ -1327,10 +1351,33 @@ export function BuildChatTab({
                 <div className="py-12 text-center text-sm text-muted-foreground">
                   {!selectedSession
                     ? "Waiting for the backend to start a build stage."
-                    : selectedSession.status === "running"
-                      ? "This stage is running. Its authoritative transcript will appear here as it is synchronized."
-                      : "No text transcript was produced for this stage."}
+                    : transcriptUnavailable
+                      ? "The stored transcript for this stage could not be read."
+                      : transcriptStale && selectedSession.messages === undefined
+                        ? "Loading this stage's transcript…"
+                        : selectedSession.status === "running"
+                          ? "This stage is running. Its authoritative transcript will appear here as it is synchronized."
+                          : "No text transcript was produced for this stage."}
                 </div>
+              }
+              header={
+                (selectedSession?.transcript && !selectedSession.transcript.complete) ||
+                selectedSession?.transcriptCheckpointError ? (
+                  <div className="px-3 py-2 text-center text-[11px] text-muted-foreground @sm:px-6">
+                    {selectedSession.transcript && !selectedSession.transcript.complete ? (
+                      <p>
+                        {selectedSession.transcript.omittedMessages ?? "Some"}{" "}
+                        {selectedSession.transcript.omittedMessages === 1
+                          ? "message was"
+                          : "messages were"}{" "}
+                        not kept in the stored transcript because of its size limit.
+                      </p>
+                    ) : null}
+                    {selectedSession.transcriptCheckpointError ? (
+                      <p>The newest messages of this stage could not be stored yet.</p>
+                    ) : null}
+                  </div>
+                ) : undefined
               }
               footer={
                 showReviewReport || showThinking ? (

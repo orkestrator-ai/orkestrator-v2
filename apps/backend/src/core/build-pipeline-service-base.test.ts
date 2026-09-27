@@ -1520,6 +1520,53 @@ describe("BuildPipelineService", () => {
     });
   }
 
+  test("recovers a legacy verification request after its transcript left the control record", async () => {
+    await withService(async (service, storage, provider) => {
+      const verifying = await startVerifying(service, storage);
+      const record = await storage.getBuildPipeline(verifying.id);
+      if (!record) throw new Error("Pipeline disappeared");
+      const snapshot = record.snapshot as BuildPipeline;
+      const session = snapshot.sessions[snapshot.currentSessionIndex]!;
+      // A record written before the request id was persisted, whose transcript
+      // was still inline.
+      delete session.structuredRequestId;
+      session.messages = [{ info: { role: "user", id: "legacy-inline-request" } }];
+      await storage.saveBuildPipeline(
+        snapshot.id,
+        snapshot.projectId,
+        snapshot.environmentId,
+        record.version,
+        snapshot,
+        record.revision,
+      );
+      expect(await storage.migrateBuildPipelineTranscripts()).toMatchObject({ migrated: 1 });
+      const migrated = (await pipeline(storage, verifying.id)).sessions.at(-1)!;
+      expect(migrated.messages).toBeUndefined();
+      expect(migrated.legacyStructuredRequestId).toBe("legacy-inline-request");
+
+      // Nothing inline, and the provider has nothing to offer either.
+      provider.messages = async () => [];
+      let observedRequestId = "";
+      provider.structured = async <T>(
+        _sessionId: string,
+        requestId: string,
+      ): Promise<StructuredOutputResult<T>> => {
+        observedRequestId = requestId;
+        return {
+          ok: true,
+          provider: "claude",
+          requestId,
+          value: { complete: true, rationale: "Recovered." } as T,
+        };
+      };
+
+      await service.advanceNow(verifying.id);
+
+      expect(observedRequestId).toBe("legacy-inline-request");
+      expect((await pipeline(storage, verifying.id)).phase).toBe("creating-pr");
+    });
+  });
+
   test("loops through fix work and stops at the verification iteration bound", async () => {
     await withService(async (service, storage, provider) => {
       provider.structured = async <T>(

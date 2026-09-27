@@ -3,6 +3,8 @@ import { invoke } from "@/lib/native/backend";
 import {
   hydrateBuildPipeline,
   hydrateBuildPipelinesForProject,
+  isBuildPipelineTranscriptStale,
+  isBuildPipelineTranscriptUnavailable,
   LEGACY_BUILD_PIPELINE_STORAGE_KEY,
   migrateLegacyBuildPipelines,
 } from "./build-pipeline-persistence";
@@ -158,11 +160,14 @@ describe("build pipeline read model", () => {
       backendRevision: 7,
     };
     useBuildPipelineStore.getState().replacePipeline(local);
+    // The backend's record carries each session's committed revision, never its body.
     const remote = {
       ...local,
       phase: "reviewing" as const,
       backendRevision: 0,
-      sessions: local.sessions.map(({ messages: _messages, ...session }) => session),
+      sessions: local.sessions.map(({ messages: _messages, ...session }) =>
+        session.sessionKey === "patched-session" ? { ...session, messageRevision: 4 } : session,
+      ),
     };
     invokeMock.mockResolvedValueOnce({
       unchanged: false,
@@ -216,21 +221,28 @@ describe("build pipeline read model", () => {
       backendRevision: 0,
       sessions: local.sessions.map(({ messages: _messages, ...session }) => session),
     };
-    const full = record(
-      {
-        ...local,
-        phase: "verifying",
-        backendRevision: 0,
-        sessions: [
-          {
-            ...local.sessions[0]!,
-            messages: [{ id: "authoritative" }],
-            messageRevision: 6,
-          },
-        ],
-      },
-      8,
-    );
+    // The retry names no held bodies, so every stale session comes back whole.
+    const { messages: _held, ...bodyFree } = local.sessions[0]!;
+    const full = {
+      unchanged: false,
+      record: record(
+        {
+          ...local,
+          phase: "verifying",
+          backendRevision: 0,
+          sessions: [{ ...bodyFree, messageRevision: 6 }],
+        },
+        8,
+      ),
+      messagePatches: [
+        {
+          sessionKey: "session-1",
+          startIndex: 0,
+          revision: 6,
+          messages: [{ id: "authoritative" }],
+        },
+      ],
+    };
     invokeMock
       .mockResolvedValueOnce({
         unchanged: false,
@@ -252,9 +264,130 @@ describe("build pipeline read model", () => {
 
     expect(restored?.phase).toBe("verifying");
     expect(restored?.sessions[0]?.messages).toEqual([{ id: "authoritative" }]);
+    expect(restored?.sessions[0]?.messageRevision).toBe(6);
     expect(invokeMock).toHaveBeenNthCalledWith(2, "get_build_pipeline", {
       pipelineId: "pipeline-1",
+      knownRevision: undefined,
+      knownSessions: {},
     });
+  });
+
+  test("keeps held transcripts across a body-free project list and reports what is stale", async () => {
+    const held = [{ id: "held-1" }, { id: "held-2" }];
+    const session = {
+      phase: "build" as const,
+      iteration: 0,
+      sessionKey: "session-1",
+      sdkSessionId: "sdk-1",
+      status: "running" as const,
+      startedAt: "2026-07-29T00:00:00.000Z",
+      label: "Build",
+      messageRevision: 3,
+    };
+    useBuildPipelineStore.getState().replacePipeline({
+      ...snapshot(),
+      currentSessionIndex: 0,
+      sessions: [{ ...session, messages: held }],
+      backendRevision: 2,
+    });
+    // The list carries control state only; the session's committed revision moved on.
+    invokeMock.mockResolvedValueOnce({
+      ids: ["pipeline-1"],
+      records: [
+        record(
+          { ...snapshot(), currentSessionIndex: 0, sessions: [{ ...session, messageRevision: 4 }] },
+          3,
+        ),
+      ],
+    });
+
+    const [restored] = await hydrateBuildPipelinesForProject("project-1");
+
+    expect(restored?.sessions[0]?.messages).toBe(held);
+    expect(restored?.sessions[0]?.messageRevision).toBe(4);
+    expect(isBuildPipelineTranscriptStale(restored?.sessions[0])).toBe(true);
+
+    // The next point read names the revision of the body it holds, not the
+    // committed one, so the backend sends the tail it is missing.
+    invokeMock.mockResolvedValueOnce({
+      unchanged: false,
+      record: record(
+        { ...snapshot(), currentSessionIndex: 0, sessions: [{ ...session, messageRevision: 4 }] },
+        3,
+      ),
+      messagePatches: [
+        {
+          sessionKey: "session-1",
+          baseRevision: 3,
+          baseCount: 2,
+          startIndex: 1,
+          revision: 4,
+          messages: [{ id: "held-2", streamed: true }, { id: "new-3" }],
+        },
+      ],
+    });
+    const patched = await hydrateBuildPipeline("pipeline-1", undefined, {
+      prioritySessionKey: "session-1",
+    });
+
+    expect(invokeMock).toHaveBeenLastCalledWith("get_build_pipeline", {
+      pipelineId: "pipeline-1",
+      knownRevision: 3,
+      knownSessions: { "session-1": { revision: 3, count: 2 } },
+      prioritySessionKey: "session-1",
+    });
+    expect(patched?.sessions[0]?.messages).toEqual([
+      { id: "held-1" },
+      { id: "held-2", streamed: true },
+      { id: "new-3" },
+    ]);
+    expect(isBuildPipelineTranscriptStale(patched?.sessions[0])).toBe(false);
+  });
+
+  test("keeps the held body when the backend defers or cannot read a transcript", async () => {
+    const held = [{ id: "held" }];
+    const base = {
+      phase: "build" as const,
+      iteration: 0,
+      sdkSessionId: "sdk-1",
+      status: "idle" as const,
+      startedAt: "2026-07-29T00:00:00.000Z",
+      label: "Build",
+    };
+    useBuildPipelineStore.getState().replacePipeline({
+      ...snapshot(),
+      currentSessionIndex: 1,
+      sessions: [
+        { ...base, sessionKey: "deferred", messages: held, messageRevision: 1 },
+        { ...base, sessionKey: "unreadable", sdkSessionId: "sdk-2", messageRevision: 1 },
+      ],
+      backendRevision: 2,
+    });
+    invokeMock.mockResolvedValueOnce({
+      unchanged: false,
+      record: record(
+        {
+          ...snapshot(),
+          currentSessionIndex: 1,
+          sessions: [
+            { ...base, sessionKey: "deferred", messageRevision: 2 },
+            { ...base, sessionKey: "unreadable", sdkSessionId: "sdk-2", messageRevision: 1 },
+          ],
+        },
+        3,
+      ),
+      messagePatches: [
+        { sessionKey: "deferred", startIndex: 0, revision: 2, messages: [], deferred: true },
+        { sessionKey: "unreadable", startIndex: 0, revision: 1, messages: [], unavailable: true },
+      ],
+    });
+
+    const restored = await hydrateBuildPipeline("pipeline-1");
+
+    expect(restored?.sessions[0]?.messages).toBe(held);
+    expect(isBuildPipelineTranscriptStale(restored?.sessions[0])).toBe(true);
+    expect(isBuildPipelineTranscriptUnavailable(restored?.sessions[1])).toBe(true);
+    expect(restored?.sessions[1]?.messages).toBeUndefined();
   });
 
   test("reuses unchanged production list entries and exposes deleted ids", async () => {

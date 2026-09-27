@@ -123,10 +123,14 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
   ): Promise<void> {
     // advance() clears pendingPromptAttempt and activePromptContext before it
     // reaches this branch, so the session's own key is the only durable copy.
-    // A snapshot written before that field existed has none, and there the
-    // providers' own transcript metadata carries the last structured request.
+    // A snapshot written before that field existed has none; its transcript
+    // metadata carried the last structured request, and moving the transcript
+    // out of the control record persists that answer explicitly. Only a record
+    // not yet migrated still answers from its inline array.
     const resolvedRequestId =
-      session.structuredRequestId ?? this.structuredRequestId(session.messages);
+      session.structuredRequestId ??
+      session.legacyStructuredRequestId ??
+      (await this.transcriptCheckpoints.recoverStructuredRequestId(pipeline.id, session));
     if (!resolvedRequestId) throw new Error("Verification result key is missing");
     const result = await this.readWorkflowResult<VerificationVerdict>(
       provider,
@@ -195,22 +199,6 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     if (elapsed >= this.structuredResultDeadlineMs) {
       throw new Error(`The ${label} finished without returning its required structured result`);
     }
-  }
-
-  protected structuredRequestId(messages: unknown[] | undefined): string | undefined {
-    if (!messages) return undefined;
-    for (const entry of [...messages].reverse()) {
-      if (!entry || typeof entry !== "object") continue;
-      const record = entry as Record<string, unknown>;
-      const info =
-        record.info && typeof record.info === "object"
-          ? (record.info as Record<string, unknown>)
-          : record;
-      if (info.role === "user" && typeof info.id === "string") return info.id;
-      if (typeof record.requestId === "string") return record.requestId;
-      if (typeof record.id === "string" && record.role === "user") return record.id;
-    }
-    return undefined;
   }
 
   protected async finishPullRequest(pipeline: BuildPipeline): Promise<void> {

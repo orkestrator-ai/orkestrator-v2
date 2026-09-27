@@ -933,20 +933,34 @@ export type ConditionalBuildPipeline<T> =
         startIndex: number;
         revision: number;
         messages: unknown[];
+        /** The stored transcript could not be read; keep what is held. */
+        unavailable?: true;
+        /** Over the response budget; a later read fetches it. */
+        deferred?: true;
+        /** Some history was not retained by the backend's transcript bound. */
+        complete?: false;
       }>;
     }
   | PersistedBuildPipeline<T>
   | null;
 
+/**
+ * Control state plus transcript windows for the sessions whose bodies the
+ * caller does not hold at their committed revision. `knownSessions` names the
+ * bodies held (revision and count); omitted sessions come back whole, and
+ * `prioritySessionKey` is served first when the response budget runs out.
+ */
 export async function getBuildPipelineConditional<T = unknown>(
   pipelineId: string,
   knownRevision?: number,
-  knownSessions?: Record<string, { revision: number; count: number }>,
+  knownSessions: Record<string, { revision: number; count: number }> = {},
+  prioritySessionKey?: string,
 ): Promise<ConditionalBuildPipeline<T>> {
   const response = await invoke<unknown>("get_build_pipeline", {
     pipelineId,
     knownRevision,
     knownSessions,
+    ...(prioritySessionKey ? { prioritySessionKey } : {}),
   });
   if (response === null) return null;
   if (!isRecord(response)) {
@@ -982,6 +996,9 @@ export async function getBuildPipelineConditional<T = unknown>(
           (Number.isSafeInteger(value.baseRevision) && (value.baseRevision as number) >= 0)) &&
         (value.baseCount === undefined ||
           (Number.isSafeInteger(value.baseCount) && (value.baseCount as number) >= 0)) &&
+        (value.unavailable === undefined || value.unavailable === true) &&
+        (value.deferred === undefined || value.deferred === true) &&
+        (value.complete === undefined || value.complete === false) &&
         Array.isArray(value.messages)
       );
     })

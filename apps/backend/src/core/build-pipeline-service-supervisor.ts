@@ -57,7 +57,11 @@ import {
   type ObservedWorktreeSnapshot,
   type ReviewWorktreeSnapshot,
 } from "./build-pipeline-prompts.js";
-import { buildReviewHandoffPrompt, prependReviewHandoff } from "./build-pipeline-handoff.js";
+import {
+  BUILD_PIPELINE_HANDOFF_TAIL_MESSAGES,
+  buildReviewHandoffPrompt,
+  prependReviewHandoff,
+} from "./build-pipeline-handoff.js";
 import {
   BuildPipelineReviewFanout,
   type ReviewFanoutStep,
@@ -85,8 +89,6 @@ import {
   executionModeOverrideForPhase,
   DEFAULT_STALL_WARNING_MS,
   withUnattendedPolicy,
-  normalizeTranscriptFingerprint,
-  transcriptFingerprint,
   attachBeforeDispatch,
   elapsedSince,
   elapsedSinceLatest,
@@ -900,18 +902,11 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     const messages = observedMessages
       ? Array.from(observedMessages)
       : await provider.messages(session.sdkSessionId);
-    const fingerprint = transcriptFingerprint(messages);
-    // A snapshot restored before fingerprints existed has none, so fall back to
-    // recomputing it from the stored transcript exactly once. One written
-    // before the digest form carries the raw key, which normalizes exactly.
-    const previous =
-      normalizeTranscriptFingerprint(session.messagesFingerprint) ??
-      (session.messages === undefined ? undefined : transcriptFingerprint(session.messages));
-    if (previous === fingerprint) return false;
-    session.messages = messages;
-    session.messagesFingerprint = fingerprint;
-    session.messageRevision = (session.messageRevision ?? 0) + 1;
-    return true;
+    // The body is held by the checkpointer, not the snapshot: the next save
+    // commits it to the transcript store before the control record that
+    // references it (plan step 16). "Changed" means changed since the last
+    // committed checkpoint, so a throttled delta is re-detected until saved.
+    return this.transcriptCheckpoints.observe(session, messages);
   }
 
   protected shouldPersistTranscript(session: PipelineSession): boolean {
@@ -1189,7 +1184,6 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         startedAt: new Date().toISOString(),
         turnStartedAt: promptStartedAt,
         label,
-        messages: [],
         messageRevision: 0,
         structuredRequestId: schema !== undefined ? requestId : undefined,
         resultTransport,
@@ -1505,6 +1499,11 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         sourceAgent: sessionAgent(pipeline, sourceSession),
         destinationAgent: agent,
         sourceSession,
+        sourceTranscript: await this.transcriptCheckpoints.window(
+          pipeline.id,
+          sourceSession,
+          BUILD_PIPELINE_HANDOFF_TAIL_MESSAGES,
+        ),
       });
       return {
         prompt: prependReviewHandoff(handoff, addressPrompt(pipeline.structuredReview)),

@@ -473,7 +473,15 @@ describe("BuildPipelineService", () => {
         "verify",
         "pr",
       ]);
-      expect(completed.sessions.every((session) => Array.isArray(session.messages))).toBe(true);
+      // Every stage's transcript was checkpointed to the transcript store and
+      // is referenced, not embedded, by the workflow record.
+      expect(completed.sessions.every((session) => session.messages === undefined)).toBe(true);
+      for (const session of completed.sessions) {
+        expect(session.transcript?.revision).toBe(session.messageRevision);
+        expect((await storage.readBuildPipelineTranscript(started.id, session)).status).toBe(
+          "found",
+        );
+      }
       expect(
         completed.sessions.map((session) => [session.phase, session.structuredResultStatus]),
       ).toEqual([
@@ -610,6 +618,12 @@ describe("BuildPipelineService", () => {
       expect(running.sessions[0]).toMatchObject({
         status: "running",
         messageRevision: 1,
+        transcript: { revision: 1, messageCount: 1, complete: true },
+      });
+      expect(running.sessions[0]!.messages).toBeUndefined();
+      const stored = await storage.readBuildPipelineTranscript(started.id, running.sessions[0]!);
+      expect(stored).toMatchObject({
+        status: "found",
         messages: [expect.objectContaining({ role: "assistant" })],
       });
     });

@@ -9,7 +9,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -120,14 +120,16 @@ function fakeAgentSession(sessionFile: string, onDispose: () => void): AgentSess
 }
 
 describe("POST /session/:id/close", () => {
-  test("resume refuses a JSONL file whose existing owner is closing", async () => {
+  test("resume refuses a JSONL file whose aliased owner is closing", async () => {
     const sessionDir = await mkdtemp(join(tmpdir(), "pi-close-resume-"));
     const previous = process.env.PI_SESSION_DIR;
     process.env.PI_SESSION_DIR = sessionDir;
     const sessionFile = join(sessionDir, "conversation.jsonl");
+    const ownerAlias = join(sessionDir, "owned-alias.jsonl");
     await writeFile(sessionFile, "", "utf8");
+    await symlink(sessionFile, ownerAlias);
     const state = newSessionState();
-    state.sessionFile = sessionFile;
+    state.sessionFile = ownerAlias;
     state.status = "running";
     sessions.set(state.id, state);
     const hung = deferred();

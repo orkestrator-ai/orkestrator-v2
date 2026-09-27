@@ -1145,7 +1145,15 @@ export async function resumeSession(
   // structure Pi resumes and forks from — so a repeat resume adopts the
   // session that already owns the file.
   for (const existing of sessions.values()) {
-    if (existing.sessionFile === resolved) {
+    const ownedFile = existing.sessionFile;
+    if (!ownedFile) continue;
+    // Restored and SDK-created sessions may retain /var while `realpath`
+    // resolves the requested file through macOS's /private/var alias.
+    const sameFile =
+      ownedFile === resolved ||
+      ownedFile === sessionFile ||
+      (await realpath(ownedFile).catch(() => undefined)) === resolved;
+    if (sameFile) {
       if (isSessionClosed(existing)) throw new SessionClosingError();
       if (policy && JSON.stringify(existing.policy) !== JSON.stringify(policy)) {
         if (existing.status === "running" || existing.dispatching) {

@@ -64,6 +64,27 @@ export function isHandledSdkMessageType(type: unknown): boolean {
   return typeof type === "string" && type in HANDLED_SDK_MESSAGE_TYPES;
 }
 
+/**
+ * Top-level frames the CLI puts on the SDK stream that the public `SDKMessage`
+ * union does not name (they are `@internal` in the CLI's own schemas), so
+ * {@link HANDLED_SDK_MESSAGE_TYPES} cannot key on them. Each one here has been
+ * read and deliberately needs nothing from the bridge; anything else outside
+ * the union is still counted as drift.
+ */
+const KNOWN_INTERNAL_SDK_MESSAGE_TYPES: ReadonlySet<string> = new Set([
+  // The fate of a uuid-stamped inbound message: queued, started, then
+  // completed / cancelled / discarded / refused. The CLI emits it for every
+  // prompt and steer because the bridge stamps each with a client uuid. The
+  // bridge already learns the same outcomes from the turn's result (which
+  // echoes that uuid) and its own interrupt and teardown paths; `refused`
+  // applies only to cross-session peer messages, which this bridge never sends.
+  "command_lifecycle",
+]);
+
+export function isKnownInternalSdkMessageType(type: unknown): boolean {
+  return typeof type === "string" && KNOWN_INTERNAL_SDK_MESSAGE_TYPES.has(type);
+}
+
 /** Every `subtype` the SDK can put on a `type: "system"` message. */
 export type SdkSystemSubtype = Extract<SDKMessage, { type: "system" }>["subtype"];
 

@@ -1497,6 +1497,40 @@ describe("useNativeAgentSession progressive view", () => {
     expect(result.current.projection?.turn.phase).toBe("idle");
   });
 
+  test("a replacement provider session under the same generation replaces the transcript", async () => {
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1"), message("m2")])];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    const { result } = renderSession();
+    await waitFor(() =>
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1", "m2"]),
+    );
+    // Let the view's own revision run ahead of a fresh session's first read.
+    for (let poll = 0; poll < 3; poll += 1) {
+      transcriptUpdates = [
+        () => transcriptSnapshot(`transcript-poll-${poll}`, [message("m1"), message("m2")]),
+      ];
+      stateUpdates = [];
+      await act(async () => {
+        await result.current.refresh();
+      });
+    }
+
+    const replacement = { ...identity, providerSessionId: "session-2" };
+    transcriptUpdates = [
+      () =>
+        transcriptSnapshot("transcript-2", [message("n1")], {
+          identity: replacement,
+        }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-2", { identity: replacement })];
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.projection?.sessionId).toBe("session-2");
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["n1"]);
+  });
+
   test("pages a direct cursor without bootstrapping through the joined snapshot", async () => {
     transcriptUpdates = [
       () =>

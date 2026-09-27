@@ -1456,7 +1456,11 @@ export function useNativeAgentSession<TMessage = unknown>({
           : {}),
         ...(current?.turnBoundaries ? { turnBoundaries: current.turnBoundaries } : {}),
         ...retainedCommandFields(current, progressiveDiscoveryRef.current, value.identity),
-        revision: (current?.revision ?? 0) + 1,
+        // Ordered after whatever is on screen, not after `current`: a new
+        // provider session under the same source generation starts `current`
+        // over, and a revision reset to 1 would make `applyProjection` drop
+        // the new session's transcript as older than the one it replaces.
+        revision: (projectionRef.current?.revision ?? 0) + 1,
         generation: value.identity.sourceGeneration,
       };
       const next: NativeAgentSessionProjection<TMessage> = {
@@ -1547,8 +1551,15 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(value.shareUrl === undefined ? {} : { shareUrl: value.shareUrl }),
         connection: value.connection,
         turn: value.turn,
-        messages: current?.messages ?? [],
-        ...(current?.messageWindow ? { messageWindow: current.messageWindow } : {}),
+        // Messages belong to the provider session they were read from. State
+        // for a replacement session must not relabel the old transcript as
+        // its own while the new transcript is still on its way.
+        ...(current && current.sessionId && current.sessionId !== value.identity.providerSessionId
+          ? { messages: [] }
+          : {
+              messages: current?.messages ?? [],
+              ...(current?.messageWindow ? { messageWindow: current.messageWindow } : {}),
+            }),
         interactions: value.interactions,
         composerControls: value.composerControls,
         ...(value.composer ? { composer: value.composer } : {}),

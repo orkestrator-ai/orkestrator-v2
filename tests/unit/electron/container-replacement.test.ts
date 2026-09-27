@@ -4,6 +4,7 @@ import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecyc
 import {
   capacityVerdict,
   parseCopyOutput,
+  rebuildPreview,
   replaceRuntimePreservingState,
   replacementCopyPlan,
 } from "../../../apps/backend/src/core/container-replacement";
@@ -156,6 +157,38 @@ exit 1
         expect(await log.read()).toBe("");
       },
     );
+    expect(record(environments.get("env-lifecycle")?.containerLifecycle).operation).toBeUndefined();
+  });
+
+  test("paused admissions refuse rebuilds before anything runs; the preview says why", async () => {
+    const { context, environments } = await fixture();
+    const previous = process.env.ORKESTRATOR_CONTAINER_REPLACEMENT;
+    process.env.ORKESTRATOR_CONTAINER_REPLACEMENT = "paused";
+    try {
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+exit 1
+`,
+        async (log) => {
+          await expect(
+            replaceRuntimePreservingState(
+              { environmentId: "env-lifecycle", expectedContainerId: "source-container" },
+              context,
+            ),
+          ).rejects.toThrow("ContainerLifecycleError:capability-unavailable");
+          expect(await log.read()).toBe("");
+          const preview = await rebuildPreview("env-lifecycle", context);
+          expect(preview).toMatchObject({
+            available: false,
+            unavailableReason: "admission-paused",
+          });
+        },
+      );
+    } finally {
+      if (previous === undefined) delete process.env.ORKESTRATOR_CONTAINER_REPLACEMENT;
+      else process.env.ORKESTRATOR_CONTAINER_REPLACEMENT = previous;
+    }
     expect(record(environments.get("env-lifecycle")?.containerLifecycle).operation).toBeUndefined();
   });
 

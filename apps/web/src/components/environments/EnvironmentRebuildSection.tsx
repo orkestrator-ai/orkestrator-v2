@@ -32,6 +32,8 @@ const UNAVAILABLE_REASONS: Record<RebuildUnavailableReason, string> = {
   "engine-without-volume-subpath":
     "Docker Engine 26 or newer is needed to keep agent sessions on persistent storage.",
   "disabled-by-configuration": "Persistent storage is disabled by configuration.",
+  "admission-paused":
+    "Rebuilds are paused on this installation. Recovery copies can still be restored or discarded.",
   "unsupported-topology": "A preserving rebuild needs a reachable local Docker engine.",
   "retention-limit":
     "This environment keeps the maximum number of recovery copies. Discard old copies first.",

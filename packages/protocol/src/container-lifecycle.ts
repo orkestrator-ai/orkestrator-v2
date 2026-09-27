@@ -837,7 +837,9 @@ export type RebuildUnavailableReason =
   | "disabled-by-configuration"
   | "unsupported-topology"
   | "retention-limit"
-  | "unsupported-format";
+  | "unsupported-format"
+  /** New rebuilds and migrations are paused on this installation. */
+  | "admission-paused";
 
 export interface RebuildProviderPreservation {
   provider: string;

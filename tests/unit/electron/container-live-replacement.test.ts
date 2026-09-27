@@ -51,6 +51,13 @@ afterAll(async () => {
     .split("\n")
     .filter(Boolean);
   if (volumes.length > 0) await docker(["volume", "rm", ...volumes]).catch(() => undefined);
+  // Environment networks are labelled with the same private owner.
+  const networks = (
+    await docker(["network", "ls", "-q", "--filter", `label=orkestrator-owner=${owner}`])
+  )
+    .split("\n")
+    .filter(Boolean);
+  if (networks.length > 0) await docker(["network", "rm", ...networks]).catch(() => undefined);
   if (dataDir) await fs.rm(dataDir, { recursive: true, force: true });
 });
 

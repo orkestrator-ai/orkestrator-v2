@@ -83,8 +83,12 @@ process of an isolated `dev:test` profile.
 - Prior image digests remain available; a runtime keeps its pinned image id,
   and an incompatible provider database is recovered from a retained copy, not
   by mounting newer state into an old runtime.
-- Rebuild/migration admission can be refused while recovery readers and
-  existing operations continue; the old prune and implicit discard are gone.
+- Rebuild/migration admission can be paused with
+  `ORKESTRATOR_CONTAINER_REPLACEMENT=paused`: new rebuilds and migrations are
+  refused before anything runs (the rebuild preview says `admission-paused`),
+  while listing, restoring and discarding recovery copies and resolving an
+  interrupted operation keep working. The old prune and implicit discard are
+  gone.
 - Resource inventory after qualification: all live-suite and profile
   resources removed by exact owner label; nothing else touched.
 - Human review of the pull request is required; nothing here merges or changes

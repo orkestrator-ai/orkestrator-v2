@@ -103,6 +103,16 @@ export type StorageFormatDecision =
  * storage contract, the daemon supports sub-path mounts, and the rollout
  * switch has not disabled it. Existing legacy runtimes are never migrated here.
  */
+/**
+ * Release safety switch: `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` refuses
+ * new rebuilds and migrations while everything that recovers data — listing,
+ * restoring and discarding recovery copies, resolving an interrupted
+ * operation — keeps working.
+ */
+export function replacementAdmissionPaused(environment: NodeJS.ProcessEnv = process.env): boolean {
+  return environment.ORKESTRATOR_CONTAINER_REPLACEMENT === "paused";
+}
+
 export function selectStorageFormat(
   capabilities: ImageManifest["capabilities"] | null,
   topology: Pick<DockerTopology, "serverVersion" | "kind">,

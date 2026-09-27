@@ -94,12 +94,17 @@ afterAll(async () => {
     .split("\n")
     .filter(Boolean);
   if (volumes.length > 0) await docker(["volume", "rm", ...volumes]).catch(() => undefined);
-  const networks = (
-    await docker(["network", "ls", "-q", "--filter", `label=${RUN_LABEL}`]).catch(() => "")
-  )
-    .split("\n")
-    .filter(Boolean);
-  if (networks.length > 0) await docker(["network", "rm", ...networks]).catch(() => undefined);
+  // Networks carry the run label or, when backend code created them, this
+  // run's private owner label.
+  const networks = new Set<string>();
+  for (const filter of [`label=${RUN_LABEL}`, `label=orkestrator-owner=${owner}`]) {
+    for (const id of (
+      await docker(["network", "ls", "-q", "--filter", filter]).catch(() => "")
+    ).split("\n")) {
+      if (id) networks.add(id);
+    }
+  }
+  if (networks.size > 0) await docker(["network", "rm", ...networks]).catch(() => undefined);
   if (dataDir) await fs.rm(dataDir, { recursive: true, force: true });
 });
 

@@ -38,6 +38,7 @@ import {
   initializeStorageSet,
   planStorageSet,
   removeStorageVolumes,
+  replacementAdmissionPaused,
   selectStorageFormat,
   storageHelperFailureMessage,
   STORAGE_HELPER_ROLE,
@@ -538,6 +539,12 @@ async function replaceRuntimePreservingStateUnfenced(
   request: ReplacementRequest,
   context: CommandContext,
 ): Promise<ReplacementOutcome | undefined> {
+  if (replacementAdmissionPaused()) {
+    throw lifecycleError(
+      "capability-unavailable",
+      "New rebuilds and migrations are paused on this installation. Recovery copies can still be restored or discarded.",
+    );
+  }
   const environment = await context.storage.getEnvironment(request.environmentId);
   if (!environment) throw new Error(`Environment not found: ${request.environmentId}`);
   if (environment.environmentType !== "containerized" || !environment.containerId) return undefined;
@@ -835,6 +842,7 @@ export async function rebuildPreview(
   if (!environment.containerId) return refuse("no-container");
   if (record.operation) return refuse("operation-in-progress");
   if (retainedCopies >= MAX_RETAINED_STORAGE_SETS) return refuse("retention-limit");
+  if (replacementAdmissionPaused()) return refuse("admission-paused");
   const topology = await detectDockerTopology();
   if (topology.kind === "remote" || topology.kind === "unavailable") {
     return refuse("unsupported-topology");

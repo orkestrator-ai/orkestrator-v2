@@ -311,6 +311,13 @@ possible and exactly which paths and provider formats survive.
 next phase boundary (it does not take the lifecycle queue the rebuild holds);
 the outcome is recorded as `cancelled` and rolled back like a failure.
 
+### Pausing admissions
+
+`ORKESTRATOR_CONTAINER_REPLACEMENT=paused` is the release safety switch: a
+new rebuild or migration is refused (`capability-unavailable`) before anything
+runs and the preview reports `admission-paused`. Recovery — listing, restoring
+and discarding copies, reconciling an interrupted operation — is unaffected.
+
 ## Recovery copies
 
 An environment keeps earlier states as recovery copies (`recovery-copies.ts`,

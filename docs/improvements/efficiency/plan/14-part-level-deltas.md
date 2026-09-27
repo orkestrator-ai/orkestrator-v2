@@ -1,6 +1,6 @@
 # 14 — Add part-level deltas only if residual amplification warrants them
 
-Status: Not started; gate evaluated — Prototype warranted (step 01 measurements). Prerequisites: 08, 09, 12, 13. Finding: E05.
+Status: Complete — adopted behind capability negotiation (backend-to-client hop). Prerequisites: 08, 09, 12, 13. Finding: E05.
 
 ## Decision gate
 
@@ -123,4 +123,58 @@ Remaining limitations: absolute sizes are small because the backend already
   and the bridge-to-backend hop (bridges still send full summaries). Per this
   step, adopt only if the prototype reduces total cost without worsening
   recovery or interaction responsiveness.
+```
+
+### Prototype and decision (adopted)
+
+```text
+Status: Complete — adopted for the backend-to-client hop, negotiated.
+Implementation commit / PR: branch implement-efficiency-improvements-7f0993836777-r1,
+  "perf(native-agent): part-level transcript patches behind negotiation".
+Protocol or storage decisions:
+  - packages/protocol/src/native-agent-transcript-patch.ts, version 1. A delta
+    may carry `messagePatches` instead of whole `messageUpserts`: per message,
+    its non-part fields, `content` as {length, append} or {value}, and per
+    part {keep: i} | {keep: i, length, append} (text appended to the kept
+    part's content, every other field identical) | {value: part}.
+  - Base identity: a delta is only applied when the client's view token equals
+    `baseToken`, which pins the exact previous version of every message the
+    server diffed, so kept parts are addressed by index without a per-part
+    revision journal. Length checks are consistency guards (UTF-16 code units,
+    JavaScript string length); byte budgets stay on the encoded response.
+  - Atomic: applyNativeAgentTranscriptDelta applies every patch or returns
+    null (then the client asks for a snapshot, the existing recovery path). A
+    message is patched or upserted, never both. Validators bound counts and
+    refuse `id`/`parts`/`content` smuggled into `fields`.
+  - Negotiation: get_native_agent_sync_capabilities advertises
+    `transcriptPatchVersions: [1]`; the web hook sends `patchVersion: 1` only
+    for a backend generation that advertised it; the command accepts only that
+    value; other clients keep whole-message deltas. A patch replaces an upsert
+    only when it encodes smaller, and patches count as delta operations.
+  - No operation history is retained: patches are computed on demand against
+    the single cached previous view, so there is nothing to expire.
+Tests: protocol native-agent-transcript-patch.test.ts (40 seeded streams x 60
+  steps with appends, settles, inserts, deletions, rewrites, multibyte and lone
+  surrogates: build-then-apply reproduces the next message exactly; kept parts
+  keep client identity; wrong-base patches refused; validator bounds; delta
+  atomicity; update validator). Backend native-agent-transcript-patches.test.ts
+  (negotiated delta reproduces the snapshot exactly at >10x fewer bytes; a
+  client that did not negotiate keeps whole-message deltas).
+Before/after measurements (harness workload j, same machine, 40 observations;
+  decoded bytes of upserts + patches; the client's applied view equals a fresh
+  snapshot at the end in every case):
+    growing prose                         446,320 B -> 27,316 B  (0.061)
+    30 completed tools + growing text     704,320 B -> 41,356 B  (0.059)
+    tool-heavy turn                       352,760 B -> 32,840 B  (0.093)
+    sub-agent gaining one action per obs  237,645 B -> 214,925 B (0.904)
+  No additional snapshots or recoveries in any workload.
+Decision: Adopt. Total bytes fall by 91-94% on three of four representative
+  workloads with no recovery regression; server CPU is one comparison per
+  part of changed messages using the step-12 encoding memo.
+Remaining limitations: nested children (sub-agent actions, grouped tools) are
+  replaced as a whole part, which is why the nested workload saves only ~10%;
+  nested part operations are a possible follow-up. The bridge-to-backend hop
+  still carries lightweight summary snapshots (conditional on the source
+  token) rather than patches; not measured as a separate cost. Compressed
+  (encoded) bytes and multi-client remote runs were not measured.
 ```

@@ -94,6 +94,8 @@ import { OPEN_CODE_INLINE_ERROR_ID_PREFIX } from "./opencode-messages.js";
 import { readReadableHostFile } from "./path-safety.js";
 import { readBridgePartDetail as bridgePartDetail } from "@orkestrator/protocol/bridge-transcript-summary";
 import { decodeHistoryCursor, encodeDirectHistoryCursor } from "./native-agent-direct-history.js";
+import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/native-agent-transcript-patch";
+import { encodedPatchBytes, patchTranscriptDelta } from "./native-agent-transcript-patches.js";
 import {
   digestWithMessages,
   encodedArrayBytes,
@@ -2305,15 +2307,21 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         previous.value.historyEpoch === value.historyEpoch
       ) {
         const delta = this.transcriptDelta(previous.value, value);
+        if (input.patchVersion === NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION) {
+          patchTranscriptDelta(delta, previous.value.messages);
+        }
         const operationCount =
           delta.messageUpserts.length +
+          (delta.messagePatches?.length ?? 0) +
           delta.deletedMessageIds.length +
           (delta.liveMessageIds?.length ?? 0);
-        const deltaBytes = encodedBytesWithMessages({
-          ...delta,
-          messages: delta.messageUpserts,
-          messageUpserts: [],
-        });
+        const deltaBytes =
+          encodedBytesWithMessages({
+            ...delta,
+            messages: delta.messageUpserts,
+            messageUpserts: [],
+            messagePatches: [],
+          }) + (delta.messagePatches ? encodedPatchBytes(delta.messagePatches) : 0);
         const snapshotBytes = entry.bytes;
         if (operationCount <= 1024 && deltaBytes < snapshotBytes) {
           this.recordProgressiveMetric(

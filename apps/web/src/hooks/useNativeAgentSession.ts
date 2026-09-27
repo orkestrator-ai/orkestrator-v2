@@ -19,6 +19,7 @@ import type {
   NativeAgentTranscriptUpdate,
   NativeAgentTranscriptView,
 } from "@orkestrator/protocol/native-agent";
+import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/native-agent-transcript-patch";
 import {
   applyNativeAgentProjectionDelta,
   applyNativeAgentTranscriptDelta,
@@ -94,6 +95,8 @@ let syncCapability: {
   progressive: boolean;
   /** The backend announces stamped, session-scoped activity invalidations. */
   observationEvents?: boolean;
+  /** The backend can answer transcript deltas with part-level patches. */
+  transcriptPatches?: boolean;
   checkedAt: number;
   generation: number;
 } | null = null;
@@ -269,11 +272,15 @@ async function nativeAgentSyncSupported(): Promise<boolean> {
       const observationEvents =
         capabilities.observationEventVersions?.includes(NATIVE_AGENT_OBSERVATION_EVENT_VERSION) ===
         true;
+      const transcriptPatches =
+        capabilities.transcriptPatchVersions?.includes(NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION) ===
+        true;
       if (generation === syncCapabilityGeneration) {
         syncCapability = {
           supported,
           progressive,
           observationEvents,
+          transcriptPatches,
           checkedAt: Date.now(),
           generation,
         };
@@ -312,6 +319,13 @@ async function nativeAgentSyncSupported(): Promise<boolean> {
 export function nativeObservationEventsSupported(): boolean {
   return Boolean(
     syncCapability?.generation === syncCapabilityGeneration && syncCapability.observationEvents,
+  );
+}
+
+/** Synchronous and conservative: false until this backend generation answered. */
+function nativeTranscriptPatchesSupported(): boolean {
+  return Boolean(
+    syncCapability?.generation === syncCapabilityGeneration && syncCapability.transcriptPatches,
   );
 }
 
@@ -1806,6 +1820,9 @@ export function useNativeAgentSession<TMessage = unknown>({
               ...identity,
               viewVersion: 1,
               liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+              ...(nativeTranscriptPatchesSupported()
+                ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
+                : {}),
               ...(forceSnapshot
                 ? { forceSnapshot: true }
                 : progressiveTranscriptTokenRef.current

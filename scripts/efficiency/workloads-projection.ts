@@ -59,6 +59,7 @@ interface Modules {
     bridgeTranscriptPage: (messages: readonly unknown[], options: Json) => Json;
     readBridgeTranscriptDetail: (messages: readonly unknown[], locator: string) => Json;
   };
+  patchVersion?: 1;
 }
 
 async function loadModules(context: WorkloadContext): Promise<Modules> {
@@ -74,11 +75,16 @@ async function loadModules(context: WorkloadContext): Promise<Modules> {
   const summary = await context.loadOptional<NonNullable<Modules["summary"]>>(
     "packages/protocol/src/bridge-transcript-summary.ts",
   );
+  // Step 14: present only on trees that implement part-level patches.
+  const patches = await context.loadOptional<{ NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION: 1 }>(
+    "packages/protocol/src/native-agent-transcript-patch.ts",
+  );
   return {
     service: service.NativeAgentService,
     storage: storage.StorageService,
     bridgeTranscriptUpdate: progressive.bridgeTranscriptUpdate,
     ...(summary ? { summary } : {}),
+    ...(patches ? { patchVersion: patches.NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } : {}),
   };
 }
 
@@ -510,6 +516,84 @@ export const STEP14_WORKLOADS: Record<string, { description: string; tail: TailB
   },
 };
 
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, entry) =>
+    entry && typeof entry === "object" && !Array.isArray(entry)
+      ? Object.fromEntries(
+          Object.keys(entry as Record<string, unknown>)
+            .sort()
+            .map((key) => [key, (entry as Record<string, unknown>)[key]]),
+        )
+      : entry,
+  );
+}
+
+/**
+ * The same stream for a client that negotiated part-level patches: decoded
+ * bytes of `messageUpserts` plus `messagePatches`, and whether the client's
+ * applied view still equals a fresh snapshot at the end.
+ */
+async function patchedStream(
+  modules: Modules,
+  prefix: readonly FixtureMessage[],
+  tail: TailBuilder,
+  patchVersion: 1,
+): Promise<{ deltas: number; snapshots: number; decodedBytes: number; matches: boolean }> {
+  const source = { messages: [...prefix, tail(0)] as unknown[], revision: 1 };
+  const methods = modules.summary
+    ? v2Methods(modules.summary, source)
+    : { transcriptSnapshot: v1Snapshot(modules, source) };
+  const { provider } = stubProvider(methods);
+  const { applyNativeAgentTranscriptDelta } =
+    (await import("../../packages/protocol/src/native-agent.ts")) as {
+      applyNativeAgentTranscriptDelta: (view: unknown, delta: unknown) => unknown;
+    };
+  return withService(modules, provider, async (service) => {
+    const read = (knownToken?: string) =>
+      service.getTranscriptUpdate({
+        ...IDENTITY,
+        viewVersion: 1,
+        liveWindow: LIVE_WINDOW,
+        patchVersion,
+        ...(knownToken ? { knownToken } : {}),
+      });
+    let update = await read();
+    let token = String(update.token);
+    let view = JSON.parse(JSON.stringify(update.value)) as unknown;
+    let deltas = 0;
+    let snapshots = 0;
+    let decodedBytes = 0;
+    for (let step = 1; step <= OBSERVATIONS; step += 1) {
+      source.messages = [...prefix, tail(step)];
+      source.revision += 1;
+      update = await read(token);
+      if (update.status === "delta") {
+        deltas += 1;
+        const delta = JSON.parse(JSON.stringify(update.delta)) as Json;
+        decodedBytes +=
+          jsonBytes(delta.messageUpserts ?? []) + jsonBytes(delta.messagePatches ?? []);
+        view = applyNativeAgentTranscriptDelta(view, delta);
+      } else if (update.status === "snapshot") {
+        snapshots += 1;
+        view = JSON.parse(JSON.stringify(update.value));
+      }
+      if (update.token) token = String(update.token);
+    }
+    const fresh = await service.getTranscriptUpdate({
+      ...IDENTITY,
+      viewVersion: 1,
+      liveWindow: LIVE_WINDOW,
+      forceSnapshot: true,
+    });
+    // Patched messages rebuild their fields in a different key order; compare
+    // content, not serialization order.
+    const matches =
+      canonicalJson((view as Json | null)?.messages) ===
+      canonicalJson((fresh.value as Json).messages);
+    return { deltas, snapshots, decodedBytes, matches };
+  });
+}
+
 export async function step14Workload(context: WorkloadContext): Promise<WorkloadDefinition> {
   const modules = await loadModules(context);
   const caseFor = (id: string, tail: TailBuilder, description: string): CaseDefinition => ({
@@ -559,6 +643,9 @@ export async function step14Workload(context: WorkloadContext): Promise<Workload
           if (update.token) token = String(update.token);
         }
         const measuredMs = performance.now() - started;
+        const patched = modules.patchVersion
+          ? await patchedStream(modules, prefix, tail, modules.patchVersion)
+          : undefined;
         const repeatedAny =
           accounting.identicalPartBytes +
           accounting.grownPartPrefixBytes +
@@ -577,6 +664,15 @@ export async function step14Workload(context: WorkloadContext): Promise<Workload
               accounting.decodedUpsertBytes,
             ),
             anyRepeatedFraction: ratio(repeatedAny, accounting.decodedUpsertBytes),
+            ...(patched
+              ? {
+                  patchedDeltas: patched.deltas,
+                  patchedSnapshots: patched.snapshots,
+                  patchedDecodedBytes: patched.decodedBytes,
+                  patchedToWholeRatio: ratio(patched.decodedBytes, accounting.decodedUpsertBytes),
+                  patchedClientMatchesSnapshot: patched.matches,
+                }
+              : {}),
           },
           measuredMs,
         };

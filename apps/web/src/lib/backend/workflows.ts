@@ -461,6 +461,8 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
   progressiveViewVersions?: number[];
   /** Stamped, session-scoped activity announcements (step 07). */
   observationEventVersions?: number[];
+  /** Part-level patches inside transcript deltas (efficiency step 14). */
+  transcriptPatchVersions?: number[];
 }> {
   const response = await invoke<unknown>("get_native_agent_sync_capabilities");
   if (!response || typeof response !== "object" || Array.isArray(response)) {
@@ -481,7 +483,11 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
     (candidate.observationEventVersions !== undefined &&
       (!Array.isArray(candidate.observationEventVersions) ||
         candidate.observationEventVersions.length > 16 ||
-        !candidate.observationEventVersions.every(Number.isSafeInteger)))
+        !candidate.observationEventVersions.every(Number.isSafeInteger))) ||
+    (candidate.transcriptPatchVersions !== undefined &&
+      (!Array.isArray(candidate.transcriptPatchVersions) ||
+        candidate.transcriptPatchVersions.length > 16 ||
+        !candidate.transcriptPatchVersions.every(Number.isSafeInteger)))
   ) {
     throw new Error("Invalid native agent sync capabilities response");
   }
@@ -490,6 +496,7 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
     historyPagingVersions: number[];
     progressiveViewVersions?: number[];
     observationEventVersions?: number[];
+    transcriptPatchVersions?: number[];
   };
 }
 
@@ -501,6 +508,8 @@ export async function getNativeAgentTranscriptUpdate<TMessage = unknown>(input: 
   liveWindow: NativeAgentLiveWindow;
   knownToken?: string;
   forceSnapshot?: boolean;
+  /** Ask for part-level patches; only when the backend advertised them. */
+  patchVersion?: 1;
 }): Promise<NativeAgentTranscriptUpdate<TMessage>> {
   const response = await invoke<unknown>("get_native_agent_transcript_update", input);
   if (

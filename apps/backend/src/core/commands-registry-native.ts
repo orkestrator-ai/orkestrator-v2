@@ -1,6 +1,7 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { NATIVE_AGENT_DISCOVERY_SECTIONS } from "@orkestrator/protocol/native-agent";
 import { NATIVE_AGENT_OBSERVATION_EVENT_VERSION } from "@orkestrator/protocol/native-agent-observation";
+import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/native-agent-transcript-patch";
 import { BUILD_PIPELINE_AGENTS, nativeAgentSessionStorageKey } from "./commands-dependencies.js";
 import {
   asString,
@@ -182,6 +183,8 @@ export function registerNativeAgentCommands(
     // Additive (step 07): activity announcements name their session and carry
     // the observer's stamp; `observation` anchors a client's gap detection.
     observationEventVersions: [NATIVE_AGENT_OBSERVATION_EVENT_VERSION],
+    // Part-level message patches inside transcript deltas (efficiency step 14).
+    transcriptPatchVersions: [NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION],
     ...(context.nativeAgents
       ? { observation: context.nativeAgents.observationStatus().stamp }
       : {}),
@@ -213,6 +216,11 @@ export function registerNativeAgentCommands(
         args.forceSnapshot === undefined
           ? undefined
           : asRequiredBoolean(args.forceSnapshot, "forceSnapshot"),
+      // Any other value is a client this backend does not know how to answer
+      // with patches; it keeps whole-message deltas.
+      ...(args.patchVersion === NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION
+        ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
+        : {}),
     });
   });
 

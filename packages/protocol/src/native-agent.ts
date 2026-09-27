@@ -4,6 +4,11 @@ import {
   type AgentInteractionRequest,
 } from "./agent-interactions.js";
 import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
+import {
+  applyNativeAgentMessagePatch,
+  isNativeAgentMessagePatchList,
+  type NativeAgentMessagePatch,
+} from "./native-agent-transcript-patch.js";
 import type {
   NativeAgentRuntimeSteerJournal,
   NativeAgentSteerRejectedOutcome,
@@ -1867,6 +1872,12 @@ export type NativeAgentDomainUpdate<T> =
 /** Message-only delta for an already-held progressive transcript snapshot. */
 export interface NativeAgentTranscriptDelta<TMessage = unknown> {
   messageUpserts: TMessage[];
+  /**
+   * Part-level patches against the base view's version of each message; only
+   * sent to a client that negotiated `NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION`.
+   * A message is either upserted or patched, never both.
+   */
+  messagePatches?: NativeAgentMessagePatch[];
   /** Present only when the ordered membership of the live tail changed. */
   liveMessageIds?: string[];
   deletedMessageIds: string[];
@@ -2248,7 +2259,9 @@ function isNativeAgentTranscriptDelta(value: unknown): value is NativeAgentTrans
       (typeof candidate.historyCursor !== "string" || candidate.historyCursor.length > 1_024)) ||
     (candidate.historyPaging !== undefined && candidate.historyPaging !== "direct") ||
     (candidate.liveMessageIds !== undefined &&
-      (!Array.isArray(candidate.liveMessageIds) || candidate.liveMessageIds.length > 4_096))
+      (!Array.isArray(candidate.liveMessageIds) || candidate.liveMessageIds.length > 4_096)) ||
+    (candidate.messagePatches !== undefined &&
+      !isNativeAgentMessagePatchList(candidate.messagePatches))
   ) {
     return false;
   }
@@ -2270,9 +2283,20 @@ export function applyNativeAgentTranscriptDelta<TMessage>(
     if (typeof id !== "string") return null;
     currentMessages.delete(id);
   }
+  // Patches address the base view's version of their message, so they apply
+  // before any upsert and fail the whole delta if a base is missing.
+  const patched = new Set<string>();
+  for (const patch of delta.messagePatches ?? []) {
+    const base = currentMessages.get(patch.id);
+    if (base === undefined || patched.has(patch.id)) return null;
+    const next = applyNativeAgentMessagePatch(base, patch);
+    if (next === null) return null;
+    currentMessages.set(patch.id, next);
+    patched.add(patch.id);
+  }
   for (const message of delta.messageUpserts) {
     const id = (message as { id?: unknown })?.id;
-    if (typeof id !== "string") return null;
+    if (typeof id !== "string" || patched.has(id)) return null;
     currentMessages.set(id, message);
   }
   const order =
@@ -2283,6 +2307,9 @@ export function applyNativeAgentTranscriptDelta<TMessage>(
   const ordered = new Set(order);
   for (const message of delta.messageUpserts) {
     if (!ordered.has((message as { id: string }).id)) return null;
+  }
+  for (const patch of delta.messagePatches ?? []) {
+    if (!ordered.has(patch.id)) return null;
   }
   return {
     ...current,

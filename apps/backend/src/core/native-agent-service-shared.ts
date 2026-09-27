@@ -245,6 +245,8 @@ export interface NativeAgentProgressiveInput {
 
 export interface NativeAgentTranscriptUpdateInput extends NativeAgentProgressiveInput {
   liveWindow: NativeAgentLiveWindow;
+  /** Part-level message patches the client can apply (step 14); absent: none. */
+  patchVersion?: 1;
 }
 
 export interface NativeAgentDiscoveryUpdateInput extends NativeAgentProgressiveInput {

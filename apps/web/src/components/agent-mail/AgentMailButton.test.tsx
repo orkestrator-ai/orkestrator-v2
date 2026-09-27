@@ -445,6 +445,23 @@ describe("AgentMailButton", () => {
     );
   });
 
+  test("stays open when the originating menu restores focus to its trigger", async () => {
+    render(
+      <>
+        <button type="button">Tab trigger</button>
+        <AgentMailButton />
+      </>,
+    );
+
+    act(() => openAgentMailForTab("env-1", "tab-1", "settings"));
+    expect(await screen.findByLabelText("Automatic delivery policy")).toBeTruthy();
+    act(() => screen.getByRole("button", { name: "Tab trigger" }).focus());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.queryByLabelText("Automatic delivery policy")).toBeTruthy();
+  });
+
   test("fetches a tab mailbox synchronized after the directory snapshot", async () => {
     useAgentMailStore.setState({
       refreshInbox: mock(async () => ({ ...snapshot, directory: [] })),

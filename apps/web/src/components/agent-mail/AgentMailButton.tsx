@@ -504,6 +504,11 @@ export function AgentMailButton() {
         align="end"
         className="w-[min(94vw,470px)] border-zinc-700/80 bg-zinc-950 p-0 shadow-2xl"
         onCloseAutoFocus={(event) => event.preventDefault()}
+        // Per-tab entry points open this from a context menu or popover that
+        // restores focus to its own trigger as it closes, which would dismiss
+        // the dropdown the instant it appears. Outside clicks and Escape still
+        // close it.
+        onFocusOutside={(event) => event.preventDefault()}
       >
         <div className="border-b border-zinc-800 px-4 py-3">
           <div className="flex items-center justify-between gap-3">

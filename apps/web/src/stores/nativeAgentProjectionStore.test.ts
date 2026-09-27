@@ -1,12 +1,34 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type {
+  NativeAgentDiscoveryView,
   NativeAgentSessionProjection,
   NativeAgentViewIdentity,
 } from "@orkestrator/protocol/native-agent";
 import {
+  measureEncodedValue,
+  setEncodedValueMeasureForTests,
+  slowEncodedBytes,
+} from "@/lib/native-history-accounting";
+import {
   evictNativeAgentHistoryCaches,
+  recomputeNativeAgentProjectionTotals,
   useNativeAgentProjectionStore,
+  type NativeAgentSyncCacheEntry,
 } from "./nativeAgentProjectionStore";
+
+function discoveryView(): NativeAgentDiscoveryView {
+  return {
+    identity: {
+      backendInstanceId: "backend-1",
+      environmentId: "env-1",
+      platform: "codex",
+      logicalSessionKey: "session-a",
+      providerSessionId: "provider-a",
+      sourceGeneration: "generation-1",
+    },
+    sections: {},
+  };
+}
 
 function projection(id: string, messages: unknown[] = []): NativeAgentSessionProjection {
   return {
@@ -176,5 +198,166 @@ describe("native agent projection history cache", () => {
     useNativeAgentProjectionStore.getState().setProjection("session-a", null, null);
 
     expect(useNativeAgentProjectionStore.getState().historyEvictions.has("session-a")).toBe(false);
+  });
+});
+
+describe("native agent projection byte accounting", () => {
+  afterEach(() => setEncodedValueMeasureForTests());
+
+  function countMeasuredObjects(): unknown[] {
+    const measured: unknown[] = [];
+    setEncodedValueMeasureForTests((value) => {
+      if (value !== null && typeof value === "object") measured.push(value);
+      return measureEncodedValue(value);
+    });
+    return measured;
+  }
+
+  function expectExactTotals(): void {
+    const state = useNativeAgentProjectionStore.getState();
+    const slow = recomputeNativeAgentProjectionTotals(state);
+    expect(state.projectionBytesTotal).toBe(slow.projectionBytesTotal);
+    expect(state.historyBytesTotal).toBe(slow.historyBytesTotal);
+    expect(state.progressiveCacheBytesTotal).toBe(slow.progressiveCacheBytesTotal);
+    for (const [key, bytes] of state.projectionBytes) {
+      expect(bytes).toBe(slowEncodedBytes(state.projections.get(key)!.messages));
+    }
+  }
+
+  function syncEntry(
+    live: NativeAgentSessionProjection,
+    historyMessages: unknown[],
+  ): NativeAgentSyncCacheEntry {
+    return {
+      liveProjection: live,
+      historyComplete: false,
+      historyMessages,
+      historyBytes: historyMessages.length ? slowEncodedBytes(historyMessages) : 0,
+    };
+  }
+
+  test("serializes only changed messages while ~8 MiB of history is retained", () => {
+    const measured = countMeasuredObjects();
+    const history = Array.from({ length: 2_000 }, (_, index) => ({
+      id: `h${index}`,
+      text: "x".repeat(4_000),
+    }));
+    let liveMessage = { id: "live", text: "" };
+    const store = useNativeAgentProjectionStore.getState();
+    store.setProjection("session-a", projection("a", [...history, liveMessage]));
+    expect(measured).toHaveLength(2_001);
+    expect(useNativeAgentProjectionStore.getState().projectionBytesTotal).toBeGreaterThan(
+      7.5 * 1024 * 1024,
+    );
+
+    for (let update = 0; update < 20; update += 1) {
+      measured.length = 0;
+      liveMessage = { id: "live", text: `${liveMessage.text}token-${update} ` };
+      store.setProjection("session-a", projection("a", [...history, liveMessage]));
+      expect(measured).toEqual([liveMessage]);
+    }
+    expectExactTotals();
+  });
+
+  test("keeps running totals exact across a random operation sequence", () => {
+    let seed = 7;
+    const random = () => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return seed / 2_147_483_648;
+    };
+    let nextId = 0;
+    const fresh = () => ({ id: `m${nextId++}`, text: "é😀".repeat(Math.floor(random() * 20)) });
+    const keys = ["a", "b", "c", "d"];
+    const store = useNativeAgentProjectionStore.getState();
+    for (let step = 0; step < 300; step += 1) {
+      const key = keys[Math.floor(random() * keys.length)]!;
+      const operation = Math.floor(random() * 6);
+      if (operation <= 1) {
+        const live = projection(`${key}-live`, [fresh(), fresh()]);
+        const history = Array.from({ length: Math.floor(random() * 4) }, fresh);
+        store.setProjection(
+          key,
+          projection(key, [...history, ...live.messages]),
+          syncEntry(live, history),
+        );
+      } else if (operation === 2) {
+        const current = useNativeAgentProjectionStore.getState().projections.get(key);
+        // Same array identity: bytes are reused without measuring anything.
+        if (current) store.setProjection(key, { ...current, revision: current.revision + 1 });
+      } else if (operation === 3) {
+        store.setProjection(key, random() < 0.5 ? null : projection(key, [fresh()]), null);
+      } else if (operation === 4) {
+        evictNativeAgentHistoryCaches(key, Math.floor(random() * 400), 300);
+      } else {
+        store.setProgressiveCache(key, {
+          transcriptAvailability: "current",
+          transcriptRefreshing: random() < 0.5,
+          stateAvailability: "current",
+          ...(random() < 0.5 ? { discovery: discoveryView() } : {}),
+        });
+      }
+      expectExactTotals();
+    }
+  });
+
+  test("an eviction charges the display budget for the live tail only", () => {
+    seedSession("session-a", 8);
+    seedSession("session-b", 8);
+    evictNativeAgentHistoryCaches("session-b", 8, 12);
+
+    const state = useNativeAgentProjectionStore.getState();
+    expect(state.projectionBytes.get("session-a")).toBe(
+      slowEncodedBytes([{ id: "session-a-live-message" }]),
+    );
+    expect(state.historyBytesTotal).toBe(8);
+    expectExactTotals();
+  });
+
+  test("does not evict a session that retains no history", () => {
+    const live = projection("a-live", [{ id: "live" }]);
+    useNativeAgentProjectionStore.getState().setProjection("a", live, syncEntry(live, []));
+    seedSession("b", 30);
+
+    evictNativeAgentHistoryCaches("b", 10, 20);
+
+    expect(useNativeAgentProjectionStore.getState().historyEvictions.has("a")).toBe(false);
+    expect(useNativeAgentProjectionStore.getState().syncCaches.has("a")).toBe(true);
+  });
+
+  test("measures discovery once per object and ignores unchanged patches", () => {
+    const measured = countMeasuredObjects();
+    const discovery = discoveryView();
+    const entry = {
+      transcriptAvailability: "current" as const,
+      transcriptRefreshing: false,
+      stateAvailability: "current" as const,
+      discovery,
+    };
+    const store = useNativeAgentProjectionStore.getState();
+    store.setProgressiveCache("session-a", entry);
+    let notifications = 0;
+    const unsubscribe = useNativeAgentProjectionStore.subscribe(() => {
+      notifications += 1;
+    });
+    try {
+      // An idle poll rebuilds an identical entry.
+      store.setProgressiveCache("session-a", { ...entry });
+      expect(notifications).toBe(0);
+      // A refresh-flag toggle is a real change, but the discovery is not.
+      store.setProgressiveCache("session-a", { ...entry, transcriptRefreshing: true });
+      store.setProgressiveCache("session-a", { ...entry, transcriptRefreshing: false });
+      expect(notifications).toBe(2);
+      expect(measured).toEqual([discovery]);
+
+      const nextDiscovery = discoveryView();
+      store.setProgressiveCache("session-a", { ...entry, discovery: nextDiscovery });
+      expect(measured).toEqual([discovery, nextDiscovery]);
+    } finally {
+      unsubscribe();
+    }
+    expect(useNativeAgentProjectionStore.getState().progressiveCacheBytes.get("session-a")).toBe(
+      slowEncodedBytes(discoveryView()) + 4_096,
+    );
+    expectExactTotals();
   });
 });

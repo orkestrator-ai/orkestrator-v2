@@ -56,6 +56,7 @@ import {
   stopNativeAgentBackgroundTask,
   updateNativeAgentControls,
 } from "@/lib/backend";
+import { encodedValueBytes, retainedHistoryBytes } from "@/lib/native-history-accounting";
 import { nativeSessionReadDemand } from "@/lib/native-session-read-policy";
 import {
   nativeObservationInvalidationMatches,
@@ -68,6 +69,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import {
   evictNativeAgentHistoryCaches,
+  nativeAgentHistoryBytesExcept,
   useNativeAgentProjectionStore,
   type NativeAgentSyncCacheEntry,
   type NativeAgentProgressiveCacheEntry,
@@ -95,10 +97,6 @@ let syncCapability: {
 let syncCapabilityGeneration = 0;
 let syncCapabilityInvalidationQueued = false;
 let syncCapabilityRequest: { generation: number; promise: Promise<boolean> } | null = null;
-
-function encodedBytes(value: unknown): number {
-  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
-}
 
 function messagePartCount(message: unknown): number {
   const parts = (message as { parts?: unknown })?.parts;
@@ -865,11 +863,7 @@ export function useNativeAgentSession<TMessage = unknown>({
    * behind a cursor only the server can mint.
    */
   const historyRequestBudget = useCallback((): { messages: number; bytes: number } => {
-    const store = useNativeAgentProjectionStore.getState();
-    const otherHistoryBytes = Array.from(store.syncCaches.entries()).reduce(
-      (total, [key, cache]) => total + (key === sessionKey ? 0 : cache.historyBytes),
-      0,
-    );
+    const otherHistoryBytes = nativeAgentHistoryBytesExcept(sessionKey);
     const byteCeiling = Math.min(
       CLIENT_HISTORY_MAX_BYTES,
       Math.max(0, CLIENT_HISTORY_TOTAL_MAX_BYTES - otherHistoryBytes),
@@ -880,7 +874,9 @@ export function useNativeAgentSession<TMessage = unknown>({
         0,
         CLIENT_HISTORY_MAX_MESSAGES - liveMessages - historyMessagesRef.current.length,
       ),
-      bytes: Math.max(0, byteCeiling - encodedBytes(historyMessagesRef.current)),
+      // Summed from cached per-message sizes; the retained pages were measured
+      // when they arrived and are not serialized again here.
+      bytes: Math.max(0, byteCeiling - retainedHistoryBytes(historyMessagesRef.current)),
     };
   }, [sessionKey]);
 
@@ -1000,21 +996,18 @@ export function useNativeAgentSession<TMessage = unknown>({
         retainedCursor = boundaryCursor;
       }
 
-      const otherHistoryBytes = Array.from(store.syncCaches.entries()).reduce(
-        (total, [key, cache]) => total + (key === sessionKey ? 0 : cache.historyBytes),
-        0,
-      );
-      let retainedHistoryBytes = encodedBytes(retainedMessages);
+      const otherHistoryBytes = nativeAgentHistoryBytesExcept(sessionKey);
+      let historyBytes = retainedHistoryBytes(retainedMessages);
       let settledCursor = retainedCursor;
       if (
         retainedMessages.length + displayLive.length > CLIENT_HISTORY_MAX_MESSAGES ||
-        retainedHistoryBytes > CLIENT_HISTORY_MAX_BYTES ||
-        retainedHistoryBytes + otherHistoryBytes > CLIENT_HISTORY_TOTAL_MAX_BYTES
+        historyBytes > CLIENT_HISTORY_MAX_BYTES ||
+        historyBytes + otherHistoryBytes > CLIENT_HISTORY_TOTAL_MAX_BYTES
       ) {
         // Eviction is an explicit collapse back to the bounded live view. The
         // server-supplied first cursor lets the same history be fetched again.
         retainedMessages = [];
-        retainedHistoryBytes = encodedBytes(retainedMessages);
+        historyBytes = 0;
         settledCursor = boundaryCursor;
       }
 
@@ -1055,7 +1048,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(boundaryCursor ? { boundaryCursor } : {}),
         historyComplete: retainedComplete,
         historyMessages: retainedMessages,
-        historyBytes: retainedHistoryBytes,
+        historyBytes,
         evictionGeneration,
       };
     },
@@ -1129,7 +1122,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(historyUnpageableRef.current ? { historyUnpageable: true } : {}),
         historyComplete: historyCompleteRef.current,
         historyMessages: historyMessagesRef.current,
-        historyBytes: encodedBytes(historyMessagesRef.current),
+        historyBytes: retainedHistoryBytes(historyMessagesRef.current),
       });
       return next;
     },
@@ -1276,7 +1269,9 @@ export function useNativeAgentSession<TMessage = unknown>({
        * the shared store cannot evict — its trim loop refuses to drop the
        * session it is currently writing, so nothing else would reclaim this.
        */
-      let retainedBytes = retained.length > 0 ? encodedBytes(retained) : 0;
+      // The prefix is made of objects this renderer already holds, so their
+      // sizes are cached; only the arriving live tail is ever serialized.
+      let retainedBytes = retainedHistoryBytes(retained);
       const retentionCollapsed =
         retained.length > 0 &&
         (retained.length + displayLive.length > CLIENT_HISTORY_MAX_MESSAGES ||
@@ -2836,7 +2831,7 @@ export function useNativeAgentSession<TMessage = unknown>({
          */
         evictNativeAgentHistoryCaches(
           sessionKey,
-          encodedBytes(historyMessagesRef.current),
+          retainedHistoryBytes(historyMessagesRef.current),
           CLIENT_HISTORY_TOTAL_MAX_BYTES,
         );
         const budget = historyRequestBudget();
@@ -2903,7 +2898,9 @@ export function useNativeAgentSession<TMessage = unknown>({
         for (let index = newMessages.length - 1; index >= 0; index -= 1) {
           if (accepted.length + retained.length >= messageBudget) break;
           const message = newMessages[index]!;
-          const bytes = encodedBytes(message) + 1;
+          // Element size plus its separating comma. Measured once: planning
+          // and the store reuse the cached size of every accepted message.
+          const bytes = encodedValueBytes(message) + 1;
           if (acceptedBytes + bytes > budget.bytes) break;
           accepted.unshift(message);
           acceptedBytes += bytes;

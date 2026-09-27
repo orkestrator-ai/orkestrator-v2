@@ -2,11 +2,9 @@ import { createSharedContainerLogReader } from "./container-log-snapshots.js";
 import { detectDockerTopology, getImageStatus } from "./docker-image.js";
 import {
   classify,
-  listContainerCleanupInventory,
   loadProtection,
   parseLabels,
   readContainerLabels,
-  removeCleanupCandidates,
   removeUnclaimedContainer,
 } from "./docker-cleanup-inventory.js";
 import { executeDockerCleanup, previewDockerCleanup } from "./docker-cleanup-preview.js";
@@ -49,7 +47,6 @@ import {
 import {
   asString,
   asOptionalString,
-  asBoolean,
   asNumber,
   findEnvironmentByContainerId,
   dockerLabelValue,
@@ -352,35 +349,19 @@ export function registerDockerCommands(
     );
     return { subscriptionId, sourceId };
   });
-  register("docker_system_prune", async ({ pruneVolumes }, context) => {
-    // Ordinary cleanup removes only stopped containers that nothing claims:
-    // not assigned to an environment, not labelled for a live environment, not
-    // owed to a pending deletion and not part of an in-flight operation. A
-    // stopped environment's container is still the only copy of its workspace,
-    // so being stopped never makes it eligible. Images, networks and volumes
-    // are left alone, even when an older renderer sends the legacy
-    // pruneVolumes flag.
-    if (pruneVolumes !== undefined) asBoolean(pruneVolumes);
-    const inventory = await listContainerCleanupInventory(context, {
-      includeRunning: false,
-      measureSize: true,
-    });
-    const result = await removeCleanupCandidates(
-      inventory.filter((row) => row.exclusion === null),
-      context,
-      { includeRunning: false },
+  // Removing Docker resources is a reviewed operation: the user sees exactly
+  // what docker_cleanup_preview found eligible and why the rest is kept, and
+  // docker_cleanup_execute removes only that selection. These two earlier
+  // one-shot commands removed without a review and are refused.
+  const reviewedCleanupRequired = async () => {
+    throw new Error(
+      formatContainerLifecycleError(
+        "invalid-request",
+        "Docker cleanup is reviewed first. Open Docker → Review cleanup to see what can be removed.",
+      ),
     );
-    return {
-      containersDeleted: result.removed,
-      containersSkipped: result.skipped,
-      containersFailed: result.failed,
-      containersProtected: inventory.filter((row) => row.exclusion !== null).length,
-      imagesDeleted: 0,
-      networksDeleted: 0,
-      volumesDeleted: 0,
-      spaceReclaimed: result.reclaimedBytes,
-    };
-  });
+  };
+  register("docker_system_prune", reviewedCleanupRequired);
   register("get_docker_system_stats", async (_args, context) => {
     // Capacity is the daemon's (on Docker Desktop, its VM), usage is the sum
     // over this installation's containers, and anything Docker would not say
@@ -550,23 +531,7 @@ export function registerDockerCommands(
       context,
     );
   });
-  register("cleanup_orphaned_containers", async (_args, context) => {
-    // Orphans are containers nothing claims, whatever their state. Assignment,
-    // a live environment label, a pending deletion or an in-flight operation
-    // is rechecked for each one immediately before it is removed.
-    const inventory = await listContainerCleanupInventory(context, { includeRunning: true });
-    const result = await removeCleanupCandidates(
-      inventory.filter((row) => row.exclusion === null),
-      context,
-      { includeRunning: true },
-    );
-    return {
-      removed: result.removed,
-      alreadyAbsent: result.alreadyAbsent,
-      skipped: result.skipped,
-      failed: result.failed,
-    };
-  });
+  register("cleanup_orphaned_containers", reviewedCleanupRequired);
   register("reattach_container", async ({ projectId, containerId, name }, context) => {
     const { storage } = context;
     const id = asString(containerId, "containerId");

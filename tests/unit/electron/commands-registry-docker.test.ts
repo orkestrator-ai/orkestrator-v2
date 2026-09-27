@@ -213,6 +213,8 @@ exit 0
           githubToken,
           anthropicApiKey,
           cursorApiKey,
+          // Credentials reach a container only for enabled providers.
+          enabledAgentPlatforms: ["claude", "cursor"],
         },
         repositories: {
           "project-1": { defaultBranch: "main", prBaseBranch: "main" },
@@ -318,7 +320,7 @@ if [ "$1" = "inspect" ]; then
   exit 0
 fi
 if [ "$1" = "rm" ]; then
-  printf '%s\\n' "$3" >> "$FAKE_DOCKER_RM_LOG"
+  printf '%s\\n' "$*" >> "$FAKE_DOCKER_RM_LOG"
   exit 0
 fi
 exit 0
@@ -346,15 +348,29 @@ exit 0
         });
         expect(containers.find((container) => container.id === foreignId)).toBeUndefined();
 
-        await expect(commands.get("cleanup_orphaned_containers")?.({}, context)).resolves.toEqual({
-          removed: 2,
-          alreadyAbsent: 0,
-          skipped: 0,
-          failed: 0,
-        });
+        // Removal is reviewed: only this registry's orphan is eligible. A
+        // container from before owner labels could be any installation's and
+        // is listed for adoption, never offered for removal.
+        const preview = (await commands.get("docker_cleanup_preview")?.({}, context)) as {
+          selectionToken: string;
+          rows: Array<{ kind: string; id: string; classification: string }>;
+        };
+        const containerRows = preview.rows.filter((row) => row.kind === "container");
+        expect(containerRows.find((row) => row.id === orphanId)?.classification).toBe("eligible");
+        expect(containerRows.find((row) => row.id === legacyOrphanId)?.classification).toBe(
+          "legacy-unadopted",
+        );
+        expect(containerRows.find((row) => row.id === foreignId)).toBeUndefined();
+        await expect(commands.get("cleanup_orphaned_containers")?.({}, context)).rejects.toThrow(
+          "ContainerLifecycleError:invalid-request",
+        );
+        await commands.get("docker_cleanup_execute")?.(
+          { selectionToken: preview.selectionToken, containerIds: [orphanId, legacyOrphanId] },
+          context,
+        );
         const removed = await fs.readFile(logs.rm, "utf8");
         expect(removed).toContain(orphanId);
-        expect(removed).toContain(legacyOrphanId);
+        expect(removed).not.toContain(legacyOrphanId);
         expect(removed).not.toContain(shortAssignedId);
         expect(removed).not.toContain(foreignId);
 
@@ -849,16 +865,25 @@ fi
 exit 0
 `,
       async (logs) => {
-        await expect(commands.get("docker_system_prune")?.({}, context)).resolves.toEqual({
-          containersDeleted: 1,
-          containersSkipped: 1,
-          containersFailed: 1,
-          containersProtected: 2,
-          imagesDeleted: 0,
-          networksDeleted: 0,
-          volumesDeleted: 0,
-          spaceReclaimed: 2_000_000,
-        });
+        const preview = (await commands.get("docker_cleanup_preview")?.({}, context)) as {
+          selectionToken: string;
+          rows: Array<{ kind: string; id: string; classification: string }>;
+        };
+        const eligible = preview.rows
+          .filter((row) => row.kind === "container" && row.classification === "eligible")
+          .map((row) => row.id)
+          .sort();
+        // Assigned and label-linked containers are kept out of the review.
+        expect(eligible).toEqual(["free-orphan", "racing-orphan", "stuck-orphan"]);
+        const result = (await commands.get("docker_cleanup_execute")?.(
+          { selectionToken: preview.selectionToken, containerIds: eligible },
+          context,
+        )) as { outcomes: Array<{ id: string; outcome: string }> };
+        const outcome = (id: string) => result.outcomes.find((entry) => entry.id === id)?.outcome;
+        expect(outcome("free-orphan")).toBe("removed");
+        // Assigned between review and removal: rechecked and kept.
+        expect(outcome("racing-orphan")).toBe("conflict");
+        expect(outcome("stuck-orphan")).toBe("failed");
         const removed = (await fs.readFile(logs.rm, "utf8")).split("\n").filter(Boolean);
         expect(removed).toEqual(["free-orphan"]);
       },

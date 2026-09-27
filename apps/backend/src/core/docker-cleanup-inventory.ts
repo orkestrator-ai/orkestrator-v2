@@ -27,7 +27,8 @@ export type CleanupExclusionReason =
   | "deletion-pending"
   | "running"
   | "foreign-owner"
-  | "identity-uncertain";
+  | "identity-uncertain"
+  | "legacy-unadopted";
 
 export interface CleanupInventoryRow {
   containerId: string;
@@ -225,6 +226,9 @@ export function classify(
   const ownerLabel = container.labels[DOCKER_LABEL_OWNER];
   if (ownerLabel !== undefined && ownerLabel !== owner) return "foreign-owner";
   if (ownerLabel === undefined && options.strictDockerOwner) return "foreign-owner";
+  // A container from before owner labels could belong to any installation on
+  // this daemon. It is listed for the user to adopt, never removed as clutter.
+  if (ownerLabel === undefined) return "legacy-unadopted";
   const labelledEnvironmentId = container.labels[DOCKER_LABEL_ENVIRONMENT_ID] ?? null;
   if (
     protection.environments.some(

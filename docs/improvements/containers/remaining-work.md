@@ -18,10 +18,10 @@ credentials this host does not have — named explicitly).
 | 6 | 09 | An explicit empty allowlist widened to the image's broad default list | Done — an empty environment list means the global one; an empty result is sent as `none` (nothing beyond GitHub) |
 | 7 | 08 | Claude credential sync and `ANTHROPIC_API_KEY` ignore whether Claude is enabled | Done — `providerCredentialsAllowed` gates creation, staging and syncs |
 | 8 | 08 | Revocation is not durable: next boot re-imports; no pending state, no process stop | Done — durable `revokedInputProviders`, staged subtrees emptied, bridge stopped, "Allow again" |
-| 9 | 06 | Rebuild fences only terminals/bridges/exec: prompts, native dispatch, pending approvals not fenced | Open |
-| 10 | 07 | `cleanup_orphaned_containers` / `docker_system_prune` remove without a reviewed preview; ownerless legacy containers can be eligible | Open |
-| 11 | 07 | Deletion revokes tool access last and force-removes without a drain | Open |
-| 12 | 06 | Copy helper does not verify ownership or directory counts; xattrs, hardlinks, devices have no policy | Open |
+| 9 | 06 | Rebuild fences only terminals/bridges/exec: prompts, native dispatch, pending approvals not fenced | Done — `withEnvironmentReplacement` refuses new prompts and mail injections for the whole rebuild/reset/restore before anything is journaled; bridges still deny parked approvals on the drain's SIGTERM; an in-flight ambiguous dispatch stays recoverable |
+| 10 | 07 | `cleanup_orphaned_containers` / `docker_system_prune` remove without a reviewed preview; ownerless legacy containers can be eligible | Done — both commands refused; ownerless containers are `legacy-unadopted`, never eligible |
+| 11 | 07 | Deletion revokes tool access last and force-removes without a drain | Done — tool access revoked right after the ledger is written; a short drain precedes the forced removal |
+| 12 | 06 | Copy helper does not verify ownership or directory counts; xattrs, hardlinks, devices have no policy | Done — numeric owner in the manifest, whole-tree directory count, hard links verified as links, devices refused, `user.*`/capability xattrs preserved; Git state is covered by the byte-identical `.git` |
 | 13 | 08 | Input pruning ignores in-flight staging (can delete an active `.partial`) | Done — 30-minute grace before an unreferenced revision is pruned |
 | 14 | 09 | `NET_ADMIN` added to full-mode containers that never run the firewall | Done — only restricted runtimes get `NET_ADMIN` |
 

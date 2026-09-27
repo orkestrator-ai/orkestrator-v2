@@ -1,3 +1,4 @@
+import { withEnvironmentReplacement } from "./container-readiness.js";
 import {
   formatContainerLifecycleError,
   parseContainerLifecycle,
@@ -1826,6 +1827,18 @@ function containerLifecycleError(code: ContainerLifecycleErrorCode, message: str
 }
 
 export async function recreateEnvironmentOnce(
+  request: RecreateEnvironmentRequest,
+  context: CommandContext,
+  schedulePendingRename: (environmentId: string, context: CommandContext) => void,
+  invalidateDiscovery: (environmentId: string) => void,
+): Promise<EnvironmentSetupStartResult | undefined> {
+  // No agent prompt reaches this environment while its runtime is replaced.
+  return withEnvironmentReplacement(request.environmentId, () =>
+    recreateEnvironmentOnceUnfenced(request, context, schedulePendingRename, invalidateDiscovery),
+  );
+}
+
+async function recreateEnvironmentOnceUnfenced(
   request: RecreateEnvironmentRequest,
   context: CommandContext,
   schedulePendingRename: (environmentId: string, context: CommandContext) => void,

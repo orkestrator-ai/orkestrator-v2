@@ -30,6 +30,7 @@ export const CLEANUP_REASONS: Record<Exclude<CleanupClassification, "eligible">,
   running: "Running",
   "foreign-owner": "Belongs to another installation",
   "identity-uncertain": "Its owner could not be confirmed",
+  "legacy-unadopted": "Created before ownership labels; reattach it or remove it yourself",
   "in-use": "Mounted by a container",
 };
 

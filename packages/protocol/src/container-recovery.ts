@@ -54,6 +54,8 @@ export type CleanupClassification =
   | "running"
   | "foreign-owner"
   | "identity-uncertain"
+  /** An earlier release's container with no owner label: reattach or remove it by hand. */
+  | "legacy-unadopted"
   | "in-use";
 
 export interface CleanupPreviewRow {

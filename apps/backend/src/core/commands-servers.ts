@@ -144,6 +144,10 @@ import {
   coordinatorRuntimeUnavailableMessage,
   resolveCoordinatorRuntime,
 } from "./coordinator-runtime.js";
+import { drainContainerProcesses } from "./container-readiness.js";
+
+/** Deletion drains briefly: the container is removed right after. */
+const DELETION_DRAIN_GRACE_SECONDS = 5;
 
 /**
  * A private Claude configuration directory holding only the credential.
@@ -1460,6 +1464,9 @@ export async function deleteEnvironment(
         ? buildEnvironmentCleanupEntry(environment, project, storage.getDataDir())
         : null;
       if (cleanup) await environmentCleanupLedger(storage.getDataDir()).record(cleanup);
+      // Agents lose tool access first: nothing an agent calls back into may act
+      // on an environment that is being taken apart.
+      context.agentTools?.revokeEnvironment(environmentId);
       await stopEnvironmentReviewValidation(environmentId, context);
       await stopEnvironmentExecWorkers(environmentId, context);
       // Waits for every terminal tree, including setup's build descendants, so
@@ -1494,6 +1501,11 @@ export async function deleteEnvironment(
         // execs into something that no longer exists.
         shutdownClaudeStatePolling(environment.containerId);
         cancelOpenCodeAgentToolsConfiguration(`container:${environment.containerId}`);
+        // Bridges and agents get the drain's SIGTERM, so they settle their
+        // journals and deny parked approvals before the forced removal.
+        await drainContainerProcesses(environment.containerId, DELETION_DRAIN_GRACE_SECONDS).catch(
+          () => null,
+        );
         // Ownership was asserted before the tombstone, above.
         if (cleanup) {
           await runEnvironmentCleanupStep(cleanup, "container", context, {

@@ -323,10 +323,13 @@ async function readLauncherInvocations(): Promise<LauncherInvocation[]> {
   return invocations;
 }
 
-async function waitFor(predicate: () => boolean, description: string): Promise<void> {
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  description: string,
+): Promise<void> {
   const deadline = Date.now() + 1_000;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`Timed out waiting for ${description}`);
@@ -690,32 +693,29 @@ describe("process and platform command behavior", () => {
     expect(await invoke("get_container_logs", { containerId: "container-a", tail: "25" })).toBe(
       "historical container log\n",
     );
-    await invoke("stream_container_logs", { containerId: "container-a" });
-    await waitFor(() => fixture.events.length === 2, "stdout and stderr container-log events");
-    // Events keep the legacy fields and add the follower's source and cursor.
-    expect(fixture.events).toEqual([
-      {
-        event: "container-log",
-        payload: expect.objectContaining({ containerId: "container-a", line: "stream stdout\n" }),
-      },
-      {
-        event: "container-log",
-        payload: expect.objectContaining({ containerId: "container-a", line: "stream stderr\n" }),
-      },
-    ]);
+    // Log content is never pushed as events: it is read by cursor.
+    const stream = (await invoke("stream_container_logs", { containerId: "container-a" })) as {
+      subscriptionId: string;
+      sourceId: string;
+    };
+    let lines: string[] = [];
+    await waitFor(async () => {
+      const read = (await invoke("read_container_logs", {
+        subscriptionId: stream.subscriptionId,
+        sourceId: stream.sourceId,
+        cursor: 0,
+      })) as { records?: Array<{ text: string }> };
+      lines = (read.records ?? []).map((record) => record.text);
+      return lines.length === 2;
+    }, "stdout and stderr container log records");
+    expect(lines.sort()).toEqual(["stream stderr\n", "stream stdout\n"]);
+    expect(fixture.events.filter((entry) => entry.event === "container-log")).toEqual([]);
+    await invoke("close_container_logs", { subscriptionId: stream.subscriptionId });
 
-    // Only unclaimed stopped containers are removed: the assigned environment
-    // container and another registry's container are kept.
-    expect(await invoke("docker_system_prune", { pruneVolumes: true })).toEqual({
-      containersDeleted: 2,
-      containersSkipped: 0,
-      containersFailed: 0,
-      containersProtected: 2,
-      imagesDeleted: 0,
-      networksDeleted: 0,
-      volumesDeleted: 0,
-      spaceReclaimed: 1_250_000_000 + 512_000_000,
-    });
+    // Unreviewed removal is refused; cleanup goes through the reviewed preview.
+    await expect(invoke("docker_system_prune", { pruneVolumes: true })).rejects.toThrow(
+      "ContainerLifecycleError:invalid-request",
+    );
     // Capacity is the daemon's and usage this installation's; anything the
     // fake daemon does not answer is reported unknown, not as host values.
     expect(await invoke("get_docker_system_stats")).toMatchObject({
@@ -728,12 +728,8 @@ describe("process and platform command behavior", () => {
       scope: { capacity: "docker-daemon", usage: "installation", disk: "docker-daemon" },
     });
     const pruneLog = await readCommandLog();
-    // Exact candidates are removed without -f, so a container started after the
-    // recheck is refused by Docker rather than killed.
-    expect(pruneLog).toContain("docker rm container-old");
-    expect(pruneLog).toContain("docker rm legacy-old");
-    expect(pruneLog).not.toContain("docker rm container-existing");
-    expect(pruneLog).not.toContain("docker rm container-foreign");
+    // Nothing is removed without a reviewed selection.
+    expect(pruneLog).not.toMatch(/docker rm( -f)? /);
     expect(pruneLog).not.toContain("docker container prune");
     expect(pruneLog).not.toContain("docker system prune");
     expect(pruneLog).not.toContain("--volumes");

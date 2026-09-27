@@ -1,3 +1,4 @@
+import { withEnvironmentReplacement } from "./container-readiness.js";
 import {
   MAX_RETAINED_STORAGE_SETS,
   formatContainerLifecycleError,
@@ -524,6 +525,16 @@ export interface ReplacementOutcome {
  * provider state. Must run inside the environment's lifecycle queue.
  */
 export async function replaceRuntimePreservingState(
+  request: ReplacementRequest,
+  context: CommandContext,
+): Promise<ReplacementOutcome | undefined> {
+  // No agent prompt reaches this environment while its runtime is replaced.
+  return withEnvironmentReplacement(request.environmentId, () =>
+    replaceRuntimePreservingStateUnfenced(request, context),
+  );
+}
+
+async function replaceRuntimePreservingStateUnfenced(
   request: ReplacementRequest,
   context: CommandContext,
 ): Promise<ReplacementOutcome | undefined> {

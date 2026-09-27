@@ -128,22 +128,6 @@ export async function getOrkestratorContainers(): Promise<ContainerInfo[]> {
   return invoke<ContainerInfo[]>("get_orkestrator_containers");
 }
 
-export interface OrphanCleanupResult {
-  removed: number;
-  alreadyAbsent: number;
-  /** Became claimed (assigned, linked, deleting) between listing and removal. */
-  skipped: number;
-  failed: number;
-}
-
-/**
- * Remove containers nothing claims. Each candidate's assignment is rechecked
- * immediately before removal; counts report what actually happened.
- */
-export async function cleanupOrphanedContainers(): Promise<OrphanCleanupResult> {
-  return invoke<OrphanCleanupResult>("cleanup_orphaned_containers");
-}
-
 /** Reattach an orphaned container to a project by creating a new environment entry */
 export async function reattachContainer(
   projectId: string,
@@ -151,38 +135,6 @@ export async function reattachContainer(
   name?: string,
 ): Promise<Environment> {
   return invoke<Environment>("reattach_container", { projectId, containerId, name });
-}
-
-/** Result of a Docker prune operation */
-export interface SystemPruneResult {
-  /** Number of containers deleted */
-  containersDeleted: number;
-  /** Candidates that became claimed before removal and were kept. */
-  containersSkipped?: number;
-  /** Candidates Docker failed to remove. */
-  containersFailed?: number;
-  /** Stopped containers kept because an environment or operation claims them. */
-  containersProtected?: number;
-  /** Number of images deleted. Always 0: images are shared, so none are pruned. */
-  imagesDeleted: number;
-  /** Number of networks deleted. Always 0: this app creates no networks. */
-  networksDeleted: number;
-  /** Number of volumes deleted. Always 0: this app creates no volumes. */
-  volumesDeleted: number;
-  /** Total space reclaimed in bytes */
-  spaceReclaimed: number;
-}
-
-/**
- * Remove this instance's stopped containers that nothing claims.
- *
- * Containers assigned to an environment, labelled for a live environment,
- * owed to a pending deletion or part of an in-flight operation are kept, even
- * when stopped. Images, networks and volumes are deliberately left alone
- * because they cannot be limited safely to resources this instance created.
- */
-export async function dockerSystemPrune(): Promise<SystemPruneResult> {
-  return invoke<SystemPruneResult>("docker_system_prune", {});
 }
 
 /** Get container logs (non-streaming, returns last N lines) */

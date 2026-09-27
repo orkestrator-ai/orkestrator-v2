@@ -1,3 +1,4 @@
+import { withEnvironmentReplacement } from "./container-readiness.js";
 import {
   MAX_RETAINED_STORAGE_SETS,
   parseContainerLifecycle,
@@ -357,6 +358,16 @@ export interface RestoreCopyRequest extends RecoveryCopyRequest {
  * environment afterwards.
  */
 export async function restoreRecoveryCopy(
+  request: RestoreCopyRequest,
+  context: CommandContext,
+): Promise<{ containerId: string } | undefined> {
+  // No agent prompt reaches this environment while its runtime is replaced.
+  return withEnvironmentReplacement(request.environmentId, () =>
+    restoreRecoveryCopyUnfenced(request, context),
+  );
+}
+
+async function restoreRecoveryCopyUnfenced(
   request: RestoreCopyRequest,
   context: CommandContext,
 ): Promise<{ containerId: string } | undefined> {

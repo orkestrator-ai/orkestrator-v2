@@ -349,8 +349,11 @@ operation's candidate set or a pending deletion.
 from that set, re-classifying each at removal time: one that became referenced
 is a `conflict`, one outside the preview is `not-in-preview`, a volume still
 mounted is `skipped` (`in-use`), never forced. Every resource gets its own
-outcome. The older `docker_system_prune` / `cleanup_orphaned_containers`
-commands stay for earlier renderers and remain container-only.
+outcome. The earlier one-shot `docker_system_prune` / `cleanup_orphaned_containers`
+commands are refused (`invalid-request`): nothing is removed without a review.
+A container from before owner labels is classified `legacy-unadopted` — it
+could be any installation's on this daemon — and is offered for reattachment,
+never removal.
 
 ## Portable inputs (`staged-inputs`)
 

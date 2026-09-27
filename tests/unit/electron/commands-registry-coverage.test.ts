@@ -229,22 +229,16 @@ afterAll(async () => {
 });
 
 describe("direct backend command registry coverage", () => {
-  test("reports Docker maintenance results and removes only unassigned containers", async () => {
+  test("reports Docker maintenance state; unreviewed removal is refused", async () => {
     const assigned = environment();
     const context = contextWithStorage({
       loadEnvironments: mock(async () => [assigned]),
     });
 
-    await expect(invoke("docker_system_prune", {}, context)).resolves.toEqual({
-      containersDeleted: 2,
-      containersSkipped: 0,
-      containersFailed: 0,
-      containersProtected: 1,
-      imagesDeleted: 0,
-      networksDeleted: 0,
-      volumesDeleted: 0,
-      spaceReclaimed: 768_000_000 * 2,
-    });
+    // Removal goes through docker_cleanup_preview / docker_cleanup_execute.
+    await expect(invoke("docker_system_prune", {}, context)).rejects.toThrow(
+      "ContainerLifecycleError:invalid-request",
+    );
     await expect(invoke("get_docker_system_stats", {}, context)).resolves.toMatchObject({
       containersTotal: 2,
       imagesTotal: 2,
@@ -291,39 +285,21 @@ describe("direct backend command registry coverage", () => {
         environmentId: null,
         projectId: null,
         isAssigned: false,
-        cleanupExclusion: null,
+        // No owner label: it could be any installation's.
+        cleanupExclusion: "legacy-unadopted",
         cpuPercent: null,
         memoryBytes: null,
         oomKilled: null,
       },
     ]);
-    await expect(invoke("cleanup_orphaned_containers", {}, context)).resolves.toEqual({
-      removed: 2,
-      alreadyAbsent: 0,
-      skipped: 0,
-      failed: 0,
-    });
+    await expect(invoke("cleanup_orphaned_containers", {}, context)).rejects.toThrow(
+      "ContainerLifecycleError:invalid-request",
+    );
 
     const log = await commandLogContents();
     expect(log).not.toContain("docker container prune");
     expect(log).not.toContain("docker system prune");
-    expect(log).toContain("docker rm orphan-container");
-    expect(log).toContain("docker rm -f orphan-container");
-    expect(log).not.toContain("assigned-container\n");
-    expect(log).not.toMatch(/docker rm( -f)? assigned-container/);
-  });
-
-  test("agent-test Docker cleanup never adopts or prunes ownerless containers", async () => {
-    const context = contextWithStorage({ loadEnvironments: mock(async () => []) });
-    context.strictDockerOwner = true;
-
-    await expect(invoke("docker_system_prune", {}, context)).resolves.toMatchObject({
-      containersDeleted: 1,
-      spaceReclaimed: 768_000_000,
-    });
-    const log = await commandLogContents();
-    expect(log).toContain("docker rm orphan-container");
-    expect(log).not.toContain("docker rm legacy-container");
+    expect(log).not.toMatch(/docker rm( -f)? /);
   });
 
   test("agent-test container commands reject foreign ownership before reads or execution", async () => {

@@ -7265,6 +7265,66 @@ describe("AgentNativeTab", () => {
       );
     });
 
+    test("withdraws a foreground command's task card when its snapshot settles", async () => {
+      renderVirtualizedMessages = true;
+      const tabId = "tab-claude-foreground-task-transition";
+      const sessionKey = createSessionKey("env-1", tabId);
+      const task = {
+        id: "foreground-suite",
+        toolUseId: "bash-foreground-suite",
+        description: "Run the tests",
+        status: "running" as const,
+      };
+      seedProjection({
+        backgroundTasks: [task],
+        messages: [
+          {
+            id: "assistant-foreground-command",
+            role: "assistant",
+            content: "",
+            createdAt: "2026-08-16T10:00:00.000Z",
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "Bash",
+                toolName: "Bash",
+                toolUseId: task.toolUseId,
+                toolState: "success",
+                toolArgs: { command: "bun test", description: task.description },
+              },
+            ],
+          },
+        ],
+      });
+      render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+
+      expect(
+        await screen.findAllByRole("button", { name: /Task Run the tests Running/ }),
+      ).toHaveLength(1);
+      expect(screen.getByRole("button", { name: "Stop Run the tests" })).toBeTruthy();
+
+      const projection = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+      act(() => {
+        useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+          ...projection,
+          revision: projection.revision + 1,
+          backgroundTasks: [
+            {
+              ...task,
+              status: "completed",
+              settledAt: "2026-08-16T10:01:00.000Z",
+            },
+          ],
+        });
+      });
+
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: /Task Run the tests/ }) === null).toBe(true),
+      );
+      expect(screen.queryByRole("button", { name: "Stop Run the tests" }) === null).toBe(true);
+      expect(screen.getAllByText("bun test")).toHaveLength(1);
+    });
+
     test("places a rowless task that settled inside the loaded window", async () => {
       /*
        * The other half of the rowless path, end to end: a task that stopped

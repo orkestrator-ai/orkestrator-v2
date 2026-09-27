@@ -1,6 +1,6 @@
 # 12 — Reuse backend normalization, hashes, sizes, and detail references
 
-Status: Not started. Prerequisites: 05, 09. Finding: E05.
+Status: Complete (whole-message wire delta retained).
 
 ## Outcome
 
@@ -75,3 +75,39 @@ Land cache-entry representation and accounting first, then diff/token changes.
 Keep the current whole-message wire delta in this step; it already permits
 most CPU reductions without introducing a new client patch protocol. Collect
 post-change bytes/CPU results for the step-14 decision.
+
+## Execution record
+
+```text
+Status: Complete
+Implementation commit / PR: branch implement-efficiency-improvements-7f0993836777-r1,
+  "perf(native-agent): serialize each projected message once per read"
+Protocol or storage decisions:
+  - native-agent-projection-encoding.ts: projected messages are immutable once
+    projectionMessages returns them, so their JSON and byte length are
+    memoized per object (WeakMap). The view token, cache bytes, per-message
+    delta comparison, delta-vs-snapshot sizing, history fingerprints and
+    bytes, the sync-v1 token/budget and both byte bounds (boundTranscriptResponse
+    now takes an injected `measure`) all use the memo.
+  - reuseUnchangedMessages keeps the previously held object for every row
+    whose encoding did not change, so later comparisons are reference checks
+    and renderer caches keyed by object stay warm. Delta membership uses Sets
+    (the old `includes` scan was quadratic).
+  - Detail references for summary parts are registered without serializing or
+    hashing bodies (step 09); inline bodies (v1 bridges, OpenCode) are still
+    hashed once per changed read to mint content-addressed refs.
+  - The whole-message wire delta is unchanged (part deltas: step 14).
+Tests and isolated profiles: native-agent-projection-encoding.test.ts (exact
+  array bytes incl. multibyte; one serialization per object; reuse of
+  unchanged rows; digests change with messages and fields; a changed read of a
+  100-message window with one changed tail serializes projected messages at
+  most window+2 times — previously token + bytes + two per comparison + two
+  sizings + two bounds); full backend suite passes.
+Before/after measurements: see baseline/ (projection serialization visits).
+Compatibility/migration result: tokens are opaque; a restarted backend issues
+  new ones anyway.
+Remaining limitations: each changed read still serializes every freshly
+  projected window row once to recognize unchanged ones; skipping that needs a
+  trustworthy per-message revision from providers, which bridges do not
+  expose yet.
+```

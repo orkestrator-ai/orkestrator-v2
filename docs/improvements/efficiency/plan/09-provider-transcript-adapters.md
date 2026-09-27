@@ -1,6 +1,6 @@
 # 09 — Implement lightweight transcript and detail reads for every provider
 
-Status: In progress (bridge half implemented; backend consumption pending).
+Status: Complete (isolated real-stack QA unrun).
 Prerequisites: 02, 05, 08. Finding: E06.
 
 ## Outcome
@@ -90,7 +90,7 @@ with its remaining cost.
 ## Execution record
 
 ```text
-Status: In progress — bridge half implemented; backend consumption and OpenCode pending
+Status: Complete — bridge half and backend half implemented (backend half below)
 Implementation commit / PR: branch worktree-agent-a4451cb3afadce5d0, commit "perf(bridges): serve v2 lightweight transcripts, exact details and history pages"; no PR yet
 Protocol or storage decisions: see "Bridge half" below
 Tests and isolated profiles: focused Bun suites below; no isolated Electron/browser profile was started
@@ -180,3 +180,35 @@ Remaining limitations: see below
   Codex's detached preview pages only the local tail until hydration.
 - Claude harness suites cannot share one Bun process with each other (true of
   the existing suites too); they pass under the repo's `--parallel` runner.
+
+### Backend half (orchestrator)
+
+- `http-bridge-transcript-v2.ts` + `http-bridge-transcript-reader.ts`: the
+  native projection's `transcriptSnapshot` asks for `representation:
+  "summary"`; the HTTP provider sends `version=2` unless this connection
+  already answered v1 (negative answer cached 10 minutes; a 5xx, timeout or
+  malformed body is a failed read, never a capability verdict). A v1 answer to
+  the v2 request is used as-is, so an old bridge costs no second request.
+  Detail/page 404/405 mean "route absent" for that connection. Other
+  consumers (reviewer views, workflows) keep raw v1 bodies.
+- Projection: summary `detail` locators become session-scoped backend
+  `detailRef`s registered as remote entries (no body fetched); expanding a
+  row calls `provider.transcriptDetail` once, caches the exact body under the
+  existing tool-detail budget, and reports missing/expired as "no longer
+  available" (never a newer body). Summary windows skip the legacy
+  incomplete-preview hydration (the `/messages` full read) unless the head is
+  part-trimmed.
+- OpenCode is in-process: there is no bridge hop to move artifacts across.
+  Its snapshot is projected (heavy fields → local detail refs) before the
+  live-window byte bound is applied, so large artifacts already do not
+  displace earlier rows. Remaining cost: inline heavy bodies are serialized
+  and hashed once per changed read to mint content-addressed refs (as for v1
+  bridges).
+- Tests: `apps/backend/src/core/http-bridge-transcript-v2.test.ts`
+  (v2 bridge, old bridge answered-v1-and-remembered, missing routes, failures
+  prove nothing, malformed v2 is an error, negative expiry) and
+  `native-agent-service-summary-transcripts.test.ts` (remote reference
+  resolved exactly once and cached, changed body → expired, no legacy
+  `/messages` or interactive snapshot on the summary path).
+- Measured structurally: a 300 × 20 KiB-output transcript sends 36 KB with
+  100 messages over v2 versus 518 KB with 25 messages over v1 (bridge half).

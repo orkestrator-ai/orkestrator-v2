@@ -1,6 +1,6 @@
 # 08 — Define lightweight transcript, detail, and history contracts
 
-Status: Not started. Prerequisite: 01. Findings: E05/E06/E07/E13.
+Status: Complete. Prerequisite: 01. Findings: E05/E06/E07/E13.
 
 ## Outcome
 
@@ -88,3 +88,56 @@ Land types, validators, capability negotiation, and fallback tests before any
 adapter advertises support. Write an explicit old/new compatibility table in
 the PR. This step changes no default data path until a bridge implements and
 advertises the complete required feature set.
+
+## Execution record
+
+```text
+Status: Complete
+Implementation commit / PR: branch implement-efficiency-improvements-7f0993836777-r1,
+  "feat(protocol): lightweight bridge transcript summaries, exact details and pages"
+  (+ readBridgePartDetail and the NativeAgentTranscriptView.historyPaging field
+  in the backend consumption commit)
+Protocol or storage decisions:
+  - packages/protocol/src/bridge-transcript-summary.ts. Summary envelope
+    `version: 2` beside the unchanged v1 envelope; capabilities are read from
+    the envelope's own discriminator (an old bridge ignores `version=2` and
+    answers v1) plus `capabilities: {details, pages}` in each v2 snapshot.
+  - Summary parts: toolOutput/toolError, diff bodies (diff/before/after) and
+    an inline `data:image/` fileUrl with no readable path move behind
+    `detail: {locator, bytes, fields}` when the payload exceeds 4 KiB; smaller
+    bodies stay inline (the backend defers those itself). Diff stats and all
+    collapsed-row fields stay. Nested parts/childTools/subagentActions/task
+    are summarized recursively (depth 8).
+  - Detail locator `bd1.<base64url {m: messageId, p: path, d: digest}>` ≤ 2 KiB:
+    path anchored on sourcePartId/toolUseId (trim-stable), digest = sha256 of
+    the exact payload. Detail answers ok | missing (message/part gone) |
+    expired (body changed) | too-large (4 MiB tool / 16 MiB image) | invalid.
+    A per-part WeakMap memo (validated by field references, incl. in-place
+    diff fields) avoids re-hashing unchanged heavy parts on each summary.
+  - Page cursor `bp1.<base64url {g, e, b}>` ≤ 1 KiB, bound to bridge
+    generation + content epoch + exclusive end position; any other epoch is
+    `expired`, never reinterpreted. Pages ≤ 200 messages / 1 MiB target, each
+    page advances or ends; `complete` only when nothing before was ever lost.
+  - Token for v2 carries a representation prefix, so v1 and v2 tokens never
+    answer each other. Title/freshness joined the shared token (step 05).
+  - Consumer validators (parseBridgeTranscriptSummaryUpdate/Detail/Page)
+    bound counts/lengths and reject non-advancing pages and forged image URLs.
+  - Backend: optional provider methods transcriptDetail/transcriptPage and
+    `representation: "summary"` / `historyCursor` on ProviderTranscriptSnapshot;
+    backend direct page cursors are a separate namespace (`v: 2`) from the
+    joined sync-v1 cursors (`v: 1`) and never translated into each other.
+  - Part-level deltas remain off (step 14 decision).
+Tests and isolated profiles: packages/protocol/src/bridge-transcript-summary.test.ts
+  (22 tests: summaries, inline threshold, images, nested tools, prompt kept
+  in window where v1 drops it, zero-visit unchanged read, v1/v2 token
+  separation, memoized heavy parts, exact/expired/missing/invalid details,
+  trim-stable lookup, contiguous page walk, byte-limited page advance,
+  cross-epoch/generation cursor expiry, incomplete history never complete,
+  consumer parser rejection cases, v1 answer recognized as not-a-summary).
+Before/after measurements: see step 09 (bytes on the wire) and baseline/.
+Compatibility/migration result: additive; old bridges answer v1 and are
+  remembered per connection; old clients never ask for v2.
+Remaining limitations: detail revisions are digest-checked rather than frozen,
+  so a streaming card's reference expires when its body changes (the next poll
+  delivers a new one).
+```

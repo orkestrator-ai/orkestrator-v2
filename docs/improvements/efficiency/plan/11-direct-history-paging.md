@@ -1,6 +1,6 @@
 # 11 — Serve history pages without rebuilding interactive projections
 
-Status: Not started. Prerequisites: 08, 09; 10 for Codex indexed pages.
+Status: Complete for providers serving v2 pages; joined fallback retained for others (isolated real-stack QA unrun).
 Finding: E07.
 
 ## Outcome
@@ -83,3 +83,48 @@ whose first access still requires a chronological normalization pass.
 Ship backend support before client cursor bootstrap changes. Retain the
 existing full-sync fallback only for consumers that have not negotiated direct
 pages; do not keep invoking it behind the new fast path.
+
+## Execution record
+
+```text
+Status: Complete for v2 providers; bounded joined fallback for older bridges
+Implementation commit / PR: branch implement-efficiency-improvements-7f0993836777-r1,
+  "feat(native-agent): consume bridge summaries, remote details and direct history pages"
+Protocol or storage decisions:
+  - native-agent-direct-history.ts: backend cursor `v: 2` wraps the provider
+    cursor with digests of the logical session key and provider session id
+    plus the provider history epoch; `v: 1` joined cursors keep their own
+    endpoint behaviour. A cursor for another session is refused; a rotated
+    provider epoch answers "cursor expired" (the renderer resets and re-reads).
+  - projectProgressiveTranscript mints a direct cursor only when the view
+    starts at or before the provider snapshot's first position (a joined
+    prefix may overlap the first page; a bound that dropped leading rows would
+    leave a gap, so no cursor is issued then). The view carries
+    `historyPaging: "direct"`; deltas mirror it.
+  - getMessagePage serves v2 cursors before anything else: resolve the owning
+    session, ask `provider.transcriptPage` for exactly the range, project only
+    that page (remote details as above). No refreshProjection, composer,
+    interaction or interactive-snapshot read, no history fingerprint pass.
+  - Web hook: adopts a direct cursor as the paging boundary whenever it holds
+    no cursor of its own for the epoch (or retention collapsed), so "load
+    earlier" no longer bootstraps through a forced joined snapshot; a page of
+    rows already on screen (a cursor adopted after rows aged out of the tail)
+    is stepped past, bounded, only when the cursor advances.
+  - Epoch correctness for positional pages: Codex local ring and Pi branch
+    navigation now rotate their content epoch (bridge half, step 09).
+Tests and isolated profiles: native-agent-service-summary-transcripts.test.ts
+  (250-message history paged to the start in contiguous order with no legacy
+  or interactive read; cross-session and post-rotation cursors refused);
+  useNativeAgentSession.progressive.test.tsx (direct cursor paging without
+  the joined snapshot; stepping past a duplicate page).
+Before/after measurements: see baseline/ (provider calls per page: joined
+  refresh vs direct).
+Compatibility/migration result: additive cursor namespace; old sync-v1 cursors
+  keep working until normal expiry.
+Remaining limitations: providers without page routes (older bridges, OpenCode
+  in-process) keep the shared joined-history fallback. Pages reach only what
+  each bridge retains (Cursor/Pi/ACP front trim; Codex detached preview
+  before hydration; Claude preview before hydration, whose cursor then
+  expires). Claude has no provider-native range read, so its cold first
+  access still performs a full chronological hydration.
+```

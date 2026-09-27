@@ -2,6 +2,12 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TerminalProvider, useTerminalContext } from "@/contexts";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import * as realBackend from "@/lib/backend";
 import * as realSonner from "sonner";
 import type {
@@ -445,21 +451,113 @@ describe("AgentMailButton", () => {
     );
   });
 
-  test("stays open when the originating menu restores focus to its trigger", async () => {
+  test("ignores only the originating menu's focus restoration", async () => {
+    render(
+      <>
+        <button type="button">Tab trigger</button>
+        <button type="button">Unrelated control</button>
+        <AgentMailButton />
+      </>,
+    );
+
+    act(() =>
+      openAgentMailForTab(
+        "env-1",
+        "tab-1",
+        "settings",
+        screen.getByRole("button", { name: "Tab trigger" }),
+      ),
+    );
+    expect(await screen.findByLabelText("Automatic delivery policy")).toBeTruthy();
+    act(() => screen.getByRole("button", { name: "Tab trigger" }).focus());
+    expect(screen.queryByLabelText("Automatic delivery policy")).toBeTruthy();
+
+    act(() => screen.getByRole("button", { name: "Unrelated control" }).focus());
+    await waitFor(() => expect(screen.queryByLabelText("Automatic delivery policy")).toBeNull());
+  });
+
+  test("stays open through context-menu focus restoration, then closes on unrelated focus", async () => {
+    let origin: HTMLElement | null = null;
+    render(
+      <>
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <button type="button">Tab trigger</button>
+          </ContextMenuTrigger>
+          <ContextMenuContent
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              origin?.focus();
+            }}
+          >
+            <ContextMenuItem
+              onClick={() => openAgentMailForTab("env-1", "tab-1", "settings", origin)}
+            >
+              Inbox settings…
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+        <button type="button">Unrelated control</button>
+        <AgentMailButton />
+      </>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Tab trigger" });
+    origin = trigger;
+    fireEvent.contextMenu(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Inbox settings…" }));
+    expect(await screen.findByLabelText("Automatic delivery policy")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+
+    act(() => screen.getByRole("button", { name: "Unrelated control" }).focus());
+    await waitFor(() => expect(screen.queryByLabelText("Automatic delivery policy")).toBeNull());
+  });
+
+  test("closes on outside focus after opening from the inbox button", async () => {
+    render(
+      <>
+        <button type="button">Unrelated control</button>
+        <AgentMailButton />
+      </>,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Agent inbox" }));
+    expect(await screen.findByRole("button", { name: "New" })).toBeTruthy();
+    act(() => screen.getByRole("button", { name: "Unrelated control" }).focus());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "New" })).toBeNull());
+  });
+
+  test("closes on outside pointer down after the focus handoff", async () => {
+    render(
+      <>
+        <button type="button">Tab trigger</button>
+        <button type="button">Unrelated control</button>
+        <AgentMailButton />
+      </>,
+    );
+    const origin = screen.getByRole("button", { name: "Tab trigger" });
+    act(() => openAgentMailForTab("env-1", "tab-1", "settings", origin));
+    expect(await screen.findByLabelText("Automatic delivery policy")).toBeTruthy();
+    act(() => origin.focus());
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Unrelated control" }));
+    await waitFor(() => expect(screen.queryByLabelText("Automatic delivery policy")).toBeNull());
+  });
+
+  test("closes on Escape after the focus handoff", async () => {
     render(
       <>
         <button type="button">Tab trigger</button>
         <AgentMailButton />
       </>,
     );
+    const origin = screen.getByRole("button", { name: "Tab trigger" });
+    act(() => openAgentMailForTab("env-1", "tab-1", "settings", origin));
+    const policy = await screen.findByLabelText("Automatic delivery policy");
+    act(() => origin.focus());
 
-    act(() => openAgentMailForTab("env-1", "tab-1", "settings"));
-    expect(await screen.findByLabelText("Automatic delivery policy")).toBeTruthy();
-    act(() => screen.getByRole("button", { name: "Tab trigger" }).focus());
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-    expect(screen.queryByLabelText("Automatic delivery policy")).toBeTruthy();
+    fireEvent.keyDown(policy, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByLabelText("Automatic delivery policy")).toBeNull());
   });
 
   test("fetches a tab mailbox synchronized after the directory snapshot", async () => {

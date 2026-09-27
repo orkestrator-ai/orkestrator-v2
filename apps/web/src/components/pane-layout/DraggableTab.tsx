@@ -380,12 +380,26 @@ export function DraggableTab({
         {owningEnvironmentId && messagingEnabled && mailCapabilities.canPull && (
           <>
             <ContextMenuItem
-              onClick={() => openAgentMailForTab(owningEnvironmentId, tab.id, "compose")}
+              onClick={() =>
+                openAgentMailForTab(
+                  owningEnvironmentId,
+                  tab.id,
+                  "compose",
+                  tooltipAnchorRef.current,
+                )
+              }
             >
               Message this tab…
             </ContextMenuItem>
             <ContextMenuItem
-              onClick={() => openAgentMailForTab(owningEnvironmentId, tab.id, "settings")}
+              onClick={() =>
+                openAgentMailForTab(
+                  owningEnvironmentId,
+                  tab.id,
+                  "settings",
+                  tooltipAnchorRef.current,
+                )
+              }
             >
               Inbox settings…
             </ContextMenuItem>

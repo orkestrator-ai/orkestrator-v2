@@ -246,6 +246,31 @@ describe("container baselines", () => {
         incomplete,
       };
 
+      // Three fresh environments at once: total wall time and each one's
+      // slowdown against the sequential median above.
+      const concurrent = await timed(() =>
+        Promise.allSettled(
+          [0, 1, 2].map(async (index) => {
+            const started = performance.now();
+            await freshRuntime(`env-${RUN}-concurrent-${index}`, "restricted");
+            return performance.now() - started;
+          }),
+        ),
+      );
+      const concurrentTotals = concurrent.value
+        .filter((entry): entry is PromiseFulfilledResult<number> => entry.status === "fulfilled")
+        .map((entry) => entry.value);
+      const sequentialMedian = summarize(fresh.total!).median;
+      results.freshConcurrent3 = {
+        wallMs: Math.round(concurrent.ms),
+        each: summarize(concurrentTotals),
+        incomplete: concurrent.value.length - concurrentTotals.length,
+        slowdownVsSequentialMedian:
+          sequentialMedian && concurrentTotals.length > 0
+            ? Math.round((summarize(concurrentTotals).median! / sequentialMedian) * 100) / 100
+            : null,
+      };
+
       // Warm stop (drain) and start to current-boot readiness.
       const warm = { stop: [] as number[], start: [] as number[] };
       const containerId = last!.containerId;
@@ -324,6 +349,17 @@ describe("container baselines", () => {
         (entry) => entry.state === "running",
       ).length;
       results.sampler = { running, ms: summarize(sampler), dockerCalls: summarize(samplerCalls) };
+
+      // Docker calls per minute while the Docker view is open (it refreshes
+      // every 5 s; the sampler shares one sample per interval).
+      const viewMinute = await timed(async () => {
+        const deadline = performance.now() + 60_000;
+        while (performance.now() < deadline) {
+          await sampleContainerUsage(last!.fixture.context);
+          await Bun.sleep(5_000);
+        }
+      });
+      results.dockerCallsPerMinuteViewOpen = viewMinute.dockerCalls;
 
       // Observer churn: 200 open/close cycles over 3 containers.
       const service = new ContainerLogService();

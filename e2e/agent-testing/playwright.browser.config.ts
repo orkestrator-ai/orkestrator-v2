@@ -15,6 +15,7 @@ export default defineConfig({
     "web-annotations-gateway.spec.ts",
     "cli-ui.spec.ts",
     "container-settings.spec.ts",
+    "container-rebuild-cycle.spec.ts",
   ],
   fullyParallel: false,
   workers: 1,

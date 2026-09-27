@@ -111,4 +111,32 @@ describe("verified copy helper", () => {
     expect(script).toContain("%U:%G");
     expect(script).toContain("--numeric-owner");
   });
+
+  test("a truncated archive fails extraction instead of reporting a partial copy", () => {
+    const { root } = workspace();
+    const archive = execFileSync("tar", ["-C", join(root, "src"), "-cf", "-", "ws"]);
+    const truncated = archive.subarray(0, Math.floor(archive.length / 3));
+    const result = copyStream(truncated, join(root, "truncated"), 1);
+    expect(result.ok).toBe(false);
+  });
+
+  test("a hard link whose target is outside the archive is not a verified copy", () => {
+    const { root } = workspace();
+    const craft = spawnSync("python3", [
+      "-c",
+      [
+        "import sys, tarfile, io",
+        "buf = io.BytesIO()",
+        "with tarfile.open(fileobj=buf, mode='w') as t:",
+        "    d = tarfile.TarInfo('ws'); d.type = tarfile.DIRTYPE; d.mode = 0o755; t.addfile(d)",
+        "    h = tarfile.TarInfo('ws/escape'); h.type = tarfile.LNKTYPE; h.linkname = '../../etc/passwd'; t.addfile(h)",
+        "sys.stdout.buffer.write(buf.getvalue())",
+      ].join("\n"),
+    ]);
+    if (craft.status !== 0) throw new Error("python3 is needed to craft the archive");
+    const destination = join(root, "escape");
+    const result = copyStream(craft.stdout, destination, 1);
+    expect(result.ok).toBe(false);
+    expect(() => statSync(join(root, "etc"))).toThrow();
+  });
 });

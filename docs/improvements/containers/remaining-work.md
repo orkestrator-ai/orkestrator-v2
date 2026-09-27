@@ -47,18 +47,18 @@ credentials this host does not have — named explicitly).
 | 30 | 12 | CI never runs the built image (bridge `/global/health`, CLI versions, dynamic assets) | Done — `docker/tests/final-image-smoke.sh`, run by CI on both native architectures after a contract-argument build |
 | 31 | 14 | Manifest `stateFormats` never enforced against storage | Done — `imageWritesVolumeStorage` gates volume storage at creation (`unsupported-format`) |
 | 32 | 12 | `docker/build.sh` cannot build the image | Done — builds from the repository root with the contract arguments |
-| 33 | 13 | No regression criteria/latency targets; missing benchmark scenarios (concurrency, idle calls/min) | Open |
+| 33 | 13 | No regression criteria/latency targets; missing benchmark scenarios (concurrency, idle calls/min) | Done — regression table in benchmarks.md; concurrency-3 and Docker-calls-per-minute scenarios measured |
 
 ## Tier 3 — verification depth
 
 | # | Step | Item | Status |
 | --- | --- | --- | --- |
-| 34 | 06/C16 | ENOSPC and inode exhaustion on a real daemon (size-capped tmpfs volumes) | Open |
-| 35 | 06 | Corrupt archive / malformed link / occupied name / failed setup injection; kill around commit | Open |
+| 34 | 06/C16 | ENOSPC and inode exhaustion on a real daemon (size-capped tmpfs volumes) | Done — live: tmpfs candidate volumes out of inodes and out of bytes mid-copy roll back, original intact (test-only volume-option seam) |
+| 35 | 06 | Corrupt archive / malformed link / occupied name / failed setup injection; kill around commit | Done — truncated archive and escaping hard link refused (unit); occupied candidate name (live); reconciliation at every pre-commit phase and just after the commit write (unit). A failed candidate boot follows the same rollback as the port conflict |
 | 36 | 07/C29 | Real-browser cycle for rebuild, recovery copies and cleanup review, including switch-away during a rebuild | Open |
-| 37 | 08/C21 | Interrupted revoke and restart during staging (fixture credentials) | Open |
+| 37 | 08/C21 | Interrupted revoke and restart during staging (fixture credentials) | Done — an interrupted revoke stays recorded and gates syncs; a staging interrupted by a restart is never read and is pruned after the grace |
 | 38 | 10 | `DockerStatsDialog` tests; parser edge cases | Done — `DockerStatsDialog.test.tsx`; watcher and shared-memory tests |
-| 39 | 09 | Sibling access through the environment gateway IP and a sibling's published port | Open |
+| 39 | 09 | Sibling access through the environment gateway IP and a sibling's published port | Done — C22 also rejects the environment gateway address and a sibling's published host port |
 
 ## Environment-limited
 

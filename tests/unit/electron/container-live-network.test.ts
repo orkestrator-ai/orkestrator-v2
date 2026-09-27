@@ -201,6 +201,22 @@ describe("C22 environment networks and narrow host access", () => {
       expect(await probe(containerId, `http://host.docker.internal:${otherPort}/`)).toBe(7);
       // Sibling: rejected, not merely unanswered.
       expect(await probe(containerId, `http://${siblingIp}:8080/`)).toBe(7);
+      // ...also through this environment network's own gateway address and
+      // through a port the sibling publishes on the host.
+      const gateway = await docker([
+        "network",
+        "inspect",
+        "-f",
+        "{{range .IPAM.Config}}{{.Gateway}}{{end}}",
+        environmentNetworkName(owner, restricted.id),
+      ]);
+      expect(await probe(containerId, `http://${gateway}:${otherPort}/`)).toBe(7);
+      const siblingPublished = (await docker(["port", siblingId, "4097/tcp"]))
+        .split("\n")[0]!
+        .split(":")
+        .at(-1)!;
+      expect(await probe(containerId, `http://${gateway}:${siblingPublished}/`)).toBe(7);
+      expect(await probe(containerId, `http://host.docker.internal:${siblingPublished}/`)).toBe(7);
       // The internet beyond the allowlist.
       expect(await probe(containerId, "https://example.com/")).not.toBe(0);
       // A full-access sibling proves the listener itself answers.

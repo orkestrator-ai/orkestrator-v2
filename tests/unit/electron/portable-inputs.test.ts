@@ -281,6 +281,56 @@ exit 0
     expect(providerCredentialsAllowed({}, ["codex"], null, "claude")).toBe(false);
   });
 
+  test("a revocation interrupted before the container answers is still in force", async () => {
+    const { dataDir } = await fixtureHome();
+    const { context, environments } = memoryLifecycleContext(
+      [lifecycleEnvironment({ containerId: "container-1" })],
+      dataDir,
+    );
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+echo "Cannot connect to the Docker daemon" >&2
+exit 1
+`,
+      async () => {
+        const result = await revokeProviderCredentials("env-lifecycle", "claude", context);
+        // Nothing could be confirmed in the container...
+        expect(result.removed).toBe(false);
+        expect(result.pendingRebuild).toBe(true);
+      },
+    );
+    // ...but the revocation was recorded first, so nothing hands it back.
+    const environment = environments.get("env-lifecycle")!;
+    expect(environment.revokedInputProviders).toEqual(["claude"]);
+    expect(providerCredentialsAllowed({}, ["claude"], environment, "claude")).toBe(false);
+  });
+
+  test("a staging interrupted by a restart is never read and a new one is independent", async () => {
+    const { dataDir, roots } = await fixtureHome();
+    const parent = environmentStateDirectory(dataDir, "portable-inputs", "env-inputs");
+    await fs.mkdir(path.join(parent, ".r0-abcdef01.partial", "claude-config"), { recursive: true });
+    await fs.writeFile(path.join(parent, ".r0-abcdef01.partial", "claude-config", "x"), "half");
+    expect(await readInputsManifest(dataDir, "env-inputs", ".r0-abcdef01.partial")).toBeNull();
+    expect(await readInputsManifest(dataDir, "env-inputs", "r0-abcdef01")).toBeNull();
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-inputs",
+      new Set(["claude", "git"] as const),
+      roots,
+    );
+    expect(staged.revision).not.toBe("r0-abcdef01");
+    expect(await readInputsManifest(dataDir, "env-inputs", staged.revision)).toMatchObject({
+      revision: staged.revision,
+    });
+    // The abandoned partial goes once it is old enough, never the live one.
+    const later = Date.now() + INPUT_REVISION_PRUNE_GRACE_MS + 1_000;
+    expect(
+      await pruneInputRevisions(dataDir, "env-inputs", new Set([staged.revision]), later),
+    ).toBe(1);
+    expect(await fs.readdir(parent)).toEqual([staged.revision]);
+  });
+
   test("the allowlist mirrors every mount point the entrypoint reads", async () => {
     const entrypoint = await fs.readFile(
       path.join(import.meta.dir, "../../../docker/entrypoint.sh"),

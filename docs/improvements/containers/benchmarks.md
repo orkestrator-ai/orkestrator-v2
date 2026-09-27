@@ -12,7 +12,7 @@ synthetic; nothing records commands, paths or contents.
 | --- | --- |
 | Host | Linux x86_64, 12 CPUs, Docker Engine 29.7.2 (containerd store) |
 | Image | `orkestrator-v2:containers-plan-check` built from this branch (step 12 layout) |
-| Concurrency | 1 (the sampler case had 5 environments running) |
+| Concurrency | 1, plus one case with 3 fresh environments at once (the sampler case had 8 running) |
 | Resource budget | none (unrestricted) |
 | Cold | per environment: new network, volumes and staged inputs; Docker's image and global caches untouched |
 | Restricted mode | allowlist `registry.npmjs.org` plus GitHub ranges |
@@ -22,26 +22,53 @@ statistically robust p95.
 
 ## Results (after the optimizations below)
 
+Latest run (after the audit fixes: stricter copy verification, refreshed
+allowlist, admission limits):
+
 | Scenario | n | min | median | p90 | max |
 | --- | --- | --- | --- | --- | --- |
-| Fresh restricted environment, total (ms) | 5 | 2,372 | 2,396 | 2,430 | 3,216 |
-| — storage volumes create + init | 5 | 565 | 570 | 572 | 578 |
-| — `docker create` (network, staged inputs, policy) | 5 | 252 | 266 | 283 | 1,089 |
-| — start to current-boot ready (firewall included) | 5 | 1,498 | 1,504 | 1,505 | 1,516 |
-| Warm stop (drain + `docker stop`) | 10 | 523 | 542 | 570 | 587 |
-| Warm start to ready | 10 | 1,489 | 1,504 | 1,514 | 1,524 |
-| Rebuild, 200 files / 0.8 MB, total | 5 | 5,820 | 5,905 | 5,971 | 5,979 |
-| — copying + verification | 5 | 1,888 | 1,900 | 1,909 | 1,939 |
-| Rebuild, 5,000 files / 102 MB, total | 3 | 18,282 | 18,367 | 18,367 | 18,377 |
-| — copying + verification | 3 | 14,252 | 14,280 | 14,280 | 14,374 |
-| Usage sample, 5 running (ms) | 10 | 2,009 | 2,011 | 2,012 | 2,064 |
+| Fresh restricted environment, total (ms) | 5 | 1,949 | 1,985 | 1,995 | 2,720 |
+| — storage volumes create + init | 5 | 328 | 336 | 344 | 349 |
+| — `docker create` (network, staged inputs, policy) | 5 | 145 | 154 | 158 | 890 |
+| — start to current-boot ready (firewall included) | 5 | 1,418 | 1,425 | 1,441 | 1,444 |
+| Three fresh environments at once, each (ms) | 3 | 2,186 | 2,281 | 2,281 | 2,377 |
+| Warm stop (drain + `docker stop`) | 10 | 468 | 496 | 504 | 512 |
+| Warm start to ready | 10 | 1,424 | 1,439 | 1,445 | 1,446 |
+| Rebuild, 200 files / 0.8 MB, total | 5 | 4,375 | 4,831 | 5,100 | 5,162 |
+| — copying + verification | 5 | 1,500 | 1,527 | 1,601 | 1,633 |
+| Rebuild, 5,000 files / 102 MB, total | 3 | 17,053 | 17,507 | 17,507 | 17,998 |
+| — copying + verification | 3 | 14,074 | 14,235 | 14,235 | 14,972 |
+| Usage sample, 8 running (ms) | 10 | 2,009 | 2,015 | 2,026 | 2,074 |
 
 Other measurements: a fresh environment costs 15 Docker CLI calls (21 at most
-when the manifest probe is uncached); a usage sample costs 3 regardless of how
-many containers run; 200 open/close log-subscription cycles over 3
-containers took 2 ms, peaked at 3 followers (one per container), returned to
-0 after the idle grace, and grew RSS by 1 MiB. Rebuild phases for the 102 MB
-case: preflight 1.8 s, quiesce 0.6 s, copy + verify 14.3 s, candidate 1.4 s.
+when the manifest probe is uncached). Three environments created at once took
+2.4 s wall time, each 1.15× the sequential median. A usage sample costs 3
+calls whatever the number of containers; with the Docker view open (5 s
+refresh) the backend makes **24 Docker calls a minute**, and none while no
+view asks. 200 open/close log-subscription cycles over 3 containers took
+3 ms, peaked at 3 followers, returned to 0 after the idle grace and grew RSS
+by 1 MiB.
+
+## Regression criteria and targets
+
+A change to these paths is a regression when, on the reference host above,
+it exceeds any of these (medians unless stated):
+
+| Measure | Target | Current |
+| --- | --- | --- |
+| Fresh restricted environment to ready | ≤ 3 s | 2.0 s |
+| Start to current-boot ready (warm) | ≤ 2 s | 1.4 s |
+| Warm stop | ≤ 1 s | 0.5 s |
+| Three concurrent fresh environments, each vs sequential | ≤ 1.5× | 1.15× |
+| Rebuild copy + verify, 102 MB / 5,000 files | ≤ 20 s | 14.2 s |
+| Docker CLI calls per fresh environment | ≤ 21 | 15 |
+| Docker calls per minute with the Docker view open | ≤ 36 | 24 |
+| Docker calls per minute with no view | 0 (the OOM event follower is one long-lived process) | 0 |
+| GitHub API calls per restricted boot with a fresh seed | 0 | 0 |
+| Follower count after the idle grace | 0 | 0 |
+
+Anything slower is either fixed or recorded here with its reason before the
+change merges.
 
 ## Dominant costs found, and what changed
 

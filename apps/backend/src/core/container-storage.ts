@@ -183,6 +183,20 @@ function labelsMatch(actual: Record<string, string>, expected: Record<string, st
  * the expected labels (an earlier attempt that timed out). A volume with the
  * planned name but different labels is never adopted.
  */
+/**
+ * Test seam for live failure injection (disk and inode exhaustion): driver
+ * options for storage volumes created from now on. Not reachable from any
+ * command; `null` restores Docker's defaults.
+ */
+let testVolumeDriverOptions: string[] = [];
+
+export function setStorageVolumeOptionsForTest(options: Record<string, string> | null): void {
+  testVolumeDriverOptions = Object.entries(options ?? {}).flatMap(([key, value]) => [
+    "--opt",
+    `${key}=${value}`,
+  ]);
+}
+
 export async function ensureStorageVolumes(
   context: Pick<CommandContext, "storage">,
   environmentId: string,
@@ -213,6 +227,7 @@ export async function ensureStorageVolumes(
           "volume",
           "create",
           ...Object.entries(expected).flatMap(([key, value]) => ["--label", `${key}=${value}`]),
+          ...testVolumeDriverOptions,
           volume.name,
         ],
         { timeoutMs: 30_000 },

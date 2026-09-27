@@ -289,6 +289,103 @@ exit 0
     });
   });
 
+  test("a kill at any phase before the commit write leaves the original authoritative", async () => {
+    for (const phase of [
+      "preflight",
+      "quiescing",
+      "source-stopped",
+      "copying",
+      "verified",
+      "candidate-prepared",
+      "candidate-healthy",
+    ]) {
+      const dir = await tempDir("ork-replacement-phase-");
+      cleanup.push(dir);
+      const owner = dockerOwnerNamespace(dir);
+      const candidateStorage = planStorageSet("env-lifecycle", owner, 1, "cand1");
+      const environment = lifecycleEnvironment({
+        containerId: "source-container",
+        status: "running",
+        containerLifecycle: {
+          schemaVersion: 1,
+          revision: 7,
+          lastRuntimeGeneration: 1,
+          runtime: { containerId: "source-container", runtimeGeneration: 1, owner },
+          storage: { format: "legacy-layer", workspaceGeneration: 1 },
+          operation: {
+            operationId: OPERATION_ID,
+            kind: "migrate",
+            status: "running",
+            phase,
+            startedAt: new Date(0).toISOString(),
+            updatedAt: new Date(0).toISOString(),
+            candidateStorage,
+          },
+          outcomes: [],
+        },
+      });
+      const { context, environments } = memoryLifecycleContext([environment], dir);
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1:$2" in
+  ps:*) printf 'candidate-container\\t2\\n' ;;
+  volume:inspect) printf '{"orkestrator-owner":"${owner}","environment-id":"env-lifecycle"}\\n' ;;
+esac
+exit 0
+`,
+        async (log) => {
+          expect(await reconcileContainerOperation(context, environment)).toBe("settled");
+          const calls = await log.read();
+          expect(calls).not.toContain("rm -f source-container");
+        },
+      );
+      const stored = environments.get("env-lifecycle");
+      expect(stored?.containerId).toBe("source-container");
+      expect(record(stored?.containerLifecycle).storage.format).toBe("legacy-layer");
+      expect(record(stored?.containerLifecycle).operation).toBeUndefined();
+    }
+  });
+
+  test("a kill right after the commit write finds nothing to undo", async () => {
+    const dir = await tempDir("ork-replacement-committed-");
+    cleanup.push(dir);
+    const owner = dockerOwnerNamespace(dir);
+    const committed = planStorageSet("env-lifecycle", owner, 1, "cand1");
+    // The one commit write moved both pointers and cleared the operation.
+    const environment = lifecycleEnvironment({
+      containerId: "candidate-container",
+      status: "stopped",
+      containerLifecycle: {
+        schemaVersion: 1,
+        revision: 8,
+        lastRuntimeGeneration: 2,
+        runtime: { containerId: "candidate-container", runtimeGeneration: 2, owner },
+        storage: committed,
+        outcomes: [
+          {
+            operationId: OPERATION_ID,
+            kind: "migrate",
+            status: "succeeded",
+            finishedAt: new Date(0).toISOString(),
+          },
+        ],
+      },
+    });
+    const { context, environments } = memoryLifecycleContext([environment], dir);
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+exit 0
+`,
+      async (log) => {
+        expect(await reconcileContainerOperation(context, environment)).toBe("none");
+        expect(await log.read()).toBe("");
+      },
+    );
+    expect(environments.get("env-lifecycle")?.containerId).toBe("candidate-container");
+  });
+
   test("a candidate volume that will not remove stays referenced, not orphaned", async () => {
     const dir = await tempDir("ork-replacement-");
     cleanup.push(dir);

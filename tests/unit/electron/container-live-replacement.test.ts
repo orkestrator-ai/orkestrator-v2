@@ -383,6 +383,101 @@ describe("C15/C16 cancellation, refusal and corrupt sources leave the original a
   );
 
   live(
+    "running out of inodes or bytes mid-copy rolls back and keeps the source (C16)",
+    async () => {
+      const { replaceRuntimePreservingState } =
+        await import("../../../apps/backend/src/core/container-replacement");
+      const { setStorageVolumeOptionsForTest } =
+        await import("../../../apps/backend/src/core/container-storage");
+      for (const [label, options, populate] of [
+        [
+          "c16i",
+          // Plenty of bytes, too few inodes for the workspace's files.
+          { type: "tmpfs", device: "tmpfs", o: "size=256m,nr_inodes=200" },
+          "mkdir -p /workspace/many && for i in $(seq 1 600); do printf x > /workspace/many/f$i; done",
+        ],
+        [
+          "c16b",
+          // Enough inodes, too few bytes; the capacity preflight cannot see a
+          // tmpfs limit Docker applies only when the volume is mounted.
+          { type: "tmpfs", device: "tmpfs", o: "size=4m" },
+          "head -c 12000000 /dev/urandom > /workspace/large.bin",
+        ],
+      ] as const) {
+        const { fixture, environmentId, containerId } = await createLegacyEnvironment(label);
+        await exec(containerId, populate);
+        const before = await exec(containerId, WORKSPACE_SNAPSHOT);
+        setStorageVolumeOptionsForTest(options);
+        try {
+          await expect(
+            replaceRuntimePreservingState(
+              { environmentId, expectedContainerId: containerId, allowUnknownCapacity: true },
+              fixture.context,
+            ),
+          ).rejects.toThrow("ContainerLifecycleError:");
+        } finally {
+          setStorageVolumeOptionsForTest(null);
+        }
+        const record = lifecycleOf(await fixture.context.storage.getEnvironment(environmentId));
+        expect(record.storage.format).toBe("legacy-layer");
+        expect(record.runtime?.containerId).toBe(containerId);
+        expect(record.operation).toBeUndefined();
+        expect(record.outcomes.at(-1)).toMatchObject({ kind: "migrate", status: "failed" });
+        // The candidate's volumes are gone; the source is intact and starts.
+        expect(
+          await docker(["volume", "ls", "-q", "--filter", `label=environment-id=${environmentId}`]),
+        ).toBe("");
+        await docker(["start", containerId]);
+        await waitForContainerBoot(containerId);
+        expect(await exec(containerId, WORKSPACE_SNAPSHOT)).toBe(before);
+      }
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
+    "a candidate name held by another container fails without touching either (C16)",
+    async () => {
+      const { replaceRuntimePreservingState } =
+        await import("../../../apps/backend/src/core/container-replacement");
+      const { dockerContainerRuntimeName } =
+        await import("../../../apps/backend/src/core/docker-ownership");
+      const { fixture, environmentId, containerId } = await createLegacyEnvironment("c16n");
+      const before = await exec(containerId, WORKSPACE_SNAPSHOT);
+      // Something else already holds the name the candidate would get.
+      const squatter = await docker([
+        "create",
+        "--name",
+        dockerContainerRuntimeName(owner, environmentId, 2),
+        "--label",
+        `orkestrator-live-squatter=${RUN}`,
+        "--entrypoint",
+        "true",
+        IMAGE,
+      ]);
+      try {
+        await expect(
+          replaceRuntimePreservingState(
+            { environmentId, expectedContainerId: containerId },
+            fixture.context,
+          ),
+        ).rejects.toThrow();
+        // The foreign container is left exactly as it was.
+        expect(await docker(["inspect", "-f", "{{.State.Status}}", squatter])).toBe("created");
+        const record = lifecycleOf(await fixture.context.storage.getEnvironment(environmentId));
+        expect(record.runtime?.containerId).toBe(containerId);
+        expect(record.operation).toBeUndefined();
+        await docker(["start", containerId]).catch(() => undefined);
+        await waitForContainerBoot(containerId);
+        expect(await exec(containerId, WORKSPACE_SNAPSHOT)).toBe(before);
+      } finally {
+        await docker(["rm", "-f", squatter]).catch(() => undefined);
+      }
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
     "a runtime that changed after review is refused before anything stops",
     async () => {
       const { replaceRuntimePreservingState } =

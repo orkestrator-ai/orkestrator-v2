@@ -7,6 +7,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import health from "./routes/health.js";
 import config from "./routes/config.js";
 import session from "./routes/session.js";
+import { sessionActivityBatch } from "./routes/session-activity.js";
 import events from "./routes/events.js";
 import mcp from "./routes/mcp.js";
 import plugins from "./routes/plugins.js";
@@ -180,6 +181,8 @@ app.post("/global/refresh-catalog", async (c) => {
 app.route("/global", health);
 app.route("/config", config);
 app.route("/session", session);
+// `POST /sessions/activity`: outside `/session/:id` so no id route can shadow it.
+app.route("/", sessionActivityBatch);
 app.route("/event", events);
 app.route("/mcp", mcp);
 app.route("/plugins", plugins);

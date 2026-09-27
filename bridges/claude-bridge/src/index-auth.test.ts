@@ -120,6 +120,28 @@ describe("bridge authentication and origin policy", () => {
     }
   });
 
+  test("mounts the batch activity route behind the same token", async () => {
+    __testing.setBridgeAuthForTesting(AUTH_TOKEN);
+    try {
+      const request = (headers: Record<string, string>) =>
+        app.request("/sessions/activity", {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({ version: 1, sessionIds: ["not-a-session-id"] }),
+        });
+      expect((await request({})).status).toBe(401);
+      expect((await request({ Authorization: "Bearer wrong" })).status).toBe(401);
+      const response = await request({ "X-Orkestrator-Claude-Token": AUTH_TOKEN });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        version: 1,
+        observations: { "not-a-session-id": { activity: "missing" } },
+      });
+    } finally {
+      __testing.setBridgeAuthForTesting();
+    }
+  });
+
   test("accepts the token on the query string only for the EventSource route", async () => {
     __testing.setBridgeAuthForTesting(AUTH_TOKEN);
     try {

@@ -25,6 +25,7 @@ import { streamSSE } from "hono/streaming";
 import { readCachedTranscript } from "./transcript-cache.js";
 import { registerMcpReloadRoute } from "./mcp-reload-route.js";
 import { registerSessionCloseRoute } from "./session-close-route.js";
+import { registerSessionActivityBatchRoute } from "./session-activity-batch-route.js";
 import {
   applyCodexCollabStateToSubagentParts,
   CODEX_TIMELINE_ITEM_PREFIX,
@@ -1350,6 +1351,8 @@ app.get("/session/:id/usage", async (c) => {
 app.get("/session/:id/activity", (c) => {
   return c.json(appServerRuntime.getActivitySnapshot(c.req.param("id")));
 });
+// The batched form of the route above, answered from the same no-touch read.
+registerSessionActivityBatchRoute(app, appServerRuntime);
 
 /**
  * Did this bridge ever take this request id?

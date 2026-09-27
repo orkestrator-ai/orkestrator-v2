@@ -19,7 +19,6 @@ import {
   answerQuestion,
   dismissQuestion,
   getPendingQuestions,
-  getSessionActivity,
   getSessionInitData,
   claimPromptDispatch,
   getPromptDispatchState,
@@ -67,6 +66,7 @@ import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transc
 import { readTranscriptVersion } from "../services/transcript-revision.js";
 import { effectiveExecutionPolicy } from "../services/read-only-policy.js";
 import { registerSessionCloseRoute } from "./session-close.js";
+import { readSessionActivityObservation } from "./session-activity.js";
 
 const session = new Hono();
 const TRANSCRIPT_GENERATION = randomUUID();
@@ -1133,16 +1133,8 @@ session.post("/:id/tasks/:taskId/stop", async (c) => {
  * Registered as a two-segment path, so the `/:id` route above cannot shadow it.
  */
 session.get("/:id/activity", async (c) => {
-  const sessionId = c.req.param("id");
-  const activity = await getSessionActivity(sessionId);
-  const resident = peekSession(sessionId);
-  return c.json({
-    activity,
-    // Readiness and activity deliberately diverge while background work is
-    // alive: the composer may accept a new prompt (and the bell may announce
-    // that fact) while the environment icon must remain blue and pulsing.
-    ...(resident?.status === "idle" ? { readyForInput: true } : {}),
-  });
+  // Shared with `POST /sessions/activity`; see `readSessionActivityObservation`.
+  return c.json(await readSessionActivityObservation(c.req.param("id")));
 });
 
 /**

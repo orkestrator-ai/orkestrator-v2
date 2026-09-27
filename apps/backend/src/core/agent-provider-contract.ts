@@ -47,6 +47,14 @@ export interface ProviderActivityObservation {
   /** The composer can accept input even if background work keeps `state` working. */
   readyForInput?: boolean;
 }
+
+/**
+ * One session's answer from {@link NativeAgentRuntimeProvider.observeActivityBatch}.
+ * `unavailable`: the bridge could not read it — uncertainty, never evidence of
+ * idleness or deletion. `deferred`: it did not fit the batch response budget
+ * and must be read through the single-session route.
+ */
+export type ProviderActivityBatchEntry = ProviderActivityObservation | "unavailable" | "deferred";
 export type ProviderExecutionMode = "plan" | "build";
 export type ProviderAgent = AgentInteractionProvider;
 
@@ -520,6 +528,18 @@ export interface AgentSessionProvider {
    * let callers fall back to activity()/status() per session.
    */
   activityBatch?(sessionIds: readonly string[]): Promise<Map<string, ProviderActivityState>>;
+  /**
+   * {@link observeActivity} for a bounded set of sessions (at most
+   * `SESSION_ACTIVITY_BATCH_LIMITS.maxSessions` batchable ids) in one no-touch
+   * read, carrying the complete per-session observation. Every requested id is
+   * answered. Resolves `"unsupported"` when the bridge predates the batch
+   * route; callers then read each session individually. A rejection (timeout,
+   * 5xx, malformed answer) is not evidence about any session: callers fall
+   * back to individual reads for that sweep only.
+   */
+  observeActivityBatch?(
+    sessionIds: readonly string[],
+  ): Promise<ReadonlyMap<string, ProviderActivityBatchEntry> | "unsupported">;
   /**
    * Whether this provider's backend-held event stream is connected right now,
    * so a turn started by anyone else will be reported through

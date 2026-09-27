@@ -601,7 +601,10 @@ When touching the app-server engine:
   bridge predates the route" and fails the environment; if 404 also meant "session
   gone" it would delete a live session mapping against an older bridge. For the
   same reason the claude bridge answers a failed existence probe `idle`, never
-  `missing` — an error is not evidence of deletion.
+  `missing` — an error is not evidence of deletion. Every HTTP bridge's
+  `POST /sessions/activity` batch route answers each id from the exact same
+  no-touch read (never omitting one: an unreadable id is `unavailable`), and
+  only a 404/405 on that route means "older bridge".
 - `GET /session/:id/dispatch?requestId=` answers `dispatched` **only** on an
   explicit positive from that bridge's own dispatch journal. No record, a record
   that predates a bridge restart (the ACP journal's `ambiguous`, the codex

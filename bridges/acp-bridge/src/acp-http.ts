@@ -87,6 +87,11 @@ import {
 } from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { dispatchAcpPrompt, promptStopReason } from "./acp-prompt.js";
+import { sessionActivityObservation } from "./acp-activity.js";
+import {
+  answerSessionActivityBatch,
+  SESSION_ACTIVITY_BATCH_PATH,
+} from "@orkestrator/protocol/session-activity-batch";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { structuredPromptInstruction } from "./acp-prompt.js";
 
@@ -201,6 +206,14 @@ export async function route(
     });
     return json(response, 201, publicSession(state));
   }
+  // The batched form of `/session/:id/activity`, from the same no-touch read.
+  // Outside `/session/...`, so the id route below can never claim it.
+  if (url.pathname === SESSION_ACTIVITY_BATCH_PATH && request.method === "POST") {
+    const answer = await answerSessionActivityBatch(request, sessionActivityObservation, {
+      contentLength: request.headers["content-length"],
+    });
+    return json(response, answer.status, answer.body);
+  }
   const match =
     /^\/session\/([^/]+)(?:\/(close|messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
       url.pathname,
@@ -208,7 +221,7 @@ export async function route(
   if (!match) return json(response, 404, { error: "Not found" });
   const state = sessions.get(match[1]!);
   if (!state) {
-    if (match[2] === "activity") return json(response, 200, { activity: "missing" });
+    if (match[2] === "activity") return json(response, 200, sessionActivityObservation(match[1]!));
     // Same reasoning: a 404 here would read as "this bridge predates the
     // route" and fail the environment. Health is optional metadata, so an
     // unknown session answers empty rather than failing.
@@ -340,10 +353,7 @@ export async function route(
     });
   }
   if (action === "activity" && request.method === "GET") {
-    return json(response, 200, {
-      activity:
-        state.status === "running" || state.activeSubagentToolIds.size > 0 ? "working" : "idle",
-    });
+    return json(response, 200, sessionActivityObservation(match[1]!));
   }
   /**
    * Did this bridge ever take this request id?

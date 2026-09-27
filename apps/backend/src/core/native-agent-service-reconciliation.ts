@@ -15,7 +15,6 @@ import {
   OPENCODE_RECOVERY_RETRY_BASE_MS,
   OPENCODE_RECOVERY_RETRY_CEILING_MS,
   PromptRejectedError,
-  ProviderUnavailableError,
   QUEUE_RETRY_BASE_MS,
   QUEUE_RETRY_CEILING_MS,
   aggregateAgentActivityState,
@@ -138,6 +137,7 @@ import {
 } from "@orkestrator/protocol/initial-prompt-attachments";
 import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { readActivityGroup } from "./native-agent-activity-reads.js";
 import {
   nativeAgentObservationCapabilities,
   nativeAgentObservationGroupKey,
@@ -400,71 +400,50 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
               interactionPolicy: session.interactionPolicy,
             });
           }
-          const batchedActivity = provider.activityBatch
-            ? await provider.activityBatch(group.map((session) => session.providerSessionId))
-            : undefined;
-          for (const session of group) {
-            const observation =
-              !batchedActivity && provider.observeActivity
-                ? await provider.observeActivity(session.providerSessionId)
-                : undefined;
-            const activity = batchedActivity
-              ? batchedActivity.get(session.providerSessionId)
-              : observation
-                ? observation.state
-                : provider.activity
-                  ? await provider.activity(session.providerSessionId)
-                  : await readProviderStatus(provider, session.providerSessionId).then(
-                      ({ status }) =>
-                        status === "missing"
-                          ? "missing"
-                          : status === "running"
-                            ? "working"
-                            : status === "blocked"
-                              ? "waiting"
-                              : "idle",
-                    );
-            if (!activity) {
-              throw new ProviderUnavailableError(
-                `Provider activity snapshot omitted ${session.providerSessionId}`,
-              );
-            }
-            if (activity === "missing") {
-              // Provider adapters may return `missing` only from an
-              // authoritative existence read. Incremental activity/status
-              // snapshots must surface uncertainty as provider unavailability.
-              await this.storage.invalidateNativeAgentSession(
-                session.key,
-                session.providerSessionId,
-              );
-              this.observations.forget(session.key);
-              settledIdle = false;
-              continue;
-            }
-            if (session.agent === "codex" && observation?.asyncQuestionItemIds?.length) {
-              try {
-                await this.recordAsyncQuestionAttention(
-                  session.environmentId,
+          // Batched where the provider can, bounded-concurrent per session
+          // otherwise; see `readActivityGroup` for the fallback and failure
+          // rules. Answers are applied one at a time, in completion order.
+          await readActivityGroup({
+            provider,
+            sessions: group,
+            apply: async (session, { state: activity, observation }) => {
+              if (activity === "missing") {
+                // Provider adapters may return `missing` only from an
+                // authoritative existence read. Incremental activity/status
+                // snapshots must surface uncertainty as provider unavailability.
+                await this.storage.invalidateNativeAgentSession(
                   session.key,
-                  observation.asyncQuestionItemIds,
+                  session.providerSessionId,
                 );
-              } catch (error) {
-                // A badge persistence failure is not evidence that the bridge
-                // or any session in this activity group is unhealthy.
-                console.warn(
-                  `[native-agent] Could not record async-question attention for ${session.environmentId}:`,
-                  error instanceof Error ? error.name : "unknown error",
-                );
+                this.observations.forget(session.key);
+                settledIdle = false;
+                return;
               }
-            }
-            await applyObservation(session, activity, {
-              ...(observation?.readyForInput !== undefined
-                ? { readyForInput: observation.readyForInput }
-                : {}),
-              pendingInteraction:
-                activity === "waiting" || (observation?.asyncQuestionItemIds?.length ?? 0) > 0,
-            });
-          }
+              if (session.agent === "codex" && observation?.asyncQuestionItemIds?.length) {
+                try {
+                  await this.recordAsyncQuestionAttention(
+                    session.environmentId,
+                    session.key,
+                    observation.asyncQuestionItemIds,
+                  );
+                } catch (error) {
+                  // A badge persistence failure is not evidence that the bridge
+                  // or any session in this activity group is unhealthy.
+                  console.warn(
+                    `[native-agent] Could not record async-question attention for ${session.environmentId}:`,
+                    error instanceof Error ? error.name : "unknown error",
+                  );
+                }
+              }
+              await applyObservation(session, activity, {
+                ...(observation?.readyForInput !== undefined
+                  ? { readyForInput: observation.readyForInput }
+                  : {}),
+                pendingInteraction:
+                  activity === "waiting" || (observation?.asyncQuestionItemIds?.length ?? 0) > 0,
+              });
+            },
+          });
           this.activityAttempts.delete(groupKey);
           this.activityRetryAt.delete(groupKey);
           this.observations.noteGroupObserved(groupKey, {

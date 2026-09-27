@@ -46,7 +46,6 @@ import {
 import {
   messageWindow,
   parseFromIndex,
-  publicActivity,
   publicDispatch,
   publicSteerDispatch,
   publicQueue,
@@ -111,6 +110,11 @@ import {
   type JsonObject,
   type SessionState,
 } from "./state.js";
+import { sessionActivityObservation } from "./session-activity.js";
+import {
+  answerSessionActivityBatch,
+  SESSION_ACTIVITY_BATCH_PATH,
+} from "@orkestrator/protocol/session-activity-batch";
 
 class HttpError extends Error {
   constructor(
@@ -213,6 +217,14 @@ export async function route(
   }
 
   try {
+    // The batched form of `/session/:id/activity`, from the same no-touch
+    // read. Outside `/session/...`, so the id router can never claim it.
+    if (url.pathname === SESSION_ACTIVITY_BATCH_PATH && request.method === "POST") {
+      const answer = await answerSessionActivityBatch(request, sessionActivityObservation, {
+        contentLength: request.headers["content-length"],
+      });
+      return json(response, answer.status, answer.body);
+    }
     const handled = await routeGlobal(request, response, url);
     if (handled) return;
     return await routeSession(request, response, url, clientSignal);
@@ -405,7 +417,7 @@ async function routeSession(
     // Answered in band so the backend can tell "this session is gone" from
     // "this bridge predates the route" — a 404 here would have it delete a
     // live session mapping against an older bridge.
-    if (action === "activity") return json(response, 200, { activity: "missing" });
+    if (action === "activity") return json(response, 200, sessionActivityObservation(match[1]!));
     // Same reasoning: a 404 here would read as "this bridge predates the
     // route" and fail the environment. Health is optional metadata, so an
     // unknown session answers empty rather than failing.
@@ -506,7 +518,8 @@ async function routeSession(
     return json(response, 200, publicStatus(state));
   }
   if (action === "activity" && request.method === "GET") {
-    return json(response, 200, publicActivity(state));
+    // Shared with `POST /sessions/activity`; see `sessionActivityObservation`.
+    return json(response, 200, sessionActivityObservation(match[1]!));
   }
   if (action === "runtime-health" && request.method === "GET") {
     // A read, like `/activity`: it must not touch liveness, hydrate, or

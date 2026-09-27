@@ -73,6 +73,7 @@
     "./review-workflow": "./src/review-workflow.ts",
     "./runtime-health": "./src/runtime-health.ts",
     "./runtime-profile-status": "./src/runtime-profile-status.ts",
+    "./session-activity-batch": "./src/session-activity-batch.ts",
     "./startup-launch": "./src/startup-launch.ts",
     "./ssh-agent-socket": "./src/ssh-agent-socket.ts",
     "./structured-review": "./src/structured-review.ts",

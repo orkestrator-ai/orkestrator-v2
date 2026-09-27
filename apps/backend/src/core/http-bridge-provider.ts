@@ -3,6 +3,7 @@ import type {
   AgentInteractionProviderCapability,
   BridgeConnection,
   NativeAgentRuntimeProvider,
+  ProviderActivityBatchEntry,
   ProviderActivityObservation,
   ProviderActivityState,
   ProviderActiveSteerRun,
@@ -97,6 +98,7 @@ import {
   readHttpBridgeTranscriptDetail,
   readHttpBridgeTranscriptPage,
 } from "./http-bridge-transcript-v2.js";
+import { HttpBridgeActivityBatchReader } from "./http-bridge-activity-batch.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly agent: HttpBridgeAgent;
@@ -120,6 +122,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   private runtimeMetadataGeneration = 0;
   /** What this bridge connection answered about transcript v2; see the module. */
   private readonly transcriptCapabilities = new HttpBridgeTranscriptCapabilities();
+  /** Scoped to this connection, so a restarted bridge re-detects the batch route. */
+  private readonly activityBatchReader: HttpBridgeActivityBatchReader;
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -130,6 +134,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     this.stageImages = stageImages;
     this.interactionAdapter = new HttpBridgeInteractionAdapter(this.agent, connection, fetchImpl);
     this.catalogAdapter = new HttpBridgeCatalogAdapter(this.agent, connection, fetchImpl);
+    this.activityBatchReader = new HttpBridgeActivityBatchReader(connection, fetchImpl);
     this.interactions = {
       listPendingInteractions: (sessionId) =>
         this.interactionAdapter.listPendingInteractions(sessionId),
@@ -522,24 +527,20 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     };
   }
 
-  /**
-   * Read activity from the bridge's dedicated observation route.
-   *
-   * This deliberately does not reuse `status()` plus the pending-input routes.
-   * Those are the routes a *tab* reads, so each one is a liveness touch: the
-   * codex bridge refreshes `lastAccessed` (blocking idle thread detaching) and
-   * the claude bridge additionally hydrates the persisted transcript. This
-   * method is polled every couple of seconds for every session in every
-   * environment, so it must have no side effect at all — `/activity` exists
-   * only to answer it.
-   *
-   * The route reports an unknown session in-band as `missing` and never 404s.
-   * A 404 here therefore means the route itself is absent — an older bridge —
-   * and must surface as a failure rather than as "this session is gone", which
-   * the caller would act on by deleting the user's session mapping.
-   */
+  /** The no-touch `/activity` read; see {@link readProviderActivityObservation}. */
   async observeActivity(sessionId: string): Promise<ProviderActivityObservation> {
     return readProviderActivityObservation(this.connection, sessionId, this.fetchImpl);
+  }
+
+  /**
+   * {@link observeActivity} for a bounded set of sessions in one request, from
+   * the same no-touch read on the bridge. `"unsupported"` (an older bridge) is
+   * remembered for this connection; see {@link HttpBridgeActivityBatchReader}.
+   */
+  observeActivityBatch(
+    sessionIds: readonly string[],
+  ): Promise<ReadonlyMap<string, ProviderActivityBatchEntry> | "unsupported"> {
+    return this.activityBatchReader.read(sessionIds);
   }
 
   async activity(sessionId: string): Promise<ProviderActivityState> {

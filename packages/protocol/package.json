@@ -18,6 +18,7 @@
     "./claude-model-catalog": "./src/claude-model-catalog.ts",
     "./build-pipeline": "./src/build-pipeline.ts",
     "./connections": "./src/connections.ts",
+    "./container-lifecycle": "./src/container-lifecycle.ts",
     "./coordinator": "./src/coordinator.ts",
     "./codex-background-task": "./src/codex-background-task.ts",
     "./cursor-plan-usage": "./src/cursor-plan-usage.ts",

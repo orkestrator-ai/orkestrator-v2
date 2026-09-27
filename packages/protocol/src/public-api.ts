@@ -182,7 +182,8 @@ export const PUBLIC_ACTIONS = {
     observation: "receipt",
     milestone: "B",
     waitConditions: ["running", "ready"],
-    summary: "Destroy and recreate the environment's container (container environments only).",
+    summary:
+      "Reset the environment's container; requires explicit discard because its local files are deleted.",
   },
   "environment.delete": {
     version: 1,

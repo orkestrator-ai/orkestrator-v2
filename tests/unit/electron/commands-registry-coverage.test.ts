@@ -40,7 +40,8 @@ if [ "$1" = "ps" ] && [ "$2" = "-a" ]; then
     *"{{json .}}"*)
       printf '%s\\n' \
         '{"ID":"assigned-container","Names":"runtime-assigned","Status":"Up 2 minutes","State":"running","Image":"orkestrator-v2:latest","Labels":"app=orkestrator-v2,orkestrator-owner=${REGISTRY_DOCKER_OWNER},environment-name=assigned"}' \
-        '{"ID":"orphan-container","Names":"runtime-orphan","Status":"Exited (0)","State":"exited","Image":"orkestrator-v2:latest","Labels":"app=orkestrator-v2,orkestrator-owner=${REGISTRY_DOCKER_OWNER},environment-name=orphan"}'
+        '{"ID":"orphan-container","Names":"runtime-orphan","Status":"Exited (0)","State":"exited","Image":"orkestrator-v2:latest","Size":"768MB (virtual 3GB)","Labels":"app=orkestrator-v2,orkestrator-owner=${REGISTRY_DOCKER_OWNER},environment-name=orphan"}' \
+        '{"ID":"legacy-container","Names":"runtime-legacy","Status":"Exited (0)","State":"exited","Image":"orkestrator-v2:latest","Size":"768MB (virtual 3GB)","Labels":"app=orkestrator-v2,environment-name=legacy"}'
       ;;
     *" -q "*) printf 'assigned-container\\norphan-container\\n' ;;
     *) printf 'assigned-container\\tassigned\\tapp=orkestrator-v2,orkestrator-owner=${REGISTRY_DOCKER_OWNER}\\norphan-container\\torphan\\tapp=orkestrator-v2,orkestrator-owner=${REGISTRY_DOCKER_OWNER}\\n' ;;
@@ -57,6 +58,13 @@ if [ "$1" = "images" ] && [ "$2" = "-q" ]; then
 fi
 if [ "$1" = "inspect" ]; then
   case "$*" in
+    *"json .Config.Labels"*)
+      case "$*" in
+        *orphan-container*) printf 'exited\t{"app":"orkestrator-v2","orkestrator-owner":"${REGISTRY_DOCKER_OWNER}"}\n' ;;
+        *legacy-container*) printf 'exited\t{"app":"orkestrator-v2"}\n' ;;
+        *) printf 'running\t{"app":"orkestrator-v2","orkestrator-owner":"${REGISTRY_DOCKER_OWNER}"}\n' ;;
+      esac
+      ;;
     *orkestrator-owner*)
       case "$*" in
         *foreign-container*) printf 'foreign-owner\trunning\n' ;;
@@ -78,7 +86,7 @@ if [ "$1" = "exec" ]; then
   esac
   exit 0
 fi
-if [ "$1" = "rm" ] && [ "$2" = "-f" ]; then
+if [ "$1" = "rm" ]; then
   exit 0
 fi
 exit 0
@@ -228,6 +236,9 @@ describe("direct backend command registry coverage", () => {
 
     await expect(invoke("docker_system_prune", {}, context)).resolves.toEqual({
       containersDeleted: 2,
+      containersSkipped: 0,
+      containersFailed: 0,
+      containersProtected: 1,
       imagesDeleted: 0,
       networksDeleted: 0,
       volumesDeleted: 0,
@@ -249,6 +260,7 @@ describe("direct backend command registry coverage", () => {
         environmentId: "environment-1",
         projectId: "project-1",
         isAssigned: true,
+        cleanupExclusion: "assigned",
         cpuPercent: null,
       },
       {
@@ -261,21 +273,37 @@ describe("direct backend command registry coverage", () => {
         environmentId: null,
         projectId: null,
         isAssigned: false,
+        cleanupExclusion: null,
+        cpuPercent: null,
+      },
+      {
+        id: "legacy-container",
+        name: "legacy",
+        status: "Exited (0)",
+        state: "exited",
+        image: "orkestrator-v2:latest",
+        created: 0,
+        environmentId: null,
+        projectId: null,
+        isAssigned: false,
+        cleanupExclusion: null,
         cpuPercent: null,
       },
     ]);
-    await expect(invoke("cleanup_orphaned_containers", {}, context)).resolves.toBe(1);
+    await expect(invoke("cleanup_orphaned_containers", {}, context)).resolves.toEqual({
+      removed: 2,
+      alreadyAbsent: 0,
+      skipped: 0,
+      failed: 0,
+    });
 
     const log = await commandLogContents();
-    expect(log).toContain(
-      `docker container prune -f --filter label=orkestrator-owner=${REGISTRY_DOCKER_OWNER}`,
-    );
-    expect(log).toContain(
-      "docker container prune -f --filter label=app=orkestrator-v2 --filter label!=orkestrator-owner",
-    );
+    expect(log).not.toContain("docker container prune");
     expect(log).not.toContain("docker system prune");
+    expect(log).toContain("docker rm orphan-container");
     expect(log).toContain("docker rm -f orphan-container");
-    expect(log).not.toContain("docker rm -f assigned-container");
+    expect(log).not.toContain("assigned-container\n");
+    expect(log).not.toMatch(/docker rm( -f)? assigned-container/);
   });
 
   test("agent-test Docker cleanup never adopts or prunes ownerless containers", async () => {
@@ -287,10 +315,8 @@ describe("direct backend command registry coverage", () => {
       spaceReclaimed: 768_000_000,
     });
     const log = await commandLogContents();
-    expect(log).toContain(
-      `docker container prune -f --filter label=orkestrator-owner=${REGISTRY_DOCKER_OWNER}`,
-    );
-    expect(log).not.toContain("label!=orkestrator-owner");
+    expect(log).toContain("docker rm orphan-container");
+    expect(log).not.toContain("docker rm legacy-container");
   });
 
   test("agent-test container commands reject foreign ownership before reads or execution", async () => {

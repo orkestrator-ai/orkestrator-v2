@@ -543,11 +543,38 @@ exit 1
         const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
         expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
         expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
-          "inspect -f {{.State.Status}} container-absent",
+          'inspect -f {{ index .Config.Labels "orkestrator-owner" }}\t{{.State.Status}} container-absent',
         ]);
       },
     );
     expect(updates).toEqual([{ status: "stopped", containerId: null }]);
+  });
+
+  test("full sync keeps container references when the daemon cannot answer", async () => {
+    const environment = createEnvironment({
+      id: "env-daemon-down",
+      environmentType: "containerized",
+      containerId: "container-unknown",
+      status: "stopped",
+    });
+    const { context, updates } = createContext([environment]);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(
+      `#!/bin/sh
+printf 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock\\n' >&2
+exit 1
+`,
+      async () => {
+        // An unreachable daemon, timeout or permission failure is not evidence
+        // that the container (and the workspace inside it) is gone.
+        await expect(
+          commands.get("sync_all_environments_with_docker")?.({}, context),
+        ).resolves.toEqual([]);
+      },
+    );
+    expect(updates).toEqual([]);
+    expect(environment.containerId).toBe("container-unknown");
   });
 
   test("stops local and container environments and treats recreation without a container as a no-op", async () => {
@@ -632,13 +659,13 @@ fi
 exit 0
 `,
       async ({ all }) => {
-        for (const command of [
-          "stop_environment",
-          "recreate_environment",
-          "delete_environment",
+        for (const [command, extra] of [
+          ["stop_environment", {}],
+          ["recreate_environment", { intent: "discard", expectedContainerId: "foreign-container" }],
+          ["delete_environment", {}],
         ] as const) {
           await expect(
-            commands.get(command)?.({ environmentId: environment.id }, context),
+            commands.get(command)?.({ environmentId: environment.id, ...extra }, context),
           ).rejects.toThrow("not owned by this development profile");
         }
 
@@ -696,7 +723,14 @@ exit 0
         // at `create`. The regression under test is only that it got that far
         // rather than being refused by the ownership probe.
         const recreateFailure = await commands
-          .get("recreate_environment")?.({ environmentId: recreatable.id }, context)
+          .get("recreate_environment")?.(
+            {
+              environmentId: recreatable.id,
+              intent: "discard",
+              expectedContainerId: "vanished-container",
+            },
+            context,
+          )
           .then(
             () => null,
             (error: unknown) => String(error),

@@ -3,7 +3,15 @@ import type { Environment } from "../models.js";
 import { requireEnvironment, requireProject } from "./actions-discovery.js";
 import { runWithContinuation } from "./background.js";
 import { PublicActionError } from "./errors.js";
-import { invalid, onlyKeys, optionalString, oneOf, requiredId, requiredOneOf } from "./input.js";
+import {
+  invalid,
+  onlyKeys,
+  optionalBoolean,
+  optionalString,
+  oneOf,
+  requiredId,
+  requiredOneOf,
+} from "./input.js";
 import { publicEnvironmentSummary } from "./summaries.js";
 import type {
   ExecuteOutcome,
@@ -216,14 +224,24 @@ const LIFECYCLE_COMMANDS: Record<LifecycleVerb, string> = {
   delete: "delete_environment",
 };
 
-function lifecycleHandler(verb: LifecycleVerb): MutationActionHandler<{ environmentId: string }> {
+function lifecycleHandler(
+  verb: LifecycleVerb,
+): MutationActionHandler<{ environmentId: string; discard?: boolean }> {
   return {
     kind: "mutation",
     action: `environment.${verb}`,
     parse(input) {
-      onlyKeys(input, ["environmentId"]);
+      onlyKeys(input, verb === "recreate" ? ["environmentId", "discard"] : ["environmentId"]);
       const environmentId = requiredId(input, "environmentId");
-      return { value: { environmentId }, scope: `environment:${environmentId}`, intent: {} };
+      if (verb !== "recreate") {
+        return { value: { environmentId }, scope: `environment:${environmentId}`, intent: {} };
+      }
+      const discard = optionalBoolean(input, "discard") === true;
+      return {
+        value: { environmentId, discard },
+        scope: `environment:${environmentId}`,
+        intent: { discard },
+      };
     },
     async prepare(input, context) {
       const environment = await requireEnvironment(context, input.environmentId);
@@ -234,13 +252,34 @@ function lifecycleHandler(verb: LifecycleVerb): MutationActionHandler<{ environm
           "Local worktree environments cannot be recreated",
         );
       }
+      // Recreating a legacy container deletes its writable layer. The request
+      // must say so explicitly; the command below refuses a preserving
+      // request as well, so an older client cannot reach the destructive path.
+      if (verb === "recreate" && environment.containerId && !input.discard) {
+        throw new PublicActionError(
+          "capability-unavailable",
+          "Recreating this container would delete its files. Pass --discard to reset it explicitly.",
+        );
+      }
+      // Bound to the runtime seen at admission: a replacement that appears
+      // before execution is not what the caller asked to discard.
+      const reviewedContainerId = environment.containerId;
       return {
         resources: { environmentId: environment.id, projectId: environment.projectId },
         async execute(operation) {
           await operation.update({
             stage: verb === "delete" ? "deleting" : `${verb === "stop" ? "stopping" : "starting"}`,
           });
-          const task = context.invoke(LIFECYCLE_COMMANDS[verb], { environmentId: environment.id });
+          const task = context.invoke(
+            LIFECYCLE_COMMANDS[verb],
+            verb === "recreate"
+              ? {
+                  environmentId: environment.id,
+                  intent: input.discard ? "discard" : "preserve",
+                  expectedContainerId: reviewedContainerId,
+                }
+              : { environmentId: environment.id },
+          );
           return runWithContinuation(operation, task, {
             runningStage:
               verb === "delete" ? "deleting" : verb === "stop" ? "stopping" : "starting",

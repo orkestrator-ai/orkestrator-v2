@@ -913,94 +913,153 @@ describe("EnvironmentSettingsDialog", () => {
     expect(localMenu).not.toContain("ports");
   });
 
-  test("blocks a pending port recreate when Docker becomes unavailable", async () => {
-    mockSection = "ports";
-    const onRestart = mock(async () => undefined);
-    const onUpdate = mock(() => undefined);
-    const environment = makeEnvironment({ status: "running" });
-    const renderDialog = (available: boolean) => (
-      <DockerAvailabilityProvider available={available}>
-        <EnvironmentSettingsDialog
-          open={true}
-          onOpenChange={() => {}}
-          environment={environment}
-          onUpdate={onUpdate}
-          onRestart={onRestart}
-        />
-      </DockerAvailabilityProvider>
-    );
-    const view = render(renderDialog(true));
-
+  function addHostPort(hostPort: string) {
     fireEvent.click(screen.getByRole("button", { name: "Add Port" }));
     fireEvent.change(screen.getByPlaceholderText("Host"), {
-      target: { value: "3001" },
+      target: { value: hostPort },
     });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+  }
 
-    const restartButton = await screen.findByRole("button", {
-      name: "Restart Environment",
-    });
-    expect((restartButton as HTMLButtonElement).disabled).toBe(false);
-
-    view.rerender(renderDialog(false));
-
-    const disabledRestartButton = screen.getByRole("button", {
-      name: "Restart Environment",
-    });
-    expect((disabledRestartButton as HTMLButtonElement).disabled).toBe(true);
-    expect(disabledRestartButton.getAttribute("title")).toBe(
-      "Start Docker to recreate this environment",
-    );
-    fireEvent.click(disabledRestartButton);
-
-    expect(mockUpdatePortMappings).not.toHaveBeenCalled();
-    expect(onRestart).not.toHaveBeenCalled();
-    expect(mockSyncEnvironmentStatus).not.toHaveBeenCalled();
-    expect(onUpdate).not.toHaveBeenCalled();
-  });
-
-  test("saves port changes without a recreate prompt while Docker is unavailable", async () => {
+  test("saves port changes on a running container without recreating it", async () => {
     mockSection = "ports";
     const onRestart = mock(async () => undefined);
     const onUpdate = mock(() => undefined);
     const onOpenChange = mock(() => undefined);
-    const environment = makeEnvironment({ status: "running" });
     render(
-      <DockerAvailabilityProvider available={false}>
+      <DockerAvailabilityProvider available={true}>
         <EnvironmentSettingsDialog
           open={true}
           onOpenChange={onOpenChange}
-          environment={environment}
+          environment={makeEnvironment({ status: "running" })}
           onUpdate={onUpdate}
           onRestart={onRestart}
         />
       </DockerAvailabilityProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Add Port" }));
-    fireEvent.change(screen.getByPlaceholderText("Host"), {
-      target: { value: "3001" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    addHostPort("3001");
+    // The deferred-application notice replaces the old preservation promise.
+    expect(
+      screen.getByText(/Saved port changes apply when this container is rebuilt/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/will be preserved/) === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    // The recreate confirmation must not open: its only action is disabled
-    // while the daemon is down, which would strand the user with no way to
-    // save and silently drop every other edit in the form.
-    await waitFor(() => {
-      expect(mockUpdatePortMappings).toHaveBeenCalledTimes(1);
-    });
-    expect(screen.queryByRole("button", { name: "Restart Environment" }) === null).toBe(true);
+    await waitFor(() => expect(mockUpdatePortMappings).toHaveBeenCalledTimes(1));
+    // Saving is not a request to replace the container, implicitly or otherwise.
     expect(onRestart).not.toHaveBeenCalled();
-    expect(onUpdate).toHaveBeenCalled();
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(mockToastSuccess).toHaveBeenCalledWith(
       "Environment settings saved",
       expect.objectContaining({
         description:
-          "Port changes apply the next time this environment is recreated, once Docker is running.",
+          "Port changes are saved and apply when this container is rebuilt. The current container keeps its ports and files.",
       }),
     );
+  });
+
+  test("saves port changes while Docker is unavailable", async () => {
+    mockSection = "ports";
+    const onRestart = mock(async () => undefined);
+    const onOpenChange = mock(() => undefined);
+    render(
+      <DockerAvailabilityProvider available={false}>
+        <EnvironmentSettingsDialog
+          open={true}
+          onOpenChange={onOpenChange}
+          environment={makeEnvironment({ status: "running" })}
+          onUpdate={() => undefined}
+          onRestart={onRestart}
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    addHostPort("3001");
+    const reset = screen.getByRole("button", { name: "Reset container…" }) as HTMLButtonElement;
+    expect(reset.disabled).toBe(true);
+    expect(reset.getAttribute("title")).toBe("Start Docker to reset this container");
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdatePortMappings).toHaveBeenCalledTimes(1));
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  test("resets only after acknowledgement, bound to the reviewed container", async () => {
+    mockSection = "ports";
+    const onRestart = mock(async () => undefined);
+    const environment = makeEnvironment({ status: "running", containerId: "container-reviewed" });
+    render(
+      <DockerAvailabilityProvider available={true}>
+        <EnvironmentSettingsDialog
+          open={true}
+          onOpenChange={() => undefined}
+          environment={environment}
+          onUpdate={() => undefined}
+          onRestart={onRestart}
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    addHostPort("3001");
+    fireEvent.click(screen.getByRole("button", { name: "Reset container…" }));
+    const confirm = (await screen.findByRole("button", {
+      name: "Delete files and reset",
+    })) as HTMLButtonElement;
+    expect(screen.getByText(/unpushed commits/)).toBeTruthy();
+    expect(confirm.disabled).toBe(true);
+    fireEvent.click(confirm);
+    expect(onRestart).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "I understand this permanently deletes the container's local files.",
+      }),
+    );
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(onRestart).toHaveBeenCalledTimes(1));
+    expect(mockUpdatePortMappings).toHaveBeenCalledTimes(1);
+    expect(onRestart).toHaveBeenCalledWith("env-1", {
+      intent: "discard",
+      expectedContainerId: "container-reviewed",
+    });
+  });
+
+  test("reports a container that changed before the reset", async () => {
+    mockSection = "ports";
+    const onRestart = mock(async () => {
+      throw new Error(
+        "ContainerLifecycleError:runtime-changed: The container changed after it was reviewed.",
+      );
+    });
+    render(
+      <DockerAvailabilityProvider available={true}>
+        <EnvironmentSettingsDialog
+          open={true}
+          onOpenChange={() => undefined}
+          environment={makeEnvironment({ status: "running" })}
+          onUpdate={() => undefined}
+          onRestart={onRestart}
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset container…" }));
+    fireEvent.click(
+      await screen.findByRole("checkbox", {
+        name: "I understand this permanently deletes the container's local files.",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete files and reset" }));
+
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Container changed before the reset", {
+        description: "The container changed after it was reviewed.",
+      }),
+    );
+    expect(mockSyncEnvironmentStatus).toHaveBeenCalled();
   });
 });

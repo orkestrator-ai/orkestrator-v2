@@ -1,3 +1,4 @@
+import { parseRecreateEnvironmentRequest } from "@orkestrator/protocol/container-lifecycle";
 import {
   isEmptyAgentSettings,
   normalizeAgentSettings,
@@ -10,6 +11,7 @@ import {
   defaultEnvironmentName,
   sanitizeEnvironmentName,
   discoverAgentExtensions,
+  dockerOwnerNamespace,
 } from "./commands-dependencies.js";
 import type { Environment } from "./commands-dependencies.js";
 import {
@@ -37,7 +39,9 @@ import {
   toClientEnvironmentSetupStartResult,
   terminalOutputBufferLength,
   logSetupTerminal,
-  getDockerStatus,
+  environmentStartTasks,
+  inspectDockerContainerIdentity,
+  isMissingDockerObjectError,
   getOrkestratorContainerStates,
   syncStoredEnvironmentStatus,
   clearPendingAgentLaunchUpdates,
@@ -368,14 +372,22 @@ export function registerEnvironmentCommands(
     const knownContainerStates = await getOrkestratorContainerStates(context);
     for (const environment of environments) {
       if (knownContainerStates?.has(environment.containerId!)) continue;
-      if (context.strictDockerOwner && knownContainerStates) {
-        await storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
-        cleared.push(environment.id);
-        continue;
-      }
+      // An admitted start or replacement owns the reference right now.
+      if (environmentStartTasks.has(environment.id)) continue;
+      // Only a definite answer clears a reference. An unreachable daemon, a
+      // timeout or a permission failure says nothing about whether the
+      // container — possibly the only copy of the workspace — still exists.
       try {
-        await getDockerStatus(environment.containerId!);
-      } catch {
+        const identity = await inspectDockerContainerIdentity(environment.containerId!);
+        if (
+          context.strictDockerOwner &&
+          identity.owner !== dockerOwnerNamespace(storage.getDataDir())
+        ) {
+          await storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
+          cleared.push(environment.id);
+        }
+      } catch (error) {
+        if (!isMissingDockerObjectError(error)) continue;
         await storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
         cleared.push(environment.id);
       }
@@ -410,9 +422,9 @@ export function registerEnvironmentCommands(
       extensionDiscoveryCache.invalidate(id),
     ),
   );
-  register("recreate_environment", async ({ environmentId }, context) => {
+  register("recreate_environment", async (args, context) => {
     const result = await recreateEnvironmentTask(
-      asString(environmentId, "environmentId"),
+      parseRecreateEnvironmentRequest(args),
       context,
       schedulePendingEnvironmentRename,
       (id) => extensionDiscoveryCache.invalidate(id),

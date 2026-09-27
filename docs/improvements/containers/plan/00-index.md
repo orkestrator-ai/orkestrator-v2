@@ -26,7 +26,7 @@ combine the whole row into one large change.
 
 | Step | Plan | Depends on | Status | Deliverable |
 | --- | --- | --- | --- | --- |
-| 01 | [Immediate data-loss safeguards](01-immediate-data-loss-safeguards.md) | — | Not started | Accurate warnings, protected cleanup and safe failure of legacy recreation |
+| 01 | [Immediate data-loss safeguards](01-immediate-data-loss-safeguards.md) | — | Implemented, in review | Accurate warnings, protected cleanup and safe failure of legacy recreation |
 | 02 | [Lifecycle authority and durable operations](02-lifecycle-authority-and-durable-operations.md) | 01 | Not started | Shared ownership checks, operation records, serialization and reconciliation |
 | 03 | [Image contracts and daemon preflight](03-image-contracts-and-daemon-preflight.md) | 02 | Not started | Immutable image identity, capabilities and supported topology checks |
 | 04 | [Runtime readiness and graceful shutdown](04-runtime-readiness-and-graceful-shutdown.md) | 02, 03 | Not started | Generation-bound readiness, process draining and safe setup retries |

@@ -1,4 +1,13 @@
 import { createSharedContainerLogReader } from "./container-log-snapshots.js";
+import {
+  classify,
+  listContainerCleanupInventory,
+  loadProtection,
+  parseLabels,
+  removeCleanupCandidates,
+  removeUnclaimedContainer,
+} from "./docker-cleanup-inventory.js";
+import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type {
   DockerAvailability,
@@ -27,8 +36,6 @@ import {
   findEnvironmentByContainerId,
   dockerLabelValue,
   dockerOwnerMatches,
-  countPrunedDockerResources,
-  parseDockerByteSize,
   toClientEnvironment,
   getDockerStatus,
   getHostPort,
@@ -126,7 +133,7 @@ export function registerDockerCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
-  const { commands } = dependencies;
+  void dependencies;
   register("check_docker", () => checkDockerAvailability());
   register("docker_version", async () =>
     (
@@ -169,9 +176,28 @@ export function registerDockerCommands(
     const id = asString(containerId, "containerId");
     await runCommand("docker", ["stop", id], { timeoutMs: 60_000 });
   });
-  register("docker_remove_container", async ({ containerId }) => {
+  register("docker_remove_container", async ({ containerId }, context) => {
+    // A supplied id is not a request to discard an environment's workspace.
+    // Raw removal is limited to containers nothing claims; an assigned runtime
+    // is reset only through `recreate_environment` with an explicit discard,
+    // and deleted only through environment deletion.
     const id = asString(containerId, "containerId");
-    await runCommand("docker", ["rm", "-f", id], { timeoutMs: 60_000 });
+    const outcome = await removeUnclaimedContainer(id, context);
+    if (outcome.outcome === "skipped") {
+      throw new Error(
+        formatContainerLifecycleError(
+          outcome.reason === "foreign-owner" ? "not-owned" : "preservation-required",
+          outcome.reason === "foreign-owner"
+            ? "This container is not owned by this Orkestrator installation."
+            : "This container belongs to an environment. Reset or delete the environment instead.",
+        ),
+      );
+    }
+    if (outcome.outcome === "failed") {
+      throw new Error(
+        formatContainerLifecycleError("removal-failed", "Docker did not remove the container."),
+      );
+    }
   });
   register("docker_container_status", async ({ containerId }) => {
     const id = asString(containerId, "containerId");
@@ -228,41 +254,32 @@ export function registerDockerCommands(
     );
   });
   register("docker_system_prune", async ({ pruneVolumes }, context) => {
-    const { storage } = context;
-    // The ordinary cleanup action is intentionally owner-scoped. Docker cannot
-    // safely filter image/network/volume prune by container ownership, so those
-    // resource classes remain untouched even when an older renderer sends the
-    // legacy pruneVolumes flag.
+    // Ordinary cleanup removes only stopped containers that nothing claims:
+    // not assigned to an environment, not labelled for a live environment, not
+    // owed to a pending deletion and not part of an in-flight operation. A
+    // stopped environment's container is still the only copy of its workspace,
+    // so being stopped never makes it eligible. Images, networks and volumes
+    // are left alone, even when an older renderer sends the legacy
+    // pruneVolumes flag.
     if (pruneVolumes !== undefined) asBoolean(pruneVolumes);
-    const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
-    const pruneContainers = (filters: string[]) =>
-      runCommand(
-        "docker",
-        ["container", "prune", "-f", ...filters.flatMap((filter) => ["--filter", filter])],
-        { timeoutMs: 120_000 },
-      );
-    // Containers created before ownership labels existed carry no owner label,
-    // yet the listings adopt them as this installation's. A second pass scoped
-    // to this app's label minus the owner label removes exactly those legacy
-    // containers, so cleanup matches what the UI reports as owned.
-    const owned = await pruneContainers([`label=${DOCKER_LABEL_OWNER}=${dockerOwner}`]);
-    const legacy = context.strictDockerOwner
-      ? { stdout: "" }
-      : await pruneContainers([
-          `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
-          `label!=${DOCKER_LABEL_OWNER}`,
-        ]);
-    const reclaimedText = (stdout: string) =>
-      /Total reclaimed space:\s*([^\n]+)/.exec(stdout)?.[1] ?? "0B";
+    const inventory = await listContainerCleanupInventory(context, {
+      includeRunning: false,
+      measureSize: true,
+    });
+    const result = await removeCleanupCandidates(
+      inventory.filter((row) => row.exclusion === null),
+      context,
+      { includeRunning: false },
+    );
     return {
-      containersDeleted:
-        countPrunedDockerResources(owned.stdout) + countPrunedDockerResources(legacy.stdout),
+      containersDeleted: result.removed,
+      containersSkipped: result.skipped,
+      containersFailed: result.failed,
+      containersProtected: inventory.filter((row) => row.exclusion !== null).length,
       imagesDeleted: 0,
       networksDeleted: 0,
       volumesDeleted: 0,
-      spaceReclaimed:
-        parseDockerByteSize(reclaimedText(owned.stdout)) +
-        parseDockerByteSize(reclaimedText(legacy.stdout)),
+      spaceReclaimed: result.reclaimedBytes,
     };
   });
   register("get_docker_system_stats", async (_args, context) => {
@@ -306,7 +323,8 @@ export function registerDockerCommands(
   });
   register("get_orkestrator_containers", async (_args, context) => {
     const { storage } = context;
-    const environments = await storage.loadEnvironments();
+    const protection = await loadProtection(context);
+    const environments = protection.environments;
     const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
     const { stdout } = await runCommand(
       "docker",
@@ -355,25 +373,39 @@ export function registerDockerCommands(
             environmentId: env?.id ?? null,
             projectId: env?.projectId ?? null,
             isAssigned: !!env,
+            // The same classification cleanup applies, so the listing never
+            // offers to delete a container cleanup would refuse.
+            cleanupExclusion: classify(
+              {
+                id,
+                state: typeof row.State === "string" ? row.State.toLowerCase() : "",
+                labels: parseLabels(row.Labels),
+              },
+              protection,
+              dockerOwner,
+              { includeRunning: true, strictDockerOwner: Boolean(context.strictDockerOwner) },
+            ),
             cpuPercent: null,
           },
         ];
       });
   });
   register("cleanup_orphaned_containers", async (_args, context) => {
-    const { storage } = context;
-    const environments = await storage.loadEnvironments();
-    const containers = (await commands.get("list_docker_containers")?.({}, context)) as string[][];
-    let removed = 0;
-    for (const [containerId] of containers) {
-      if (containerId && !findEnvironmentByContainerId(environments, containerId)) {
-        await runCommand("docker", ["rm", "-f", containerId], { timeoutMs: 60_000 }).catch(
-          () => undefined,
-        );
-        removed += 1;
-      }
-    }
-    return removed;
+    // Orphans are containers nothing claims, whatever their state. Assignment,
+    // a live environment label, a pending deletion or an in-flight operation
+    // is rechecked for each one immediately before it is removed.
+    const inventory = await listContainerCleanupInventory(context, { includeRunning: true });
+    const result = await removeCleanupCandidates(
+      inventory.filter((row) => row.exclusion === null),
+      context,
+      { includeRunning: true },
+    );
+    return {
+      removed: result.removed,
+      alreadyAbsent: result.alreadyAbsent,
+      skipped: result.skipped,
+      failed: result.failed,
+    };
   });
   register("reattach_container", async ({ projectId, containerId, name }, context) => {
     const { storage } = context;

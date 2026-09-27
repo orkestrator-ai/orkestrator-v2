@@ -1,4 +1,5 @@
 import { invoke } from "@/lib/native/backend";
+import type { RecreateEnvironmentIntent } from "@orkestrator/protocol/container-lifecycle";
 import type {
   Project,
   Environment,
@@ -193,12 +194,27 @@ export async function stopEnvironment(environmentId: string): Promise<void> {
   return invoke("stop_environment", { environmentId });
 }
 
+export interface RecreateEnvironmentOptions {
+  /**
+   * `discard` deletes the container and everything in its filesystem. The
+   * default, `preserve`, is refused with a `preservation-required` lifecycle
+   * error while the environment keeps its workspace inside the container.
+   */
+  intent: RecreateEnvironmentIntent;
+  /** The container the user reviewed; a different runtime conflicts. */
+  expectedContainerId: string | null;
+}
+
 /**
- * Recreate an environment - preserves filesystem state via docker commit, then creates new container with updated port mappings
- * Note: All running processes will be terminated, but installed packages and file changes are preserved
+ * Replace an environment's container. Only an explicit, reviewed discard can
+ * remove a container whose writable layer holds the workspace; see
+ * `parseContainerLifecycleError` for the typed refusals.
  */
-export async function recreateEnvironment(environmentId: string): Promise<void> {
-  return invoke("recreate_environment", { environmentId });
+export async function recreateEnvironment(
+  environmentId: string,
+  options: RecreateEnvironmentOptions,
+): Promise<void> {
+  return invoke("recreate_environment", { environmentId, ...options });
 }
 
 export async function syncEnvironmentStatus(environmentId: string): Promise<Environment> {

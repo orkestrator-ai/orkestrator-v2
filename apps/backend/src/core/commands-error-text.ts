@@ -35,6 +35,8 @@ export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
   runtimeUnavailable: "The container runtime is unavailable. Start it and retry.",
   imageUnavailable: "The environment image is unavailable. Rebuild it and retry.",
   diskFull: "The host has run out of disk space. Free space and retry.",
+  containerRemovalFailed:
+    "Docker did not remove the old container, so it was kept. Retry the reset once Docker is healthy.",
   gitSshAuthentication:
     "Git SSH authentication failed. Check that your SSH agent has a key authorized for this repository, or configure its socket in Settings > General, then restart Orkestrator and retry.",
 } as const;

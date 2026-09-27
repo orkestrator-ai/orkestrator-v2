@@ -246,7 +246,10 @@ only; the printed receipt resumes with `run wait`.
 An explicit base must be a branch plus a full 40-character commit contained in
 it; container bases must be published to a remote. The commit actually used is
 reported as `base.commit`. `recreate` (containers only) and `delete` are
-destructive and say so in help. Deletion is tracked through cleanup; a failed
+destructive and say so in help. `recreate` requires `--discard`: a legacy
+container keeps its workspace in its own filesystem, so without it the request
+is refused (`capability-unavailable`) rather than deleting that work, and the
+discard is bound to the container seen at admission. Deletion is tracked through cleanup; a failed
 cleanup stays inspectable. Stop, recreate and delete first cancel the
 environment's running exec commands.
 

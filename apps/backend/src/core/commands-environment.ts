@@ -1,3 +1,8 @@
+import {
+  formatContainerLifecycleError,
+  type ContainerLifecycleErrorCode,
+  type RecreateEnvironmentRequest,
+} from "@orkestrator/protocol/container-lifecycle";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import {
@@ -55,6 +60,7 @@ import {
   environmentStartTasks,
   environmentLifecycleOperations,
   environmentBaselineTasks,
+  containerGitFetchPolicy,
   diffStatsService,
   invalidatePendingDiffStatsSync,
   syncDiffStatsTracking,
@@ -96,6 +102,7 @@ import {
   ensureCreatedFromCommitBeforeSetup,
   enqueueLocalServerEnvironmentOperation,
   stopLocalServersForEnvironmentUnlocked,
+  cancelOpenCodeAgentToolsConfiguration,
 } from "./commands-local-server-lifecycle.js";
 import {
   resolveRemoteWorktreeStartPoint,
@@ -1359,47 +1366,132 @@ export function stopEnvironmentTask(
   );
 }
 
+/**
+ * Fields that describe the workspace a discarded runtime had prepared. A fresh
+ * runtime starts from an empty `/workspace`, so none of them may survive: a
+ * retained `setupScriptsComplete` would make setup short-circuit and a retained
+ * `createdFromCommit` would skip the clone, handing the user a container with
+ * no checkout. `delegationBaseCommit` is deliberately absent — it is the
+ * immutable intent the new checkout must be reconciled to.
+ */
+export function discardedRuntimeSetupUpdates(): Partial<Environment> {
+  return {
+    setupScriptsComplete: false,
+    setupPhase: "pending",
+    setupOverride: false,
+    setupSessionId: undefined,
+    setupStartedAt: undefined,
+    setupCompletedAt: undefined,
+    createdFromCommit: undefined,
+    hostEntryPort: undefined,
+  };
+}
+
+/**
+ * Removes one runtime and reports whether Docker confirmed it is gone.
+ *
+ * `docker rm -f` succeeds for an absent container on current engines and fails
+ * with "no such container" on older ones; both are confirmed absence. Every
+ * other failure — a refusal, a timeout, an unreachable daemon — leaves the
+ * deterministic container name possibly still reserved, so the caller must keep
+ * the reference rather than advancing to a create that would collide with it.
+ */
+export async function removeContainerConfirmingAbsence(containerId: string): Promise<void> {
+  try {
+    await runCommand("docker", ["rm", "-f", containerId], { timeoutMs: 60_000 });
+  } catch (error) {
+    if (isMissingDockerObjectError(error)) return;
+    throw error;
+  }
+}
+
+function containerLifecycleError(code: ContainerLifecycleErrorCode, message: string): Error {
+  return new Error(formatContainerLifecycleError(code, message));
+}
+
 export async function recreateEnvironmentOnce(
-  environmentId: string,
+  request: RecreateEnvironmentRequest,
   context: CommandContext,
   schedulePendingRename: (environmentId: string, context: CommandContext) => void,
   invalidateDiscovery: (environmentId: string) => void,
 ): Promise<EnvironmentSetupStartResult | undefined> {
-  const environment = await context.storage.getEnvironment(environmentId);
+  const environment = await context.storage.getEnvironment(request.environmentId);
   if (!environment?.containerId) return;
-  await assertDockerContainerOwned(environment.containerId, context);
+  // Re-read under the lifecycle queue: the request may have waited behind a
+  // start/recreate that replaced the runtime the user reviewed.
+  assertEnvironmentNotDeleting(environment.id);
+  assertEnvironmentDeletionNotRequested(environment, environment.id);
+  if (request.intent !== "discard") {
+    // A legacy container keeps its workspace in the writable layer, which
+    // `docker rm` destroys. Until a verified migration exists for this
+    // environment the only safe answer to a preserving (or pre-intent)
+    // request is to refuse.
+    throw containerLifecycleError(
+      "preservation-required",
+      "This environment keeps its files inside the container, so recreating it would delete " +
+        "them. Save the settings to apply them later, or explicitly reset the container.",
+    );
+  }
+  if (request.expectedContainerId !== environment.containerId) {
+    throw containerLifecycleError(
+      "runtime-changed",
+      "The container changed after it was reviewed. Review the environment again before resetting it.",
+    );
+  }
+  const containerId = environment.containerId;
+  await assertDockerContainerOwned(containerId, context);
   // Commands running in the container are cancelled (and recorded as such)
   // before the container they run in is removed.
+  await stopEnvironmentReviewValidation(environment.id, context);
   await stopEnvironmentExecWorkers(environment.id, context);
   invalidateDiscovery(environment.id);
   context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
-  // Recreate is the user's repair action for a container that is already
-  // broken, so a failing `rm -f` must not be the thing that makes it
-  // unrepairable. Drop the reference and build a fresh container anyway; the
-  // remains are swept by `cleanup_orphaned_containers`. Logged rather than
-  // swallowed so the daemon-level cause is still recoverable.
-  await runCommand("docker", ["rm", "-f", environment.containerId], { timeoutMs: 60_000 }).catch(
-    (error: unknown) => {
-      logEnvironmentLifecycleFailure("recreate (container removal)", environment.id, error);
-    },
-  );
+  shutdownClaudeStatePolling(containerId);
+  cancelOpenCodeAgentToolsConfiguration(`container:${containerId}`);
+  try {
+    await removeContainerConfirmingAbsence(containerId);
+  } catch (error) {
+    // The old name may still be reserved by the daemon, and the container may
+    // hold the only copy of the user's work. Keep the reference and surface
+    // the failure instead of creating a replacement that would either collide
+    // with it or orphan it.
+    logEnvironmentLifecycleFailure("recreate (container removal)", environment.id, error);
+    await context.storage
+      .updateEnvironment(environment.id, {
+        lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.containerRemovalFailed,
+      })
+      .catch(() => undefined);
+    throw containerLifecycleError(
+      "removal-failed",
+      "Docker did not remove the container, so it was kept. Retry once Docker is healthy.",
+    );
+  }
+  containerGitFetchPolicy.forgetContainer(containerId);
+  // Terminals and setup state belong to the removed runtime. A pane-carried
+  // PTY id or a retained setup buffer must not attach to the replacement.
+  await context.storage.clearBackendTerminalSessionIds?.(environment.id);
+  cleanupEnvironmentSetupState(environment.id);
   await context.storage.updateEnvironment(environment.id, {
     containerId: null,
     status: "stopped",
     lifecycleError: null,
+    ...discardedRuntimeSetupUpdates(),
+    ...clearPendingAgentLaunchUpdates(),
   });
   return startEnvironmentOnce(environment.id, context, schedulePendingRename);
 }
 
 export function recreateEnvironmentTask(
-  environmentId: string,
+  request: RecreateEnvironmentRequest,
   context: CommandContext,
   schedulePendingRename: (environmentId: string, context: CommandContext) => void,
   invalidateDiscovery: (environmentId: string) => void,
 ): Promise<EnvironmentSetupStartResult | undefined> {
-  invalidateEnvironmentStartDedupe(environmentId);
-  return enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
-    recreateEnvironmentOnce(environmentId, context, schedulePendingRename, invalidateDiscovery),
+  // Only a discard replaces the runtime. A preserving request that is refused
+  // must not detach a later start from one already in flight.
+  if (request.intent === "discard") invalidateEnvironmentStartDedupe(request.environmentId);
+  return enqueueEnvironmentLifecycleOperation(request.environmentId, context, () =>
+    recreateEnvironmentOnce(request, context, schedulePendingRename, invalidateDiscovery),
   );
 }
 

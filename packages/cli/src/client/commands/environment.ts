@@ -54,6 +54,7 @@ async function lifecycle(
   parsed: ParsedCommand,
   action: PublicActionName,
   conditions: EnvironmentCondition[],
+  extraInput: Record<string, unknown> = {},
 ): Promise<CommandOutcome> {
   const environmentId = String(parsed.positionals.environment);
   const wait =
@@ -66,7 +67,7 @@ async function lifecycle(
   const { session, result, receipt, warnings } = await submit<Record<string, unknown>>(
     context,
     action,
-    { environmentId },
+    { environmentId, ...extraInput },
     parsed.options,
   );
   let finalReceipt: PublicReceipt | undefined = receipt;
@@ -267,14 +268,29 @@ export const environmentCommands: CommandSpec[] = [
   },
   {
     path: ["environment", "recreate"],
-    summary: "DESTRUCTIVE: remove and recreate the container (container environments only).",
+    summary: "DESTRUCTIVE: reset the container, deleting its files (container environments only).",
     description:
-      "The container filesystem outside the mounted workspace is discarded. Local worktree environments cannot be recreated.",
+      "A legacy container keeps its workspace in its own filesystem, so resetting it deletes uncommitted, untracked and ignored files, unpushed commits, installed tools and container-local agent sessions. Requires --discard. Local worktree environments cannot be recreated.",
     positionals: [{ name: "environment", required: true }],
-    options: [waitOption(["running", "ready"]), TIMEOUT_OPTION, REQUEST_ID_OPTION],
+    options: [
+      {
+        name: "discard",
+        kind: "boolean",
+        description: "Confirm that the container's local files are deleted.",
+      },
+      waitOption(["running", "ready"]),
+      TIMEOUT_OPTION,
+      REQUEST_ID_OPTION,
+    ],
     idOutput: "operation ID",
     run: (context, parsed) =>
-      lifecycle(context, parsed, "environment.recreate", ["running", "ready"]),
+      lifecycle(
+        context,
+        parsed,
+        "environment.recreate",
+        ["running", "ready"],
+        optionalBoolean(parsed.options, "discard") ? { discard: true } : {},
+      ),
   },
   {
     path: ["environment", "delete"],

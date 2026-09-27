@@ -532,7 +532,10 @@ mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
   }: {
     environment: Environment;
     onOpenChange: (open: boolean) => void;
-    onRestart: (environmentId: string) => Promise<void>;
+    onRestart: (
+      environmentId: string,
+      options: { intent: "discard"; expectedContainerId: string | null },
+    ) => Promise<void>;
     onUpdate: (environment: Environment) => void;
     open: boolean;
   }) =>
@@ -542,7 +545,15 @@ mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
         <button onClick={() => onUpdate({ ...environment, name: "updated-env" })} type="button">
           Update mock environment
         </button>
-        <button onClick={() => void onRestart(environment.id)} type="button">
+        <button
+          onClick={() =>
+            void onRestart(environment.id, {
+              intent: "discard",
+              expectedContainerId: environment.containerId,
+            })
+          }
+          type="button"
+        >
           Restart mock environment
         </button>
         <button onClick={() => onOpenChange(false)} type="button">
@@ -2104,7 +2115,11 @@ describe("ActionBar toolbar interactions", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Restart mock environment" }));
     await waitFor(
-      () => expect(recreateEnvironmentMock).toHaveBeenCalledWith("env-1"),
+      () =>
+        expect(recreateEnvironmentMock).toHaveBeenCalledWith("env-1", {
+          intent: "discard",
+          expectedContainerId: expect.anything(),
+        }),
       asyncDialogOptions,
     );
   }, 60_000);

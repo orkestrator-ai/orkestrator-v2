@@ -72,7 +72,17 @@ if [ "$1" = "create" ]; then
   exit 0
 fi
 if [ "$1" = "inspect" ] && [ "$2" = "-f" ]; then
-  printf '%s\n' "\${FAKE_DOCKER_STATUS:-running}"
+  case "$3" in
+    *"json .Config.Labels"*)
+      case "$4" in
+        container-old) printf 'exited\t{"app":"orkestrator-v2","orkestrator-owner":"%s"}\n' "\${FAKE_DOCKER_OWNER:-}" ;;
+        legacy-old) printf 'exited\t{"app":"orkestrator-v2"}\n' ;;
+        container-a) printf '%s\t{"app":"orkestrator-v2","orkestrator-owner":"%s"}\n' "\${FAKE_DOCKER_STATUS:-running}" "\${FAKE_DOCKER_OWNER:-}" ;;
+        *) echo "Error: No such object: $4" >&2; exit 1 ;;
+      esac
+      ;;
+    *) printf '%s\n' "\${FAKE_DOCKER_STATUS:-running}" ;;
+  esac
   exit 0
 fi
 if [ "$1" = "inspect" ] && [ "$2" = "--format" ]; then
@@ -82,6 +92,12 @@ fi
 if [ "$1" = "ps" ] && [ "$2" = "-a" ]; then
   case " $* " in
     *" -q "*) printf 'container-a\ncontainer-b\n' ;;
+    *"{{json .}}"*)
+      printf '{"ID":"container-old","Names":"old","State":"exited","Size":"1.25GB (virtual 3GB)","Labels":"app=orkestrator-v2,orkestrator-owner=%s"}\n' "\${FAKE_DOCKER_OWNER:-}"
+      printf '{"ID":"legacy-old","Names":"legacy","State":"exited","Size":"512MB (virtual 3GB)","Labels":"app=orkestrator-v2"}\n'
+      printf '{"ID":"container-existing","Names":"assigned","State":"exited","Size":"9GB (virtual 3GB)","Labels":"app=orkestrator-v2,orkestrator-owner=%s"}\n' "\${FAKE_DOCKER_OWNER:-}"
+      printf '{"ID":"container-foreign","Names":"foreign","State":"exited","Size":"1GB (virtual 3GB)","Labels":"app=orkestrator-v2,orkestrator-owner=other-registry"}\n'
+      ;;
     *)
       printf 'container-a\talpha\tapp=orkestrator-v2,orkestrator-owner=%s\n' "\${FAKE_DOCKER_OWNER:-}"
       printf 'container-b\tbeta\tapp=orkestrator-v2\n'
@@ -663,8 +679,13 @@ describe("process and platform command behavior", () => {
       { event: "container-log", payload: { containerId: "container-a", line: "stream stderr\n" } },
     ]);
 
+    // Only unclaimed stopped containers are removed: the assigned environment
+    // container and another registry's container are kept.
     expect(await invoke("docker_system_prune", { pruneVolumes: true })).toEqual({
       containersDeleted: 2,
+      containersSkipped: 0,
+      containersFailed: 0,
+      containersProtected: 2,
       imagesDeleted: 0,
       networksDeleted: 0,
       volumesDeleted: 0,
@@ -678,14 +699,13 @@ describe("process and platform command behavior", () => {
       diskUsed: 0,
     });
     const pruneLog = await readCommandLog();
-    expect(pruneLog).toContain(
-      `docker container prune -f --filter label=orkestrator-owner=${dockerOwnerNamespace(root)}`,
-    );
-    // A second pass removes legacy containers that predate ownership labels,
-    // so the cleanup matches what the listings adopt as this installation's.
-    expect(pruneLog).toContain(
-      "docker container prune -f --filter label=app=orkestrator-v2 --filter label!=orkestrator-owner",
-    );
+    // Exact candidates are removed without -f, so a container started after the
+    // recheck is refused by Docker rather than killed.
+    expect(pruneLog).toContain("docker rm container-old");
+    expect(pruneLog).toContain("docker rm legacy-old");
+    expect(pruneLog).not.toContain("docker rm container-existing");
+    expect(pruneLog).not.toContain("docker rm container-foreign");
+    expect(pruneLog).not.toContain("docker container prune");
     expect(pruneLog).not.toContain("docker system prune");
     expect(pruneLog).not.toContain("--volumes");
   });

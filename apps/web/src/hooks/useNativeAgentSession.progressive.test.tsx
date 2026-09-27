@@ -33,6 +33,8 @@ interface TestMessage {
     sourcePartId?: string;
     createdAt?: string;
     toolUseId?: string;
+    toolName?: string;
+    toolTitle?: string;
     toolState?: string;
   }>;
 }
@@ -1319,6 +1321,118 @@ describe("useNativeAgentSession progressive view", () => {
     const projection = await applyTrimmedHead(held, [held[2]!, grown]);
 
     expect(projection?.messages[2]?.parts).toEqual([...held.slice(0, 3), grown]);
+  });
+
+  test("keeps every held part when the byte window removes the entire head", async () => {
+    const held = streamedParts(4);
+    const projection = await applyTrimmedHead(held, [], held.length);
+
+    expect(projection?.messages.map(({ id }) => id)).toEqual(["old", "user", "asst"]);
+    expect(projection?.messages[2]?.parts).toEqual(held);
+  });
+
+  test("appends a sole new final part after a fully omitted held head", async () => {
+    const all = streamedParts(5);
+    const projection = await applyTrimmedHead(all.slice(0, 4), all.slice(4), 4);
+
+    expect(projection?.messages.map(({ id }) => id)).toEqual(["old", "user", "asst"]);
+    expect(projection?.messages[2]?.parts).toEqual(all);
+  });
+
+  test("distinguishes Codex file changes that share a tool id", async () => {
+    const files = ["a.ts", "b.ts", "c.ts", "d.ts"].map((path) => ({
+      type: "tool-invocation",
+      content: path,
+      toolName: "apply_patch",
+      toolTitle: `update: ${path}`,
+      toolUseId: "file-change-1",
+    }));
+    const projection = await applyTrimmedHead(files.slice(0, 3), files.slice(2), 1);
+
+    expect(projection?.messages[2]?.parts).toEqual(files);
+  });
+
+  test("uses the longest suffix overlap for repeated anonymous parts without a hint", async () => {
+    const repeated = { type: "text", content: "same" };
+    const final = { type: "text", content: "final" };
+    const projection = await applyTrimmedHead(
+      [repeated, repeated, repeated],
+      [repeated, repeated, final],
+    );
+
+    expect(projection?.messages[2]?.parts).toEqual([repeated, repeated, repeated, final]);
+  });
+
+  test("aligns unchanged content when a bridge reissues source part ids", async () => {
+    const held = streamedParts(5);
+    const reissued = held
+      .slice(2)
+      .map((part) => ({ ...part, sourcePartId: `new-${part.sourcePartId}` }));
+    const projection = await applyTrimmedHead(held, reissued, 2);
+
+    expect(projection?.messages.map(({ id }) => id)).toEqual(["old", "user", "asst"]);
+    expect(projection?.messages[2]?.parts).toEqual([...held.slice(0, 2), ...reissued]);
+  });
+
+  test("loads earlier after a progressive merge without losing the head prefix", async () => {
+    const all = streamedParts(8);
+    transcriptUpdates = [
+      () =>
+        transcriptSnapshot("transcript-1", [
+          message("user"),
+          message("asst", "turn", all.slice(0, 6)),
+        ]),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.projection?.messages[1]?.parts).toHaveLength(6));
+
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-2", [message("asst", "turn", all.slice(3, 7))], {
+          messageWindow: {
+            limit: 1,
+            truncated: true,
+            truncationReason: "bytes",
+            omittedMessages: 1,
+            omittedParts: 3,
+            canLoadEarlier: true,
+          },
+        }),
+    ];
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.projection?.messages[1]?.parts).toEqual(all.slice(0, 7));
+
+    projectionUpdates = [
+      () => ({
+        ...joinedSnapshot("joined-1", [message("asst", "turn", all.slice(4))], {
+          historyCursor: "cursor-before-asst",
+        }),
+        projection: projection([message("asst", "turn", all.slice(4))], {
+          messageWindow: {
+            limit: 1,
+            truncated: true,
+            truncationReason: "bytes",
+            omittedParts: 4,
+            canLoadEarlier: false,
+          },
+        }),
+      }),
+    ];
+    messagePages = [() => historyPage([message("old")])];
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+
+    expect(messagePageCalls).toEqual([{ before: "cursor-before-asst" }]);
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "old",
+      "user",
+      "asst",
+    ]);
+    expect(result.current.projection?.messages[2]?.parts).toEqual(all);
   });
 
   test("takes a trimmed head that does not overlap the held copy", async () => {

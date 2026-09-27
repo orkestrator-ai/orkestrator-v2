@@ -43,6 +43,7 @@ Refreshed 2026-09-17 against the current tree.
 | --- | --- | --- |
 | [testing-guide.md](development/testing-guide.md) | Living | How to choose and run tests. Commands live here. |
 | [agent-testing.md](development/agent-testing.md) | Living | Isolated profiles and real-stack QA. |
+| [cli-testing.md](development/cli-testing.md) | Living | Driving a `dev:test` profile with the `orkestrator` CLI: setup from a worktree, scripting output, recipes, UI rehydration checks. Contract stays in `public-cli.md`. |
 | [upgrade-agents.md](development/upgrade-agents.md) | Living | SDK/CLI bump runbook. Pins are test-enforced. |
 | [credentials-and-models.md](development/credentials-and-models.md) | Living | Credential and catalogue inventory. |
 | [test-logs.md](development/test-logs.md) | Living | Diagnostic-bounds rationale. Operator commands stay in `testing-guide.md`. |

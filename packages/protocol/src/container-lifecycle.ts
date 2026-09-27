@@ -43,6 +43,8 @@ export const CONTAINER_LIFECYCLE_ERROR_CODES = [
   "resource-exhausted",
   /** The requested operation id is unknown or its record has expired. */
   "operation-unknown",
+  /** The runtime did not reach readiness for its current boot. */
+  "not-ready",
 ] as const;
 
 export type ContainerLifecycleErrorCode = (typeof CONTAINER_LIFECYCLE_ERROR_CODES)[number];
@@ -272,6 +274,28 @@ export interface ContainerOperationOutcome {
   failureCode?: ContainerOperationRecord["failureCode"];
 }
 
+export type ContainerBootPhase =
+  | "starting"
+  | "initializing"
+  | "ready"
+  | "failed"
+  | "draining"
+  | "stopped";
+
+export interface ContainerBootRecord {
+  /** Boot id from the entrypoint; absent for a legacy image. */
+  bootId?: string;
+  phase: ContainerBootPhase;
+  observedAt: string;
+  failureCode?: string;
+}
+
+export interface ContainerSetupRecord {
+  runtimeGeneration: number;
+  workspaceGeneration: number;
+  completedAt: string;
+}
+
 /** Backend-private durable record stored with the environment. */
 export interface EnvironmentContainerLifecycle {
   schemaVersion: number;
@@ -283,6 +307,13 @@ export interface EnvironmentContainerLifecycle {
   storage: ContainerStorageIdentity;
   operation?: ContainerOperationRecord;
   outcomes: ContainerOperationOutcome[];
+  /** Last readiness observation for the current runtime (step 04). */
+  boot?: ContainerBootRecord;
+  /**
+   * Which workspace/runtime the last successful setup belongs to. A completion
+   * recorded for another generation does not count as setup of this one.
+   */
+  setup?: ContainerSetupRecord;
   /**
    * Operation ids at or before this time have aged out of `outcomes`. A
    * repeated request older than the horizon is answered `operation-unknown`
@@ -309,6 +340,8 @@ export interface ContainerLifecycleSnapshot {
     failureCode: string | null;
   } | null;
   lastOutcome: ContainerOperationOutcome | null;
+  /** Readiness of the current runtime, when observed. */
+  bootPhase: ContainerBootPhase | null;
 }
 
 export function emptyContainerLifecycle(): EnvironmentContainerLifecycle {
@@ -515,7 +548,53 @@ export function parseContainerLifecycle(value: unknown): ParsedContainerLifecycl
   }
   const horizon = boundedString(value.outcomeHorizon, 64);
   if (horizon) record.outcomeHorizon = horizon;
+  if (isRecord(value.boot)) {
+    const phase = value.boot.phase;
+    const observedAt = boundedString(value.boot.observedAt, 64);
+    if (
+      observedAt &&
+      (phase === "starting" ||
+        phase === "initializing" ||
+        phase === "ready" ||
+        phase === "failed" ||
+        phase === "draining" ||
+        phase === "stopped")
+    ) {
+      record.boot = { phase, observedAt };
+      const bootId = boundedString(value.boot.bootId, 64);
+      if (bootId) record.boot.bootId = bootId;
+      const failureCode = boundedString(value.boot.failureCode, 64);
+      if (failureCode) record.boot.failureCode = failureCode;
+    }
+  }
+  if (isRecord(value.setup)) {
+    const runtimeGeneration = nonNegativeInteger(value.setup.runtimeGeneration);
+    const workspaceGeneration = nonNegativeInteger(value.setup.workspaceGeneration);
+    const completedAt = boundedString(value.setup.completedAt, 64);
+    if (runtimeGeneration !== undefined && workspaceGeneration !== undefined && completedAt) {
+      record.setup = { runtimeGeneration, workspaceGeneration, completedAt };
+    }
+  }
   return { supported: true, record };
+}
+
+/**
+ * Whether a recorded setup completion belongs to the current runtime and
+ * workspace. A legacy writable-layer workspace lives and dies with its
+ * runtime, so a new runtime generation invalidates it; persistent storage
+ * keeps project setup across runtime replacement and is invalidated by a new
+ * workspace generation. No record means the older, generation-less completion
+ * flag is all there is, and it is trusted as before.
+ */
+export function setupCompletionIsCurrent(record: EnvironmentContainerLifecycle): boolean {
+  if (!record.setup) return true;
+  if (record.storage.format === "legacy-layer") {
+    return (
+      record.setup.runtimeGeneration ===
+      (record.runtime?.runtimeGeneration ?? record.lastRuntimeGeneration)
+    );
+  }
+  return record.setup.workspaceGeneration === record.storage.workspaceGeneration;
 }
 
 export function containerLifecycleSnapshot(
@@ -531,6 +610,7 @@ export function containerLifecycleSnapshot(
       workspaceGeneration: 0,
       operation: null,
       lastOutcome: null,
+      bootPhase: null,
     };
   }
   const { record } = parsed;
@@ -553,6 +633,7 @@ export function containerLifecycleSnapshot(
         }
       : null,
     lastOutcome: record.outcomes.at(-1) ?? null,
+    bootPhase: record.boot?.phase ?? null,
   };
 }
 

@@ -4,6 +4,47 @@
 
 set -e
 
+# Boot status contract (docker/image-manifest.ts):
+# ORKESTRATOR_CAPABILITY boot-status=1
+#
+# Readiness belongs to this boot only. Markers from an earlier start of the
+# same container are removed before anything else runs, and every status
+# record names this boot's id and PID 1's start time, which changes on every
+# container start. The backend accepts a record only when that start time
+# matches the one it reads itself, so a record left by a previous boot can
+# never release setup or agent launch.
+BOOT_STATUS_DIR=/run/orkestrator
+BOOT_STATUS_FILE="$BOOT_STATUS_DIR/boot-status.json"
+rm -f /tmp/.environment-ready /tmp/.entrypoint-complete "$BOOT_STATUS_FILE"
+mkdir -p "$BOOT_STATUS_DIR/processes"
+BOOT_ID="$(cat /proc/sys/kernel/random/uuid)"
+BOOT_PID1_START="$(awk '{print $22}' /proc/1/stat)"
+BOOT_PHASE=""
+BOOT_FAILURE_CODE=""
+
+# Atomic: a reader sees the previous record or this one, never a partial one.
+write_boot_status() {
+    BOOT_PHASE="$1"
+    local failure="${2:-}"
+    local failure_json=null
+    [ -n "$failure" ] && failure_json="\"$failure\""
+    local tmp="$BOOT_STATUS_FILE.$$.tmp"
+    printf '{"version":1,"bootId":"%s","pid1Start":"%s","phase":"%s","failureCode":%s,"updatedAt":"%s"}\n' \
+        "$BOOT_ID" "$BOOT_PID1_START" "$BOOT_PHASE" "$failure_json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        > "$tmp" && mv -f "$tmp" "$BOOT_STATUS_FILE"
+}
+
+# Any exit before `ready` is a failed boot with a fixed reason code.
+on_entrypoint_exit() {
+    local status=$?
+    if [ "$BOOT_PHASE" != "ready" ]; then
+        write_boot_status failed "${BOOT_FAILURE_CODE:-entrypoint-failed}" || true
+    fi
+    exit "$status"
+}
+trap on_entrypoint_exit EXIT
+write_boot_status initializing
+
 # Progress file for workspace-setup.sh to read
 PROGRESS_FILE="/tmp/.entrypoint-progress"
 echo "" > "$PROGRESS_FILE"
@@ -476,16 +517,26 @@ log_progress "=== Claude Code Environment Initializing ==="
 
 # Initialize the firewall through the one exact privileged command granted to
 # node. The script reads the root-owned policy written before privileges drop.
+# In restricted mode a missing firewall is as fatal as a failed one: the
+# container must never report ready with an open network.
+network_mode=""
+IFS= read -r network_mode < /etc/orkestrator/network-mode 2>/dev/null || true
 if [ -x /usr/local/bin/init-firewall.sh ]; then
     log_progress "Initializing network firewall..."
     if ! sudo /usr/local/bin/init-firewall.sh; then
-        if ! IFS= read -r network_mode < /etc/orkestrator/network-mode || [ "${network_mode:-}" != "full" ]; then
+        if [ "${network_mode:-}" != "full" ]; then
+            BOOT_FAILURE_CODE=firewall-failed
             log_progress "ERROR: Restricted-network firewall initialization failed"
             exit 1
         fi
         log_progress "Warning: Firewall initialization failed in full-network mode"
     fi
+elif [ "${network_mode:-}" != "full" ]; then
+    BOOT_FAILURE_CODE=firewall-missing
+    log_progress "ERROR: Restricted network requested but the firewall is not installed"
+    exit 1
 fi
+write_boot_status network-ready
 
 # Set up Claude Code configuration
 # The host's ~/.claude is mounted read-only at /claude-config
@@ -957,15 +1008,21 @@ echo "Claude Code: $(claude --version 2>/dev/null || echo 'installed')"
 echo "OpenCode: $(opencode --version 2>/dev/null || echo 'installed')"
 echo ""
 
-# Write a ready marker file that can be checked by the frontend
-touch /tmp/.environment-ready
+write_boot_status inputs-ready
 
-# Write a ready marker that workspace-setup.sh can check
+# Legacy markers for older backends. Current readers use the boot status.
+touch /tmp/.environment-ready
 touch /tmp/.entrypoint-complete
 
 log_progress "=== Container Ready ==="
 log_progress "Waiting for terminal connection..."
 echo ""
+
+# The keepalive is recorded so a drain signals every workload process but not
+# the process holding the container open (`exec` keeps this PID).
+echo "$$" > "$BOOT_STATUS_DIR/keepalive.pid"
+write_boot_status ready
+trap - EXIT
 
 # Keep container alive - workspace setup happens when terminal connects via docker exec
 # This ensures the user sees the clone and setup output in their terminal

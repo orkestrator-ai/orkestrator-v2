@@ -1,9 +1,21 @@
 import {
   formatContainerLifecycleError,
+  parseContainerLifecycle,
+  setupCompletionIsCurrent,
   type ContainerLifecycleErrorCode,
   type ContainerMutationIdentity,
   type RecreateEnvironmentRequest,
 } from "@orkestrator/protocol/container-lifecycle";
+import {
+  ContainerInitializationError,
+  assertEnvironmentNotDraining,
+  containerStopWasForced,
+  drainContainerProcesses,
+  ensureCurrentBootReady,
+  waitForContainerBoot,
+  withEnvironmentDraining,
+  type DrainResult,
+} from "./container-readiness.js";
 import {
   advanceContainerOperation,
   beginContainerOperation,
@@ -126,7 +138,7 @@ import {
   ensureContainerProjectFilesAccess,
 } from "./commands-files.js";
 import { AmbiguousContainerCreateError, createDockerContainer } from "./commands-containers.js";
-import { configuredImageRef, resolveDockerImage } from "./docker-image.js";
+import { configuredImageRef, imageCapabilities, resolveDockerImage } from "./docker-image.js";
 import {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   environmentLifecycleErrorMessage,
@@ -712,6 +724,9 @@ export async function completeEnvironmentSetup(
     setupOverride: false,
     setupCompletedAt: new Date().toISOString(),
   });
+  // Bind the completion to the runtime and workspace it describes, so a later
+  // replacement cannot inherit it.
+  updated = await recordSetupCompletion(updated, context).catch(() => updated);
   if (updated.pendingAgentLaunch && context.nativeAgents) {
     await context.nativeAgents.reconcileInitialLaunch(updated.id).catch(() => {
       // The service persists a sanitized retryable launch error. Setup itself
@@ -837,11 +852,13 @@ export async function startEnvironmentSetupOnce(
   environment: Environment,
   context: CommandContext,
 ): Promise<EnvironmentSetupStartResult> {
+  assertEnvironmentNotDraining(environment.id);
   const current = (await context.storage.getEnvironment(environment.id)) ?? environment;
   if (
-    current.setupScriptsComplete ||
-    current.setupPhase === "ready" ||
-    current.setupOverride === true
+    (current.setupScriptsComplete ||
+      current.setupPhase === "ready" ||
+      current.setupOverride === true) &&
+    setupCompletionBelongsToRuntime(current)
   ) {
     logSetupTerminal("setup already complete", {
       environmentId: current.id,
@@ -1096,11 +1113,49 @@ export async function prepareEnvironmentForSetup(
   prepare: typeof ensureCreatedFromCommitBeforeSetup = ensureCreatedFromCommitBeforeSetup,
   reconcile: typeof reconcilePreparedContainerDelegation = reconcilePreparedContainerDelegation,
 ): Promise<Environment> {
+  // Immediately before repository work runs in the container: if Docker
+  // restarted it since the start was admitted, wait for the new boot.
+  if (environment.environmentType === "containerized" && environment.containerId) {
+    await ensureCurrentBootReady(environment.containerId);
+  }
   const prepared = await prepare(environment, context, onPrepareOutput);
   // Container preparation owns the initial clone. Reconcile an explicit
   // delegation base only after that clone exists, but before project setup
   // scripts run against it.
   return reconcile(prepared, context);
+}
+
+/**
+ * Whether the environment's recorded setup completion describes its current
+ * runtime and workspace (see `setupCompletionIsCurrent`).
+ */
+export function setupCompletionBelongsToRuntime(environment: Environment): boolean {
+  if (environment.environmentType !== "containerized") return true;
+  const parsed = parseContainerLifecycle(environment.containerLifecycle);
+  return parsed.supported ? setupCompletionIsCurrent(parsed.record) : true;
+}
+
+async function recordSetupCompletion(
+  environment: Environment,
+  context: CommandContext,
+): Promise<Environment> {
+  if (environment.environmentType !== "containerized" || !environment.containerLifecycle) {
+    return environment;
+  }
+  const parsed = parseContainerLifecycle(environment.containerLifecycle);
+  if (!parsed.supported) return environment;
+  const record = parsed.record;
+  return context.storage.updateEnvironment(environment.id, {
+    containerLifecycle: {
+      ...record,
+      revision: record.revision + 1,
+      setup: {
+        runtimeGeneration: record.runtime?.runtimeGeneration ?? record.lastRuntimeGeneration,
+        workspaceGeneration: record.storage.workspaceGeneration,
+        completedAt: new Date().toISOString(),
+      },
+    },
+  });
 }
 
 /**
@@ -1178,9 +1233,41 @@ async function startContainerRuntime(
       });
       unpersistedContainerId = null;
     }
-    await advanceContainerOperation(context, environment.id, operationId, { phase: "starting" });
+    await advanceContainerOperation(context, environment.id, operationId, {
+      phase: "starting",
+      boot: { phase: "starting" },
+    });
     await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
     await ensureContainerProjectFilesAccess(containerId);
+    // Readiness belongs to this boot: nothing is prepared or launched until
+    // the entrypoint reports ready for the current PID 1. Legacy images have
+    // no boot status and keep their previous behavior.
+    const started = await context.storage.getEnvironment(environment.id);
+    const runtime = started ? currentRuntimeIdentity(started, context) : undefined;
+    const capabilities = await imageCapabilities(runtime?.imageId, context);
+    if (capabilities?.["boot-status"]) {
+      await advanceContainerOperation(context, environment.id, operationId, {
+        phase: "initializing",
+        boot: { phase: "initializing" },
+      });
+      try {
+        const bootId = await waitForContainerBoot(containerId);
+        await advanceContainerOperation(context, environment.id, operationId, {
+          boot: { phase: "ready", ...(bootId ? { bootId } : {}) },
+          ...(runtime && bootId ? { runtime: { ...runtime, bootId } } : {}),
+        });
+      } catch (error) {
+        if (error instanceof ContainerInitializationError) {
+          await advanceContainerOperation(context, environment.id, operationId, {
+            boot: {
+              phase: "failed",
+              ...(error.failureCode ? { failureCode: error.failureCode } : {}),
+            },
+          }).catch(() => undefined);
+        }
+        throw error;
+      }
+    }
     await completeContainerOperation(context, environment.id, operationId, "succeeded");
     return { containerId, replayed: false };
   } catch (error) {
@@ -1466,14 +1553,40 @@ export async function stopEnvironmentOnce(
       "stop",
       identity,
       async (operation) => {
+        const runtime = currentRuntimeIdentity(environment, context);
+        const capabilities = await imageCapabilities(runtime?.imageId, context);
+        let drain: DrainResult | null = null;
+        if (capabilities?.["graceful-shutdown"]) {
+          // Persist the fence before draining: new bridges, terminals and
+          // setup are refused, and every observer sees "draining" rather than
+          // a running environment that is about to vanish.
+          await advanceContainerOperation(context, environment.id, operation.operationId, {
+            phase: "draining",
+            boot: { phase: "draining" },
+          });
+          drain = await withEnvironmentDraining(environment.id, containerId, () =>
+            drainContainerProcesses(containerId),
+          );
+        }
         await advanceContainerOperation(context, environment.id, operation.operationId, {
           phase: "stopping",
+          ...(drain ? { details: { signalled: drain.signalled, remaining: drain.remaining } } : {}),
         });
         await runCommand("docker", ["stop", containerId], { timeoutMs: 60_000 });
-        await storage.updateEnvironment(environment.id, {
-          status: "stopped",
-          lifecycleError: null,
-          ...clearPendingAgentLaunchUpdates(),
+        // A forced stop is recorded as such, never as a graceful drain: either
+        // Docker had to SIGKILL PID 1, or workload the drain could not stop
+        // was killed by the container going down.
+        const forced = capabilities?.["graceful-shutdown"]
+          ? (drain?.remaining ?? 0) > 0 || (await containerStopWasForced(containerId)) === true
+          : null;
+        await advanceContainerOperation(context, environment.id, operation.operationId, {
+          boot: { phase: "stopped" },
+          ...(forced === null ? {} : { details: { forced } }),
+          environment: {
+            status: "stopped",
+            lifecycleError: null,
+            ...clearPendingAgentLaunchUpdates(),
+          },
         });
       },
       { source: currentRuntimeIdentity(environment, context) },

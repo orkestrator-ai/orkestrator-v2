@@ -76,7 +76,8 @@ import {
 import type { LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 import { ContainerLifecycleError, findOperationContainers } from "./container-lifecycle-service.js";
-import { detectDockerTopology } from "./docker-image.js";
+import { detectDockerTopology, imageCapabilities } from "./docker-image.js";
+import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
 
 const AGENT_TEST_LOCAL_GIT_REMOTE_PATH = "/orkestrator-agent-test-origin.git";
 
@@ -196,6 +197,12 @@ export async function createDockerContainer(
       : []),
     "--workdir",
     "/workspace",
+    // An image that implements the drain contract runs under Docker's init,
+    // which forwards signals and reaps orphaned exec descendants.
+    ...(identity.imageId &&
+    (await imageCapabilities(identity.imageId, context))?.["graceful-shutdown"]
+      ? ["--init"]
+      : []),
     "--cap-add",
     "NET_ADMIN",
     // The image ships Chromium for Playwright, and Chromium puts its renderer
@@ -407,12 +414,16 @@ export async function startContainerServer(
   command: string,
   redactValues?: ReadonlyArray<string | null | undefined>,
 ): Promise<{ hostPort: number; wasRunning: boolean }> {
+  assertContainerNotDraining(containerId);
   if (!(await isContainerRunning(containerId))) {
     throw retryableBridgeStartupError("Container is not running");
   }
   const hostPort = await getHostPort(containerId, port);
   if (!hostPort) throw new Error(`Container port ${port} is not mapped`);
   if (await checkHttpHealth(hostPort)) return { hostPort, wasRunning: true };
+  // Launching into a container Docker restarted since readiness was checked
+  // would start the bridge before this boot's configuration exists.
+  await ensureCurrentBootReady(containerId);
   await dockerExecDetached(containerId, command, redactValues);
   await waitForLocalServerHealth(hostPort, processName).catch(async (error) => {
     const logFile = containerServerLogFile(processName);
@@ -457,6 +468,7 @@ export function containerServerLogFile(processName: LocalServerKind): string {
 export async function startContainerOpenCodeServer(
   containerId: string,
 ): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
+  assertContainerNotDraining(containerId);
   if (!(await isContainerRunning(containerId))) {
     throw retryableBridgeStartupError("Container is not running");
   }
@@ -502,6 +514,7 @@ export async function startContainerOpenCodeServer(
     await replaceRunningServer();
   }
 
+  await ensureCurrentBootReady(containerId);
   const authToken = randomBytes(32).toString("base64url");
   await dockerExecDetached(
     containerId,

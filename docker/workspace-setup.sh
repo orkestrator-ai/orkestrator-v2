@@ -71,22 +71,21 @@ capture_runtime_env_snapshot() {
     fi
 }
 
-# Wait for entrypoint to complete (config files to be set up)
-# This prevents race conditions where Claude is launched before config is ready
-WAIT_COUNT=0
+# Wait for this boot's initialization (config files, firewall) to finish.
+# This prevents race conditions where Claude is launched before config is ready.
+# A boot status record counts only when it names the current PID 1 start time:
+# a record or marker left by an earlier start of this container must never
+# release setup. On timeout or failure setup stops with a retryable error; it
+# never proceeds on an unfinished container.
 PROGRESS_FILE="/tmp/.entrypoint-progress"
+BOOT_STATUS_FILE=/run/orkestrator/boot-status.json
+BOOT_WAIT_SECONDS="${ORKESTRATOR_BOOT_WAIT_SECONDS:-120}"
 LAST_LINE_COUNT=0
 
-# Show what the entrypoint is doing in real-time
-echo -e "${BLUE}=== Container Initialization ===${NC}"
-echo ""
-
-while [ ! -f /tmp/.entrypoint-complete ] && [ $WAIT_COUNT -lt 100 ]; do
-    # Check for new progress lines and display them
+show_new_progress() {
     if [ -f "$PROGRESS_FILE" ]; then
         CURRENT_LINE_COUNT=$(wc -l < "$PROGRESS_FILE" 2>/dev/null || echo "0")
         if [ "$CURRENT_LINE_COUNT" -gt "$LAST_LINE_COUNT" ]; then
-            # Show new lines (skip empty lines)
             tail -n +$((LAST_LINE_COUNT + 1)) "$PROGRESS_FILE" | while IFS= read -r line; do
                 if [ -n "$line" ]; then
                     echo -e "  $line"
@@ -95,29 +94,47 @@ while [ ! -f /tmp/.entrypoint-complete ] && [ $WAIT_COUNT -lt 100 ]; do
             LAST_LINE_COUNT=$CURRENT_LINE_COUNT
         fi
     fi
+}
 
-    sleep 0.2
-    WAIT_COUNT=$((WAIT_COUNT + 1))
-done
+# Prints the current boot's phase, or nothing when no current record exists.
+current_boot_phase() {
+    [ -f "$BOOT_STATUS_FILE" ] || return 0
+    local pid1_start
+    pid1_start="$(awk '{print $22}' /proc/1/stat 2>/dev/null)"
+    jq -r --arg start "$pid1_start" 'select(.pid1Start == $start) | .phase' "$BOOT_STATUS_FILE" 2>/dev/null || true
+}
 
-# Show any remaining progress lines
-if [ -f "$PROGRESS_FILE" ]; then
-    CURRENT_LINE_COUNT=$(wc -l < "$PROGRESS_FILE" 2>/dev/null || echo "0")
-    if [ "$CURRENT_LINE_COUNT" -gt "$LAST_LINE_COUNT" ]; then
-        tail -n +$((LAST_LINE_COUNT + 1)) "$PROGRESS_FILE" | while IFS= read -r line; do
-            if [ -n "$line" ]; then
-                echo -e "  $line"
-            fi
-        done
+echo -e "${BLUE}=== Container Initialization ===${NC}"
+echo ""
+
+BOOT_READY=false
+BOOT_FAILED=false
+DEADLINE=$(( $(date +%s) + BOOT_WAIT_SECONDS ))
+while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+    show_new_progress
+    if [ -d /run/orkestrator ]; then
+        phase="$(current_boot_phase)"
+        if [ "$phase" = "ready" ]; then BOOT_READY=true; break; fi
+        if [ "$phase" = "failed" ]; then BOOT_FAILED=true; break; fi
+    elif [ -f /tmp/.entrypoint-complete ]; then
+        # An image that predates boot status records.
+        BOOT_READY=true
+        break
     fi
-fi
+    sleep 0.2
+done
+show_new_progress
 
 echo ""
-if [ ! -f /tmp/.entrypoint-complete ]; then
-    echo -e "${YELLOW}Container initialization timed out, proceeding anyway${NC}"
-else
-    echo -e "${GREEN}Container initialization complete${NC}"
+if [ "$BOOT_FAILED" = true ]; then
+    echo -e "${RED}Container initialization failed. Check the container logs, then retry setup.${NC}"
+    exit 1
 fi
+if [ "$BOOT_READY" != true ]; then
+    echo -e "${RED}Container initialization did not complete within ${BOOT_WAIT_SECONDS}s. Retry setup once the container is ready.${NC}"
+    exit 1
+fi
+echo -e "${GREEN}Container initialization complete${NC}"
 
 # Display network access mode for user awareness
 if [ "${NETWORK_MODE:-restricted}" = "full" ]; then

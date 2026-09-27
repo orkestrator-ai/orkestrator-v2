@@ -213,6 +213,8 @@ export interface OperationPatch {
   /** Environment fields committed atomically with the record. */
   environment?: Partial<Environment>;
   storage?: EnvironmentContainerLifecycle["storage"];
+  /** Readiness observation; `observedAt` is filled in. */
+  boot?: Omit<NonNullable<EnvironmentContainerLifecycle["boot"]>, "observedAt">;
 }
 
 function applyPatch(
@@ -235,6 +237,14 @@ function applyPatch(
     );
   }
   if (patch.storage) record.storage = patch.storage;
+  if (patch.boot) {
+    record.boot = {
+      ...patch.boot,
+      // A new boot id replaces the old one; a phase change keeps it.
+      ...(patch.boot.bootId || !record.boot?.bootId ? {} : { bootId: record.boot.bootId }),
+      observedAt: now,
+    };
+  }
 }
 
 function currentOperation(

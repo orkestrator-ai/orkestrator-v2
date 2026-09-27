@@ -347,7 +347,9 @@ esac
           operationId: "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
           runtimeGeneration: 2,
         });
-        const create = (await log.read()).split("\n").find((line) => line.startsWith("create "));
+        const create = (await log.read())
+          .split("\n")
+          .find((line) => line.startsWith("create --name"));
         expect(create?.endsWith(IMAGE_ID)).toBe(true);
         expect(create).not.toContain(retagged);
         expect(create).toContain("orkestrator-runtime-generation=2");

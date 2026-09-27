@@ -35,6 +35,10 @@ export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
   runtimeUnavailable: "The container runtime is unavailable. Start it and retry.",
   imageUnavailable: "The environment image is unavailable. Rebuild it and retry.",
   diskFull: "The host has run out of disk space. Free space and retry.",
+  initializationFailed:
+    "The container did not finish initializing. Check the container logs, then retry.",
+  initializationTimedOut:
+    "The container did not finish initializing in time. Retry once it is ready.",
   containerRemovalFailed:
     "Docker did not remove the old container, so it was kept. Retry the reset once Docker is healthy.",
   gitSshAuthentication:
@@ -58,6 +62,11 @@ export function environmentLifecycleErrorMessage(error: unknown): string {
   }
 
   const message = error instanceof Error ? error.message : "";
+  if (message.includes("ContainerLifecycleError:not-ready:")) {
+    return /did not complete in time/.test(message)
+      ? ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.initializationTimedOut
+      : ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.initializationFailed;
+  }
   if (message === ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.noLocalPath) {
     return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.noLocalPath;
   }

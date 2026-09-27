@@ -170,3 +170,54 @@ Desktop for Linux) provides its own DNS entry.
 Qualified locally: Docker Engine 29.7.2 on Linux amd64. Docker Desktop and
 rootless daemons are detected and reported but not yet qualified; features
 that depend on cgroup or firewall enforcement gate on them explicitly.
+
+## Readiness
+
+An image with the `boot-status` capability writes
+`/run/orkestrator/boot-status.json` atomically at each phase
+(`initializing`, `network-ready`, `inputs-ready`, `ready`, or `failed` with a
+fixed code such as `firewall-failed`, `firewall-missing`, `entrypoint-failed`).
+The entrypoint removes the legacy markers and the previous record before doing
+anything else. A record counts only when its `pid1Start` equals the start time
+of the container's current PID 1 (`/proc/1/stat`), which changes on every
+start, so a record or marker from an earlier boot can never release work.
+
+- A start of a capable runtime waits for `ready` (default 120 s, separate from
+  clone/setup/bridge deadlines) before setup or agents run; a failed boot, an
+  exited container or a timeout is a typed, retryable `not-ready` failure.
+- Immediately before workspace preparation and before a bridge launch, the
+  backend rechecks the current boot and waits if Docker restarted the
+  container in between. A legacy image, or a probe that cannot be answered,
+  does not gate dispatch.
+- `workspace-setup.sh` applies the same rule inside the container and fails
+  (retryably) instead of "proceeding anyway" on timeout.
+- In restricted mode a missing firewall script is as fatal as a failed one.
+
+Readiness is orchestration evidence, not a security boundary against the
+container user.
+
+## Setup completion
+
+A successful setup records which runtime generation and workspace generation
+it belongs to. A legacy writable-layer workspace dies with its runtime, so a
+new runtime generation invalidates the completion; persistent storage keeps it
+until the workspace generation changes. Setup interrupted by a backend exit is
+fenced as failed and requires an explicit retry; repository commands are never
+rerun automatically.
+
+## Stop and drain
+
+An image with the `graceful-shutdown` capability runs under Docker's `--init`
+(signal forwarding, orphan reaping). An explicit stop:
+
+1. persists the `draining` phase and fences new bridges, terminals and setup
+   for that environment;
+2. runs `/usr/local/bin/orkestrator-drain.sh` as root, which sends SIGTERM to
+   every workload process except PID 1 and the recorded keepalive and waits up
+   to 10 s;
+3. runs `docker stop`, then records `forced: true` if anything survived the
+   drain or Docker had to SIGKILL PID 1.
+
+Backend shutdown never stops user containers; their processes are rehydrated
+and uncertain operations reconciled on the next start. Approvals are never
+approved by a stop: bridges deny or withdraw on the way out.

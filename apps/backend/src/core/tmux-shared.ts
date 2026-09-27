@@ -482,9 +482,9 @@ export const TRANSCRIPT_HEAD_MARKER = "__ork_head__";
  * Line count plus the first `maxBytes` of a transcript, in one round trip.
  *
  * Session listings only need a title (from the first user message) and a count.
- * Reading whole rollout files to derive metadata is the anti-pattern AGENTS.md
- * calls out for the codex bridge; these files reach many megabytes and there
- * are up to fifty of them.
+ * Reading whole rollout files to derive metadata is the anti-pattern
+ * bridges/codex-bridge/AGENTS.md calls out; these files reach many megabytes
+ * and there are up to fifty of them.
  */
 export function transcriptHeadCommand(filePath: string, maxBytes: number): string {
   const quoted = shellArg(filePath);

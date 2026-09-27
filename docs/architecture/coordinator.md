@@ -114,6 +114,39 @@ authority: the bridge replaces whatever policy a request body or a persisted
 record carries, so a permissive record cannot survive a restart and widen a live
 conversation.
 
+### Changing qualification
+
+Do not reintroduce a platform literal at any of the gates listed above — that
+is what previously let a platform be half-qualified, allowed to hold a
+conversation but refused a bridge.
+
+Moving a platform to `enforced` is a claim that the provider or the OS blocks
+the mutation whatever the agent attempts. It requires both:
+
+- a translation of `capabilityPolicy` into that provider's own vocabulary, in
+  the bridge, applied on create, resume, config and every turn; and
+- `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only` honoured as
+  process authority, so a request body or a persisted record cannot widen a
+  live conversation across a restart.
+
+`toolPolicy` cannot carry that translation: its strings are Codex's tool names,
+so the same list means "Write, Edit" on one bridge and nothing at all on
+another. Use `capabilityPolicy`, which names the operation rather than the tool.
+
+Where a platform cannot honour an axis, report it in the policy's `note` and
+leave the tier at `provider-configured`. Do not silently drop the axis, and do
+not claim a boundary the bridge is not holding — the tier is shown to the user
+next to the platform they are choosing.
+
+`delegation` is derived, not declared per platform. It is an MCP client *and* an
+injectable native mailbox, because `launch_environment` goes out over MCP while
+the worker's reply comes back as agent mail. Native Claude, Codex, OpenCode,
+Pi, Cursor, and Grok all have both. Cursor and Grok consume per-tab
+`agentMcp` the same way Claude and Pi do; the process-env token is only the
+fallback. Deriving delegation from the outbound half alone is what would
+let the coordinator prompt promise workers whose mailbox cannot receive the
+answer.
+
 ## Attachments
 
 Pasted images and other prompt attachments are staged under application data, in

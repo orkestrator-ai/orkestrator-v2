@@ -1,8 +1,11 @@
 # Documentation catalog
 
-`AGENTS.md` is the agent source of truth. This file is the living catalog of
-`docs/` only — status, location, and which document to open. Do not copy
-invariants from `AGENTS.md` here.
+`AGENTS.md` is the agent source of truth. The root file holds repository-wide
+rules and an index of area-specific instruction files (`bridges/AGENTS.md`,
+`bridges/<bridge>/AGENTS.md`, `docker/AGENTS.md`), each paired with a
+`CLAUDE.md` that imports it. This file is the living catalog of `docs/` only —
+status, location, and which document to open. Do not copy invariants from any
+`AGENTS.md` here.
 
 Refreshed 2026-09-17 against the current tree.
 
@@ -47,6 +50,7 @@ Refreshed 2026-09-17 against the current tree.
 | [upgrade-agents.md](development/upgrade-agents.md) | Living | SDK/CLI bump runbook. Pins are test-enforced. |
 | [credentials-and-models.md](development/credentials-and-models.md) | Living | Credential and catalogue inventory. |
 | [test-logs.md](development/test-logs.md) | Living | Diagnostic-bounds rationale. Operator commands stay in `testing-guide.md`. |
+| [linting.md](development/linting.md) | Living | oxfmt/oxlint configuration, exclusions, severity policy and disable-directive rules. |
 
 ## Tests
 

@@ -1,3 +1,7 @@
+import {
+  formatContainerLifecycleError,
+  parseContainerLifecycle,
+} from "@orkestrator/protocol/container-lifecycle";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import {
@@ -1423,6 +1427,16 @@ export async function deleteEnvironment(
     await enqueueLocalServerEnvironmentOperation(environmentId, async () => {
       const { storage } = context;
       const environment = await storage.getEnvironment(environmentId);
+      // A lifecycle record written by a newer version may reference storage
+      // this version cannot recognise; deleting around it could orphan data.
+      if (environment && !parseContainerLifecycle(environment.containerLifecycle).supported) {
+        throw new Error(
+          formatContainerLifecycleError(
+            "unsupported-format",
+            "This environment was changed by a newer version of Orkestrator. Update Orkestrator before deleting it.",
+          ),
+        );
+      }
       if (environment?.containerId) {
         await assertDockerContainerOwned(environment.containerId, context);
       }

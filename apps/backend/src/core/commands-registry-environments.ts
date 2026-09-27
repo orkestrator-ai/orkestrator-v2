@@ -1,4 +1,10 @@
-import { parseRecreateEnvironmentRequest } from "@orkestrator/protocol/container-lifecycle";
+import {
+  containerLifecycleSnapshot,
+  parseContainerLifecycle,
+  parseContainerMutationIdentity,
+  parseRecreateEnvironmentRequest,
+} from "@orkestrator/protocol/container-lifecycle";
+import { resolveNeedsAttentionOperation } from "./container-lifecycle-service.js";
 import {
   isEmptyAgentSettings,
   normalizeAgentSettings,
@@ -53,6 +59,7 @@ import {
   deleteEnvironmentTask,
   scheduleMergeCleanupRecovery,
   logEnvironmentLifecycleFailure,
+  enqueueEnvironmentLifecycleOperation,
 } from "./commands-helpers.js";
 import { ControlRequestConflictError } from "./storage-projects.js";
 import { forkEnvironmentRecord } from "./commands-environment-fork.js";
@@ -397,31 +404,69 @@ export function registerEnvironmentCommands(
   // `admit` refuses synchronously by design, so every lifecycle command is
   // `async`: a caller that reaches the registry directly must see a rejection
   // rather than a throw from the call expression itself.
-  register("start_environment", async ({ environmentId }, context) => {
+  register("start_environment", async (args, context) => {
     const { task } = await admitEnvironmentStartTask(
-      asString(environmentId, "environmentId"),
+      asString(args.environmentId, "environmentId"),
       context,
       schedulePendingEnvironmentRename,
+      parseContainerMutationIdentity(args),
     );
     return toClientEnvironmentSetupStartResult(await task);
   });
-  register("start_environment_background", async ({ environmentId }, context) => {
-    const id = asString(environmentId, "environmentId");
+  register("start_environment_background", async (args, context) => {
+    const id = asString(args.environmentId, "environmentId");
     // Validate before acknowledging the request. Once accepted, the task is
     // backend-owned: a renderer, browser, or reverse proxy can disconnect
     // without cancelling Docker provisioning or losing the durable launch.
-    const { task } = await admitEnvironmentStartTask(id, context, schedulePendingEnvironmentRename);
+    const { task } = await admitEnvironmentStartTask(
+      id,
+      context,
+      schedulePendingEnvironmentRename,
+      parseContainerMutationIdentity(args),
+    );
     void task.catch((error) => {
       // `startEnvironmentOnce` has already logged the cause; this only records
       // that nobody was awaiting the result, so the rejection is not unhandled.
       logEnvironmentLifecycleFailure("background start", id, error);
     });
   });
-  register("stop_environment", async ({ environmentId }, context) =>
-    stopEnvironmentTask(asString(environmentId, "environmentId"), context, (id) =>
-      extensionDiscoveryCache.invalidate(id),
+  register("stop_environment", async (args, context) =>
+    stopEnvironmentTask(
+      asString(args.environmentId, "environmentId"),
+      context,
+      (id) => extensionDiscoveryCache.invalidate(id),
+      parseContainerMutationIdentity(args),
     ),
   );
+  register("get_container_lifecycle_snapshot", async ({ environmentId }, { storage }) => {
+    const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
+    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    return containerLifecycleSnapshot(parseContainerLifecycle(environment.containerLifecycle));
+  });
+  register("resolve_container_operation", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      ["environmentId", "operationId", "resolution", "containerId"],
+      "arguments",
+    );
+    const environmentId = asString(args.environmentId, "environmentId");
+    const operationId = asString(args.operationId, "operationId");
+    const resolution = args.resolution;
+    if (resolution !== "adopt" && resolution !== "release") {
+      throw new Error("Expected resolution to be adopt or release");
+    }
+    const updated = await enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
+      resolveNeedsAttentionOperation(
+        context,
+        environmentId,
+        operationId,
+        resolution === "adopt"
+          ? { kind: "adopt", containerId: asString(args.containerId, "containerId") }
+          : { kind: "release" },
+      ),
+    );
+    return updated ? toClientEnvironment(updated) : undefined;
+  });
   register("recreate_environment", async (args, context) => {
     const result = await recreateEnvironmentTask(
       parseRecreateEnvironmentRequest(args),

@@ -371,3 +371,9 @@ export async function removeUnclaimedContainer(
   );
   return result.outcomes[0] ?? { containerId, outcome: "failed", reason: "removal-failed" };
 }
+
+/** All labels of one container; empty when it cannot be read. */
+export async function readContainerLabels(containerId: string): Promise<Record<string, string>> {
+  const current = await inspectForRemoval(containerId).catch(() => "absent" as const);
+  return current === "absent" ? {} : current.labels;
+}

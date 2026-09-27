@@ -1,8 +1,20 @@
 import {
   formatContainerLifecycleError,
   type ContainerLifecycleErrorCode,
+  type ContainerMutationIdentity,
   type RecreateEnvironmentRequest,
 } from "@orkestrator/protocol/container-lifecycle";
+import {
+  advanceContainerOperation,
+  beginContainerOperation,
+  completeContainerOperation,
+  currentRuntimeIdentity,
+  nextRuntimeGeneration,
+  operationFailureCode,
+  releaseActiveContainerOperation,
+  resolveContainerOwnership,
+  runContainerOperation,
+} from "./container-lifecycle-service.js";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import {
@@ -12,6 +24,7 @@ import {
   path,
   spawnPty,
   APP_SLUG,
+  DOCKER_IMAGE,
   DOCKER_LABEL_APP,
   DOCKER_LABEL_APP_VALUE,
   DOCKER_LABEL_OWNER,
@@ -113,7 +126,7 @@ import {
   syncContainerClaudeCredentialBestEffort,
   ensureContainerProjectFilesAccess,
 } from "./commands-files.js";
-import { createDockerContainer } from "./commands-containers.js";
+import { AmbiguousContainerCreateError, createDockerContainer } from "./commands-containers.js";
 import {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   environmentLifecycleErrorMessage,
@@ -215,31 +228,39 @@ export function isMissingDockerObjectError(error: unknown): boolean {
   return /no such (object|container)/i.test(message);
 }
 
+/**
+ * Refuses a Docker operation on a container this registry does not own, in
+ * every profile. The container must carry this registry's owner label; a
+ * pre-label container qualifies only when an environment record already
+ * references it (never under a strict profile).
+ */
 export async function assertDockerContainerOwned(
   containerId: string,
   context: Pick<CommandContext, "storage" | "strictDockerOwner">,
+  options: { trustExactAssociation?: boolean } = {},
 ): Promise<void> {
-  if (!context.strictDockerOwner) return;
-  const owner = dockerOwnerNamespace(context.storage.getDataDir());
-  let identity: { owner: string; status: EnvironmentStatus };
-  try {
-    identity = await inspectDockerContainerIdentity(containerId);
-  } catch (error) {
-    // A container the daemon has already forgotten belongs to nobody, so there
-    // is nothing here to protect. Refusing would strand the environment: an
-    // errored environment is exempt from status reconciliation, so its stale
-    // `containerId` never clears, and `recreate`/`delete` — the user's repair
-    // actions for exactly this state — would fail identically on every retry.
-    // Any other failure is an unreachable daemon, which is not evidence of
-    // ownership and must still refuse.
-    if (isMissingDockerObjectError(error)) return;
-    throw error;
-  }
-  if (identity.owner !== owner) {
+  const ownership = await resolveContainerOwnership(containerId, context, options);
+  // A container the daemon has already forgotten belongs to nobody, so there
+  // is nothing here to protect. Refusing would strand the environment: an
+  // errored environment is exempt from status reconciliation, so its stale
+  // `containerId` never clears, and `recreate`/`delete` — the user's repair
+  // actions for exactly this state — would fail identically on every retry.
+  if (ownership.verdict === "owned" || ownership.verdict === "missing") return;
+  if (ownership.verdict === "unknown") {
+    // An unreachable daemon or unreadable answer is not evidence of ownership.
     throw new Error(
-      "Refusing Docker operation on a container not owned by this development profile",
+      formatContainerLifecycleError(
+        "daemon-unavailable",
+        "Docker could not confirm who owns this container. Retry once Docker is reachable.",
+      ),
     );
   }
+  throw new Error(
+    formatContainerLifecycleError(
+      "not-owned",
+      "Refusing Docker operation on a container not owned by this development profile",
+    ),
+  );
 }
 
 /**
@@ -1082,10 +1103,110 @@ export async function prepareEnvironmentForSetup(
   return reconcile(prepared, context);
 }
 
+/**
+ * Creates (when needed) and starts an environment's container as one durable
+ * lifecycle operation. Each phase is persisted before its Docker effect, the
+ * create is labelled with the operation id, and the container id is committed
+ * together with its runtime identity.
+ */
+async function startContainerRuntime(
+  environment: Environment,
+  context: CommandContext,
+  identity: ContainerMutationIdentity,
+): Promise<{ containerId: string; replayed: false } | { replayed: true }> {
+  // Authorize before admission: a refused request records nothing. A
+  // container this operation creates carries this registry's labels by
+  // construction, so only an existing one is verified.
+  if (environment.containerId) await assertDockerContainerOwned(environment.containerId, context);
+  const admission = await beginContainerOperation(
+    context,
+    environment.id,
+    environment.containerId ? "start" : "create",
+    { ...identity, source: currentRuntimeIdentity(environment, context) },
+  );
+  if (admission.kind === "replayed") return { replayed: true };
+  const { operationId } = admission.operation;
+  let unpersistedContainerId: string | null = null;
+  try {
+    let containerId = environment.containerId;
+    if (!containerId) {
+      const runtimeGeneration = nextRuntimeGeneration(environment);
+      const imageRef = context.dockerImage ?? DOCKER_IMAGE;
+      await advanceContainerOperation(context, environment.id, operationId, {
+        phase: "creating",
+        details: { generation: runtimeGeneration, imageRef },
+      });
+      containerId = await createDockerContainer(environment, context, {
+        operationId,
+        runtimeGeneration,
+      });
+      unpersistedContainerId = containerId;
+      await advanceContainerOperation(context, environment.id, operationId, {
+        phase: "created",
+        runtime: {
+          containerId,
+          runtimeGeneration,
+          owner: dockerOwnerNamespace(context.storage.getDataDir()),
+          imageRef,
+          createdByOperationId: operationId,
+        },
+        environment: { containerId },
+      });
+      unpersistedContainerId = null;
+    }
+    await advanceContainerOperation(context, environment.id, operationId, { phase: "starting" });
+    await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
+    await ensureContainerProjectFilesAccess(containerId);
+    await completeContainerOperation(context, environment.id, operationId, "succeeded");
+    return { containerId, replayed: false };
+  } catch (error) {
+    if (error instanceof AmbiguousContainerCreateError) {
+      // Leave the operation current: the next admission reconciles it by the
+      // operation label rather than creating a second container.
+      releaseActiveContainerOperation(context, operationId);
+      throw error;
+    }
+    if (unpersistedContainerId) {
+      // Created but never committed. Removing it keeps the deterministic name
+      // free; if Docker refuses, the operation label lets reconciliation adopt
+      // it instead of creating another.
+      await runCommand("docker", ["rm", "-f", unpersistedContainerId], {
+        timeoutMs: 60_000,
+      }).catch(() => undefined);
+    }
+    await completeContainerOperation(context, environment.id, operationId, "failed", {
+      failureCode: operationFailureCode(error),
+    }).catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
+ * Starts an assigned container without running environment setup, as the
+ * legacy `docker_start_container` command did, but through the lifecycle queue
+ * and a durable operation like every other container mutation.
+ */
+export function startAssignedContainerRuntimeTask(
+  environmentId: string,
+  context: CommandContext,
+  identity: ContainerMutationIdentity = {},
+): Promise<string | null> {
+  return enqueueEnvironmentLifecycleOperation(environmentId, context, async () => {
+    const environment = await context.storage.getEnvironment(environmentId);
+    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    assertEnvironmentNotDeleting(environment.id);
+    assertEnvironmentDeletionNotRequested(environment, environment.id);
+    if (!environment.containerId) return null;
+    const runtime = await startContainerRuntime(environment, context, identity);
+    return runtime.replayed ? environment.containerId : runtime.containerId;
+  });
+}
+
 export async function startEnvironmentOnce(
   environmentId: string,
   context: CommandContext,
   schedulePendingRename: (environmentId: string, context: CommandContext) => void,
+  identity: ContainerMutationIdentity = {},
 ): Promise<EnvironmentSetupStartResult> {
   const { storage } = context;
   const environment = await storage.getEnvironment(environmentId);
@@ -1095,7 +1216,6 @@ export async function startEnvironmentOnce(
   // operation while a durable deletion tombstone was persisted.
   assertEnvironmentNotDeleting(environment.id);
   assertEnvironmentDeletionNotRequested(environment, environment.id);
-  let unpersistedContainerId: string | null = null;
   // Rolling back a worktree needs the repository it was added to and the branch
   // it created, not just the directory: `git worktree add -b` makes both.
   let unpersistedWorktree: { projectPath: string; path: string; branch: string } | null = null;
@@ -1157,16 +1277,13 @@ export async function startEnvironmentOnce(
       return result;
     }
 
-    let containerId = environment.containerId;
-    if (!containerId) {
-      containerId = await createDockerContainer(environment, context);
-      unpersistedContainerId = containerId;
-      await storage.updateEnvironment(environment.id, { containerId });
-      unpersistedContainerId = null;
+    const runtime = await startContainerRuntime(environment, context, identity);
+    if (runtime.replayed) {
+      // The identical request already completed; its effects are not repeated.
+      const current = (await storage.getEnvironment(environment.id)) ?? environment;
+      return { setupStarted: false, environment: current };
     }
-    await assertDockerContainerOwned(containerId, context);
-    await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
-    await ensureContainerProjectFilesAccess(containerId);
+    const containerId = runtime.containerId;
     // An already-prepared delegated checkout is reconciled on every restart.
     // A fresh checkout is handled by startEnvironmentSetupAfterPreparation,
     // after prepareContainerWorkspace has cloned /workspace.
@@ -1203,11 +1320,6 @@ export async function startEnvironmentOnce(
   } catch (error) {
     logEnvironmentLifecycleFailure("start", environment.id, error);
     const lifecycleError = environmentLifecycleErrorMessage(error);
-    if (unpersistedContainerId) {
-      await runCommand("docker", ["rm", "-f", unpersistedContainerId], { timeoutMs: 60_000 }).catch(
-        () => undefined,
-      );
-    }
     if (unpersistedWorktree) {
       // `git worktree add -b` created a branch too. Leaving it behind makes the
       // next start's uniqueness loop pick `<slug>-1`, drifting the environment's
@@ -1239,6 +1351,7 @@ export async function admitEnvironmentStartTask(
   environmentId: string,
   context: CommandContext,
   schedulePendingRename: (environmentId: string, context: CommandContext) => void,
+  identity: ContainerMutationIdentity = {},
 ): Promise<{ task: Promise<EnvironmentSetupStartResult> }> {
   // Check both before and after the storage read. The first avoids needless I/O
   // for a delete already admitted in this process; the second closes the
@@ -1253,7 +1366,7 @@ export async function admitEnvironmentStartTask(
   if (existing) return { task: existing };
 
   const task = enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
-    startEnvironmentOnce(environmentId, context, schedulePendingRename),
+    startEnvironmentOnce(environmentId, context, schedulePendingRename, identity),
   ).finally(() => {
     if (environmentStartTasks.get(environmentId) === task) {
       environmentStartTasks.delete(environmentId);
@@ -1301,6 +1414,7 @@ export async function stopEnvironmentOnce(
   environmentId: string,
   context: CommandContext,
   invalidateDiscovery: (environmentId: string) => void,
+  identity: ContainerMutationIdentity = {},
 ): Promise<void> {
   const { storage } = context;
   const environment = await storage.getEnvironment(environmentId);
@@ -1320,14 +1434,28 @@ export async function stopEnvironmentOnce(
   // later reuses can never inherit this environment's authorization.
   context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
   if (environment.containerId) {
-    await assertDockerContainerOwned(environment.containerId, context);
-    await runCommand("docker", ["stop", environment.containerId], { timeoutMs: 60_000 });
-    await storage.updateEnvironment(environment.id, {
-      status: "stopped",
-      lifecycleError: null,
-      ...clearPendingAgentLaunchUpdates(),
-    });
-    shutdownClaudeStatePolling(environment.containerId);
+    const containerId = environment.containerId;
+    await assertDockerContainerOwned(containerId, context);
+    const outcome = await runContainerOperation(
+      context,
+      environment.id,
+      "stop",
+      identity,
+      async (operation) => {
+        await advanceContainerOperation(context, environment.id, operation.operationId, {
+          phase: "stopping",
+        });
+        await runCommand("docker", ["stop", containerId], { timeoutMs: 60_000 });
+        await storage.updateEnvironment(environment.id, {
+          status: "stopped",
+          lifecycleError: null,
+          ...clearPendingAgentLaunchUpdates(),
+        });
+      },
+      { source: currentRuntimeIdentity(environment, context) },
+    );
+    if ("replayed" in outcome) return;
+    shutdownClaudeStatePolling(containerId);
     invalidatePendingDiffStatsSync();
     diffStatsService.pause(environment.id);
     invalidatePendingPrMonitorSync();
@@ -1359,10 +1487,11 @@ export function stopEnvironmentTask(
   environmentId: string,
   context: CommandContext,
   invalidateDiscovery: (environmentId: string) => void,
+  identity: ContainerMutationIdentity = {},
 ): Promise<void> {
   invalidateEnvironmentStartDedupe(environmentId);
   return enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
-    stopEnvironmentOnce(environmentId, context, invalidateDiscovery),
+    stopEnvironmentOnce(environmentId, context, invalidateDiscovery, identity),
   );
 }
 
@@ -1440,14 +1569,28 @@ export async function recreateEnvironmentOnce(
   }
   const containerId = environment.containerId;
   await assertDockerContainerOwned(containerId, context);
-  // Commands running in the container are cancelled (and recorded as such)
-  // before the container they run in is removed.
-  await stopEnvironmentReviewValidation(environment.id, context);
-  await stopEnvironmentExecWorkers(environment.id, context);
-  invalidateDiscovery(environment.id);
-  context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
-  shutdownClaudeStatePolling(containerId);
-  cancelOpenCodeAgentToolsConfiguration(`container:${containerId}`);
+  const admission = await beginContainerOperation(context, environment.id, "discard", {
+    ...request,
+    source: currentRuntimeIdentity(environment, context),
+  });
+  if (admission.kind === "replayed") return;
+  const { operationId } = admission.operation;
+  try {
+    // Commands running in the container are cancelled (and recorded as such)
+    // before the container they run in is removed.
+    await stopEnvironmentReviewValidation(environment.id, context);
+    await stopEnvironmentExecWorkers(environment.id, context);
+    invalidateDiscovery(environment.id);
+    context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
+    shutdownClaudeStatePolling(containerId);
+    cancelOpenCodeAgentToolsConfiguration(`container:${containerId}`);
+    await advanceContainerOperation(context, environment.id, operationId, { phase: "removing" });
+  } catch (error) {
+    await completeContainerOperation(context, environment.id, operationId, "failed", {
+      failureCode: operationFailureCode(error),
+    }).catch(() => undefined);
+    throw error;
+  }
   try {
     await removeContainerConfirmingAbsence(containerId);
   } catch (error) {
@@ -1456,11 +1599,10 @@ export async function recreateEnvironmentOnce(
     // the failure instead of creating a replacement that would either collide
     // with it or orphan it.
     logEnvironmentLifecycleFailure("recreate (container removal)", environment.id, error);
-    await context.storage
-      .updateEnvironment(environment.id, {
-        lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.containerRemovalFailed,
-      })
-      .catch(() => undefined);
+    await completeContainerOperation(context, environment.id, operationId, "failed", {
+      failureCode: "removal-failed",
+      environment: { lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.containerRemovalFailed },
+    }).catch(() => undefined);
     throw containerLifecycleError(
       "removal-failed",
       "Docker did not remove the container, so it was kept. Retry once Docker is healthy.",
@@ -1471,12 +1613,16 @@ export async function recreateEnvironmentOnce(
   // PTY id or a retained setup buffer must not attach to the replacement.
   await context.storage.clearBackendTerminalSessionIds?.(environment.id);
   cleanupEnvironmentSetupState(environment.id);
-  await context.storage.updateEnvironment(environment.id, {
-    containerId: null,
-    status: "stopped",
-    lifecycleError: null,
-    ...discardedRuntimeSetupUpdates(),
-    ...clearPendingAgentLaunchUpdates(),
+  await completeContainerOperation(context, environment.id, operationId, "succeeded", {
+    phase: "removed",
+    runtime: null,
+    environment: {
+      containerId: null,
+      status: "stopped",
+      lifecycleError: null,
+      ...discardedRuntimeSetupUpdates(),
+      ...clearPendingAgentLaunchUpdates(),
+    },
   });
   return startEnvironmentOnce(environment.id, context, schedulePendingRename);
 }

@@ -97,6 +97,7 @@ const {
   withGnuBase64Shim,
   writeBridgeEntrypoint,
   writeBridgeServer,
+  ownedContainerInspect,
 } = await createCommandFixtures();
 
 import type {
@@ -619,6 +620,7 @@ exit 1
     await withFakeDocker(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 exit 0
 `,
       async (logs) => {
@@ -930,7 +932,7 @@ exit 0
       async ({ all }) => {
         await expect(
           commands.get("stop_environment")?.({ environmentId: environment.id }, context),
-        ).rejects.toThrow("Cannot connect to the Docker daemon");
+        ).rejects.toThrow("ContainerLifecycleError:daemon-unavailable");
 
         expect(await fs.readFile(all, "utf8")).not.toContain("stop unreachable-container");
       },

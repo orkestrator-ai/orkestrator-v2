@@ -8,6 +8,10 @@ import type {
 } from "@orkestrator/protocol/agent-activity";
 import type { TabTeardownKind } from "@orkestrator/protocol/tab-teardown";
 import type {
+  ContainerLifecycleSnapshot,
+  EnvironmentContainerLifecycle,
+} from "@orkestrator/protocol/container-lifecycle";
+import type {
   AgentInteractionOrigin,
   AgentInteractionPolicy,
   AgentInteractionResolutionJournal,
@@ -213,6 +217,13 @@ export interface Environment {
   cleanupAfterMergeRequestedAt?: string;
   /** Last backend cleanup failure retained for rehydration and manual retry. */
   cleanupAfterMergeError?: string;
+  /**
+   * Durable container lifecycle record: runtime/storage identity, the one
+   * unresolved operation and recent outcomes. Backend-private; clients receive
+   * `ContainerLifecycleSnapshot`. Always read through `parseContainerLifecycle`
+   * because a newer backend may have written a version this one cannot read.
+   */
+  containerLifecycle?: EnvironmentContainerLifecycle;
   /** Backend-owned long-running operation currently affecting this environment. */
   lifecycleOperation?: EnvironmentLifecycleOperation;
   lifecycleOperationStartedAt?: string;
@@ -378,7 +389,10 @@ export type ClientEnvironment = Omit<
   | "controlRequestId"
   | "controlRequestFingerprint"
   | "branchRevision"
+  | "containerLifecycle"
 > & {
+  /** Safe projection of the durable container lifecycle record. */
+  containerLifecycle?: ContainerLifecycleSnapshot;
   /**
    * Whether the stripped `initialPromptAttachments` array holds anything.
    *

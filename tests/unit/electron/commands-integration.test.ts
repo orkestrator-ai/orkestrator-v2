@@ -567,6 +567,10 @@ describe("storage-backed command delegation", () => {
       loadSessionBuffer: mock(async () => "saved output"),
       reorderSessions: mock(async () => sessions),
       cleanupOrphanedBuffers: mock(async () => 3),
+      // The session names the environment's own container, which the registry
+      // accepts as an exact persisted association without probing Docker.
+      getDataDir: () => "/tmp/orkestrator-session-delegation",
+      loadEnvironments: mock(async () => [{ id: "env-1", containerId: "container-1" }]),
     };
     const context = { storage } as unknown as CommandContext;
     const commands = createCommandRegistry();

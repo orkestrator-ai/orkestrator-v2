@@ -1,3 +1,7 @@
+import {
+  containerLifecycleSnapshot,
+  parseContainerLifecycle,
+} from "@orkestrator/protocol/container-lifecycle";
 import { existsSync, path, createHash } from "./commands-dependencies.js";
 import type {
   ClientEnvironment,
@@ -74,6 +78,7 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     controlRequestId: _controlRequestId,
     controlRequestFingerprint: _controlRequestFingerprint,
     branchRevision: _branchRevision,
+    containerLifecycle: _containerLifecycle,
     ...client
   } = environment;
   if (!client.pendingAgentLaunch && client.startupAgentSession?.status !== "starting") {
@@ -89,6 +94,13 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
   return {
     ...client,
     hasInitialPromptAttachments: (_attachments?.length ?? 0) > 0,
+    ...(_containerLifecycle === undefined
+      ? {}
+      : {
+          containerLifecycle: containerLifecycleSnapshot(
+            parseContainerLifecycle(_containerLifecycle),
+          ),
+        }),
   };
 }
 

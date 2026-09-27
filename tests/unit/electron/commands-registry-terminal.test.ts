@@ -2478,7 +2478,7 @@ exec sleep 30
     expect(containerCreated.created).toBe(true);
     expect(containerCreated.sessionId).toBeString();
     expect(await getTerminalStateSnapshot(containerCreated.sessionId)).toBeNull();
-    const attached = commands.get("attach_terminal")?.(
+    const attached = await commands.get("attach_terminal")?.(
       { containerId: "container-without-history", cols: 80, rows: 24 },
       context,
     );

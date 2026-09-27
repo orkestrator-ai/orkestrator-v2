@@ -8,6 +8,12 @@ export const DOCKER_LABEL_ENVIRONMENT_ID = "environment-id";
 export const DOCKER_LABEL_ENVIRONMENT_NAME = "environment-name";
 export const DOCKER_LABEL_OWNER = "orkestrator-owner";
 export const DOCKER_LABEL_PROJECT_ID = "project-id";
+/** Lifecycle operation that created the resource; reconciles ambiguous creates. */
+export const DOCKER_LABEL_OPERATION_ID = "orkestrator-operation-id";
+/** Runtime generation of a container; changes whenever the runtime is replaced. */
+export const DOCKER_LABEL_RUNTIME_GENERATION = "orkestrator-runtime-generation";
+/** Role of an owned volume/network/helper (workspace, state, network, helper…). */
+export const DOCKER_LABEL_RESOURCE_ROLE = "orkestrator-resource-role";
 
 /** Endpoints each managed ACP provider requires in restricted containers. */
 export const AGENT_NETWORK_DOMAINS_BY_PLATFORM = Object.freeze({

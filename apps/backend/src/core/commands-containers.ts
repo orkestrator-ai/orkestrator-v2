@@ -12,6 +12,8 @@ import {
   DOCKER_LABEL_ENVIRONMENT_NAME,
   DOCKER_LABEL_OWNER,
   DOCKER_LABEL_PROJECT_ID,
+  DOCKER_LABEL_OPERATION_ID,
+  DOCKER_LABEL_RUNTIME_GENERATION,
   GROK_ACP_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
   PI_BRIDGE_PORT,
@@ -73,6 +75,7 @@ import {
 } from "./commands-server-health.js";
 import type { LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
+import { ContainerLifecycleError, findOperationContainers } from "./container-lifecycle-service.js";
 
 const AGENT_TEST_LOCAL_GIT_REMOTE_PATH = "/orkestrator-agent-test-origin.git";
 
@@ -99,9 +102,30 @@ export function publishedPortArguments(
   return args;
 }
 
+export interface CreateContainerIdentity {
+  /** Lifecycle operation creating this runtime; labelled for reconciliation. */
+  operationId?: string;
+  /** Runtime generation of the new container; `>1` gets a distinct name. */
+  runtimeGeneration?: number;
+}
+
+/**
+ * Thrown when Docker's answer to a create is unknown and no exact labelled
+ * candidate can be found yet (for example the daemon became unreachable). The
+ * operation stays current so the next admission reconciles it by identity
+ * instead of creating a second container.
+ */
+export class AmbiguousContainerCreateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AmbiguousContainerCreateError";
+  }
+}
+
 export async function createDockerContainer(
   environment: Environment,
   context: CommandContext,
+  identity: CreateContainerIdentity = {},
 ): Promise<string> {
   const project = await context.storage.getProject(environment.projectId);
   if (!project) throw new Error(`Project not found: ${environment.projectId}`);
@@ -132,10 +156,11 @@ export async function createDockerContainer(
     ? AGENT_TEST_LOCAL_GIT_REMOTE_PATH
     : project.gitUrl;
   const dockerOwner = dockerOwnerNamespace(context.storage.getDataDir());
+  const runtimeGeneration = identity.runtimeGeneration ?? 1;
   const args = [
     "create",
     "--name",
-    dockerContainerRuntimeName(dockerOwner, environment.id),
+    dockerContainerRuntimeName(dockerOwner, environment.id, runtimeGeneration),
     "--label",
     `${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
     "--label",
@@ -149,6 +174,11 @@ export async function createDockerContainer(
     `${DOCKER_LABEL_OWNER}=${dockerOwner}`,
     "--label",
     `${DOCKER_LABEL_PROJECT_ID}=${project.id}`,
+    "--label",
+    `${DOCKER_LABEL_RUNTIME_GENERATION}=${runtimeGeneration}`,
+    ...(identity.operationId
+      ? ["--label", `${DOCKER_LABEL_OPERATION_ID}=${identity.operationId}`]
+      : []),
     "--workdir",
     "/workspace",
     "--cap-add",
@@ -307,12 +337,36 @@ export async function createDockerContainer(
   args.push("-p", `127.0.0.1::${PI_BRIDGE_PORT}/tcp`);
   args.push(context.dockerImage ?? DOCKER_IMAGE);
 
-  const { stdout } = await runCommand("docker", args, {
-    env: dockerEnvironment,
-    timeoutMs: 120_000,
-    redactValues,
-  });
-  const containerId = stdout.trim();
+  let containerId: string;
+  try {
+    const { stdout } = await runCommand("docker", args, {
+      env: dockerEnvironment,
+      timeoutMs: 120_000,
+      redactValues,
+    });
+    containerId = stdout.trim();
+  } catch (error) {
+    invalidateDockerContainerStateCache();
+    if (!identity.operationId) throw error;
+    // A timeout or dropped connection does not say whether Docker created the
+    // container. Resolve it by exact label identity before reporting failure,
+    // so a retry never creates a second container behind the first.
+    const search = await findOperationContainers(context, identity.operationId);
+    if (search.kind === "one") {
+      containerId = search.containerId;
+    } else if (search.kind === "none") {
+      throw error;
+    } else if (search.kind === "many") {
+      throw new ContainerLifecycleError(
+        "needs-attention",
+        "Docker reported more than one container for this operation. They were kept for review.",
+      );
+    } else {
+      throw new AmbiguousContainerCreateError(
+        "Docker could not confirm whether the container was created. It will be reconciled when Docker is reachable.",
+      );
+    }
+  }
   invalidateDockerContainerStateCache();
   try {
     if (project.localPath) {

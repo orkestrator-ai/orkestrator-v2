@@ -97,6 +97,7 @@ const {
   withGnuBase64Shim,
   writeBridgeEntrypoint,
   writeBridgeServer,
+  ownedContainerInspect,
 } = await createCommandFixtures();
 
 import type {
@@ -246,6 +247,7 @@ exit 1
       await withFakeDocker(
         `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
   exit 0
@@ -485,6 +487,7 @@ exit 0
       await withFakeDocker(
         `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
   exit 0
@@ -1013,6 +1016,7 @@ exit 1
           await withFakeDocker(
             `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create) printf 'container-created\\n'; exit 0 ;;
   start) exit 0 ;;
@@ -1121,6 +1125,7 @@ exit 1
           await withFakeDocker(
             `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     : > '${shellStartedPath}'
@@ -1213,6 +1218,7 @@ esac
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     while [ ! -f '${shellReleasePath}' ]; do sleep 0.01; done
@@ -1389,6 +1395,7 @@ esac
     await withFakeDocker(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create) printf 'container-unpersisted\\n' ;;
   rm) exit 0 ;;
@@ -1491,6 +1498,7 @@ esac
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     : > '${startedPath.replaceAll("'", "'\\''")}'
@@ -1546,6 +1554,7 @@ esac
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     : > '${startedPath.replaceAll("'", "'\\''")}'
@@ -1647,6 +1656,7 @@ esac
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1:$2" in
   rm:-f)
     : > '${startedPath.replaceAll("'", "'\\''")}'
@@ -1812,6 +1822,7 @@ esac
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "stop" ]; then
   : > '${stopStartedPath.replaceAll("'", "'\\''")}'
   while [ ! -f '${releaseStopPath.replaceAll("'", "'\\''")}' ]; do sleep 0.01; done
@@ -1893,6 +1904,7 @@ exit 0
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     while [ ! -f '${releasePath.replaceAll("'", "'\\''")}' ]; do sleep 0.01; done
@@ -1937,6 +1949,7 @@ esac
 
       await withFakeDocker(
         `#!/bin/sh
+${ownedContainerInspect()}
 if [ "$1" = "stop" ]; then
   printf 'container runtime refused stop\\n' >&2
   exit 1
@@ -1956,7 +1969,7 @@ exit 0
         "The container runtime is unavailable. Start it and retry.",
       );
 
-      await withFakeDocker("#!/bin/sh\nexit 0\n", async () => {
+      await withFakeDocker(`#!/bin/sh\n${ownedContainerInspect()}\nexit 0\n`, async () => {
         await expect(
           commands.get("stop_environment")?.({ environmentId: environment.id }, context),
         ).resolves.toBeUndefined();
@@ -2018,6 +2031,7 @@ exit 0
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     : > '${startedPath.replaceAll("'", "'\\''")}'
@@ -2083,6 +2097,7 @@ esac
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     : > '${startedPath.replaceAll("'", "'\\''")}'
@@ -2152,6 +2167,7 @@ esac
           await withFakeDocker(
             `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     : > '${startedPath.replaceAll("'", "'\\''")}'
@@ -2212,6 +2228,7 @@ esac
           await withFakeDocker(
             `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   rm)
     printf 'container runtime refused removal\\n' >&2
@@ -2270,6 +2287,7 @@ esac
     await withFakeDocker(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 exit 0
 `,
       async (logs) => {
@@ -2320,6 +2338,7 @@ exit 0
         await withFakeDocker(
           `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   rm) printf 'Error response from daemon: No such container: container-old\\n' >&2; exit 1 ;;
   create) printf 'container-new\\n' ;;
@@ -2413,6 +2432,7 @@ esac
       await withFakeDocker(
         `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     printf 'container-copy-created\\n'
@@ -2535,6 +2555,7 @@ exit 0
     await withFakeDocker(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     printf 'container-copy-fail\\n'
@@ -2604,6 +2625,7 @@ exit 0
     await withFakeDocker(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 case "$1" in
   create)
     printf 'container-symlink-fail\\n'
@@ -3081,6 +3103,7 @@ exit 0
       await withFakeDocker(
         `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
   exit 0
@@ -3454,6 +3477,7 @@ exit 1
     await withFakeDocker(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
   case "$*" in
@@ -3575,6 +3599,7 @@ exit 1
     await withFakeDocker(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
   printf 'docker exec should not be called for a stopped container\\n' >&2

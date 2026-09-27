@@ -97,6 +97,7 @@ const {
   withGnuBase64Shim,
   writeBridgeEntrypoint,
   writeBridgeServer,
+  ownedContainerInspect,
 } = await createCommandFixtures();
 
 import type {
@@ -484,6 +485,7 @@ exit 0
 
       await withFakeDocker(
         `#!/bin/sh
+${ownedContainerInspect()}
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 command=""
 for arg in "$@"; do command="$arg"; done
@@ -532,6 +534,7 @@ exit 1
 
     await withFakeDocker(
       `#!/bin/sh
+${ownedContainerInspect()}
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 command=""
 for arg in "$@"; do command="$arg"; done
@@ -581,6 +584,7 @@ exit 1
     for (const failure of ["draft-status", "ready"] as const) {
       await withFakeDocker(
         `#!/bin/sh
+${ownedContainerInspect()}
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 command=""
 for arg in "$@"; do command="$arg"; done
@@ -1310,6 +1314,7 @@ exit 1
 
       await withFakeDocker(
         `#!/bin/sh
+${ownedContainerInspect()}
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 command=""
 for arg in "$@"; do command="$arg"; done

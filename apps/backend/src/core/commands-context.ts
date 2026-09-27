@@ -37,6 +37,12 @@ export type CommandContext = {
   strictDockerOwner?: boolean;
   credentialSources?: ReadonlySet<AgentPlatform>;
   environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
+  /**
+   * Exclusive right to mutate this registry's containers. Held by the backend
+   * process; absent only in embedded command fixtures, which own a private
+   * data directory.
+   */
+  registryWriterLease?: import("./registry-writer-lease.js").RegistryWriter;
   toolchainBinDir?: string;
   agentTools?: {
     connection(

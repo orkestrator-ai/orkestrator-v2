@@ -8,6 +8,7 @@ import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import type { Environment } from "../../../apps/backend/src/core/models";
 import { runCommand } from "../../../apps/backend/src/core/shell";
 import { dockerOwnerNamespace } from "../../../apps/backend/src/core/docker-ownership";
+import { resetContainerOwnershipCache } from "../../../apps/backend/src/core/container-lifecycle-service";
 
 const { createCommandRegistry, shutdownPrMonitorTracking } =
   await import("../../../apps/backend/src/core/commands");
@@ -345,20 +346,36 @@ describe("direct backend command registry coverage", () => {
     expect(await commandLogContents()).toContain("docker logs --tail 200 assigned-container");
   });
 
-  test("the ownership wrapper costs nothing outside an agent-test profile", async () => {
+  test("the ownership wrapper protects production without re-inspecting known containers", async () => {
     // The wrapper sits in front of *every* command carrying a containerId,
-    // including ones the renderer polls. Without the strict-mode guard each of
-    // those would pay for an extra `docker inspect` round trip in production.
-    const context = contextWithStorage({});
+    // including ones the renderer polls. Production refuses a container this
+    // registry does not own, but an exact persisted association costs nothing
+    // and a verified owner label is inspected once, then cached.
+    resetContainerOwnershipCache();
+    const context = contextWithStorage({
+      loadEnvironments: mock(async () => [environment()]),
+    });
     expect(context.strictDockerOwner).toBeFalsy();
 
     await expect(
       invoke("get_container_logs", { containerId: "foreign-container" }, context),
+    ).rejects.toThrow("not owned by this development profile");
+    await expect(
+      invoke("get_container_logs", { containerId: "assigned-container" }, context),
+    ).resolves.toBe("");
+    await expect(
+      invoke("get_container_logs", { containerId: "owned-unassigned" }, context),
+    ).resolves.toBe("");
+    await expect(
+      invoke("get_container_logs", { containerId: "owned-unassigned" }, context),
     ).resolves.toBe("");
 
     const log = await commandLogContents();
-    expect(log).not.toContain("docker inspect");
-    expect(log).toContain("docker logs --tail 200 foreign-container");
+    expect(log.match(/docker inspect .* foreign-container/g)).toHaveLength(1);
+    expect(log).not.toMatch(/docker inspect .* assigned-container/);
+    expect(log.match(/docker inspect .* owned-unassigned/g)).toHaveLength(1);
+    expect(log).not.toContain("docker logs --tail 200 foreign-container");
+    expect(log).toContain("docker logs --tail 200 assigned-container");
   });
 
   test("stops each bridge, reports authenticated OpenCode health, and delegates model caching", async () => {

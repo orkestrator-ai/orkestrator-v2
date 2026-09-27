@@ -6,6 +6,7 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import type { Environment } from "../../../apps/backend/src/core/models";
+import { EnvironmentLifecycleTaskTracker } from "../../../apps/backend/src/core/environment-lifecycle-tasks";
 import {
   dockerContainerRuntimeName,
   dockerOwnerNamespace,
@@ -73,6 +74,9 @@ if [ "$1" = "create" ]; then
 fi
 if [ "$1" = "inspect" ] && [ "$2" = "-f" ]; then
   case "$3" in
+    *'index .Config.Labels "orkestrator-owner"'*)
+      printf '%s\t%s\torkestrator-v2\t%s\n' "\${FAKE_DOCKER_OWNER:-}" "\${FAKE_DOCKER_STATUS:-running}" "$4"
+      ;;
     *"json .Config.Labels"*)
       case "$4" in
         container-old) printf 'exited\t{"app":"orkestrator-v2","orkestrator-owner":"%s"}\n' "\${FAKE_DOCKER_OWNER:-}" ;;
@@ -240,6 +244,7 @@ function createContext(initialEnvironment = environment()): {
   const context = {
     appRoot: root,
     resourceRoot: root,
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
     emit: mock((event: string, payload: unknown) => events.push({ event, payload })),
     storage: {
       getDataDir: () => root,
@@ -552,10 +557,17 @@ describe("process and platform command behavior", () => {
   });
 
   test("provisions and controls a container with validated arguments", async () => {
+    fixture.environment.containerId = null;
     expect(await invoke("provision_environment", { environmentId: "environment-1" })).toBe(
       "container-created-123",
     );
-    expect(fixture.updates).toContainEqual({ containerId: "container-created-123" });
+    expect(fixture.updates).toContainEqual(
+      expect.objectContaining({ containerId: "container-created-123" }),
+    );
+    // Provisioning is idempotent: a repeated request returns the same runtime.
+    expect(await invoke("provision_environment", { environmentId: "environment-1" })).toBe(
+      "container-created-123",
+    );
 
     await invoke("docker_start_container", { containerId: "container-a" });
     await invoke("docker_stop_container", { containerId: "container-a" });
@@ -596,6 +608,8 @@ describe("process and platform command behavior", () => {
     fixture.context.storage.getDataDir = () => profileDataDir;
     fixture.project.gitUrl = originPath;
 
+    fixture.environment.containerId = null;
+
     await invoke("provision_environment", { environmentId: "environment-1" });
 
     const log = await readCommandLog();
@@ -611,6 +625,8 @@ describe("process and platform command behavior", () => {
     fixture.context.runtimeFlavor = "agent-test";
     fixture.project.gitUrl = unrelatedRemote;
 
+    fixture.environment.containerId = null;
+
     await invoke("provision_environment", { environmentId: "environment-1" });
 
     const log = await readCommandLog();
@@ -621,6 +637,7 @@ describe("process and platform command behavior", () => {
   test("adds ACP vendor hosts only for the platforms that are enabled", async () => {
     fixture.environment.allowedDomains = ["github.com"];
     fixture.globalConfig.enabledAgentPlatforms = ["claude", "cursor"];
+    fixture.environment.containerId = null;
     await invoke("provision_environment", { environmentId: "environment-1" });
 
     const allowed = lastAllowedDomains(await readCommandLog());
@@ -638,6 +655,7 @@ describe("process and platform command behavior", () => {
   test("keeps an explicit per-environment allowlist intact when no ACP platform is enabled", async () => {
     fixture.environment.allowedDomains = ["github.com", "registry.npmjs.org"];
     fixture.globalConfig.enabledAgentPlatforms = ["claude", "codex", "opencode"];
+    fixture.environment.containerId = null;
     await invoke("provision_environment", { environmentId: "environment-1" });
 
     const allowed = lastAllowedDomains(await readCommandLog());

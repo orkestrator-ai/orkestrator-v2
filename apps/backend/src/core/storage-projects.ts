@@ -1,3 +1,4 @@
+import { MAX_LIFECYCLE_RECORD_BYTES } from "@orkestrator/protocol/container-lifecycle";
 import * as shared from "./storage-shared.js";
 import {
   MAX_INITIAL_PROMPT_ATTACHMENT_STORAGE_BYTES,
@@ -620,6 +621,19 @@ export abstract class StorageProjects extends StorageBase {
         }
       }
 
+      if ("containerLifecycle" in updates) {
+        const value = updates.containerLifecycle;
+        if (value == null) {
+          environment.containerLifecycle = undefined;
+        } else if (isRecord(value)) {
+          if (JSON.stringify(value).length > MAX_LIFECYCLE_RECORD_BYTES) {
+            throw new Error("Container lifecycle record exceeds its size bound");
+          }
+          environment.containerLifecycle = value as unknown as Environment["containerLifecycle"];
+        } else {
+          throw new Error("Container lifecycle record is malformed");
+        }
+      }
       if (
         "containerId" in updates &&
         (updates.containerId == null || typeof updates.containerId === "string")

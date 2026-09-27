@@ -1,3 +1,5 @@
+import { openRegistryWriter } from "./registry-writer-lease.js";
+import { reconcileContainerOperations } from "./container-lifecycle-service.js";
 import { DesignService } from "./design-service.js";
 import { PreviewRuntime } from "./preview-runtime.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
@@ -730,9 +732,26 @@ export class OrkestratorBackend {
     // Do not accept commands while durable state claims work is still running
     // from a previous process. If this write fails, startup fails closed rather
     // than exposing progress that this backend can never complete.
+    // Exclusive container mutation for this data directory. A second backend,
+    // or one older than the directory's schema marker, keeps serving reads
+    // while every container mutation is refused.
+    this.context.registryWriterLease ??= await openRegistryWriter(
+      this.context.storage.getDataDir(),
+    );
     const lifecycleRecovery = await reconcileInterruptedEnvironmentLifecycleTasks(
       this.context.storage,
     );
+    // Before background launch or cleanup can act on their resources:
+    // operations a previous process left unresolved are settled by exact
+    // Docker identity. An unreachable daemon leaves them for the next attempt.
+    if (this.context.registryWriterLease.isHeld()) {
+      await reconcileContainerOperations(this.context).catch((error: unknown) => {
+        console.warn(
+          "[backend] Container operation reconciliation failed:",
+          error instanceof Error ? error.message : error,
+        );
+      });
+    }
     await this.agentTools.start();
     this.reserveOwnedPreviewPorts();
     // No renderer can be alive yet, so every persisted `frontend` activity
@@ -1381,6 +1400,7 @@ export class OrkestratorBackend {
           operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
         });
       } finally {
+        await this.context.registryWriterLease?.release().catch(() => undefined);
         this.context.previews?.dispose();
         this.context.mcpManagement?.dispose();
         await this.controlMcp.stop();

@@ -4,10 +4,22 @@ import {
   listContainerCleanupInventory,
   loadProtection,
   parseLabels,
+  readContainerLabels,
   removeCleanupCandidates,
   removeUnclaimedContainer,
 } from "./docker-cleanup-inventory.js";
-import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
+import {
+  createOperationId,
+  emptyContainerLifecycle,
+  formatContainerLifecycleError,
+  parseContainerMutationIdentity,
+} from "@orkestrator/protocol/container-lifecycle";
+import {
+  advanceContainerOperation,
+  nextRuntimeGeneration,
+  probeContainer,
+  runContainerOperation,
+} from "./container-lifecycle-service.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type {
   DockerAvailability,
@@ -44,6 +56,10 @@ import {
   syncContainerClaudeCredentialBestEffort,
   ensureContainerProjectFilesAccess,
   createDockerContainer,
+  enqueueEnvironmentLifecycleOperation,
+  assertEnvironmentDeletionNotRequested,
+  startAssignedContainerRuntimeTask,
+  stopEnvironmentTask,
 } from "./commands-helpers.js";
 
 const lastDockerAvailabilityDiagnosticByLogger = new WeakMap<(message: string) => void, string>();
@@ -150,20 +166,55 @@ export function registerDockerCommands(
       () => false,
     ),
   );
-  register("provision_environment", async ({ environmentId }, context) => {
-    const environment = await context.storage.getEnvironment(
-      asString(environmentId, "environmentId"),
-    );
-    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-    const containerId = await createDockerContainer(environment, context);
-    await context.storage.updateEnvironment(environment.id, { containerId });
-    return containerId;
+  register("provision_environment", async (args, context) => {
+    const id = asString(args.environmentId, "environmentId");
+    const identity = parseContainerMutationIdentity(args);
+    // Idempotent and serialized: a repeated or concurrent request returns the
+    // container the first one created instead of creating another.
+    return enqueueEnvironmentLifecycleOperation(id, context, async () => {
+      const environment = await context.storage.getEnvironment(id);
+      if (!environment) throw new Error(`Environment not found: ${id}`);
+      assertEnvironmentDeletionNotRequested(environment, environment.id);
+      if (environment.containerId) return environment.containerId;
+      const outcome = await runContainerOperation(context, id, "create", identity, async (op) => {
+        const runtimeGeneration = nextRuntimeGeneration(environment);
+        const imageRef = context.dockerImage ?? DOCKER_IMAGE;
+        await advanceContainerOperation(context, id, op.operationId, {
+          phase: "creating",
+          details: { generation: runtimeGeneration, imageRef },
+        });
+        const containerId = await createDockerContainer(environment, context, {
+          operationId: op.operationId,
+          runtimeGeneration,
+        });
+        await advanceContainerOperation(context, id, op.operationId, {
+          phase: "created",
+          runtime: {
+            containerId,
+            runtimeGeneration,
+            owner: dockerOwnerNamespace(context.storage.getDataDir()),
+            imageRef,
+            createdByOperationId: op.operationId,
+          },
+          environment: { containerId },
+        });
+        return containerId;
+      });
+      if ("result" in outcome) return outcome.result;
+      return (await context.storage.getEnvironment(id))?.containerId ?? null;
+    });
   });
   register("docker_start_container", async ({ containerId }, context) => {
     const { storage } = context;
     const id = asString(containerId, "containerId");
-    await runCommand("docker", ["start", id], { timeoutMs: 60_000 });
-    await ensureContainerProjectFilesAccess(id);
+    const assigned = findEnvironmentByContainerId(await storage.loadEnvironments(), id);
+    if (assigned) {
+      // An environment's runtime starts through the lifecycle authority.
+      await startAssignedContainerRuntimeTask(assigned.id, context);
+    } else {
+      await runCommand("docker", ["start", id], { timeoutMs: 60_000 });
+      await ensureContainerProjectFilesAccess(id);
+    }
     const config = await storage.loadConfig();
     if (context.runtimeFlavor !== "agent-test") {
       await syncContainerGitHubCredential(id, await resolveContainerGitHubToken(config.global));
@@ -172,8 +223,14 @@ export function registerDockerCommands(
       await syncContainerClaudeCredentialBestEffort(id, config.global);
     }
   });
-  register("docker_stop_container", async ({ containerId }) => {
+  register("docker_stop_container", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
+    const assigned = findEnvironmentByContainerId(await context.storage.loadEnvironments(), id);
+    if (assigned) {
+      // Stopping an environment's runtime is the environment's stop.
+      await stopEnvironmentTask(assigned.id, context, () => undefined);
+      return;
+    }
     await runCommand("docker", ["stop", id], { timeoutMs: 60_000 });
   });
   register("docker_remove_container", async ({ containerId }, context) => {
@@ -409,11 +466,80 @@ export function registerDockerCommands(
   });
   register("reattach_container", async ({ projectId, containerId, name }, context) => {
     const { storage } = context;
-    const env = createEnvironment(asString(projectId, "projectId"), {
-      name: asOptionalString(name) ?? `reattached-${String(containerId).slice(0, 8)}`,
+    const id = asString(containerId, "containerId");
+    const project = asString(projectId, "projectId");
+    // Explicit adoption of a reviewed container. It must be this app's, owned
+    // by this registry (or a pre-label container outside strict profiles), not
+    // already the runtime of an environment, and not labelled as a different
+    // live environment's runtime.
+    const probe = await probeContainer(id);
+    if (probe.kind === "missing") throw new Error(`Container not found: ${id}`);
+    if (probe.kind !== "present") {
+      throw new Error(
+        formatContainerLifecycleError(
+          "daemon-unavailable",
+          "Docker could not confirm this container's identity. Retry once Docker is reachable.",
+        ),
+      );
+    }
+    const owner = dockerOwnerNamespace(storage.getDataDir());
+    const ownerLabel = probe.labels[DOCKER_LABEL_OWNER];
+    if (
+      probe.labels[DOCKER_LABEL_APP] !== DOCKER_LABEL_APP_VALUE ||
+      (ownerLabel !== undefined && ownerLabel !== owner) ||
+      (ownerLabel === undefined && context.strictDockerOwner)
+    ) {
+      throw new Error(
+        formatContainerLifecycleError(
+          "not-owned",
+          "Refusing Docker operation on a container not owned by this development profile",
+        ),
+      );
+    }
+    const environments = await storage.loadEnvironments();
+    if (
+      findEnvironmentByContainerId(environments, id) ||
+      findEnvironmentByContainerId(environments, probe.containerId)
+    ) {
+      throw new Error(
+        formatContainerLifecycleError(
+          "operation-in-progress",
+          "This container is already attached to an environment.",
+        ),
+      );
+    }
+    const labelledEnvironmentId = (await readContainerLabels(id))[DOCKER_LABEL_ENVIRONMENT_ID];
+    if (
+      labelledEnvironmentId &&
+      environments.some((environment) => environment.id === labelledEnvironmentId)
+    ) {
+      throw new Error(
+        formatContainerLifecycleError(
+          "operation-in-progress",
+          "This container belongs to an existing environment.",
+        ),
+      );
+    }
+    const env = createEnvironment(project, {
+      name: asOptionalString(name) ?? `reattached-${id.slice(0, 8)}`,
     });
-    env.containerId = asString(containerId, "containerId");
+    // The full id, so the persisted association is exact.
+    env.containerId = probe.containerId;
     env.status = await getDockerStatus(env.containerId).catch(() => "stopped");
+    const adoptedAt = new Date().toISOString();
+    const operationId = createOperationId();
+    env.containerLifecycle = {
+      ...emptyContainerLifecycle(),
+      revision: 1,
+      lastRuntimeGeneration: 1,
+      runtime: {
+        containerId: probe.containerId,
+        runtimeGeneration: 1,
+        owner,
+        createdByOperationId: operationId,
+      },
+      outcomes: [{ operationId, kind: "adopt", status: "succeeded", completedAt: adoptedAt }],
+    };
     return toClientEnvironment(await storage.addEnvironment(env));
   });
   register("propagate_github_token_to_containers", async (_args, { storage }) => {

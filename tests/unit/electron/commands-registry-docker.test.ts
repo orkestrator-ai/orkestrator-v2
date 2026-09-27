@@ -96,6 +96,7 @@ const {
   withGnuBase64Shim,
   writeBridgeEntrypoint,
   writeBridgeServer,
+  ownedContainerInspect,
 } = await createCommandFixtures();
 
 import type {
@@ -114,6 +115,7 @@ describe("Electron backend command registry", () => {
   // on every platform instead of silently depending on the developer's OS.
   const CLAUDE_CREDENTIAL_SYNC_DOCKER_SCRIPT = `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
   if [ "$2" = "--user" ]; then exit 0; fi
@@ -531,6 +533,7 @@ exit 0
       await withFakeDocker(
         `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
   if [ "$2" = "--user" ]; then exit 0; fi

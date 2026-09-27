@@ -135,8 +135,8 @@ Tests and isolated profiles:
     worktree; unrelated). New metrics test file: 6 pass. Root:
     tests/unit/efficiency (18 pass), mise-tasks/gitignore/monorepo/docs guards:
     2 pre-existing failures in files this step does not touch
-    (validation.md's `bun run -` probe commands and plan 13's
-    `mise run test:browser:` wording). Backend typecheck, ad hoc strict tsc
+    (validation.md's stdin probe commands and plan 13's browser-suite
+    wording; both since fixed). Backend typecheck, ad hoc strict tsc
     over scripts/efficiency, mise run format / format:check / lint: pass
     (pre-existing warnings only). Harness run end to end against both roots.
   No real-stack, browser, Docker or remote run.

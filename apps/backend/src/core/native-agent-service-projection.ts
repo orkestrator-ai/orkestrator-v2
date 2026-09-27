@@ -91,6 +91,17 @@ import { OPEN_CODE_INLINE_ERROR_ID_PREFIX } from "./opencode-messages.js";
 import { readReadableHostFile } from "./path-safety.js";
 import { readBridgePartDetail as bridgePartDetail } from "@orkestrator/protocol/bridge-transcript-summary";
 import { decodeHistoryCursor, encodeDirectHistoryCursor } from "./native-agent-direct-history.js";
+import {
+  digestWithMessages,
+  encodedArrayBytes,
+  encodedBytesWithMessages,
+  encodedValue,
+  reuseUnchangedMessages,
+  sameEncoding,
+  sameIds,
+  updateHashWithValues,
+  valueFingerprint,
+} from "./native-agent-projection-encoding.js";
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
 import {
   commandCatalogueKey,
@@ -1058,6 +1069,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         // The bound applies to the bare message array; the surrounding
         // projection is not what this ceiling protects.
         envelopeReserveBytes: 0,
+        // Projected rows are immutable: measure them once for every consumer.
+        measure: (message) => encodedValue(message).bytes,
         // A half-rendered final message is worse than an explicit failure here:
         // the renderer has a recovery path for an unavailable projection, and
         // the bridges have already bounded their own responses well below this.
@@ -1132,6 +1145,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       boundedTranscript = boundTranscriptResponse(requested, maximumBytes, {
         envelopeReserveBytes: 0,
         contentFallbackBytes: null,
+        measure: (message) => encodedValue(message).bytes,
       });
     } catch (error) {
       if (!(error instanceof TypeError)) throw error;
@@ -1180,9 +1194,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     mutableTailStart: number,
     complete: boolean,
   ): void {
-    const messageFingerprints = messages.map((message) =>
-      createHash("sha256").update(JSON.stringify(message)).digest("hex").slice(0, 24),
-    );
+    // Memoized per projected message: a history refresh re-fingerprints only
+    // the messages this read actually produced anew.
+    const messageFingerprints = messages.map(valueFingerprint);
     const previous = this.projectionHistory.get(sessionKey);
     // Everything before the *current* live boundary is now historical. If a
     // message changed while simultaneously aging out of the live tail, the
@@ -1202,7 +1216,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       ),
     );
     const epoch = appendCompatible ? previous!.epoch : randomUUID();
-    const bytes = Buffer.byteLength(JSON.stringify(messages));
+    const bytes = encodedArrayBytes(messages);
     if (previous) this.projectionHistoryBytes -= previous.bytes;
     this.projectionHistory.delete(sessionKey);
     this.projectionHistory.set(sessionKey, {
@@ -1289,16 +1303,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       this.projectionSync.delete(key);
       this.projectionSync.set(key, state);
     }
-    const serializedProjection = JSON.stringify(projection);
-    const token = createHash("sha256")
-      .update(
-        `${state.incarnation}\0${serializedProjection}\0${historyEpoch}\0${historyCursor ?? ""}`,
-      )
-      .digest("base64url")
-      .slice(0, 43);
+    const token = digestWithMessages(
+      `${state.incarnation}\0${historyEpoch}\0${historyCursor ?? ""}`,
+      projection,
+    );
     if (state.currentToken === token) return { token, identityChanged: false };
     state.currentToken = token;
-    const bytes = Buffer.byteLength(serializedProjection);
+    const bytes = encodedBytesWithMessages(projection);
     if (bytes <= NATIVE_SYNC_MAX_REVISION_BYTES) {
       state.revisions.push({ token, projection, bytes, createdAt: this.now() });
       state.revisionBytes += bytes;
@@ -1345,8 +1356,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const messageUpserts = current.messages.filter((message) => {
       const id = (message as { id: string }).id;
       const existing = previousById.get(id);
-      return !existing || JSON.stringify(existing) !== JSON.stringify(message);
+      return !existing || !sameEncoding(existing, message);
     });
+    const currentIdSet = new Set(currentIds);
     const setFields: Record<string, unknown> = {};
     const unsetFields: string[] = [];
     const previousFields = previous as unknown as Record<string, unknown>;
@@ -1364,11 +1376,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
     return {
       messageUpserts,
-      ...(JSON.stringify(previousIds) === JSON.stringify(currentIds)
-        ? {}
-        : { liveMessageIds: currentIds }),
+      ...(sameIds(previousIds, currentIds) ? {} : { liveMessageIds: currentIds }),
       deletedMessageIds: previousIds.filter(
-        (id) => !currentIds.includes(id) && !currentHistoryIds.has(id),
+        (id) => !currentIdSet.has(id) && !currentHistoryIds.has(id),
       ),
       setFields,
       unsetFields: unsetFields as NativeAgentProjectionDelta["unsetFields"],
@@ -1555,14 +1565,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const messageUpserts = current.messages.filter((message) => {
       const id = (message as { id: string }).id;
       const existing = previousById.get(id);
-      return !existing || JSON.stringify(existing) !== JSON.stringify(message);
+      return !existing || !sameEncoding(existing, message);
     });
+    const currentIdSet = new Set(currentIds);
     return {
       messageUpserts,
-      ...(JSON.stringify(previousIds) === JSON.stringify(currentIds)
-        ? {}
-        : { liveMessageIds: currentIds }),
-      deletedMessageIds: previousIds.filter((id) => !currentIds.includes(id)),
+      ...(sameIds(previousIds, currentIds) ? {} : { liveMessageIds: currentIds }),
+      deletedMessageIds: previousIds.filter((id) => !currentIdSet.has(id)),
       freshness: current.freshness,
       historyEpoch: current.historyEpoch,
       historyComplete: current.historyComplete,
@@ -1983,16 +1992,19 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         historyEpoch,
         providerSessionId,
       );
+    // Unchanged rows keep the objects already held, so every later comparison
+    // and encoding of them in this read and the next is a reference check.
+    const messages = reuseUnchangedMessages(previous?.value.messages, bounded.messages);
     return {
       value: {
         identity,
         freshness:
-          bounded.messages.length === 0 && complete
+          messages.length === 0 && complete
             ? "empty"
             : snapshot.freshness === "cached"
               ? "cached"
               : "current",
-        messages: bounded.messages,
+        messages,
         messageWindow: {
           ...bounded.window,
           truncated,
@@ -2028,8 +2040,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const value = projection.value;
     const observed = this.progressiveTranscriptCache.get(key);
     if (observed?.value === value) return observed.token;
-    const token = createHash("sha256")
-      .update(
+    const token = updateHashWithValues(
+      createHash("sha256").update(
         JSON.stringify([
           value.identity,
           value.historyEpoch,
@@ -2037,14 +2049,15 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           this.progressiveSourceTokens.get(key),
           projection.historyStartIndex,
           projection.historyEndIndex,
-          value.messages,
         ]),
-      )
+      ),
+      value.messages,
+    )
       .digest("base64url")
       .slice(0, 43);
     const current = this.progressiveTranscriptCache.get(key);
     if (!current || current.token !== token) {
-      const bytes = Buffer.byteLength(JSON.stringify(value));
+      const bytes = encodedBytesWithMessages(value);
       if (current) this.progressiveTranscriptBytes -= current.bytes;
       this.progressiveTranscriptCache.delete(key);
       this.progressiveTranscriptCache.set(key, {
@@ -2268,8 +2281,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           delta.messageUpserts.length +
           delta.deletedMessageIds.length +
           (delta.liveMessageIds?.length ?? 0);
-        const deltaBytes = Buffer.byteLength(JSON.stringify(delta));
-        const snapshotBytes = Buffer.byteLength(JSON.stringify(value));
+        const deltaBytes = encodedBytesWithMessages({
+          ...delta,
+          messages: delta.messageUpserts,
+          messageUpserts: [],
+        });
+        const snapshotBytes = entry.bytes;
         if (operationCount <= 1024 && deltaBytes < snapshotBytes) {
           this.recordProgressiveMetric("transcript", startedAt, "provider", "delta");
           return {
@@ -2858,7 +2875,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       true,
     );
     if (!projection) return { syncVersion: 1, status: "missing" };
-    if (Buffer.byteLength(JSON.stringify(projection)) > NATIVE_SYNC_MAX_SNAPSHOT_BYTES) {
+    const projectionBytes = encodedBytesWithMessages(projection);
+    if (projectionBytes > NATIVE_SYNC_MAX_SNAPSHOT_BYTES) {
       throw new ProviderUnavailableError("Native agent sync projection exceeded 20 MiB");
     }
     const key = this.syncCacheKey(input);
@@ -2900,8 +2918,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         (delta.liveMessageIds?.length ?? 0) +
         Object.keys(delta.setFields).length +
         delta.unsetFields.length;
-      const deltaBytes = Buffer.byteLength(JSON.stringify(delta));
-      const snapshotBytes = Buffer.byteLength(JSON.stringify(projection));
+      const deltaBytes = encodedBytesWithMessages({
+        ...delta,
+        messages: delta.messageUpserts,
+        messageUpserts: [],
+      });
+      const snapshotBytes = projectionBytes;
       if (
         operationCount <= NATIVE_SYNC_MAX_DELTA_OPERATIONS &&
         deltaBytes <= NATIVE_SYNC_MAX_DELTA_BYTES &&

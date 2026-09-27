@@ -53,6 +53,13 @@ export interface BoundTranscriptOptions {
    * report `overflowed` instead.
    */
   contentFallbackBytes?: number | null;
+  /**
+   * Encoded bytes of one message. Defaults to serializing it; a caller that
+   * already memoizes encodings of immutable messages passes its own so a
+   * bound does not re-serialize what the caller measured moments earlier.
+   * Must return exactly the UTF-8 length of `JSON.stringify(message)`.
+   */
+  measure?: (message: unknown) => number;
 }
 
 interface BoundableMessage {
@@ -114,7 +121,9 @@ export function boundTranscriptResponse<TMessage extends BoundableMessage>(
       : options.contentFallbackBytes;
 
   const selected = [...messages];
-  const sizes = selected.map((message) => Buffer.byteLength(JSON.stringify(message)));
+  const measure =
+    options.measure ?? ((message: unknown) => Buffer.byteLength(JSON.stringify(message)));
+  const sizes = selected.map((message) => measure(message));
   // Array brackets plus one comma between each adjacent pair.
   let bytes =
     envelope + 2 + sizes.reduce((total, size) => total + size, 0) + Math.max(0, sizes.length - 1);

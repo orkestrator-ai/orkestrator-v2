@@ -511,6 +511,82 @@ focused suite was active. On the 18-core reference machine, the measured
 post-change runs were about 188 seconds cold and 75 seconds warm; these are
 diagnostic reference points, not fixed pass criteria.
 
+## Parallel isolation and Bun module mocks
+
+The suite is dominated by I/O waits (tests that boot real backend processes, bind
+ports, drive happy-dom) rather than CPU, so it parallelizes well:
+
+- **Within a group** — `bun test --parallel` spreads test *files* across worker
+  processes. This is where nearly all of the win is (the root suite alone goes
+  from ~100s to ~30s).
+- **Across groups** — `scripts/test-all.ts` runs the workspace, root, bridge and
+  protocol groups concurrently, with bounded worker pools (`planWorkers`) so
+  the three worker-consuming groups cannot oversubscribe a small CI runner.
+  Larger hosts give remaining capacity to the root long pole while keeping at
+  most two package tasks active. iOS is opt-in through `test:all` and runs
+  last and alone because the simulator is a single shared resource.
+
+Group output streams to private bounded files while only a failure tail stays in
+memory. Passing groups print a summary; failing groups retain compressed
+artifacts. **Every** failing group is reported rather than stopping at the first.
+
+Always add `--parallel` when running a suite directly; a sequential run of
+`tests/` takes roughly three times as long.
+
+**`--parallel` implies `--isolate`.** Each test file gets a fresh module registry,
+which removes the cross-file `mock.module()` leakage described below — but it also
+means a test that only passed because a *sibling* file had mutated a global will
+now fail. That is a real bug being exposed, not a parallelism problem: fix the
+test to set up what it needs itself. `bridges/claude-bridge/src/routes/events.test.ts`
+is the worked example — it guarded its `globalThis.TransformStream` polyfill with
+`if (!globalThis.TransformStream)`, so it silently depended on another suite
+installing that global first.
+
+Before assuming a parallel-only failure is a race, run the file on its own:
+
+```bash
+bun test path/to/one.test.ts   # if this fails alone, it was never self-sufficient
+```
+
+### Bun `mock.module()` rules
+
+Bun's module mocking is **global at the module-cache level**. In this repo, top-level `mock.module()` calls can leak across test files even when `mock.restore()` is used later.
+
+Use this stable pattern:
+
+1. Put truly shared mocks in `tests/setup.ts`.
+   - Example: native wrapper mocks from `@/lib/native/*` are registered once there so files do not fight over competing global mocks.
+2. If some tests need a mocked module but other tests need the real module, keep the module real in `tests/setup.ts` and put **shared mock functions** in `tests/mocks/*`.
+   - Example: `tests/mocks/clipboard-paste.ts` exports reusable mock functions, and `terminal-paste.test.ts` wires them up per-file with `mock.module(...)`.
+3. Prefer mocking narrow dependencies, not broad app modules or shared UI components.
+   - Avoid top-level mocks for modules like `@/components/chat/NativeMessage` unless the whole suite should use that fake. These are especially likely to pollute unrelated tests.
+4. Do not assume `mock.restore()` fixes module-cache pollution.
+   - It is useful for resetting function state, but it is not a reliable isolation boundary for `mock.module(...)` in Bun.
+5. Before adding a new `mock.module(...)`, search for existing comments/patterns in `tests/setup.ts` and `tests/mocks/`.
+   - If the same module is mocked in multiple files, centralize it or convert to shared mock functions.
+
+### Snapshot-and-restore pattern for unavoidable sibling-component stubs
+
+When a test *must* stub a sibling component that has its own test file (e.g. `ChatTab.test.tsx` stubbing `./ComposeBar`, when `ComposeBar.test.tsx` needs the real module), snapshot the real module before installing the stub and restore it in `afterAll`. Bun caches the first `mock.module` factory result, but a subsequent `mock.module(path, () => snapshot)` call does override the cache for future imports.
+
+```typescript
+import { afterAll, mock } from "bun:test";
+
+// 1. Snapshot the real module BEFORE any mock.module call that would replace it.
+import * as realComposeBar from "./ComposeBar";
+const realComposeBarSnapshot = { ...realComposeBar };
+
+// 2. Install the stub.
+mock.module("./ComposeBar", () => ({ ComposeBar: () => <button>Stub</button> }));
+
+// 3. Restore when this file's tests finish so later files see the real module.
+afterAll(() => {
+  mock.module("./ComposeBar", () => realComposeBarSnapshot);
+});
+```
+
+Use this only as a last resort — prefer not mocking sibling components at all when feasible (see rule 3 above).
+
 ## Diagnose a failure
 
 Use this order:

@@ -335,7 +335,33 @@ describe("plan approval flow", () => {
     track(session.id);
     const promptPromise = sendPrompt(session.id, "make a plan", { permissionMode: "plan" });
     const call = await nextQueryCall();
-    expect((call.options.hooks as Record<string, unknown> | undefined)?.PreToolUse).toBeUndefined();
+    // The only PreToolUse hook is the one that opens a change-measuring window
+    // around a call. It observes; it never decides, so a plan-file Write still
+    // reaches `canUseTool` untouched.
+    const preToolUse =
+      (
+        call.options.hooks as
+          | Record<string, Array<{ hooks: Array<(...args: unknown[]) => Promise<unknown>> }>>
+          | undefined
+      )?.PreToolUse ?? [];
+    for (const matcher of preToolUse) {
+      for (const hook of matcher.hooks) {
+        await expect(
+          hook(
+            {
+              hook_event_name: "PreToolUse",
+              tool_name: "Write",
+              tool_input: { file_path: "/tmp/plan.md", content: "# Plan" },
+              tool_use_id: "plan-write",
+              session_id: "plan-direct-capture",
+              cwd: tmpdir(),
+            },
+            "plan-write",
+            { signal: new AbortController().signal },
+          ),
+        ).resolves.toEqual({});
+      }
+    }
 
     const toolPromise = call.options.canUseTool!("ExitPlanMode", {
       plan: "# Plan\n\nVerify behavior.\nVerify behavior.",

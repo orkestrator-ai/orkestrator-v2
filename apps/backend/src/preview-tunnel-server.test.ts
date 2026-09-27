@@ -29,6 +29,14 @@ interface TunnelClient {
   nextControl(type?: string): Promise<Record<string, unknown>>;
 }
 
+async function waitForTunnelCleanup(condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for tunnel cleanup");
+    await Bun.sleep(5);
+  }
+}
+
 describe("PreviewTunnelServer", () => {
   let harness: PreviewHarness;
   let fixture: PreviewFixture;
@@ -172,6 +180,7 @@ describe("PreviewTunnelServer", () => {
     );
     expect(response).toStartWith("HTTP/1.1 200");
     expect(response).toContain('"marker":"tunnel-app"');
+    await waitForTunnelCleanup(() => tunnel.stats().sockets === 0);
     expect(tunnel.stats()).toMatchObject({ sockets: 0, aggregateQueuedBytes: 0 });
   });
 
@@ -273,7 +282,7 @@ describe("PreviewTunnelServer", () => {
     );
     client.ws.terminate();
     await client.closed;
-    await Bun.sleep(20);
+    await waitForTunnelCleanup(() => tunnel.stats().sockets === 0);
     expect(tunnel.stats()).toMatchObject({ sockets: 0, aggregateQueuedBytes: 0 });
   });
 
@@ -298,7 +307,7 @@ describe("PreviewTunnelServer", () => {
     expect((await extra.closed).code).toBe(4429);
     for (const client of opened) client.ws.close();
     await Promise.all(opened.map((client) => client.closed));
-    await Bun.sleep(10);
+    await waitForTunnelCleanup(() => tunnel.stats().admission.active === 0);
     expect(tunnel.stats().admission.active).toBe(0);
   });
 

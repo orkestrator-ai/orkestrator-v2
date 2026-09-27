@@ -103,11 +103,17 @@ export async function codexProjectTrust(
     };
   }
   const projects = isRecord(config.projects) ? config.projects : {};
+  const aliases = new Map<string, unknown>();
+  for (const [configuredPath, entry] of Object.entries(projects)) {
+    const canonical = await realpathOr(configuredPath);
+    if (canonical !== configuredPath && !aliases.has(canonical)) aliases.set(canonical, entry);
+  }
   const candidates = [await realpathOr(worktree)];
   const main = await mainCheckoutOf(worktree, read);
   if (main) candidates.push(await realpathOr(main));
   for (const candidate of candidates) {
-    const entry = projects[candidate];
+    // An exact canonical entry wins if the config also names a symlink to it.
+    const entry = projects[candidate] ?? aliases.get(candidate);
     const level = isRecord(entry) ? entry.trust_level : undefined;
     const which = candidate === candidates[0] ? "this worktree" : "its main checkout";
     if (level === "trusted") {
@@ -186,22 +192,43 @@ export async function grokCompat(
   return { enabled: true };
 }
 
+function folderTrustVerdict(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (value === "trusted") return true;
+  if (value === "untrusted") return false;
+  if (isRecord(value)) return folderTrustVerdict(value.trusted ?? value.trust ?? value.decision);
+  return undefined;
+}
+
 function folderTrustEntry(store: Record<string, unknown>, folder: string): boolean | undefined {
   const folders = store.folders;
-  const verdict = (value: unknown): boolean | undefined => {
-    if (typeof value === "boolean") return value;
-    if (value === "trusted") return true;
-    if (value === "untrusted") return false;
-    if (isRecord(value)) return verdict(value.trusted ?? value.trust ?? value.decision);
-    return undefined;
-  };
-  if (isRecord(folders)) return verdict(folders[folder]);
+  if (isRecord(folders)) return folderTrustVerdict(folders[folder]);
   if (Array.isArray(folders)) {
     for (const item of folders) {
-      if (isRecord(item) && item.path === folder) return verdict(item);
+      if (isRecord(item) && item.path === folder) return folderTrustVerdict(item);
     }
   }
   return undefined;
+}
+
+async function folderTrustAliases(store: Record<string, unknown>): Promise<Map<string, boolean>> {
+  const aliases = new Map<string, boolean>();
+  const folders = store.folders;
+  const entries: Array<[string, unknown]> = isRecord(folders)
+    ? Object.entries(folders)
+    : Array.isArray(folders)
+      ? folders
+          .filter((item): item is Record<string, unknown> => isRecord(item))
+          .filter((item) => typeof item.path === "string")
+          .map((item) => [item.path as string, item])
+      : [];
+  for (const [configuredPath, value] of entries) {
+    const decision = folderTrustVerdict(value);
+    if (decision === undefined) continue;
+    const canonical = await realpathOr(configuredPath);
+    if (canonical !== configuredPath && !aliases.has(canonical)) aliases.set(canonical, decision);
+  }
+  return aliases;
 }
 
 /**
@@ -228,10 +255,11 @@ export async function grokFolderTrust(
   }
   const store = await readToml(read, path.join(input.grokHome, "trusted_folders.toml"));
   if (store) {
+    const aliases = await folderTrustAliases(store);
     const own = await realpathOr(worktree);
     let folder = own;
     for (;;) {
-      const decision = folderTrustEntry(store, folder);
+      const decision = folderTrustEntry(store, folder) ?? aliases.get(folder);
       if (decision === true) {
         return {
           trust: "allowed",

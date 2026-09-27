@@ -107,6 +107,8 @@ import {
   recordInitCommandInventory,
 } from "./session-manager-commands.js";
 import type { McpToolMetadata } from "../types/mcp.js";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
+import { commandChangeHooks, commandChangeProbe } from "./command-changes.js";
 
 export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): string {
   switch (reason) {
@@ -252,6 +254,7 @@ import {
   refreshSettledToolRows,
   resultAnswersOtherInput,
   taskNotificationNoticePart,
+  toolResultIds,
 } from "./session-manager-messages.js";
 export { memoryRecallPart } from "./session-manager-messages.js";
 import {
@@ -1217,6 +1220,32 @@ export async function sendPrompt(
       finishTurnInputIfSettled();
       return {};
     };
+    // A measurement usually lands on a call the tracker already holds; one that
+    // outruns the assistant message carrying the call waits here for its
+    // tool result, which cannot precede it.
+    const pendingCommandChanges = new Map<string, MeasuredWorkspaceChange>();
+    const applyCommandChanges = (toolUseId: string, change: MeasuredWorkspaceChange) => {
+      if (!toolTracker.setCommandChanges(toolUseId, change)) {
+        pendingCommandChanges.set(toolUseId, change);
+        return;
+      }
+      if (session.latestTurnGeneration !== turnGeneration) return;
+      if (stream.currentAssistantMessage) {
+        stream.currentAssistantMessage.parts = buildMessageParts(
+          stream.accumulatedOrderedParts,
+          toolTracker,
+        );
+        stream.emitCurrentAssistantMessage();
+      }
+      refreshSettledToolRows(
+        session,
+        sessionId,
+        toolTracker,
+        [toolUseId],
+        stream.currentAssistantMessage,
+      );
+    };
+    const commandChangeHook = commandChangeHooks(applyCommandChanges);
     const queryIterator = query({
       prompt: heldSdkPrompt.prompt,
       options: {
@@ -1321,9 +1350,16 @@ export async function sendPrompt(
         hooks: {
           // Registered here rather than through settings so a workspace cannot
           // remove the one control that actually holds the boundary.
-          ...(coordinatorReadOnly && policy
-            ? { PreToolUse: [{ hooks: [createCoordinatorReadOnlyHook(policy)] }] }
-            : {}),
+          // The read-only hook runs first: a call it denies must never be
+          // snapshotted, and the measuring hook only opens a window.
+          PreToolUse: [
+            ...(coordinatorReadOnly && policy
+              ? [{ hooks: [createCoordinatorReadOnlyHook(policy)] }]
+              : []),
+            commandChangeHook.PreToolUse,
+          ],
+          PostToolUse: [commandChangeHook.PostToolUse],
+          PostToolUseFailure: [commandChangeHook.PostToolUseFailure],
           TaskCreated: [{ hooks: [recordBackgroundTaskHook] }],
           TaskCompleted: [{ hooks: [recordBackgroundTaskHook] }],
           SubagentStart: [{ hooks: [recordBackgroundTaskHook] }],
@@ -2258,6 +2294,11 @@ export async function sendPrompt(
           // What only this frame says is *who* decided and why, so that is
           // what is kept on the call, where the renderer shows it.
           const reason = boundedNoticeText(denial.decision_reason ?? denial.message);
+          // PreToolUse ran before the permission decision; no PostToolUse
+          // will close the window it opened.
+          if (typeof denial.tool_use_id === "string") {
+            commandChangeProbe.discard(denial.tool_use_id);
+          }
           const marked =
             typeof denial.tool_use_id === "string" &&
             toolTracker.recordDenial(denial.tool_use_id, {
@@ -2514,6 +2555,17 @@ export async function sendPrompt(
         );
 
         const sdkUserMessage = message as SDKUserMessage;
+        for (const toolUseId of toolResultIds(sdkUserMessage)) {
+          // A call whose PostToolUse already ran has closed its window, so this
+          // only drops one no hook will close: a call refused by `canUseTool`,
+          // or one cut off by an interrupt.
+          commandChangeProbe.discard(toolUseId);
+          const pending = pendingCommandChanges.get(toolUseId);
+          if (pending) {
+            pendingCommandChanges.delete(toolUseId);
+            toolTracker.setCommandChanges(toolUseId, pending);
+          }
+        }
         let settledProvisionalTask = false;
         for (const outcome of bashToolResultOutcomes(sdkUserMessage, toolTracker)) {
           if (outcome.launch) {

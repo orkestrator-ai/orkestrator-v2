@@ -94,6 +94,32 @@ describe("normalizeOpenCodeInteractiveMessage edit diffs", () => {
 
     expect(firstTool(normalized)?.toolDiff).toBeUndefined();
   });
+
+  test("overlays a measured shell change by callID, still without a toolDiff", () => {
+    const change = {
+      additions: 2,
+      deletions: 1,
+      files: [{ path: "a.ts", additions: 2, deletions: 1 }],
+    };
+    const bash = (callID: string) => ({
+      id: `part-${callID}`,
+      type: "tool",
+      tool: "bash",
+      callID,
+      state: { status: "completed", input: { command: "sed -i s/a/b/ a.ts" }, output: "" },
+    });
+    const normalized = normalizeOpenCodeInteractiveMessage(
+      message([bash("call-1"), bash("call-2")]),
+      0,
+      undefined,
+      new Map([["call-1", change]]),
+    );
+    const parts = normalized?.parts as Array<Record<string, unknown>>;
+
+    expect(parts[0]?.commandChanges).toEqual(change);
+    expect(parts[0]?.toolDiff).toBeUndefined();
+    expect(parts[1]).not.toHaveProperty("commandChanges");
+  });
 });
 
 describe("normalizeOpenCodeInlineError", () => {

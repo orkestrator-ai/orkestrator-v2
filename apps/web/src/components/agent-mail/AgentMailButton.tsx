@@ -45,8 +45,11 @@ export function openAgentMailForTab(
   environmentId: string,
   tabId: string,
   mode: "inbox" | "compose" | "settings" = "inbox",
+  restoreFocusTo?: HTMLElement | null,
 ): void {
-  window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: { environmentId, tabId, mode } }));
+  window.dispatchEvent(
+    new CustomEvent(OPEN_EVENT, { detail: { environmentId, tabId, mode, restoreFocusTo } }),
+  );
 }
 
 function senderLabel(message: Pick<AgentMailMessage, "from">): string {
@@ -141,6 +144,7 @@ export function AgentMailButton() {
   const sendAttempt = useRef<{ fingerprint: string; requestId: string } | null>(null);
   const destinationRef = useRef("");
   const focusRef = useRef<MailboxAddress | null>(null);
+  const restoreFocusToRef = useRef<HTMLElement | null>(null);
   const hydrateGeneration = useRef(0);
 
   const hydrate = useCallback(
@@ -243,9 +247,10 @@ export function AgentMailButton() {
   useEffect(() => {
     const listener = (raw: Event) => {
       const detail = (raw as CustomEvent).detail as
-        | { environmentId?: string; tabId?: string; mode?: string }
+        | { environmentId?: string; tabId?: string; mode?: string; restoreFocusTo?: HTMLElement }
         | undefined;
       if (!detail?.environmentId || !detail.tabId) return;
+      restoreFocusToRef.current = detail.restoreFocusTo ?? null;
       const nextFocus = { environmentId: detail.environmentId, tabId: detail.tabId };
       const nextDestination = mailboxIdOf(nextFocus);
       focusRef.current = nextFocus;
@@ -456,7 +461,9 @@ export function AgentMailButton() {
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
+        if (!next) restoreFocusToRef.current = null;
         if (next) {
+          restoreFocusToRef.current = null;
           focusRef.current = null;
           setFocus(null);
           setFocusUnavailable(false);
@@ -484,6 +491,14 @@ export function AgentMailButton() {
         align="end"
         className="w-[min(94vw,470px)] border-zinc-700/80 bg-zinc-950 p-0 shadow-2xl"
         onCloseAutoFocus={(event) => event.preventDefault()}
+        // A closing context menu or popover may restore focus to its trigger
+        // after opening this dropdown. Ignore only that one focus handoff.
+        onFocusOutside={(event) => {
+          const restoreFocusTo = restoreFocusToRef.current;
+          restoreFocusToRef.current = null;
+          if (restoreFocusTo && event.detail.originalEvent.target === restoreFocusTo)
+            event.preventDefault();
+        }}
       >
         <div className="border-b border-zinc-800 px-4 py-3">
           <div className="flex items-center justify-between gap-3">

@@ -467,6 +467,42 @@ describe("application logging shutdown", () => {
     expect(app.quitCount).toBe(1);
   });
 
+  test("re-quits after will-quit dispatch returns when the queue is already idle", async () => {
+    // Electron drains microtasks before `will-quit` dispatch returns, ignores a
+    // quit issued while it still considers itself quitting, and only then
+    // applies `preventDefault` by clearing that flag.
+    let listener: ((event: { preventDefault(): void }) => void) | null = null;
+    let quitting = false;
+    let effectiveQuits = 0;
+    const host: ApplicationLoggingQuitHost = {
+      on(_event, next) {
+        listener = next;
+        return host;
+      },
+      quit() {
+        if (!quitting) effectiveQuits += 1;
+      },
+    };
+    const logging = {
+      logDirectory: "/tmp/logs",
+      retentionDays: 7,
+      flush: async () => {},
+      dropStats: () => ({ droppedEntries: 0, droppedBytes: 0 }),
+      stop: async () => {},
+    } satisfies InstalledApplicationLogging;
+
+    registerApplicationLoggingShutdown(host, logging, 5_000);
+    quitting = true;
+    let prevented = false;
+    listener?.({ preventDefault: () => (prevented = true) });
+    for (let tick = 0; tick < 50; tick += 1) await Promise.resolve();
+    if (prevented) quitting = false;
+    expect(effectiveQuits).toBe(0);
+
+    await Bun.sleep(5);
+    expect(effectiveQuits).toBe(1);
+  });
+
   test("registers nothing when logging was not installed", () => {
     const app = fakeApp();
     registerApplicationLoggingShutdown(app.host, null);

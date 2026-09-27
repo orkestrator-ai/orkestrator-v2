@@ -45,6 +45,15 @@ export function claudeSessionPreferencesDir(): string {
 }
 
 /**
+ * Bridge-owned directory for the per-session journals of what each shell
+ * command changed (see `command-changes.ts`). Beside the preference files for
+ * the same reason they live here.
+ */
+export function claudeCommandChangesDir(): string {
+  return join(claudeHome(), ".claude", "orkestrator", "command-changes");
+}
+
+/**
  * Point every resolver at a different home directory.
  *
  * Exported for tests. Mocking `node:os` instead would be visible to every

@@ -237,6 +237,10 @@ export async function spawnBridge(
     // The bridge fingerprints Grok's MCP configuration at every child spawn;
     // point it at a scratch home rather than the developer's own.
     GROK_HOME: join(stateDirectory, "grok-home"),
+    // The bridge runs in this repository, so measuring shell fixtures would
+    // snapshot the suite's own checkout on every command. A test that wants
+    // measurement passes `ACP_MEASURE_COMMAND_CHANGES: undefined` and a `CWD`.
+    ACP_MEASURE_COMMAND_CHANGES: "0",
   };
   delete env.ACP_MAX_SESSIONS;
   Object.assign(env, options.env);

@@ -181,6 +181,11 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
 
     case "commandExecution": {
       const exitCode = typeof raw.exitCode === "number" ? raw.exitCode : undefined;
+      // Kept for measuring what the command changed in its worktree: `cwd`
+      // picks the repository, `source` separates the agent's own commands from
+      // user shell commands and writes to an already-running process.
+      const cwd = str(raw.cwd);
+      const source = str(raw.source);
       return {
         item: {
           id,
@@ -189,6 +194,8 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
           aggregated_output: typeof raw.aggregatedOutput === "string" ? raw.aggregatedOutput : "",
           status: commandStatus(raw.status),
           ...(exitCode === undefined ? {} : { exit_code: exitCode }),
+          ...(cwd ? { cwd } : {}),
+          ...(source ? { source } : {}),
         } as EngineItem,
       };
     }

@@ -1163,10 +1163,25 @@ export function collectRenderedBackgroundTaskIds(messages: readonly NativeMessag
   return ids;
 }
 
+function collectToolUseIds(parts: readonly NativeMessagePart[], ids: Set<string>): void {
+  for (const part of parts) {
+    if (part.toolUseId) ids.add(part.toolUseId);
+    if (part.type === "agent-group" || part.type === "tool-group") {
+      collectToolUseIds(part.parts, ids);
+    } else if (part.type === "task-group") {
+      collectToolUseIds([part.task, ...part.childTools], ids);
+    } else if (part.type === "subagent" && part.subagentActions) {
+      collectToolUseIds(part.subagentActions, ids);
+    }
+  }
+}
+
 export interface BackgroundTaskSnapshot {
   id: string;
   status: NativeBackgroundTaskStatus;
   description?: string;
+  /** The tool call that launched the task, when the provider reported one. */
+  toolUseId?: string;
   /** Backend-recorded launch clock; see the protocol summary's `startedAt`. */
   startedAt?: string;
   /** Backend-recorded terminal edge; see `NativeBackgroundTask.settledAt`. */
@@ -1257,6 +1272,12 @@ function isLiveBackgroundTask(status: NativeBackgroundTaskStatus): boolean {
  * cards into a conversation that has no room for them. Both answers come from
  * the backend's own timestamps, so they do not depend on what this tab watched
  * happen.
+ *
+ * Claude also reports a foreground command that runs for more than a moment as
+ * a task. Its launch is an ordinary tool row, not a card, so while it runs it
+ * still gets a card here for the stop control. Once it settles, that row
+ * already shows the finished command, and a second card would only repeat it
+ * away from the text around it.
  */
 export function rowlessBackgroundTaskMessages(
   tasks: readonly BackgroundTaskSnapshot[],
@@ -1266,10 +1287,20 @@ export function rowlessBackgroundTaskMessages(
 
   const rendered = collectRenderedBackgroundTaskIds(messages);
   const anchors = createNativeAgentSettleAnchors(messages);
+  let launchToolUseIds: Set<string> | undefined;
+  const hasLaunchRow = (task: BackgroundTaskSnapshot): boolean => {
+    if (!task.toolUseId) return false;
+    if (!launchToolUseIds) {
+      launchToolUseIds = new Set();
+      for (const message of messages) collectToolUseIds(message.parts, launchToolUseIds);
+    }
+    return launchToolUseIds.has(task.toolUseId);
+  };
   const rows = tasks.filter(
     (task) =>
       !rendered.has(task.id) &&
-      (isLiveBackgroundTask(task.status) || anchors.resolve(task.settledAt) !== undefined),
+      (isLiveBackgroundTask(task.status) ||
+        (anchors.resolve(task.settledAt) !== undefined && !hasLaunchRow(task))),
   );
   if (rows.length === 0) return EMPTY_ROWLESS_TASKS;
 

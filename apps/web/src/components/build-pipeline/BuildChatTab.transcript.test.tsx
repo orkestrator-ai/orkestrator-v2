@@ -178,6 +178,7 @@ describe("BuildChatTab referenced transcripts", () => {
     const { rerender } = renderTab();
     await waitFor(() => expect(screen.getByText("All criteria pass")).toBeTruthy());
 
+    fireEvent.click(screen.getByRole("button", { name: /^Build,/ }));
     fireEvent.click(screen.getByRole("tab", { name: /^Build/ }));
     await waitFor(() =>
       expect(

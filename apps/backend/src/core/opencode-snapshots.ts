@@ -19,6 +19,7 @@ import type {
   NativeAgentNotice,
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { normalizeOpenCodeTranscriptMessages } from "./opencode-messages.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
 
@@ -36,6 +37,8 @@ export async function openCodeTranscriptSnapshot(input: {
   replaceMessages: (messages: unknown[]) => void;
   title: () => string | undefined;
   recordUnknown: (type: string) => void;
+  /** Measured shell changes to overlay by `callID`; see `opencode-command-changes.ts`. */
+  commandChanges?: () => Promise<ReadonlyMap<string, MeasuredWorkspaceChange>>;
 }): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
   try {
     const revision = input.revision();
@@ -51,9 +54,11 @@ export async function openCodeTranscriptSnapshot(input: {
     if (!current && input.options.limit >= OPEN_CODE_MESSAGE_HISTORY_LIMIT) {
       input.replaceMessages(rawMessages);
     }
+    const commandChanges = await input.commandChanges?.();
     const messages = normalizeOpenCodeTranscriptMessages(
       rawMessages.slice(-input.options.limit),
       input.recordUnknown,
+      commandChanges,
     );
     const title = input.title();
     return {

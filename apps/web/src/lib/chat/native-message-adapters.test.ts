@@ -349,6 +349,187 @@ describe("Claude activity in the shared native transcript", () => {
         rowlessBackgroundTaskMessages([{ ...watchTask, status: "completed" }], transcript),
       ).toHaveLength(0);
     });
+
+    describe("a foreground command Claude reported as a task", () => {
+      const foreground = (parentTaskUseId?: string): NativeMessage => ({
+        id: "assistant-command",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-08-16T10:00:00.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolUseId: "bash-fg",
+            toolState: "success",
+            toolArgs: { command: "bun test", description: "Run the tests" },
+            ...(parentTaskUseId ? { parentTaskUseId } : {}),
+          },
+        ],
+      });
+      const task = {
+        id: "fg-task",
+        toolUseId: "bash-fg",
+        description: "Run the tests",
+      } as const;
+
+      test("adds no card once it settles, because its own row shows it", () => {
+        /*
+         * A long turn runs dozens of these. Carding each one as well stacks the
+         * duplicates under whichever row they settled beside, and the reader
+         * sees a wall of commands in place of the text between them.
+         */
+        const [row] = normalizeNativeMessages([foreground()]);
+
+        expect(
+          rowlessBackgroundTaskMessages(
+            [{ ...task, status: "completed", settledAt: "2026-08-16T10:01:00.000Z" }],
+            [row!],
+          ),
+        ).toHaveLength(0);
+      });
+
+      test("recognises the launch inside a promoted task's child tools", () => {
+        const agentLaunch: NativeMessage = {
+          id: "assistant-agent",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-08-16T09:59:00.000Z",
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "Agent",
+              toolName: "Agent",
+              toolUseId: "agent-1",
+              toolState: "pending",
+              agentState: "active",
+            },
+          ],
+        };
+        agentLaunch.parts.push(...foreground("agent-1").parts);
+        const rows = normalizeNativeMessages([agentLaunch]);
+        const parent = rows[0]?.parts[0];
+        expect(parent?.type).toBe("task-group");
+        if (parent?.type !== "task-group") throw new Error("expected a task group");
+        expect(parent.childTools.some((part) => part.toolUseId === "bash-fg")).toBe(true);
+
+        expect(
+          rowlessBackgroundTaskMessages(
+            [{ ...task, status: "completed", settledAt: "2026-08-16T10:01:00.000Z" }],
+            rows,
+          ),
+        ).toHaveLength(0);
+      });
+
+      test("recognises a promoted task's own launch inside an agent group", () => {
+        const [row] = normalizeNativeMessages([
+          {
+            id: "assistant-agents",
+            role: "assistant",
+            content: "",
+            createdAt: "2026-08-16T10:00:00.000Z",
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "Agent",
+                toolName: "Agent",
+                toolUseId: "agent-other",
+                toolState: "success",
+                agentState: "finished",
+              },
+              {
+                type: "tool-invocation",
+                content: "Agent",
+                toolName: "Agent",
+                toolUseId: "agent-1",
+                toolState: "success",
+                agentState: "finished",
+              },
+            ],
+          },
+        ]);
+        expect(row?.parts[0]?.type).toBe("agent-group");
+        expect(row?.parts[0]?.type === "agent-group" && row.parts[0].parts[1]?.type).toBe(
+          "task-group",
+        );
+        expect(
+          rowlessBackgroundTaskMessages(
+            [
+              {
+                ...task,
+                toolUseId: "agent-1",
+                status: "completed",
+                settledAt: "2026-08-16T10:01:00.000Z",
+              },
+            ],
+            [row!],
+          ),
+        ).toHaveLength(0);
+      });
+
+      test("recognises the launch inside a subagent's actions", () => {
+        const [row] = normalizeNativeMessages([
+          {
+            id: "assistant-subagent",
+            role: "assistant",
+            content: "",
+            createdAt: "2026-08-16T10:00:00.000Z",
+            parts: [
+              {
+                type: "subagent",
+                content: "Run the tests",
+                subagentId: "child-1",
+                subagentActions: foreground().parts,
+              },
+            ],
+          },
+        ]);
+        expect(row?.parts[0]?.type).toBe("subagent");
+        expect(row?.parts[0]?.subagentActions?.[0]?.toolUseId).toBe("bash-fg");
+        expect(
+          rowlessBackgroundTaskMessages(
+            [{ ...task, status: "completed", settledAt: "2026-08-16T10:01:00.000Z" }],
+            [row!],
+          ),
+        ).toHaveLength(0);
+      });
+
+      test("keeps a settled card when its identified launch is outside the loaded window", () => {
+        const rows = rowlessBackgroundTaskMessages(
+          [{ ...task, status: "completed", settledAt: "2026-08-16T10:01:00.000Z" }],
+          transcript,
+        );
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.parts[0]?.type).toBe("task-group");
+      });
+
+      test("keeps a settled card when the snapshot omits its launch identifier", () => {
+        // Without a shared identifier, the visible Bash row cannot be proven
+        // to belong to this task; retaining the card preserves its lifecycle.
+        const [row] = normalizeNativeMessages([foreground()]);
+        const rows = rowlessBackgroundTaskMessages(
+          [
+            {
+              id: task.id,
+              description: task.description,
+              status: "completed",
+              settledAt: "2026-08-16T10:01:00.000Z",
+            },
+          ],
+          [row!],
+        );
+        expect(rows).toHaveLength(1);
+      });
+
+      test("keeps a card while it runs, for the stop control", () => {
+        const [row] = normalizeNativeMessages([foreground()]);
+
+        expect(
+          rowlessBackgroundTaskMessages([{ ...task, status: "running" }], [row!]),
+        ).toHaveLength(1);
+      });
+    });
   });
 
   test("keeps an unresolved background launch a plain tool row", () => {

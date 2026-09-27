@@ -14,6 +14,7 @@ import type {
   NativeAgentTurnUsage,
 } from "@orkestrator/protocol/native-agent";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 
 export type JsonObject = Record<string, unknown>;
 export type SessionStatus = "idle" | "running" | "error";
@@ -100,6 +101,12 @@ export interface BridgeToolPart {
   toolOutput?: string;
   toolError?: string;
   toolDiff?: BridgeToolDiff;
+  /**
+   * What a shell call changed in the worktree, measured by this bridge (see
+   * `command-changes.ts`). Set once the call settles, and only when something
+   * changed; the SDK reports nothing like it.
+   */
+  commandChanges?: MeasuredWorkspaceChange;
   /** Launch tool this nested call belongs to. */
   parentTaskUseId?: string;
 }

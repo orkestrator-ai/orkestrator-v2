@@ -1,5 +1,9 @@
 import { useCallback, useMemo } from "react";
-import { countTextLines, splitTextLines } from "@orkestrator/protocol/tool-diff";
+import {
+  countTextLines,
+  splitTextLines,
+  type MeasuredWorkspaceChange,
+} from "@orkestrator/protocol/tool-diff";
 import {
   Brain,
   ChevronRight,
@@ -11,7 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
-import { useTerminalContext } from "@/contexts/TerminalContext";
+import { useOptionalTerminalContext, useTerminalContext } from "@/contexts/TerminalContext";
 import { type ToolDiffMetadata } from "@/lib/opencode-client";
 import { getToolDisplayName, getToolTitleDisplayName } from "@/lib/tool-names";
 import {
@@ -159,6 +163,7 @@ export function ToolPart({
   backgroundTask,
   progress,
   denied,
+  commandChanges,
   deferredDetails = false,
 }: {
   expansionKey: string;
@@ -183,6 +188,8 @@ export function ToolPart({
    * not a retry.
    */
   denied?: { reason?: string; source?: string };
+  /** Files this shell call changed, measured by the bridge. */
+  commandChanges?: MeasuredWorkspaceChange;
   /** Output exists but is fetched on expand, so the row must stay expandable. */
   deferredDetails?: boolean;
 }) {
@@ -207,7 +214,11 @@ export function ToolPart({
   // its output only loads *because* the row was expanded, so gating the trigger
   // on already-present output would make it permanently unreachable.
   const hasExpandableContent =
-    toolOutput || toolError || deferredDetails || (toolArgs && Object.keys(toolArgs).length > 0);
+    toolOutput ||
+    toolError ||
+    deferredDetails ||
+    (commandChanges && commandChanges.files.length > 0) ||
+    (toolArgs && Object.keys(toolArgs).length > 0);
 
   // The collapsed row is a single truncating line, so anything shown there is
   // flattened and capped rather than relying on CSS alone — the accessible name
@@ -453,6 +464,7 @@ export function ToolPart({
             {displayToolTitle}
           </span>
         )}
+        {commandChanges && <CommandChangeStats change={commandChanges} />}
         {displayedState && (
           <span className={cn("ml-auto shrink-0", displayedState.className)}>
             {displayedState.label}
@@ -490,6 +502,10 @@ export function ToolPart({
               </div>
             )}
 
+            {commandChanges && commandChanges.files.length > 0 && (
+              <CommandChangedFiles change={commandChanges} />
+            )}
+
             {/* Output section */}
             {toolOutput && (
               <div className="px-3 py-2 max-h-64 overflow-auto">
@@ -514,6 +530,83 @@ export function ToolPart({
         </CollapsibleContent>
       )}
     </Collapsible>
+  );
+}
+
+const APPROXIMATE_CHANGES_TITLE =
+  "Approximate: other changes were made in this worktree while the command ran";
+
+/**
+ * The +N −M a shell row shows for the files the command changed, matching the
+ * edit card's badge. A measured no-op shows nothing; a change git cannot count
+ * in lines (a binary file, a pure rename) shows its file count instead.
+ */
+export function CommandChangeStats({ change }: { change: MeasuredWorkspaceChange }) {
+  const { additions, deletions, files, approximate } = change;
+  const fileCount = files.length;
+  if (additions === 0 && deletions === 0 && fileCount === 0) return null;
+  return (
+    <span
+      className={cn("flex items-center gap-1 shrink-0 font-mono", approximate && "opacity-60")}
+      title={approximate ? APPROXIMATE_CHANGES_TITLE : undefined}
+      data-testid="command-change-stats"
+    >
+      {approximate && <span className="text-muted-foreground">~</span>}
+      {additions > 0 && <span className="text-success">+{additions}</span>}
+      {deletions > 0 && <span className="text-failure">-{deletions}</span>}
+      {additions === 0 && deletions === 0 && (
+        <span className="text-muted-foreground">
+          {fileCount}
+          {change.filesTruncated ? "+" : ""} {fileCount === 1 ? "file" : "files"}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Expanded list of the files a shell call changed, each opening its diff. */
+function CommandChangedFiles({ change }: { change: MeasuredWorkspaceChange }) {
+  // Optional: shell rows also render outside a terminal (pipeline transcripts),
+  // where the paths are shown but cannot be opened.
+  const createFileTab = useOptionalTerminalContext()?.createFileTab;
+  return (
+    <div className="px-3 py-2 border-b border-border/30 text-xs">
+      <div className="mb-1 text-muted-foreground">
+        {change.approximate ? "Changed files (approximate)" : "Changed files"}
+      </div>
+      <ul className="space-y-0.5">
+        {change.files.map((file) => (
+          <li key={file.path} className="flex items-center gap-2 font-mono">
+            {createFileTab ? (
+              <button
+                type="button"
+                className="truncate text-left text-foreground/80 hover:text-foreground hover:underline"
+                title={file.previousPath ? `${file.previousPath} → ${file.path}` : file.path}
+                onClick={() =>
+                  createFileTab(file.path, { isDiff: true, gitStatus: file.status ?? "M" })
+                }
+              >
+                {file.path}
+              </button>
+            ) : (
+              <span className="truncate text-foreground/80" title={file.path}>
+                {file.path}
+              </span>
+            )}
+            <span className="ml-auto flex shrink-0 gap-1">
+              {file.binary && <span className="text-muted-foreground">binary</span>}
+              {file.additions > 0 && <span className="text-success">+{file.additions}</span>}
+              {file.deletions > 0 && <span className="text-failure">-{file.deletions}</span>}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {change.filesTruncated && (
+        <div className="mt-1 text-muted-foreground">
+          More files changed; totals include them all.
+        </div>
+      )}
+    </div>
   );
 }
 

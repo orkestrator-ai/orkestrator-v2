@@ -35,6 +35,11 @@ import {
   workingDirectory,
 } from "./config.js";
 import {
+  commandChangeExtension,
+  discardToolCall,
+  overlayCommandChanges,
+} from "./command-changes.js";
+import {
   markCommandCatalogueStale,
   noteCommandError,
   readSessionCommandCatalogue,
@@ -451,6 +456,8 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
         extensionFactories: [
           { name: "orkestrator", factory: approvalExtension(state) },
           { name: "orkestrator-mcp", factory: piMcpExtension(state) },
+          // After the approval gate, so a refused call is never measured.
+          { name: "orkestrator-command-changes", factory: commandChangeExtension(state) },
         ],
       },
     });
@@ -583,7 +590,12 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
   // The one subscription that builds the transcript. Held so detaching can
   // release it: a listener left attached to a disposed session keeps the whole
   // object graph — messages, tools, extension runner — alive.
-  state.unsubscribe = session.subscribe((event) => applySessionEvent(state, event));
+  state.unsubscribe = session.subscribe((event) => {
+    applySessionEvent(state, event);
+    // Every call that ran was already measured in the `tool_result` hook,
+    // which precedes this frame. What is left open here never ran.
+    if (event.type === "tool_execution_end") discardToolCall(state, event.toolCallId);
+  });
   // A fresh runtime loaded its resources from scratch, so this read is also
   // the reload any refresh deferred while the session was detached or busy.
   state.commandReloadPending = false;
@@ -1145,7 +1157,15 @@ export async function resumeSession(
   // structure Pi resumes and forks from — so a repeat resume adopts the
   // session that already owns the file.
   for (const existing of sessions.values()) {
-    if (existing.sessionFile === resolved) {
+    const ownedFile = existing.sessionFile;
+    if (!ownedFile) continue;
+    // Restored and SDK-created sessions may retain /var while `realpath`
+    // resolves the requested file through macOS's /private/var alias.
+    const sameFile =
+      ownedFile === resolved ||
+      ownedFile === sessionFile ||
+      (await realpath(ownedFile).catch(() => undefined)) === resolved;
+    if (sameFile) {
       if (isSessionClosed(existing)) throw new SessionClosingError();
       if (policy && JSON.stringify(existing.policy) !== JSON.stringify(policy)) {
         if (existing.status === "running" || existing.dispatching) {
@@ -1180,6 +1200,7 @@ export async function resumeSession(
     applyComposerPatch(state, patch);
     state.composer = await hydrateComposerForSession(state.composer);
     hydrateHistory(state);
+    await overlayCommandChanges(state);
     sessions.set(state.id, state);
     return state;
   })();
@@ -1221,6 +1242,7 @@ export async function forkSession(
         : {}),
     });
     forked.policy = state.policy;
+    await overlayCommandChanges(forked, { inheritFrom: state.piSessionId });
     return forked;
   }
   const forked = newSessionState(undefined, state.policy);
@@ -1239,6 +1261,7 @@ export async function forkSession(
     publishAttachedSession(forked, runtime.session);
     resetRenderedHistory(forked);
     hydrateHistory(forked);
+    await overlayCommandChanges(forked, { inheritFrom: state.piSessionId });
     sessions.set(forked.id, forked);
     return outcome.selectedText
       ? Object.assign(forked, { forkDraft: outcome.selectedText })
@@ -1263,6 +1286,7 @@ export async function navigateSessionHistory(
   if (result.cancelled || result.aborted) throw new Error("Pi did not change the active branch");
   resetRenderedHistory(state);
   hydrateHistory(state);
+  await overlayCommandChanges(state);
 }
 
 export async function setSessionTitle(state: SessionState, title: string): Promise<void> {
@@ -1303,6 +1327,7 @@ export function resetRenderedHistory(state: SessionState): void {
   state.transcriptTruncated = false;
   state.openTextParts.clear();
   state.toolInputs.clear();
+  state.pendingCommandChanges?.clear();
   state.currentAssistantMessageId = undefined;
   state.uncheckedTranscriptBytes = 0;
 }

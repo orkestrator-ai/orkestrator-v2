@@ -316,9 +316,77 @@ background change must include this path:
 4. Return and verify status, messages, pending interactions, and controls from
    authoritative snapshots.
 
+Reload once more after returning and verify the same result again. Do not accept
+a result that works only while the initiating component stays mounted: live
+SSE/IPC events are incremental hints, and the check must prove a missed event
+can be recovered.
+
 For each failure record profile and commit, automated commands, route used,
 reproduction steps, expected and actual results, severity, and evidence paths.
 Continue past non-blocking failures and state any skipped flows.
+
+## Frontend change checklist
+
+Use this cycle whenever a change affects rendered UI, routing, browser gateway
+behavior, frontend state, terminal presentation, environment controls, or any
+interaction a user can perform in the desktop window. Test the actual Vite
+renderer against a real isolated backend, not only component mocks.
+
+Before starting the UI, typecheck the web package and run the owning test file
+(see [Automated checks](#automated-checks)). Do not proceed to browser QA with a
+known type error or deterministic focused test failure. A browser pass cannot
+compensate for a broken static or unit check.
+
+For a frontend change, exercise at least:
+
+1. The primary user path changed by the implementation.
+2. Empty, loading, success, and error/disabled states that are reachable safely.
+3. A page reload after the state change, proving the UI rehydrates from the
+   backend instead of depending on the event that originally produced it.
+4. A narrow viewport and a normal desktop viewport for layout-affecting changes.
+5. Keyboard focus, labels, and the relevant accessible role/name for new controls.
+
+Iterate without restarting unnecessarily:
+
+- Frontend-only edits should arrive through Vite HMR in the running profile.
+  Wait for the update, then re-run the affected path. Hard-reload the page if the
+  test specifically needs a clean mount.
+- Changes to Electron main/preload code, backend startup/options, profile wiring,
+  or installed dependencies require stopping and starting the profile again.
+- Backend business-logic changes generally require a restart because the
+  supervised backend is not a Vite module.
+- Use `dev:reset` only when the scenario requires pristine persisted state. A
+  normal implementation loop should preserve the profile so reload and
+  rehydration behavior remain testable.
+- After every restart, call `dev:status --json` again; ports may have changed.
+
+Minimum verification by change type:
+
+| Change scope                                    | Minimum required verification                                                                                           |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| CSS, layout, or visual component                | Web typecheck; owning tests; real browser at desktop and narrow viewport; screenshot of non-sensitive UI if useful      |
+| Frontend interaction or Zustand/Context state   | Web typecheck; owning tests; browser smoke; primary path; reload; inactive-tab path when background state is involved   |
+| Browser gateway or backend command              | Backend and web typechecks; focused gateway/command tests; browser smoke; authenticated real-browser path               |
+| Electron main, preload, IPC, or window behavior | Desktop typecheck; focused Electron tests; `test:agent:electron`; native-window check when visual behavior changed      |
+| Docker lifecycle or container UI                | Backend typecheck; exact-owner focused tests; local browser smoke; opt-in Docker fixture/suite when Docker is available |
+| Cross-cutting or release-sensitive change       | All relevant checks above, then `mise run test`; use `mise run test:all` for release validation including iOS             |
+
+Record enough evidence for another agent to reproduce the result: profile name
+and tested commit/worktree, exact commands and pass/fail counts, the logged
+runner's compressed failure artifact path when a command fails, the browser or
+Electron route and viewport when layout matters, short reproduction steps with
+expected and actual results, artifact paths under
+`output/agent-testing/<run-id>/`, and any skipped flow with its concrete reason.
+Failure screenshots should show only the UI needed to establish the issue, and
+test names, annotations, console messages, and filenames must not carry secrets.
+
+If an automated suite fails, inspect its saved log and owning test first. If it
+failed in an aggregate/parallel run, rerun the owning file alone before calling
+it flaky, then follow the flake workflow in
+[testing-guide.md](testing-guide.md#diagnose-a-failure).
+
+Before handing off, confirm there is no live launcher for the test profile and
+report whether its state was reset or deliberately retained.
 
 ## Stop and reset
 

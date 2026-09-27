@@ -1,4 +1,5 @@
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
+import { removeOpenCodeCommandChangeJournals } from "./opencode-command-changes.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import {
   existsSync,
@@ -1529,6 +1530,11 @@ export async function deleteEnvironment(
             error instanceof Error ? error.message : error,
           );
         });
+      // Measured shell-change badges of the environment's OpenCode sessions.
+      // Never rejects; a leftover journal only costs disk.
+      if (typeof storage.getDataDir === "function") {
+        await removeOpenCodeCommandChangeJournals(storage.getDataDir(), environmentId);
+      }
       context.nativeAgents?.forgetEnvironmentCommandCatalogues?.(environmentId);
       await storage.deleteComposeDraftsByEnvironment(environmentId);
       await storage.deleteFileDraftsByEnvironment(environmentId);

@@ -16,6 +16,7 @@ import { randomBytes } from "node:crypto";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { encodedJsonBytes, jsonStringContentBytes } from "@orkestrator/protocol/transcript-budget";
 import { nextPartOrdinal, toolResultImagePartId } from "@orkestrator/protocol/transcript-part-ids";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { noteCommandOutput } from "./commands.js";
 import { MAX_TOOL_TITLE_BYTES } from "./config.js";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
@@ -402,6 +403,11 @@ function applyToolExecution(
   if (rendered.toolOutput !== undefined) part.toolOutput = rendered.toolOutput;
   if (rendered.toolError !== undefined) part.toolError = rendered.toolError;
   if (rendered.toolDiff) part.toolDiff = rendered.toolDiff;
+  const pendingChanges = state.pendingCommandChanges?.get(toolCallId);
+  if (pendingChanges) {
+    part.commandChanges = pendingChanges;
+    state.pendingCommandChanges?.delete(toolCallId);
+  }
 
   if (phase === "settled") {
     part.toolState = rendered.toolError === undefined ? "success" : "failure";
@@ -423,6 +429,41 @@ function applyToolExecution(
   // worse than one that appears a moment late.
   if (phase === "settled") appendToolResultImages(state, message, toolCallId, rendered.images);
   state.revision += 1;
+}
+
+/** Measured changes held for cards not rendered yet; see `pendingCommandChanges`. */
+const MAX_PENDING_COMMAND_CHANGES = 64;
+
+/**
+ * Stamp a shell call's measured line changes onto its card.
+ *
+ * The measurement finishes in Pi's post-tool hook, which runs before the
+ * call's `tool_execution_end` — so the card is normally there, mid-flight, and
+ * is patched in place; the end frame's re-render leaves the field alone. A
+ * card not rendered yet picks the change up from the pending map when its
+ * first frame arrives. Newest messages first: the call is almost always in the
+ * turn still running.
+ */
+export function applyCommandChanges(
+  state: SessionState,
+  toolCallId: string,
+  change: MeasuredWorkspaceChange,
+): void {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    for (const part of state.messages[index]!.parts) {
+      if (part.type !== "tool-invocation" || part.toolUseId !== toolCallId) continue;
+      part.commandChanges = change;
+      chargeToolPart(state, part);
+      state.revision += 1;
+      return;
+    }
+  }
+  const pending = (state.pendingCommandChanges ??= new Map());
+  if (pending.size >= MAX_PENDING_COMMAND_CHANGES) {
+    const oldest = pending.keys().next();
+    if (!oldest.done) pending.delete(oldest.value);
+  }
+  pending.set(toolCallId, change);
 }
 
 /**

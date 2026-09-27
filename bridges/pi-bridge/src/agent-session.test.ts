@@ -35,7 +35,9 @@ import {
   type AgentSessionTestHooks,
 } from "./agent-session.js";
 import { commandBindingRevision } from "@orkestrator/protocol/agent-command-catalogue";
-import { workingDirectory } from "./config.js";
+import { CommandChangeJournal } from "@orkestrator/protocol/command-change-journal";
+import { setCommandChangeProbeForTests } from "./command-changes.js";
+import { commandChangeJournalPath, workingDirectory } from "./config.js";
 import { catalogReadFailed, refreshModels } from "./models.js";
 import { dispatchPrompt } from "./prompt.js";
 import { setModelRuntimeFactoryForTests } from "./runtime.js";
@@ -340,6 +342,99 @@ describe("session ownership", () => {
       toolState: "success",
       toolOutput: "/workspace",
     });
+  });
+
+  test("puts journaled shell-command changes back on a resumed transcript", async () => {
+    // Pi's session file carries no measurement, so a resume only has the
+    // badge if the journal beside the bridge state supplies it by call id.
+    const stateDirectory = await mkdtemp(join(tmpdir(), "pi-bridge-command-journal-"));
+    const previousStateDirectory = process.env.PI_BRIDGE_STATE_DIR;
+    process.env.PI_BRIDGE_STATE_DIR = stateDirectory;
+    try {
+      const change = {
+        additions: 4,
+        deletions: 2,
+        files: [{ path: "a.ts", additions: 4, deletions: 2 }],
+      };
+      await new CommandChangeJournal(commandChangeJournalPath("journaled-history")!).append(
+        "call-1",
+        change,
+      );
+      const sessionFile = join(sessionDirectory, "journaled-history.jsonl");
+      const timestamp = "2026-09-27T00:00:00.000Z";
+      const entries = [
+        { type: "session", version: 3, id: "journaled-history", timestamp, cwd: workingDirectory },
+        {
+          type: "message",
+          id: "assistant-entry",
+          parentId: null,
+          timestamp,
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-1",
+                name: "bash",
+                arguments: { command: "sed -i x a" },
+              },
+              { type: "toolCall", id: "call-2", name: "bash", arguments: { command: "ls" } },
+            ],
+            api: "openai-completions",
+            provider: "test",
+            model: "test",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: Date.parse(timestamp),
+          },
+        },
+      ];
+      await writeFile(sessionFile, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+
+      const resumed = await resumeSession(sessionFile, undefined);
+      const tools = resumed.messages[0]?.parts.filter((part) => part.type === "tool-invocation");
+      expect(tools?.map((part) => [part.toolUseId, part.commandChanges])).toEqual([
+        ["call-1", change],
+        ["call-2", undefined],
+      ]);
+    } finally {
+      if (previousStateDirectory === undefined) delete process.env.PI_BRIDGE_STATE_DIR;
+      else process.env.PI_BRIDGE_STATE_DIR = previousStateDirectory;
+      await rm(stateDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("closes a measuring window whose call ended without reaching the post-tool hook", async () => {
+    // A call a later `tool_call` handler blocked, or one an abort skipped,
+    // gets `tool_execution_end` but never `tool_result`.
+    const discarded: string[] = [];
+    setCommandChangeProbeForTests({
+      begin: async () => undefined,
+      note: async () => undefined,
+      end: async () => undefined,
+      discard: (id) => {
+        discarded.push(id);
+      },
+    });
+    try {
+      const fake = fakeSession();
+      installTestHooks({ createAgentSession: async () => fake.session });
+      const state = newSessionState();
+      await ensureSession(state);
+
+      fake.emit({ type: "tool_execution_end", toolCallId: "call-1", toolName: "bash" });
+
+      expect(discarded).toEqual([`${state.id}:call-1`]);
+    } finally {
+      setCommandChangeProbeForTests(undefined);
+    }
   });
 
   test("rehydrates past usage and context-edit entries without rendering them", async () => {

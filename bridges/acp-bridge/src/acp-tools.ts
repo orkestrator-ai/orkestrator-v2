@@ -124,14 +124,19 @@ export function commitToolPartMutation(
   return true;
 }
 
+/**
+ * Upsert a tool part from a `tool_call` / `tool_call_update` frame. Returns the
+ * part once the update is committed, so the caller can follow the call's
+ * lifecycle (see `acp-command-changes.ts`); undefined when nothing was.
+ */
 export function applyToolCallUpdate(
   state: SessionState,
   update: JsonObject,
   isInitial: boolean,
-): void {
-  if (typeof update.toolCallId !== "string") return;
+): BridgeToolPart | undefined {
+  if (typeof update.toolCallId !== "string") return undefined;
   const toolCallId = truncateUtf8(update.toolCallId, MAX_TOOL_ID_BYTES);
-  if (!toolCallId) return;
+  if (!toolCallId) return undefined;
 
   // Incremental transcript reads intentionally re-fetch only the trailing
   // message. Tool updates therefore upsert there as well; mutating an older
@@ -166,7 +171,7 @@ export function applyToolCallUpdate(
         state.revision += 1;
         schedulePersist();
       }
-      return;
+      return undefined;
     }
   }
 
@@ -195,7 +200,7 @@ export function applyToolCallUpdate(
         toolState: "pending",
         createdAt: new Date().toISOString(),
       };
-      if (!pushToolPart(state, owner, part, isInitial)) return;
+      if (!pushToolPart(state, owner, part, isInitial)) return undefined;
     }
   }
 
@@ -209,6 +214,7 @@ export function applyToolCallUpdate(
       agentState: part.agentState,
       rawOutput: part.toolOutput,
       contentDiffs: part.toolDiff ? [part.toolDiff] : [],
+      commandChanges: part.commandChanges,
     };
     acpToolSourceStates.set(part, source);
   }
@@ -224,7 +230,7 @@ export function applyToolCallUpdate(
   }
   syncActiveSubagentTool(state, part);
 
-  if (!commitToolPartMutation(state, part, source)) return;
+  if (!commitToolPartMutation(state, part, source)) return undefined;
 
   // Cursor's live ACP stream intentionally reduces read/search calls to
   // generic labels such as `Read File` and `grep`. Its indexed session replay
@@ -244,6 +250,7 @@ export function applyToolCallUpdate(
   ) {
     scheduleCursorToolMetadataReconcile(state);
   }
+  return part;
 }
 
 export function collectReplayToolMetadata(
@@ -818,6 +825,7 @@ export function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceS
     source.locationPath ?? toolArgumentPath(source.toolArgs),
   );
   setOptionalPartField(part, "toolDiff", diff);
+  setOptionalPartField(part, "commandChanges", source.commandChanges);
 }
 
 export function acpSubagentState(
@@ -900,6 +908,7 @@ export function ensureAcpToolSource(part: BridgeToolPart): AcpToolSourceState {
     rawOutput: part.toolOutput,
     lifecycleError: part.agentState === "failed" ? part.toolError : undefined,
     contentDiffs: part.toolDiff ? [part.toolDiff] : [],
+    commandChanges: part.commandChanges,
   };
   acpToolSourceStates.set(part, source);
   return source;

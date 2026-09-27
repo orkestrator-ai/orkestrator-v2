@@ -12,8 +12,8 @@ import {
  * The global setup mocks `@/lib/native/events` for every suite. `startResourceSync`
  * needs to drive that listener, so this file overrides the mock with a
  * controllable one and restores the shared shape afterwards — the
- * snapshot-and-restore pattern from AGENTS.md — so later files still see the
- * no-op listener they expect.
+ * snapshot-and-restore pattern from docs/development/testing-guide.md — so
+ * later files still see the no-op listener they expect.
  */
 import * as realEvents from "@/lib/native/events";
 

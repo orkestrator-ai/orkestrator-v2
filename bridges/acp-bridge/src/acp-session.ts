@@ -89,6 +89,7 @@ import { applyGrokInterjectionBroadcast } from "./grok-interjection.js";
 import { effectiveTurnExecutionPolicy } from "./acp-policy.js";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import { applyCommandInventory } from "./acp-commands.js";
+import { applyJournaledCommandChanges, trackCommandChangeWindow } from "./acp-command-changes.js";
 
 export async function listResumableSessions(): Promise<JsonObject[]> {
   if (sessionListProbe) return sessionListProbe;
@@ -308,6 +309,8 @@ export async function resumeSessionReserved(
     // session/load is a projection of work owned by another ACP process. Its
     // historical active markers cannot describe children of this new process.
     reconcileStaleToolParts(state, true);
+    // The vendor replay has no shell measurements; this bridge journaled them.
+    await applyJournaledCommandChanges(state);
     state.cursorTodos = restoreCursorTodosFromMessages(state.messages);
     if (isObject(loaded)) {
       const sessionConfig = normalizeAcpSessionConfig(provider, {
@@ -655,7 +658,11 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
     );
     finalizeHistoryReplayTurnUsage(state);
     state.historyReplay = false;
-    if (hydratedHistory) reconcileStaleToolParts(state, true);
+    if (hydratedHistory) {
+      reconcileStaleToolParts(state, true);
+      // The vendor replay has no shell measurements; this bridge journaled them.
+      await applyJournaledCommandChanges(state);
+    }
     state.cursorTodos = restoreCursorTodosFromMessages(state.messages);
     if (isObject(loaded)) {
       const sessionConfig = normalizeAcpSessionConfig(provider, {
@@ -1013,7 +1020,8 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
   }
   if (state.outputTruncated) return;
   if (kind === "tool_call" || kind === "tool_call_update") {
-    applyToolCallUpdate(state, update, kind === "tool_call");
+    const part = applyToolCallUpdate(state, update, kind === "tool_call");
+    if (part) trackCommandChangeWindow(state, part, kind === "tool_call");
     return;
   }
   if (kind === "plan" || kind === "plan_update") {

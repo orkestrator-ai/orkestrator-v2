@@ -31,6 +31,23 @@ export function stateFilePath(): string | null {
 }
 
 /**
+ * Where one Pi session's measured shell-command changes are journaled, or null
+ * when this bridge is stateless.
+ *
+ * Beside `state.json`, keyed by Pi's own session id rather than the bridge's:
+ * a resume or fork rebuilds the transcript from Pi's session file under a new
+ * bridge session, and only Pi's id (and the tool call ids inside that file)
+ * survive the trip. The id is reduced to a safe file name because it comes
+ * from a session file this bridge did not write.
+ */
+export function commandChangeJournalPath(piSessionId: string | undefined): string | null {
+  const directory = process.env.PI_BRIDGE_STATE_DIR?.trim();
+  const name = piSessionId?.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 128);
+  if (!directory || !name || /^\.+$/.test(name)) return null;
+  return resolve(directory, "command-changes", `${name}.jsonl`);
+}
+
+/**
  * Pi's own configuration directory, holding `auth.json`, `models.json` and
  * `settings.json`.
  *

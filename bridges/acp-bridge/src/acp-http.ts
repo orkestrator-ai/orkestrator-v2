@@ -99,6 +99,7 @@ import {
 } from "@orkestrator/protocol/session-activity-batch";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { structuredPromptInstruction } from "./acp-prompt.js";
+import { primeCommandChanges, settleCommandChangeWindows } from "./acp-command-changes.js";
 
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
 
@@ -681,6 +682,9 @@ export async function route(
       schedulePersist();
       return json(response, 409, { error: SESSION_CLOSING_ERROR });
     }
+    // Grok reports a command only once it is running, so each shell call is
+    // measured from the latest snapshot; this is the turn's first one.
+    await primeCommandChanges();
     const acpPrompt = schema ? `${prompt}\n\n${structuredPromptInstruction(schema)}` : prompt;
     const promptCompletion = dispatchAcpPrompt(
       state,
@@ -789,6 +793,7 @@ export async function route(
         // The turn is over. A tool still in flight here was cancelled or abandoned
         // by the agent — ACP has no status for that, so settle it explicitly.
         reconcileStaleToolParts(state);
+        settleCommandChangeWindows(state);
         state.currentTurnOutput = null;
         if (!state.outputTruncated && state.child === child && state.status !== "error") {
           state.status = "idle";
@@ -818,6 +823,7 @@ export async function route(
         // background work, and nothing should outlive the turn that asked for it.
         cancelCursorToolMetadataReconcile(state);
         reconcileStaleToolParts(state, true);
+        settleCommandChangeWindows(state);
         if (requestId)
           setPromptJournal(state, {
             requestId,

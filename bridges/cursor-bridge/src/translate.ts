@@ -22,6 +22,7 @@ import {
   MAX_TOOL_TITLE_BYTES,
 } from "./config.js";
 import type { InteractionUpdate, NestedTaskUpdate } from "@cursor/sdk";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { recordObservedMcpTool } from "./mcp.js";
 import { jsonStringContentBytes, encodedJsonBytes } from "@orkestrator/protocol/transcript-budget";
 import { nextPartOrdinal } from "@orkestrator/protocol/transcript-part-ids";
@@ -316,6 +317,32 @@ function applyToolCall(
   }
   chargeToolPart(state, part);
   state.revision += 1;
+}
+
+/**
+ * Put a shell call's measured worktree change on its card.
+ *
+ * The measurement settles after the call does, on its own schedule, so the
+ * card is found again by call id — newest first, since it is almost always in
+ * the message still being written. False when the card is gone: a transcript
+ * trim evicted it, or a rewind removed its turn.
+ */
+export function applyCommandChanges(
+  state: SessionState,
+  callId: string,
+  change: MeasuredWorkspaceChange,
+): boolean {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    for (const part of state.messages[index]!.parts) {
+      if (part.type !== "tool-invocation" || part.toolUseId !== callId) continue;
+      part.commandChanges = change;
+      // Bounded by the probe (at most fifty files, each a path and two counts).
+      chargeTranscript(state, Buffer.byteLength(JSON.stringify(change)));
+      state.revision += 1;
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

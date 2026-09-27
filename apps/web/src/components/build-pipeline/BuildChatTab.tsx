@@ -1,6 +1,7 @@
 import { ReviewValidationStatus } from "../review/ReviewValidationStatus";
 import { WorkflowResultStatus } from "../review/WorkflowResultStatus";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   AlertCircle,
   ArrowDown,
@@ -12,12 +13,12 @@ import {
   Pause,
   Play,
   RefreshCw,
-  RotateCcw,
   Square,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  isActiveBuildPhase,
   isReviewPackagePreparationSession,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
   REVIEW_PACKAGE_SESSION_LABEL,
@@ -48,13 +49,6 @@ import {
 import { useMediaQuery, useVirtuosoScrollState } from "@/hooks";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { Button } from "@/components/ui/button";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -70,6 +64,20 @@ import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { BuildCompletionStatus } from "./BuildCompletionStatus";
 import { toPipelineTranscript } from "./pipeline-transcript";
+import {
+  formatStageSpan,
+  pipelineStageGroups,
+  pipelineStageItems,
+  stageGroupKeyByItemId,
+  validationOutcome,
+  validationStageSummary,
+  type PipelineStageItem,
+} from "./pipeline-stage-groups";
+import {
+  PipelineStageRail,
+  useStageGroupExpansion,
+  type PipelineStageRowView,
+} from "./PipelineStageRail";
 
 interface BuildChatTabProps {
   data: BuildTabData;
@@ -144,96 +152,6 @@ const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
 const MOBILE_VIEWS = ["stages", "transcript"] as const;
 
 type MobileView = (typeof MOBILE_VIEWS)[number];
-
-type PipelineStageItem =
-  | { kind: "session"; id: string; key: string; session: PipelineSession }
-  | { kind: "validation"; id: string; key: string };
-
-type ValidationRun = NonNullable<BuildPipeline["validationRun"]>;
-type ValidationOutcome = "running" | "failed" | "cancelled" | "incomplete" | "passed";
-
-/**
- * Lifecycle `completed` means every command finished, not that they passed.
- * Failed is reserved for run-level faults (HEAD moved, runner died), so the
- * stage icon has to read the per-command results as well. Cancellation is a
- * distinct terminal state: the run stopped, it did not fail.
- */
-function validationOutcome(run: ValidationRun | undefined): ValidationOutcome {
-  const status = run?.status;
-  if (status === "planned" || status === "running") return "running";
-  if (status === "cancelled") return "cancelled";
-  if (status === "failed") return "failed";
-  const results = run?.results ?? [];
-  if (results.some((result) => result.status === "failed")) return "failed";
-  if (results.some((result) => result.status === "incomplete")) return "incomplete";
-  return "passed";
-}
-
-function validationStageSummary(run: ValidationRun): string {
-  if (run.status === "failed") {
-    const error = run.error?.trim();
-    return error && error.length > 0 ? error : "Validation failed";
-  }
-  if (run.status === "cancelled") {
-    const error = run.error?.trim();
-    return error && error.length > 0 ? error : "Validation cancelled";
-  }
-  const commandCount = run.plan.commands.length;
-  const checkWord = commandCount === 1 ? "check" : "checks";
-  const outcome = validationOutcome(run);
-  if (outcome === "failed" && run.status === "completed") {
-    const failed = run.results.filter((result) => result.status === "failed").length;
-    return failed === commandCount
-      ? `${failed} ${checkWord} failed`
-      : `${failed} of ${commandCount} ${checkWord} failed`;
-  }
-  if (outcome === "incomplete") {
-    const incomplete = run.results.filter((result) => result.status === "incomplete").length;
-    return incomplete === commandCount
-      ? `${incomplete} ${checkWord} incomplete`
-      : `${incomplete} of ${commandCount} ${checkWord} incomplete`;
-  }
-  return `${commandCount} ${checkWord}`;
-}
-
-/**
- * Validation is backend-owned work rather than an agent session, but it is a
- * first-class pipeline stage to the reader. Insert it immediately after the
- * package-preparation turn that discovered the commands, leaving the review
- * sessions below it in their existing order.
- */
-function pipelineStageItems(pipeline: BuildPipeline): PipelineStageItem[] {
-  const items: PipelineStageItem[] = pipeline.sessions.map((session) => ({
-    kind: "session",
-    id: session.sdkSessionId,
-    key: session.sessionKey,
-    session,
-  }));
-  if (!pipeline.validationRun) return items;
-
-  const validationItem: PipelineStageItem = {
-    kind: "validation",
-    id: `validation:${pipeline.validationRun.id}`,
-    key: `validation-${pipeline.validationRun.id}`,
-  };
-  let preparationIndex = -1;
-  for (let index = pipeline.sessions.length - 1; index >= 0; index -= 1) {
-    if (isReviewPackagePreparationSession(pipeline.sessions[index], pipeline)) {
-      preparationIndex = index;
-      break;
-    }
-  }
-  if (preparationIndex >= 0) {
-    items.splice(preparationIndex + 1, 0, validationItem);
-    return items;
-  }
-
-  // Old persisted snapshots can have validation evidence without the labelled
-  // preparation session. It still belongs before the first review it supplied.
-  const firstReviewIndex = pipeline.sessions.findIndex((session) => session.phase === "review");
-  items.splice(firstReviewIndex >= 0 ? firstReviewIndex : items.length, 0, validationItem);
-  return items;
-}
 
 /**
  * The stage that owns the structured review report.
@@ -355,33 +273,6 @@ export function pipelineReviewRuntimeSummary(
   return runtimeSummary(session, session.status === "running", now);
 }
 
-function SessionStateIcon({ session }: { session: PipelineSession }) {
-  if (session.status === "running") {
-    return <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />;
-  }
-  if (session.status === "error") {
-    return <AlertCircle className="h-3.5 w-3.5 text-destructive" />;
-  }
-  return <CheckCircle2 className="h-3.5 w-3.5 text-success" />;
-}
-
-function ValidationStateIcon({ pipeline }: { pipeline: BuildPipeline }) {
-  const outcome = validationOutcome(pipeline.validationRun);
-  if (outcome === "running") {
-    return <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />;
-  }
-  if (outcome === "failed") {
-    return <AlertCircle className="h-3.5 w-3.5 text-destructive" />;
-  }
-  if (outcome === "cancelled") {
-    return <Circle className="h-3.5 w-3.5 text-muted-foreground" />;
-  }
-  if (outcome === "incomplete") {
-    return <AlertCircle className="h-3.5 w-3.5 text-muted-foreground" />;
-  }
-  return <CheckCircle2 className="h-3.5 w-3.5 text-success" />;
-}
-
 export function BuildChatTab({
   data,
   isActive = false,
@@ -441,6 +332,7 @@ export function BuildChatTab({
   const transcriptPanelId = `${instanceId}transcript`;
   const stagesPanelId = `${instanceId}stages`;
   const stageTabId = (sessionKey: string) => `${instanceId}stage-${sessionKey}`;
+  const stageGroupPanelId = (groupKey: string) => `${instanceId}stage-group-${groupKey}`;
   const mobileViewTabId = (view: MobileView) => `${instanceId}view-${view}`;
   const mobileViewPanelId = (view: MobileView) =>
     view === "stages" ? stagesPanelId : transcriptPanelId;
@@ -498,12 +390,15 @@ export function BuildChatTab({
   const hasRunningReview = pipeline?.sessions.some(
     (session) => isIndependentReviewSession(session) && session.status === "running",
   );
+  // The stage rail's phase durations and elapsed footer count up while the
+  // pipeline works, so they share this clock with the reviewer timers.
+  const pipelineRunning = pipeline ? isActiveBuildPhase(pipeline.phase) : false;
   useEffect(() => {
-    if (!isActive || (!hasRunningValidation && !hasRunningReview)) return;
+    if (!isActive || (!hasRunningValidation && !hasRunningReview && !pipelineRunning)) return;
     setDisplayNow(Date.now());
     const interval = window.setInterval(() => setDisplayNow(Date.now()), 1_000);
     return () => window.clearInterval(interval);
-  }, [hasRunningReview, hasRunningValidation, isActive]);
+  }, [hasRunningReview, hasRunningValidation, isActive, pipelineRunning]);
 
   useEffect(() => {
     if (!pipeline?.sessions.length) {
@@ -709,6 +604,27 @@ export function BuildChatTab({
   const listMessages = validationSelected ? lastListMessagesRef.current : messages;
   const listReviewReport = validationSelected ? lastListReportRef.current : selectedReviewReport;
 
+  /** The accepted report a stage produced, as its stage badge and the rail's review chip read it. */
+  const stageReportFor = (session: PipelineSession) =>
+    (sessionReviewReportsAreCurrent ? session.reviewReport : undefined) ??
+    (reportSession && session.sessionKey === reportSession.sessionKey
+      ? pipeline?.structuredReview
+      : undefined);
+  const stageItems = pipeline ? pipelineStageItems(pipeline) : [];
+  const timeline = pipeline
+    ? pipelineStageGroups(pipeline, stageItems, {
+        reportIssueCount: (session) => stageReportFor(session)?.issues.length,
+      })
+    : undefined;
+  const groupKeyByStageId = timeline ? stageGroupKeyByItemId(timeline) : new Map<string, string>();
+  const { isGroupExpanded, toggleGroup } = useStageGroupExpansion(
+    data.pipelineId,
+    timeline?.groups.find((group) => group.current)?.key,
+    selectedSessionId,
+    selectedSessionId ? groupKeyByStageId.get(selectedSessionId) : undefined,
+    pinnedSessionRef.current,
+  );
+
   const runControl = async (action: "pause" | "resume" | "cancel"): Promise<void> => {
     if (!pipeline || controlPending) return;
     setControlPending(true);
@@ -871,7 +787,6 @@ export function BuildChatTab({
         ? (reviewLabels.get(selectedSession.sessionKey) ?? selectedSession.label)
         : "Transcript",
   };
-  const stageItems = pipelineStageItems(pipeline);
 
   /**
    * The pipeline controls, as data rather than markup.
@@ -933,6 +848,115 @@ export function BuildChatTab({
   }
 
   /**
+   * What each stage tab shows.
+   *
+   * Inside a phase group a row can be shorter than the stage's own label — a
+   * reviewer reads as its letter and model — so the full label is kept as the
+   * tab's accessible name, followed by what the row's badges say.
+   */
+  const stageRowView = (item: PipelineStageItem): PipelineStageRowView => {
+    if (item.kind === "validation") {
+      const run = pipeline.validationRun;
+      const summary = run ? validationStageSummary(run) : "0 checks";
+      const outcome = validationOutcome(run);
+      return {
+        accessibleName: `Tests, ${summary}`,
+        title: "Tests",
+        meta:
+          outcome === "running"
+            ? "running"
+            : formatStageSpan(
+                run ? Date.parse(run.startedAt) : undefined,
+                run?.completedAt ? Date.parse(run.completedAt) : undefined,
+                false,
+                displayNow,
+              ),
+        detail: { text: summary },
+        autoDeclineCount: 0,
+        status: outcome === "passed" ? "done" : outcome === "failed" ? "error" : outcome,
+      };
+    }
+    const { session } = item;
+    const reviewLabel = reviewLabels.get(session.sessionKey);
+    const fanoutReviewer = fanoutReviewerBySessionKey.get(session.sessionKey);
+    const reviewerIndex = reviewLabel ? (pipelineIndependentReviewSlot(session.label) ?? -1) : -1;
+    const configuredReviewer =
+      reviewerIndex >= 0 && pipeline.reviewers?.length
+        ? pipeline.reviewers[reviewerIndex % pipeline.reviewers.length]
+        : undefined;
+    const reviewerAgent =
+      session.agent ?? fanoutReviewer?.agent ?? configuredReviewer?.agent ?? pipeline.agentType;
+    const reviewerModel =
+      session.model ??
+      (fanoutReviewer?.modelUnpinned ? undefined : fanoutReviewer?.model) ??
+      configuredReviewer?.model;
+    const reviewerModelLabel =
+      reviewLabel && reviewerAgent
+        ? reviewerModel
+          ? resolveCatalogModelLabel(reviewerModel, modelsForAgent(modelCatalog, reviewerAgent))
+          : "Provider default"
+        : null;
+    const reviewerRuntime = reviewLabel
+      ? pipelineReviewRuntimeSummary(
+          {
+            ...session,
+            completedAt: session.completedAt ?? fanoutReviewer?.completedAt,
+            tokenCount: session.tokenCount ?? fanoutReviewer?.tokenCount,
+          },
+          displayNow,
+        )
+      : null;
+    const report = stageReportFor(session);
+    const autoDeclineCount = session.autoDeclineCount ?? 0;
+    const status =
+      session.status === "running" ? "running" : session.status === "error" ? "error" : "done";
+    const accessibleName = [
+      reviewLabel
+        ? [reviewLabel, reviewerModelLabel].filter(Boolean).join(", ")
+        : `${session.label}, Iteration ${session.iteration + 1}`,
+      status === "running" ? "running" : status === "error" ? "failed" : null,
+      report ? `Report · ${issueCountLabel(report.issues.length)}` : null,
+      autoDeclineCount > 0
+        ? `${autoDeclineCount} input request${autoDeclineCount === 1 ? "" : "s"} auto-declined`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    if (reviewLabel) {
+      const previous = reviewLabel.endsWith(" · previous");
+      return {
+        accessibleName,
+        title: reviewerModelLabel ?? reviewLabel,
+        letter: reviewLetter(reviewerIndex),
+        tag: previous ? "previous" : undefined,
+        detail: reviewerRuntime
+          ? { text: reviewerRuntime, label: `${reviewLabel} runtime and token usage`, mono: true }
+          : null,
+        autoDeclineCount,
+        reportIssueCount: report?.issues.length,
+        status,
+      };
+    }
+    return {
+      accessibleName,
+      title: session.label,
+      meta:
+        status === "running"
+          ? "running"
+          : formatStageSpan(
+              Date.parse(session.startedAt),
+              session.completedAt ? Date.parse(session.completedAt) : undefined,
+              false,
+              displayNow,
+            ),
+      autoDeclineCount,
+      reportIssueCount: report?.issues.length,
+      status,
+    };
+  };
+  const stageRows = new Map(stageItems.map((item) => [item.id, stageRowView(item)] as const));
+
+  /**
    * Move the selection to another stage from the keyboard.
    *
    * Taking `role="tab"` is a promise that arrow keys move between stages and
@@ -940,16 +964,28 @@ export function BuildChatTab({
    * `aria-orientation="vertical"` repeats. Focus follows selection, which is the
    * correct pattern here because showing a stage is cheap and has no side
    * effect beyond rendering its transcript.
+   *
+   * The keys walk every stage in pipeline order, folded phases included:
+   * selecting a stage opens its phase, so no stage is out of keyboard reach.
    */
   const moveStageFocus = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const step = STAGE_TAB_KEYS[event.key];
     if (step === undefined || stageItems.length === 0) return;
+    // A phase header is a disclosure button, not a tab; its keys are its own.
+    if (event.target instanceof Element && event.target.closest("[data-stage-group]")) return;
     // Consumed even when the selection does not move (a single-stage pipeline,
     // or Home on the first stage): a tablist owns these keys, and letting one
     // fall through to scroll the stage list instead is the inconsistency the
     // pattern exists to remove.
     event.preventDefault();
-    const current = stageItems.findIndex((stage) => stage.id === selectedSessionId);
+    const focusedTab =
+      event.target instanceof Element ? event.target.closest<HTMLElement>('[role="tab"]') : null;
+    const focusedStage = focusedTab
+      ? stageItems.find((stage) => stageTabId(stage.key) === focusedTab.id)
+      : undefined;
+    const current = stageItems.findIndex(
+      (stage) => stage.id === (focusedStage?.id ?? selectedSessionId),
+    );
     const next =
       step === "first"
         ? 0
@@ -960,7 +996,9 @@ export function BuildChatTab({
             (Math.max(current, 0) + step + stageItems.length) % stageItems.length;
     const target = stageItems[next];
     if (!target || target.id === selectedSessionId) return;
-    pinSession(target.id);
+    // Committed synchronously so a tab in a folded phase is mounted, with its
+    // phase opened, before focus is moved onto it.
+    flushSync(() => pinSession(target.id));
     document.getElementById(stageTabId(target.key))?.focus();
   };
 
@@ -1115,7 +1153,7 @@ export function BuildChatTab({
       )}
 
       <div className="flex min-h-0 flex-1">
-        <ScrollArea
+        <div
           id={stagesPanelId}
           hidden={!stagesVisible}
           // On mobile this half is a panel of the view switcher above. On
@@ -1131,202 +1169,27 @@ export function BuildChatTab({
             // `hidden` has to be the utility, not just the attribute: the
             // attribute's base-layer rule loses to any display utility.
             !stagesVisible && "hidden",
-            isMobile ? "w-full" : "w-60 shrink-0 border-r border-border/40",
+            isMobile ? "w-full" : "w-[272px] shrink-0 border-r border-border/40",
           )}
         >
-          <div
-            className="space-y-1 p-2"
-            role="tablist"
-            aria-orientation="vertical"
-            aria-label="Build stages"
-            onKeyDown={moveStageFocus}
-          >
-            {stageItems.length === 0 ? (
-              <div className="px-2 py-4 text-xs text-muted-foreground">
-                The backend is preparing the first stage.
-              </div>
-            ) : (
-              stageItems.map((stage, index) => {
-                if (stage.kind === "validation") {
-                  const isSelected = selectedSessionId === stage.id;
-                  const testsSummary = pipeline.validationRun
-                    ? validationStageSummary(pipeline.validationRun)
-                    : "0 checks";
-                  return (
-                    <ContextMenu key={stage.key}>
-                      <ContextMenuTrigger asChild>
-                        <button
-                          id={stageTabId(stage.key)}
-                          type="button"
-                          role="tab"
-                          aria-selected={isSelected}
-                          aria-controls={transcriptPanelId}
-                          aria-label={`Tests, ${testsSummary}`}
-                          tabIndex={
-                            isSelected || (selectedSessionId === null && index === 0) ? 0 : -1
-                          }
-                          className={cn(
-                            "flex w-full items-start gap-2 rounded-lg border px-2 py-2 text-left transition-colors",
-                            isSelected
-                              ? "border-zinc-700/70 bg-zinc-800/85"
-                              : "border-transparent hover:bg-zinc-800/55",
-                          )}
-                          onClick={() => selectStage(stage.id)}
-                        >
-                          <ValidationStateIcon pipeline={pipeline} />
-                          <span className="min-w-0">
-                            <span
-                              className={cn(
-                                "block truncate text-xs font-medium",
-                                isSelected ? "text-foreground" : "text-foreground/80",
-                              )}
-                            >
-                              Tests
-                            </span>
-                            <span className="block text-[11px] text-muted-foreground">
-                              {testsSummary}
-                            </span>
-                          </span>
-                        </button>
-                      </ContextMenuTrigger>
-                      <ContextMenuContent className="w-40">
-                        <ContextMenuItem
-                          disabled={controlPending}
-                          onSelect={() => void restartStage(stage.id)}
-                        >
-                          <RotateCcw />
-                          Restart
-                        </ContextMenuItem>
-                      </ContextMenuContent>
-                    </ContextMenu>
-                  );
-                }
-                const { session } = stage;
-                const isSelected = selectedSessionId === stage.id;
-                const reviewLabel = reviewLabels.get(session.sessionKey);
-                const fanoutReviewer = fanoutReviewerBySessionKey.get(session.sessionKey);
-                const reviewerIndex = reviewLabel
-                  ? (pipelineIndependentReviewSlot(session.label) ?? -1)
-                  : -1;
-                const configuredReviewer =
-                  reviewerIndex >= 0 && pipeline.reviewers?.length
-                    ? pipeline.reviewers[reviewerIndex % pipeline.reviewers.length]
-                    : undefined;
-                const reviewerAgent =
-                  session.agent ??
-                  fanoutReviewer?.agent ??
-                  configuredReviewer?.agent ??
-                  pipeline.agentType;
-                const reviewerModel =
-                  session.model ??
-                  (fanoutReviewer?.modelUnpinned ? undefined : fanoutReviewer?.model) ??
-                  configuredReviewer?.model;
-                const reviewerModelLabel =
-                  reviewLabel && reviewerAgent
-                    ? reviewerModel
-                      ? resolveCatalogModelLabel(
-                          reviewerModel,
-                          modelsForAgent(modelCatalog, reviewerAgent),
-                        )
-                      : "Provider default"
-                    : null;
-                const reviewerRuntime = reviewLabel
-                  ? pipelineReviewRuntimeSummary(
-                      {
-                        ...session,
-                        completedAt: session.completedAt ?? fanoutReviewer?.completedAt,
-                        tokenCount: session.tokenCount ?? fanoutReviewer?.tokenCount,
-                      },
-                      displayNow,
-                    )
-                  : null;
-                const ownsReport = Boolean(
-                  reportSession && session.sessionKey === reportSession.sessionKey,
-                );
-                const stageReport =
-                  (sessionReviewReportsAreCurrent ? session.reviewReport : undefined) ??
-                  (ownsReport ? pipeline.structuredReview : undefined);
-                return (
-                  <ContextMenu key={session.sessionKey}>
-                    <ContextMenuTrigger asChild>
-                      <button
-                        id={stageTabId(session.sessionKey)}
-                        type="button"
-                        role="tab"
-                        aria-selected={isSelected}
-                        aria-controls={transcriptPanelId}
-                        // One stop for the whole list, then arrow keys within it —
-                        // otherwise Tab walks every stage before reaching the
-                        // transcript. The first stage stands in for the frame before
-                        // the following effect has chosen one.
-                        tabIndex={
-                          isSelected || (selectedSessionId === null && index === 0) ? 0 : -1
-                        }
-                        className={cn(
-                          "flex w-full items-start gap-2 rounded-lg border px-2 py-2 text-left transition-colors",
-                          isSelected
-                            ? "border-zinc-700/70 bg-zinc-800/85"
-                            : "border-transparent hover:bg-zinc-800/55",
-                        )}
-                        onClick={() => selectStage(stage.id)}
-                      >
-                        <SessionStateIcon session={session} />
-                        <span className="min-w-0 flex-1">
-                          <span
-                            className={cn(
-                              "block truncate text-xs font-medium",
-                              isSelected ? "text-foreground" : "text-foreground/80",
-                            )}
-                          >
-                            {reviewLabel ?? session.label}
-                          </span>
-                          {reviewerModelLabel ? (
-                            <span className="block truncate text-[11px] text-muted-foreground">
-                              {reviewerModelLabel}
-                            </span>
-                          ) : (
-                            <span className="block text-[11px] text-muted-foreground">
-                              Iteration {session.iteration + 1}
-                            </span>
-                          )}
-                          {reviewerRuntime && (
-                            <span
-                              className="mt-0.5 block truncate font-mono text-[10px] tabular-nums text-muted-foreground"
-                              aria-label={`${reviewLabel} runtime and token usage`}
-                            >
-                              {reviewerRuntime}
-                            </span>
-                          )}
-                          {(session.autoDeclineCount ?? 0) > 0 && (
-                            <span className="mt-1 block text-[10px] text-muted-foreground">
-                              {session.autoDeclineCount} input request
-                              {session.autoDeclineCount === 1 ? "" : "s"} auto-declined
-                            </span>
-                          )}
-                          {stageReport && (
-                            <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200/90">
-                              <ClipboardCheck className="h-2.5 w-2.5" />
-                              Report · {issueCountLabel(stageReport.issues.length)}
-                            </span>
-                          )}
-                        </span>
-                      </button>
-                    </ContextMenuTrigger>
-                    <ContextMenuContent className="w-40">
-                      <ContextMenuItem
-                        disabled={controlPending}
-                        onSelect={() => void restartStage(stage.id)}
-                      >
-                        <RotateCcw />
-                        Restart
-                      </ContextMenuItem>
-                    </ContextMenuContent>
-                  </ContextMenu>
-                );
-              })
-            )}
-          </div>
-        </ScrollArea>
+          {timeline && (
+            <PipelineStageRail
+              timeline={timeline}
+              rows={stageRows}
+              now={displayNow}
+              selectedStageId={selectedSessionId}
+              isGroupExpanded={isGroupExpanded}
+              onToggleGroup={toggleGroup}
+              stageTabId={stageTabId}
+              groupPanelId={stageGroupPanelId}
+              transcriptPanelId={transcriptPanelId}
+              onSelectStage={(stageId) => selectStage(stageId)}
+              onRestartStage={(stageId) => void restartStage(stageId)}
+              restartDisabled={controlPending}
+              onKeyDown={moveStageFocus}
+            />
+          )}
+        </div>
 
         <div
           className={cn(

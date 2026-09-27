@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Context, Hono } from "hono";
 import { compress } from "hono/compress";
 import {
@@ -27,6 +28,19 @@ export interface CodexTranscriptRuntime {
 }
 
 /**
+ * Scopes the transcript generation to this bridge process.
+ *
+ * The engine generation alone is not enough: a supervisor numbers its
+ * app-server children from 1 in every process, and a restored session starts
+ * its revision and content epoch again at 0 (`ThreadRegistry.restoreSession`).
+ * After a bridge restart all three can repeat values a reader still holds a
+ * token or page cursor for, and that token would then answer `unchanged` for
+ * different content. The other bridges draw a random generation per process;
+ * this keeps the engine generation readable after the process part.
+ */
+const TRANSCRIPT_PROCESS = randomUUID();
+
+/**
  * What every transcript route of one session reads right now.
  *
  * The bridge-owned display tail — the attached thread's rendered messages, or
@@ -48,7 +62,7 @@ export function codexTranscriptSource(
   return {
     messages: cached.messages,
     sessionIdentity: sessionId,
-    generation: status.engineGeneration,
+    generation: `${TRANSCRIPT_PROCESS}:${status.engineGeneration}`,
     contentEpoch: status.contentEpoch,
     revision: status.messageRevision,
     complete: cached.complete,

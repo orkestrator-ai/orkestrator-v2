@@ -1288,7 +1288,13 @@ function resolveUserEntryId(
   return messageIndex >= 0 ? entries[messageIndex]?.entryId : undefined;
 }
 
-function resetRenderedHistory(state: SessionState): void {
+/**
+ * Forget the rendered transcript before it is rebuilt from another branch.
+ *
+ * A different history then starts at index 0 again, so the transcript epoch
+ * moves and every position, page cursor and token from before expires.
+ */
+export function resetRenderedHistory(state: SessionState): void {
   state.messages = [];
   // A different history now starts at index 0 again; old positions must expire.
   state.transcriptEpoch = (state.transcriptEpoch ?? 0) + 1;

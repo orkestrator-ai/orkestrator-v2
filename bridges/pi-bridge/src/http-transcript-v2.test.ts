@@ -4,8 +4,18 @@
  * `/transcript/page`, all read from one transcript source.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { BridgeMessage, SessionState } from "./state.js";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  bridgeTranscriptContract,
+  type BridgeTranscriptContractAdapter,
+  type ContractMessage,
+  type ContractReader,
+} from "@orkestrator/protocol/bridge-transcript-contract";
+import type { BridgeMessage, BridgeToolPart, SessionState } from "./state.js";
 
 // `config.ts` reads its environment once, at import; load the router after.
 process.env.PORT = "0";
@@ -16,8 +26,9 @@ delete process.env.PI_BRIDGE_STATE_DIR;
 
 const { server, start, shutdown } = await import("./server.js");
 const { authToken: TOKEN } = await import("./config.js");
-const { newSessionState } = await import("./agent-session.js");
-const { sessions } = await import("./state.js");
+const { newSessionState, resetRenderedHistory } = await import("./agent-session.js");
+const { clientSessionKeys, sessions } = await import("./state.js");
+const { loadPersistedState, persistBarrier } = await import("./persistence.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -35,8 +46,13 @@ afterAll(async () => {
 });
 
 const seeded: string[] = [];
-afterEach(() => {
+/** Routers started by a simulated restart. */
+const restartedServers: Server[] = [];
+afterEach(async () => {
   for (const id of seeded.splice(0)) sessions.delete(id);
+  for (const restarted of restartedServers.splice(0)) {
+    await new Promise<void>((resolve) => restarted.close(() => resolve()));
+  }
 });
 
 async function call(path: string, token: string = TOKEN): Promise<Response> {
@@ -238,4 +254,93 @@ describe("Pi transcript routes for an unknown session", () => {
     expect((await call(page("unknown", { cursor: "bp1.x" }), "wrong")).status).toBe(401);
     expect((await call(detail("unknown", "bd1.x"), "wrong")).status).toBe(401);
   });
+});
+
+function reader(origin: string): ContractReader {
+  return async (path) => {
+    const response = await nativeFetch(`${origin}${path}`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(response.status).toBe(200);
+    return response.json();
+  };
+}
+
+let restarts = 0;
+
+/**
+ * Publish every session to a private state file, forget them, and load that
+ * file through the production restore path. The state directory is read per
+ * call, so it exists only for the duration of the restart.
+ */
+async function republishAndRestore(): Promise<void> {
+  const directory = await mkdtemp(join(tmpdir(), "pi-transcript-contract-"));
+  process.env.PI_BRIDGE_STATE_DIR = directory;
+  try {
+    await persistBarrier();
+    sessions.clear();
+    clientSessionKeys.clear();
+    await loadPersistedState();
+  } finally {
+    delete process.env.PI_BRIDGE_STATE_DIR;
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The contract over the real Pi router and state. A rewrite is branch
+ * navigation's own reset followed by the re-render of an earlier branch; a
+ * restart restores from the persisted state file and serves it from a freshly
+ * evaluated `http.ts`, so a new process generation.
+ */
+function piContractAdapter(): BridgeTranscriptContractAdapter<SessionState> {
+  const toBridge = (message: ContractMessage) => structuredClone(message) as BridgeMessage;
+  return {
+    read: reader(origin),
+    async seed(messages) {
+      return sessionWith(messages.map(toBridge));
+    },
+    append(state, message) {
+      state.messages.push(toBridge(message));
+      state.revision += 1;
+    },
+    setToolOutput(state, messageId, output) {
+      const message = state.messages.find((candidate) => candidate.id === messageId)!;
+      (message.parts[0] as BridgeToolPart).toolOutput = output;
+      state.revision += 1;
+    },
+    rewrite(state) {
+      // `navigateSessionHistory` to an earlier entry: reset, then render the
+      // shorter branch from Pi's session file.
+      const branch = state.messages.slice(0, 200);
+      resetRenderedHistory(state);
+      state.messages.push(...branch);
+      state.revision += 1;
+    },
+    async restart(state) {
+      await republishAndRestore();
+      restarts += 1;
+      const specifier = `./http.js?contract-restart=${restarts}`;
+      const fresh = (await import(specifier)) as typeof import("./http.js");
+      const restartedServer = createServer((request, response) => {
+        void fresh.route(request, response, new AbortController().signal);
+      });
+      restartedServers.push(restartedServer);
+      await new Promise<void>((resolve) => restartedServer.listen(0, "127.0.0.1", resolve));
+      const restored = sessions.get(state.id);
+      if (!restored) throw new Error("the restart did not restore the session");
+      return {
+        read: reader(`http://127.0.0.1:${(restartedServer.address() as AddressInfo).port}`),
+        session: restored,
+      };
+    },
+  };
+}
+
+describe("Pi: shared v2 transcript contract", () => {
+  for (const scenario of bridgeTranscriptContract) {
+    test(scenario.name, async () => {
+      await scenario.run(piContractAdapter());
+    });
+  }
 });

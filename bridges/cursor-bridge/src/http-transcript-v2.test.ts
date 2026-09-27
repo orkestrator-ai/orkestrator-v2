@@ -4,19 +4,41 @@
  * `/transcript/page`, all read from one transcript source.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { BridgeMessage, SessionState } from "./state.js";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import {
+  bridgeTranscriptContract,
+  type BridgeTranscriptContractAdapter,
+  type ContractMessage,
+  type ContractReader,
+} from "@orkestrator/protocol/bridge-transcript-contract";
+import { authToken } from "./config.js";
+import { drainPersistence, loadPersistedState, schedulePersist } from "./persistence.js";
+import {
+  clientSessionKeys,
+  sessions,
+  type BridgeMessage,
+  type BridgeToolPart,
+  type SessionState,
+} from "./state.js";
 import { startRouterHarness, type RouterHarness } from "./testing/router-harness.js";
+import { rewindTranscriptTo } from "./transcript.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Body = any;
 
 let harness: RouterHarness;
+/** Routers started by a simulated restart, closed with the harness. */
+const restartedServers: Server[] = [];
 
 beforeEach(async () => {
   harness = await startRouterHarness();
 });
 
 afterEach(async () => {
+  for (const server of restartedServers.splice(0)) {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
   await harness.close();
 });
 
@@ -216,4 +238,78 @@ describe("Cursor transcript routes for an unknown session", () => {
     });
     expect(response.status).toBe(401);
   });
+});
+
+/** Reads through a router, requiring the 200 every transcript route answers here. */
+function reader(call: (path: string) => Promise<Response>): ContractReader {
+  return async (path) => {
+    const response = await call(path);
+    expect(response.status).toBe(200);
+    return response.json();
+  };
+}
+
+let restarts = 0;
+
+/**
+ * The contract over the real Cursor router and state.
+ *
+ * A restart publishes the state file, forgets every in-memory session, loads
+ * the file through the production restore path and serves it from a freshly
+ * evaluated `http.ts` — a new module instance, so a new process generation —
+ * over the same session registry.
+ */
+function cursorContractAdapter(): BridgeTranscriptContractAdapter<SessionState> {
+  const toBridge = (message: ContractMessage) => structuredClone(message) as BridgeMessage;
+  return {
+    read: reader((path) => harness.call(path)),
+    async seed(messages) {
+      return sessionWith(messages.map(toBridge));
+    },
+    append(state, message) {
+      state.messages.push(toBridge(message));
+      state.revision += 1;
+    },
+    setToolOutput(state, messageId, output) {
+      const message = state.messages.find((candidate) => candidate.id === messageId)!;
+      (message.parts[0] as BridgeToolPart).toolOutput = output;
+      state.revision += 1;
+    },
+    rewrite(state) {
+      // The transcript step of a destructive rewind to an earlier turn.
+      rewindTranscriptTo(state, state.messages[200]!.id);
+    },
+    async restart(state) {
+      schedulePersist();
+      await drainPersistence();
+      sessions.clear();
+      clientSessionKeys.clear();
+      await loadPersistedState();
+      restarts += 1;
+      const specifier = `./http.js?contract-restart=${restarts}`;
+      const fresh = (await import(specifier)) as typeof import("./http.js");
+      const server = createServer((request, response) => {
+        void fresh.route(request, response, new AbortController().signal);
+      });
+      restartedServers.push(server);
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const restored = sessions.get(state.id);
+      if (!restored) throw new Error("the restart did not restore the session");
+      return {
+        read: reader((path) =>
+          Bun.fetch(`${origin}${path}`, { headers: { authorization: `Bearer ${authToken}` } }),
+        ),
+        session: restored,
+      };
+    },
+  };
+}
+
+describe("Cursor: shared v2 transcript contract", () => {
+  for (const scenario of bridgeTranscriptContract) {
+    test(scenario.name, async () => {
+      await scenario.run(cursorContractAdapter());
+    });
+  }
 });

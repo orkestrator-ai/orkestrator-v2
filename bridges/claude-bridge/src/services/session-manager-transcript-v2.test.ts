@@ -14,6 +14,12 @@ import {
 import { describe, expect, test } from "bun:test";
 import { gunzipSync } from "node:zlib";
 import { Hono } from "hono";
+import {
+  bridgeTranscriptContract,
+  type BridgeTranscriptContractAdapter,
+  type ContractMessage,
+  type ContractReader,
+} from "@orkestrator/protocol/bridge-transcript-contract";
 import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
 import sessionRoutes from "../routes/session.js";
 import { compressTranscriptReads } from "../routes/session-transcript.js";
@@ -275,4 +281,62 @@ describe("unknown sessions", () => {
     // An unknown sub-path is still not a route.
     expect((await get("/session/session-unknown/transcript/other")).status).toBe(404);
   });
+});
+
+function reader(target: Hono): ContractReader {
+  return async (path) => {
+    const response = await target.request(path);
+    expect(response.status).toBe(200);
+    return response.json();
+  };
+}
+
+let restarts = 0;
+
+/**
+ * The contract over the real Claude session routes and session manager.
+ *
+ * A rewrite is what every wholesale replacement here does — a conversation
+ * reset, an eviction, a hydration: install a different array and start a new
+ * transcript epoch. A restart mounts a freshly evaluated `routes/session.ts`,
+ * so a new process generation, over the same resident session.
+ */
+function claudeContractAdapter(): BridgeTranscriptContractAdapter<SessionState> {
+  const toClaude = (message: ContractMessage) => structuredClone(message) as NormalizedMessage;
+  return {
+    read: reader(app),
+    async seed(messages) {
+      return sessionWith(messages.map(toClaude));
+    },
+    append(session, message) {
+      session.messages.push(toClaude(message));
+      markTranscriptChanged(session);
+    },
+    setToolOutput(session, messageId, output) {
+      const message = session.messages.find((candidate) => candidate.id === messageId)!;
+      message.parts[0]!.toolOutput = output;
+      markTranscriptChanged(session);
+    },
+    rewrite(session) {
+      session.messages = session.messages.slice(0, 200);
+      resetTranscriptEpoch(session);
+    },
+    async restart(session) {
+      restarts += 1;
+      const specifier = `../routes/session.js?contract-restart=${restarts}`;
+      const fresh = (await import(specifier)) as typeof import("../routes/session.js");
+      const restarted = new Hono();
+      compressTranscriptReads(restarted);
+      restarted.route("/session", fresh.default);
+      return { read: reader(restarted), session };
+    },
+  };
+}
+
+describe("Claude: shared v2 transcript contract", () => {
+  for (const scenario of bridgeTranscriptContract) {
+    test(scenario.name, async () => {
+      await scenario.run(claudeContractAdapter());
+    });
+  }
 });

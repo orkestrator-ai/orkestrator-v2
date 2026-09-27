@@ -4,10 +4,19 @@
  * `/transcript/page`, all read from the bridge-owned display tail.
  */
 import { afterAll, describe, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { CompressionStream as NodeCompressionStream } from "node:stream/web";
 import { gunzipSync } from "node:zlib";
 import { Hono } from "hono";
+import {
+  bridgeTranscriptContract,
+  type BridgeTranscriptContractAdapter,
+  type ContractMessage,
+  type ContractReader,
+} from "@orkestrator/protocol/bridge-transcript-contract";
+import type { EngineTurnConfig } from "./engine/types.js";
 import type { NormalizedMessage } from "./messages/types.js";
+import { ThreadRegistry, type BridgeSession } from "./sessions/thread-registry.js";
 import { registerCodexTranscriptRoutes, type CodexTranscriptRuntime } from "./transcript-routes.js";
 
 // The DOM test preload replaces browser globals; Hono's compress middleware
@@ -117,7 +126,8 @@ describe("Codex v2 transcript summaries", () => {
         startIndex: 0,
         complete: true,
         freshness: "current",
-        generation: 3,
+        // Process-scoped, with the engine generation after it.
+        generation: expect.stringMatching(/^[0-9a-f-]{36}:3$/),
         contentEpoch: 1,
         revision: 1,
         title: "Codex session",
@@ -200,7 +210,12 @@ describe("Codex transcript pages", () => {
     let cursor: string | undefined = v2.value.historyCursor;
     while (cursor) {
       const next = await read(page({ cursor, limit: "100" }));
-      expect(next).toMatchObject({ version: 1, status: "page", generation: 3, contentEpoch: 1 });
+      expect(next).toMatchObject({
+        version: 1,
+        status: "page",
+        generation: v2.value.generation,
+        contentEpoch: 1,
+      });
       expect(next.nextCursor).not.toBe(cursor);
       starts.push(next.startIndex);
       ids.unshift(...next.messages.map((m: NormalizedMessage) => m.id));
@@ -266,4 +281,127 @@ describe("Codex composition root", () => {
       __testing.setBridgeAuthForTesting();
     }
   });
+});
+
+/**
+ * A supervisor numbers its app-server generations from 1 in every process, so
+ * the first generation after a bridge restart has the same number as the
+ * first one before it.
+ */
+const FIRST_ENGINE_GENERATION = 1;
+
+let restarts = 0;
+
+/**
+ * The contract over Codex's transcript routes.
+ *
+ * The routes read through the `CodexTranscriptRuntime` seam; behind it, the
+ * session counters live in a real `ThreadRegistry`, and the thread's messages
+ * stand in for the provider-owned rollout. Installing history — hydration,
+ * a rewind — advances the epoch through the registry and the revision with
+ * it, as the runtime does. A restart restores the session through
+ * `ThreadRegistry.restoreSession` (which starts its counters again), rehydrates
+ * the same rollout, and serves it from a freshly evaluated
+ * `transcript-routes.ts` whose engine generation is again the first.
+ */
+function codexContractAdapter(): BridgeTranscriptContractAdapter<BridgeSession> {
+  const rollouts = new Map<string, NormalizedMessage[]>();
+  const toCodex = (message: ContractMessage) => structuredClone(message) as NormalizedMessage;
+
+  function runtimeOver(registry: ThreadRegistry): CodexTranscriptRuntime {
+    return {
+      getStatus: (sessionId) => {
+        const session = registry.getSession(sessionId);
+        return session
+          ? {
+              title: session.title,
+              engineGeneration: FIRST_ENGINE_GENERATION,
+              contentEpoch: session.contentEpoch,
+              messageRevision: session.messageRevision,
+            }
+          : null;
+      },
+      getCachedMessages: (sessionId) => {
+        const messages = rollouts.get(sessionId);
+        return registry.getSession(sessionId) && messages
+          ? { messages, freshness: "current", complete: true }
+          : null;
+      },
+    };
+  }
+
+  function serve(
+    registerRoutes: typeof registerCodexTranscriptRoutes,
+    registry: ThreadRegistry,
+  ): ContractReader {
+    const app = new Hono();
+    registerRoutes(app, runtimeOver(registry));
+    return async (path) => {
+      const response = await app.request(path);
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+  }
+
+  /** What installing a thread's history does to the session's counters. */
+  function installHistory(registry: ThreadRegistry, session: BridgeSession): void {
+    registry.bumpContentEpoch(session);
+    session.messageRevision += 1;
+  }
+
+  const registry = new ThreadRegistry();
+  return {
+    read: serve(registerCodexTranscriptRoutes, registry),
+    async seed(messages) {
+      const session = registry.createSession({
+        id: randomUUID(),
+        threadId: null,
+        config: {} as EngineTurnConfig,
+        title: "Codex session",
+      });
+      rollouts.set(session.id, messages.map(toCodex));
+      installHistory(registry, session);
+      return session;
+    },
+    append(session, message) {
+      rollouts.get(session.id)!.push(toCodex(message));
+      session.messageRevision += 1;
+    },
+    setToolOutput(session, messageId, output) {
+      const message = rollouts.get(session.id)!.find((candidate) => candidate.id === messageId)!;
+      message.parts[0]!.toolOutput = output;
+      session.messageRevision += 1;
+    },
+    rewrite(session) {
+      // A rewind: the rollout is cut back and its history reinstalled.
+      rollouts.set(session.id, rollouts.get(session.id)!.slice(0, 200));
+      installHistory(registry, session);
+    },
+    async restart(session) {
+      const restartedRegistry = new ThreadRegistry();
+      const restored = restartedRegistry.restoreSession({
+        id: session.id,
+        threadId: session.threadId,
+        config: session.config,
+        title: session.title,
+        lastAccessed: session.lastAccessed,
+      });
+      installHistory(restartedRegistry, restored);
+      restarts += 1;
+      const specifier = `./transcript-routes.js?contract-restart=${restarts}`;
+      const fresh = (await import(specifier)) as typeof import("./transcript-routes.js");
+      return {
+        read: serve(fresh.registerCodexTranscriptRoutes, restartedRegistry),
+        session: restored,
+      };
+    },
+  };
+}
+
+describe("Codex: shared v2 transcript contract", () => {
+  for (const scenario of bridgeTranscriptContract) {
+    test(scenario.name, async () => {
+      await scenario.run(codexContractAdapter());
+    });
+  }
 });

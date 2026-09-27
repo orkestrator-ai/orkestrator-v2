@@ -6,13 +6,40 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 // Must precede every bridge import below: `acp-context.ts` resolves its
-// provider configuration at module scope.
+// provider configuration and its state file at module scope.
 import "./testing/unit-test-env.js";
+import {
+  privateStateDir,
+  removePrivateStateDir,
+  restoreStateDirEnvironment,
+} from "./testing/private-state-dir.js";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import {
+  bridgeTranscriptContract,
+  type BridgeTranscriptContractAdapter,
+  type ContractMessage,
+  type ContractReader,
+} from "@orkestrator/protocol/bridge-transcript-contract";
+import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { route } from "./acp-http.js";
-import { authToken, sessions, type BridgeMessage, type SessionState } from "./acp-context.js";
+import {
+  authToken,
+  clientSessionKeys,
+  MAX_MESSAGES,
+  sessions,
+  stateFile,
+  type BridgeMessage,
+  type BridgeToolPart,
+  type SessionState,
+} from "./acp-context.js";
+import { emptySessionConfig, loadPersistedState } from "./acp-persistence.js";
+import { persistState } from "./acp-persist-writer.js";
 import { nativeFetch } from "./acp-test-harness.js";
+import { boundTranscript } from "./acp-transcript.js";
+
+// The bridge modules have read it; nothing after this file should.
+restoreStateDirEnvironment();
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Body = any;
@@ -30,11 +57,17 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
+  removePrivateStateDir();
 });
 
 const seeded: string[] = [];
-afterEach(() => {
+/** Routers started by a simulated restart. */
+const restartedServers: Server[] = [];
+afterEach(async () => {
   for (const id of seeded.splice(0)) sessions.delete(id);
+  for (const restarted of restartedServers.splice(0)) {
+    await new Promise<void>((resolve) => restarted.close(() => resolve()));
+  }
 });
 
 async function call(path: string, token: string = authToken): Promise<Response> {
@@ -228,4 +261,120 @@ describe("ACP transcript routes for an unknown session", () => {
     expect((await call(page("unknown", { cursor: "bp1.x" }), "wrong")).status).toBe(401);
     expect((await call(detail("unknown", "bd1.x"), "wrong")).status).toBe(401);
   });
+});
+
+function reader(base: string): ContractReader {
+  return async (path) => {
+    const response = await nativeFetch(`${base}${path}`, {
+      headers: { authorization: `Bearer ${authToken}` },
+    });
+    expect(response.status).toBe(200);
+    return response.json();
+  };
+}
+
+/** A complete session record, so the production persist and restore paths accept it. */
+function fullSession(messages: BridgeMessage[]): SessionState {
+  nextId += 1;
+  const state: SessionState = {
+    id: `transcript-contract-${nextId}`,
+    acpSessionId: `acp-contract-${nextId}`,
+    status: "idle",
+    messages,
+    activeSubagentToolIds: new Set(),
+    activeSubagentDescriptors: new Map(),
+    settledCursorAgentIds: new Set(),
+    subagentLimitExceeded: false,
+    subagentToolIds: new Map(),
+    cursorTodos: [],
+    historyMessageIds: new Map(),
+    child: null,
+    revision: 1,
+    structured: new Map(),
+    promptJournal: new Map(),
+    grokInterjectionJournal: new Map(),
+    approvals: new Map(),
+    interactions: new Map(),
+    outputTruncated: false,
+    uncheckedTranscriptBytes: 0,
+    currentTurnOutput: null,
+    promptSequence: 0,
+    droppedMessages: 0,
+    droppedParts: 0,
+    transcriptTruncated: false,
+    sessionConfig: emptySessionConfig(),
+    dispatching: false,
+    historyReplay: false,
+    health: new RuntimeHealthRecorder(),
+  };
+  sessions.set(state.id, state);
+  seeded.push(state.id);
+  return state;
+}
+
+let restarts = 0;
+
+/**
+ * The contract over the real ACP router and state. ACP has no rewind: history
+ * is only ever rewritten by its front trim, so a rewrite appends past
+ * `MAX_MESSAGES` and applies the bridge's own bound. A restart publishes the
+ * state file through the production writer, forgets every session, restores
+ * them through the production loader and serves them from a freshly
+ * evaluated `acp-http.ts`, so a new process generation.
+ */
+function acpContractAdapter(): BridgeTranscriptContractAdapter<SessionState> {
+  const toBridge = (message: ContractMessage) => structuredClone(message) as BridgeMessage;
+  return {
+    read: reader(origin),
+    async seed(messages) {
+      return fullSession(messages.map(toBridge));
+    },
+    append(state, message) {
+      state.messages.push(toBridge(message));
+      state.revision += 1;
+    },
+    setToolOutput(state, messageId, output) {
+      const message = state.messages.find((candidate) => candidate.id === messageId)!;
+      (message.parts[0] as BridgeToolPart).toolOutput = output;
+      state.revision += 1;
+    },
+    rewrite(state) {
+      const overflow = MAX_MESSAGES - state.messages.length + 150;
+      for (let index = 0; index < overflow; index += 1) {
+        state.messages.push(textMessage(`later${index}`));
+      }
+      boundTranscript(state);
+      expect(state.droppedMessages).toBe(150);
+      state.revision += 1;
+    },
+    async restart(state) {
+      expect(stateFile?.startsWith(privateStateDir)).toBe(true);
+      await persistState();
+      sessions.clear();
+      clientSessionKeys.clear();
+      await loadPersistedState();
+      restarts += 1;
+      const specifier = `./acp-http.js?contract-restart=${restarts}`;
+      const fresh = (await import(specifier)) as typeof import("./acp-http.js");
+      const restartedServer = createServer((request, response) => {
+        void fresh.route(request, response, new AbortController().signal);
+      });
+      restartedServers.push(restartedServer);
+      await new Promise<void>((resolve) => restartedServer.listen(0, "127.0.0.1", resolve));
+      const restored = sessions.get(state.id);
+      if (!restored) throw new Error("the restart did not restore the session");
+      return {
+        read: reader(`http://127.0.0.1:${(restartedServer.address() as AddressInfo).port}`),
+        session: restored,
+      };
+    },
+  };
+}
+
+describe("ACP: shared v2 transcript contract", () => {
+  for (const scenario of bridgeTranscriptContract) {
+    test(scenario.name, async () => {
+      await scenario.run(acpContractAdapter());
+    });
+  }
 });

@@ -565,6 +565,7 @@ export function BuildChatTab({
     timeline?.groups.find((group) => group.current)?.key,
     selectedSessionId,
     selectedSessionId ? groupKeyByStageId.get(selectedSessionId) : undefined,
+    pinnedSessionRef.current,
   );
 
   const runControl = async (action: "pause" | "resume" | "cancel"): Promise<void> => {
@@ -920,7 +921,14 @@ export function BuildChatTab({
     // fall through to scroll the stage list instead is the inconsistency the
     // pattern exists to remove.
     event.preventDefault();
-    const current = stageItems.findIndex((stage) => stage.id === selectedSessionId);
+    const focusedTab =
+      event.target instanceof Element ? event.target.closest<HTMLElement>('[role="tab"]') : null;
+    const focusedStage = focusedTab
+      ? stageItems.find((stage) => stageTabId(stage.key) === focusedTab.id)
+      : undefined;
+    const current = stageItems.findIndex(
+      (stage) => stage.id === (focusedStage?.id ?? selectedSessionId),
+    );
     const next =
       step === "first"
         ? 0

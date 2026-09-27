@@ -80,14 +80,15 @@ interface ExpansionState {
  * toggle wins until the pipeline moves on to another group, which returns
  * every group to that default. Selecting a stage inside a folded group — from
  * the keyboard, the report hint, or by following the pipeline — opens it,
- * because a selected tab has to be visible, and a group the selection leaves
- * stays open.
+ * because a selected tab has to be visible. A group left by a user's selection
+ * stays open; an automatic advance resets to the new default.
  */
 export function useStageGroupExpansion(
   pipelineId: string,
   currentGroupKey: string | undefined,
   selectedStageId: string | null,
   selectedGroupKey: string | undefined,
+  selectionIsPinned: boolean,
 ) {
   const scope = `${pipelineId}\n${currentGroupKey ?? ""}`;
   const [state, setState] = useState<ExpansionState>(() => ({
@@ -103,9 +104,13 @@ export function useStageGroupExpansion(
   } else if (state.selectedStageId !== selectedStageId) {
     const overrides = { ...state.overrides };
     if (selectedGroupKey) overrides[selectedGroupKey] = true;
-    // The group the selection left stays as it was on screen. Folding it would
+    // Keep a group left by a user's selection on screen. Folding it would
     // shift the rows below it — including, often, the one just clicked.
-    if (state.selectedGroupKey && overrides[state.selectedGroupKey] === undefined) {
+    if (
+      selectionIsPinned &&
+      state.selectedGroupKey &&
+      overrides[state.selectedGroupKey] === undefined
+    ) {
       overrides[state.selectedGroupKey] = true;
     }
     current = { scope, selectedStageId, selectedGroupKey, overrides };
@@ -118,13 +123,16 @@ export function useStageGroupExpansion(
   const defaultExpanded = (groupKey: string) =>
     groupKey === selectedGroupKey || groupKey === currentGroupKey;
   const isGroupExpanded = (groupKey: string) =>
-    current.overrides[groupKey] ?? defaultExpanded(groupKey);
+    groupKey === selectedGroupKey || (current.overrides[groupKey] ?? defaultExpanded(groupKey));
   const toggleGroup = (groupKey: string) =>
     setState((previous) => ({
       ...previous,
       overrides: {
         ...previous.overrides,
-        [groupKey]: !(previous.overrides[groupKey] ?? defaultExpanded(groupKey)),
+        [groupKey]:
+          groupKey === selectedGroupKey
+            ? true
+            : !(previous.overrides[groupKey] ?? defaultExpanded(groupKey)),
       },
     }));
   return { isGroupExpanded, toggleGroup };
@@ -139,6 +147,8 @@ const GROUP_STATUS_TEXT: Record<PipelineStageGroupStatus, string> = {
   paused: "paused",
   error: "failed",
   done: "done",
+  incomplete: "incomplete",
+  cancelled: "cancelled",
 };
 
 function GroupNode({ status }: { status: PipelineStageGroupStatus | "upcoming" }) {
@@ -149,6 +159,12 @@ function GroupNode({ status }: { status: PipelineStageGroupStatus | "upcoming" }
   if (status === "error") return <AlertCircle className={cn(className, "text-destructive")} />;
   if (status === "paused") {
     return <PauseCircle className={cn(className, "text-muted-foreground")} />;
+  }
+  if (status === "incomplete") {
+    return <AlertCircle className={cn(className, "text-muted-foreground")} />;
+  }
+  if (status === "cancelled") {
+    return <Circle className={cn(className, "text-muted-foreground")} />;
   }
   if (status === "upcoming") {
     return (
@@ -184,7 +200,11 @@ function Connector({ status }: { status: PipelineStageGroupStatus | "upcoming" }
         status === "done" && "bg-success/25",
         status === "running" && "bg-gradient-to-b from-primary to-primary/0",
         status === "error" && "bg-destructive/25",
-        (status === "paused" || status === "upcoming") && "bg-border/60",
+        (status === "paused" ||
+          status === "incomplete" ||
+          status === "cancelled" ||
+          status === "upcoming") &&
+          "bg-border/60",
       )}
     />
   );
@@ -193,10 +213,9 @@ function Connector({ status }: { status: PipelineStageGroupStatus | "upcoming" }
 /**
  * The build's stages as a timeline of phases.
  *
- * Each phase is a disclosure button over the stage tabs it contains. The tabs
- * stay the real `role="tab"` elements of one vertical tablist, so selection,
- * roving focus and the Restart menu behave as they did in the flat list; only
- * a folded group's tabs are left out of the DOM.
+ * Each phase is a disclosure button over its stage tabs. The separate tablist
+ * owns only the mounted tabs through aria-owns, keeping disclosure buttons and
+ * pending rows out of its accessibility tree.
  */
 export function PipelineStageRail({
   timeline,
@@ -217,8 +236,7 @@ export function PipelineStageRail({
     isGroupExpanded(group.key) ? group.items : [],
   );
   // One stop for the whole list, then arrow keys within it — otherwise Tab
-  // walks every stage before reaching the transcript. When the selected stage
-  // is folded away, the first visible one stands in for it.
+  // walks every stage before reaching the transcript.
   const tabStopId = visibleItems.some((item) => item.id === selectedStageId)
     ? selectedStageId
     : (visibleItems[0]?.id ?? null);
@@ -377,7 +395,8 @@ export function PipelineStageRail({
             data-stage-group={group.key}
             aria-expanded={expanded}
             aria-controls={groupPanelId(group.key)}
-            aria-label={`${group.name}, ${GROUP_STATUS_TEXT[group.status]}${duration ? `, ${duration}` : ""}`}
+            disabled={group.items.some((item) => item.id === selectedStageId)}
+            aria-label={`${group.name}, ${GROUP_STATUS_TEXT[group.status]}${duration ? `, ${duration}` : ""}${group.issueCount !== undefined ? `, ${issueCountLabel(group.issueCount)}` : ""}${summary ? `, ${summary}` : ""}`}
             className={cn(
               headerClass,
               "transition-colors",
@@ -400,24 +419,26 @@ export function PipelineStageRail({
             {summary && <span className="block text-[11px] text-muted-foreground">{summary}</span>}
           </div>
         )}
-        {expanded && (
-          <div id={groupPanelId(group.key)} className="space-y-px pt-0.5 pb-1.5">
-            {group.items.map(renderStage)}
-            {group.pending.map((pending) => (
-              <div
-                key={pending.key}
-                className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground/60"
-              >
-                <span
-                  aria-hidden="true"
-                  className="block h-3 w-3 shrink-0 rounded-full border-[1.5px] border-dashed border-current"
-                />
-                <span className="min-w-0 flex-1 truncate">{pending.label}</span>
-                {pending.meta && <span className="shrink-0 text-[10.5px]">{pending.meta}</span>}
-              </div>
-            ))}
-          </div>
-        )}
+        <div id={groupPanelId(group.key)} hidden={!expanded} className="space-y-px pt-0.5 pb-1.5">
+          {expanded && (
+            <>
+              {group.items.map(renderStage)}
+              {group.pending.map((pending) => (
+                <div
+                  key={pending.key}
+                  className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground/60"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="block h-3 w-3 shrink-0 rounded-full border-[1.5px] border-dashed border-current"
+                  />
+                  <span className="min-w-0 flex-1 truncate">{pending.label}</span>
+                  {pending.meta && <span className="shrink-0 text-[10.5px]">{pending.meta}</span>}
+                </div>
+              ))}
+            </>
+          )}
+        </div>
       </div>
     );
   };
@@ -446,13 +467,13 @@ export function PipelineStageRail({
         </div>
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div
-          className="px-2 pb-2"
-          role="tablist"
-          aria-orientation="vertical"
-          aria-label="Build stages"
-          onKeyDown={onKeyDown}
-        >
+        <div className="px-2 pb-2" onKeyDown={onKeyDown}>
+          <div
+            role="tablist"
+            aria-orientation="vertical"
+            aria-label="Build stages"
+            aria-owns={visibleItems.map((item) => stageTabId(item.key)).join(" ") || undefined}
+          />
           {timeline.groups.map(renderGroup)}
           {timeline.upcoming.map((group, index) => (
             <div

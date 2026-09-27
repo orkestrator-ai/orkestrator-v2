@@ -109,8 +109,15 @@ export type PipelineStageGroupKind =
 /**
  * `paused` and `error` describe the group the pipeline stopped in; `running`
  * is the group it is working through now, or one with a member still running.
+ * Terminal Tests outcomes that did not pass stay distinct from `done`.
  */
-export type PipelineStageGroupStatus = "running" | "paused" | "error" | "done";
+export type PipelineStageGroupStatus =
+  | "running"
+  | "paused"
+  | "error"
+  | "incomplete"
+  | "cancelled"
+  | "done";
 
 export interface PipelineStageGroup {
   /** Stable across snapshots: new groups append, so the ordinal never shifts. */
@@ -216,7 +223,14 @@ function timestamp(value: string | undefined): number | undefined {
 function itemTiming(
   item: PipelineStageItem,
   pipeline: BuildPipeline,
-): { start?: number; end?: number; running: boolean; error: boolean } {
+): {
+  start?: number;
+  end?: number;
+  running: boolean;
+  error: boolean;
+  incomplete: boolean;
+  cancelled: boolean;
+} {
   if (item.kind === "validation") {
     const run = pipeline.validationRun;
     const outcome = validationOutcome(run);
@@ -225,6 +239,8 @@ function itemTiming(
       end: timestamp(run?.completedAt),
       running: outcome === "running",
       error: outcome === "failed",
+      incomplete: outcome === "incomplete",
+      cancelled: outcome === "cancelled",
     };
   }
   return {
@@ -232,6 +248,8 @@ function itemTiming(
     end: timestamp(item.session.completedAt),
     running: item.session.status === "running",
     error: item.session.status === "error",
+    incomplete: false,
+    cancelled: false,
   };
 }
 
@@ -412,10 +430,14 @@ export function pipelineStageGroups(
     group.current = group === currentGroup;
     const memberRunning = timings.some((timing) => timing.running);
     const memberError = timings.some((timing) => timing.error);
+    const memberIncomplete = timings.some((timing) => timing.incomplete);
+    const memberCancelled = timings.some((timing) => timing.cancelled);
     if (group.current && phase === "failed") group.status = "error";
     else if (group.current && phase === "paused") group.status = "paused";
     else if (group.current || memberRunning) group.status = "running";
     else if (memberError) group.status = "error";
+    else if (memberIncomplete) group.status = "incomplete";
+    else if (memberCancelled) group.status = "cancelled";
     else group.status = "done";
   }
 

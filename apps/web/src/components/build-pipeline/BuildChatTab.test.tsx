@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   BUILD_PIPELINE_AGENTS,
@@ -277,9 +277,10 @@ function testsTabIconClass(): string {
  * full label is the leading part of the tab's accessible name.
  */
 function stageTabLabels(): string[] {
-  return Array.from(
-    screen.getByRole("tablist", { name: "Build stages" }).querySelectorAll('[role="tab"]'),
-  ).map((tab) => tab.getAttribute("aria-label")?.split(", ")[0] ?? "");
+  return (screen.getByRole("tablist", { name: "Build stages" }).getAttribute("aria-owns") ?? "")
+    .split(" ")
+    .filter(Boolean)
+    .map((id) => document.getElementById(id)?.getAttribute("aria-label")?.split(", ")[0] ?? "");
 }
 
 /** The stage tab whose own label is exactly `label`, whatever its badges add. */
@@ -679,6 +680,10 @@ describe("BuildChatTab backend projection", () => {
     expect(testsTabIconClass()).toContain("text-muted-foreground");
     expect(testsTabIconClass()).not.toContain("text-success");
     expect(screen.getByText("1 of 2 checks incomplete")).toBeTruthy();
+    const buildNode = screen.getByRole("button", { name: /^Build, incomplete/ }).parentElement!;
+    expect(buildNode.querySelector("svg")?.getAttribute("class")).toContain(
+      "text-muted-foreground",
+    );
   });
 
   test("names a run-level failed Tests stage after the terminal outcome", () => {
@@ -732,6 +737,10 @@ describe("BuildChatTab backend projection", () => {
     expect(tab.textContent).toContain("Validation cancelled");
     expect(testsTabIconClass()).toContain("text-muted-foreground");
     expect(testsTabIconClass()).not.toContain("text-destructive");
+    const buildNode = screen.getByRole("button", { name: /^Build, cancelled/ }).parentElement!;
+    expect(buildNode.querySelector("svg")?.getAttribute("class")).toContain(
+      "text-muted-foreground",
+    );
   });
 
   test("treats skipped commands as success when nothing failed", () => {
@@ -4458,7 +4467,7 @@ describe("BuildChatTab phase rail", () => {
   };
 
   /** Renders without opening any phase, unlike the other suites. */
-  function renderRail(next: BuildPipeline) {
+  function renderRail(next: BuildPipeline, isActive = false) {
     useBuildPipelineStore.setState({
       pipelines: new Map([[next.id, next]]),
       buildEnvironmentIds: new Set([next.environmentId]),
@@ -4466,6 +4475,7 @@ describe("BuildChatTab phase rail", () => {
     });
     render(
       <BuildChatTab
+        isActive={isActive}
         data={{
           pipelineId: next.id,
           environmentId: next.environmentId,
@@ -4496,6 +4506,10 @@ describe("BuildChatTab phase rail", () => {
     expect(tabNames()).toEqual(["Verification Session, Iteration 1"]);
     // A folded review still says what it found.
     expect(within(phaseHeader("Review")).getByText("1 issue")).toBeTruthy();
+    expect(phaseHeader("Review").getAttribute("aria-label")).toContain("1 issue");
+    expect(
+      document.getElementById(phaseHeader("Build").getAttribute("aria-controls")!),
+    ).toBeTruthy();
     expect(screen.getByText("4 of 4 phases")).toBeTruthy();
   });
 
@@ -4512,6 +4526,16 @@ describe("BuildChatTab phase rail", () => {
 
     fireEvent.click(phaseHeader("Build"));
     expect(screen.queryByRole("tab", { name: "Build Session, Iteration 1" }) === null).toBe(true);
+  });
+
+  test("announces the verdict when Verify is folded", () => {
+    renderRail({ ...reviewed, verificationResult: "pass" });
+    fireEvent.click(phaseHeader("Build"));
+    fireEvent.click(screen.getByRole("tab", { name: "Build Session, Iteration 1" }));
+    fireEvent.click(phaseHeader("Verify"));
+
+    expect(phaseHeader("Verify").getAttribute("aria-expanded")).toBe("false");
+    expect(phaseHeader("Verify").getAttribute("aria-label")).toContain("Verdict: passed");
   });
 
   test("opens the phase an arrow key moves into and focuses the stage there", async () => {
@@ -4536,6 +4560,20 @@ describe("BuildChatTab phase rail", () => {
     expect(selectedTab()?.getAttribute("aria-label")).toBe("Build Session, Iteration 1");
   });
 
+  test("moves from the focused tab when it differs from the selected stage", async () => {
+    renderRail(reviewed);
+    fireEvent.click(phaseHeader("Build"));
+    const buildTab = screen.getByRole("tab", { name: "Build Session, Iteration 1" });
+    buildTab.focus();
+
+    fireEvent.keyDown(buildTab, { key: "ArrowDown" });
+
+    await waitFor(() =>
+      expect(selectedTab()?.getAttribute("aria-label")).toMatch(/^Review Session, Iteration 1/),
+    );
+    expect(document.activeElement).toBe(selectedTab() ?? null);
+  });
+
   test("reopens a phase the user folded when the report hint selects a stage in it", async () => {
     renderRail(reviewed);
     fireEvent.click(phaseHeader("Review"));
@@ -4550,17 +4588,102 @@ describe("BuildChatTab phase rail", () => {
     expect(phaseHeader("Review").getAttribute("aria-expanded")).toBe("true");
   });
 
-  test("keeps a tab stop on a visible stage when the selected phase is folded", () => {
+  test("keeps the selected phase and transcript linked when its disclosure is pressed", () => {
+    renderRail(reviewed);
+    fireEvent.click(phaseHeader("Verify"));
+    const selected = selectedTab()!;
+    const panel = screen.getByRole("tabpanel");
+    expect(phaseHeader("Verify").getAttribute("aria-expanded")).toBe("true");
+    expect(selected.getAttribute("tabindex")).toBe("0");
+    expect(panel.getAttribute("aria-labelledby")).toBe(selected.id);
+    expect(document.getElementById(panel.getAttribute("aria-labelledby")!)).toBe(selected);
+    expect(screen.getAllByRole("tab").filter((tab) => tab.tabIndex === 0)).toEqual([selected]);
+  });
+
+  test("keeps phase controls outside the tablist and owns only mounted tabs", () => {
     renderRail(reviewed);
     fireEvent.click(phaseHeader("Build"));
-    fireEvent.click(phaseHeader("Verify"));
+    const tablist = screen.getByRole("tablist", { name: "Build stages" });
+    expect(tablist.querySelector("[data-stage-group]") === null).toBe(true);
+    expect(tablist.querySelector("[role=button]") === null).toBe(true);
+    const owned = (tablist.getAttribute("aria-owns") ?? "").split(" ").filter(Boolean);
+    expect(owned.map((id) => document.getElementById(id))).toEqual(screen.getAllByRole("tab"));
+    expect(owned.length).toBeGreaterThan(0);
+  });
 
-    expect(
-      screen
-        .getAllByRole("tab")
-        .filter((tab) => tab.getAttribute("tabindex") === "0")
-        .map((tab) => tab.getAttribute("aria-label")),
-    ).toEqual(["Build Session, Iteration 1"]);
+  test("folds the prior phase when the pipeline advances and selection follows", async () => {
+    const building = {
+      ...reviewed,
+      phase: "building" as const,
+      currentSessionIndex: 0,
+      backendRevision: 61,
+    };
+    renderRail(building);
+    expect(phaseHeader("Build").getAttribute("aria-expanded")).toBe("true");
+
+    act(() => {
+      useBuildPipelineStore.getState().replacePipeline({
+        ...reviewed,
+        phase: "reviewing",
+        currentSessionIndex: 1,
+        backendRevision: 62,
+      });
+    });
+    await waitFor(() => expect(selectedTab()?.getAttribute("aria-label")).toContain("Review"));
+    expect(phaseHeader("Build").getAttribute("aria-expanded")).toBe("false");
+    expect(phaseHeader("Review").getAttribute("aria-expanded")).toBe("true");
+  });
+
+  test("ticks the running phase duration and stops its clock when paused", () => {
+    let now = Date.parse("2026-07-29T00:02:00.000Z");
+    const dateNow = spyOn(Date, "now").mockImplementation(() => now);
+    const setIntervalSpy = spyOn(window, "setInterval");
+    const clearIntervalSpy = spyOn(window, "clearInterval");
+    try {
+      const running = {
+        ...pipeline,
+        phase: "building" as const,
+        sessions: [{ ...pipeline.sessions[0]!, status: "running" as const }],
+        currentSessionIndex: 0,
+        backendRevision: 70,
+      };
+      renderRail(running, true);
+      expect(phaseHeader("Build").getAttribute("aria-label")).toContain("2m 0s");
+      const tick = setIntervalSpy.mock.calls.find(([, timeout]) => timeout === 1_000)?.[0];
+      expect(typeof tick).toBe("function");
+
+      now += 5_000;
+      act(() => {
+        if (typeof tick === "function") tick();
+      });
+      expect(phaseHeader("Build").getAttribute("aria-label")).toContain("2m 5s");
+
+      act(() => {
+        useBuildPipelineStore.getState().replacePipeline({
+          ...running,
+          phase: "paused",
+          pausedFromPhase: "building",
+          sessions: [
+            {
+              ...running.sessions[0]!,
+              status: "idle",
+              completedAt: new Date(now).toISOString(),
+            },
+          ],
+          backendRevision: 71,
+        });
+      });
+      expect(clearIntervalSpy).toHaveBeenCalled();
+      now += 5_000;
+      act(() => {
+        if (typeof tick === "function") tick();
+      });
+      expect(phaseHeader("Build").getAttribute("aria-label")).toContain("2m 5s");
+    } finally {
+      clearIntervalSpy.mockRestore();
+      setIntervalSpy.mockRestore();
+      dateNow.mockRestore();
+    }
   });
 
   test("lists the unselectable work still to come while the pipeline ships", () => {

@@ -224,7 +224,12 @@ function viewTabs() {
 function stageTab(name: string): HTMLElement | null {
   const list = screen.queryByRole("tablist", { name: "Build stages" });
   if (!list) return null;
-  return within(list).queryByRole("tab", { name: new RegExp(name) });
+  const ids = (list.getAttribute("aria-owns") ?? "").split(" ").filter(Boolean);
+  return (
+    ids
+      .map((id) => document.getElementById(id))
+      .find((tab) => tab?.getAttribute("aria-label")?.match(new RegExp(name))) ?? null
+  );
 }
 
 /** The options behind the transcript on screen right now. */

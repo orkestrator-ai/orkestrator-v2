@@ -332,4 +332,35 @@ describe("pipelineStageGroups", () => {
     expect(buildGroup!.status).toBe("paused");
     expect(buildGroup!.summary).toBe("build label · Tests: 1 of 2 checks failed");
   });
+
+  test("keeps incomplete and cancelled Tests groups out of the success state", () => {
+    const firstRun = validationRun();
+    const base = build({
+      phase: "reviewing",
+      sessions: [
+        session("build", "build", 60),
+        session("review", "review", 120, { status: "running", completedAt: undefined }),
+      ],
+      currentSessionIndex: 1,
+    });
+    const incomplete = pipelineStageGroups({
+      ...base,
+      validationRun: {
+        ...firstRun,
+        results: [
+          firstRun.results[0]!,
+          { ...firstRun.results[1]!, status: "incomplete", exitCode: null },
+        ],
+      },
+    }).groups[1]!;
+    const cancelled = pipelineStageGroups({
+      ...base,
+      validationRun: validationRun({ status: "cancelled" }),
+    }).groups[1]!;
+
+    expect(incomplete.status).toBe("incomplete");
+    expect(cancelled.status).toBe("cancelled");
+    expect(incomplete.summary).toContain("1 of 2 checks incomplete");
+    expect(cancelled.summary).toContain("Validation cancelled");
+  });
 });

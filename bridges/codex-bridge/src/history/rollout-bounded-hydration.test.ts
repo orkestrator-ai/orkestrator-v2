@@ -207,5 +207,7 @@ describe("bounded rollout hydration", () => {
   test("a thread whose rollout cannot be read is unavailable, not empty", async () => {
     const hydrated = await hydrateMessagesFromPersistedSession("missing-thread");
     expect(hydrated).toMatchObject({ messages: [], transcriptStatus: "unavailable" });
+    // No rollout on disk is not a failed read: attach may treat it as empty.
+    expect(hydrated.readFailed).toBeUndefined();
   });
 });

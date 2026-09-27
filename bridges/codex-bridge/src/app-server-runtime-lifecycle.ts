@@ -648,6 +648,11 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       const hydrated = await hydrateMessagesFromPersistedSession(context.threadId, {
         structuredOutputTurns: this.structuredOutputTurnsForThread(context.threadId),
       });
+      // A rollout that could not be read at all is not an empty conversation:
+      // leave the transcript unhydrated so readers keep reporting a cached,
+      // incomplete preview (and the next attach retries) instead of an
+      // authoritative empty history that would overwrite a display tail.
+      if (hydrated.readFailed) return;
       context.messages = hydrated.messages;
       this.registry.indexHydratedAsyncQuestions(context);
       this.applyPersistedModelOverrides(context);

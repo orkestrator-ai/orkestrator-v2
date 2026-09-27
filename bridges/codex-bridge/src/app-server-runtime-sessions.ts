@@ -247,6 +247,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
 
     // Only hydrate when this is the first tab on the thread; a second tab must
     // join the existing canonical transcript rather than rebuild it.
+    let unreadable = false;
     if (context.messages.length === 0) {
       const hydrated = await hydrateMessagesFromPersistedSession(threadId, {
         structuredOutputTurns: this.structuredOutputTurnsForThread(threadId),
@@ -260,6 +261,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       }
       session.title = thread.name ?? hydrated.title;
       session.titleSource = thread.name ? "codex" : hydrated.titleSource;
+      if (hydrated.readFailed) unreadable = true;
     } else {
       this.publishPersistedModelOverrides(context);
       const existing = this.registry
@@ -268,7 +270,11 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       session.title = existing?.title ?? thread.name ?? undefined;
       session.titleSource = existing?.titleSource;
     }
-    context.transcriptHydrated = true;
+    // A rollout that could not be read at all is not an empty conversation:
+    // leave the transcript unhydrated so readers keep reporting a cached,
+    // incomplete preview (and the next attach retries) instead of an
+    // authoritative empty history that would overwrite a display tail.
+    if (!unreadable) context.transcriptHydrated = true;
 
     await this.synchronizeAttachedModelOverrides(context, modelsBeforeAttach);
     await this.persistSession(session);
@@ -363,7 +369,11 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         this.bumpMessageRevision(context);
         this.registry.bumpContentEpoch(child);
       }
-      context.transcriptHydrated = true;
+      // A rollout that could not be read at all is not an empty conversation:
+      // leave the transcript unhydrated so readers keep reporting a cached,
+      // incomplete preview (and the next attach retries) instead of an
+      // authoritative empty history that would overwrite a display tail.
+      if (!hydrated.readFailed) context.transcriptHydrated = true;
       await this.persistSession(child);
       return {
         outcome: "created",

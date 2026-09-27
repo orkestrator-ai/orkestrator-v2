@@ -1093,6 +1093,11 @@ export interface PersistedSessionHydration {
    * evidence of an empty session.
    */
   transcriptStatus: TranscriptReadStatus;
+  /**
+   * True only when a rollout exists but could not be read. A thread with no
+   * rollout on disk yet is a different, genuinely empty case.
+   */
+  readFailed?: true;
 }
 
 export async function hydrateMessagesFromPersistedSession(
@@ -1145,6 +1150,7 @@ export async function hydrateMessagesFromPersistedSession(
     title: meta.title,
     titleSource: meta.titleSource,
     transcriptStatus: "unavailable",
+    readFailed: true,
   };
 }
 

@@ -1,6 +1,6 @@
 # 15 — Reuse conditional transcripts for reviewers and workflow progress
 
-Status: Complete — conditional, bounded progress probes; lightweight reviewer windows with on-demand details. Prerequisites: 09, 11. Finding: E13.
+Status: Complete — conditional, bounded progress probes over the newest eight messages (e79798e3); lightweight reviewer windows with on-demand details and "load earlier" history pages (c150f423). No live multi-review run. Prerequisites: 09, 11. Finding: E13.
 
 ## Outcome
 
@@ -76,7 +76,7 @@ on an exact/raw path and its bounded read strategy rather than claiming all
 ## Execution record
 
 ```text
-Status: Implemented, validation pending (no isolated real-stack run)
+Status: Complete (no isolated real-stack multi-review run; see gap closure below)
 Implementation commit / PR: worktree branch worktree-agent-a2874c745cf3eb33a
   (commit "perf(workflows): conditional, bounded transcript progress probes")
 Protocol or storage decisions:
@@ -192,14 +192,14 @@ Compatibility/migration result: persisted legacy digests rebase once without
   progress; providers without snapshots keep legacy digests; digests remain
   64-hex so older backends still load the workflows.
 Remaining limitations:
-  - No production bridge serves v2 summaries yet, so today changed probes are
-    raw v1 windows; a changed probe whose raw tail row exceeds 64 KiB still
-    pays one legacy read (unchanged probes never do).
+  - Superseded: all five bridges serve v2 summaries since d8796c28. A raw v1
+    probe whose tail row exceeds 64 KiB still pays one legacy read
+    (unchanged probes never do).
   - A v1 row with no parts whose content exceeds 64 KiB is head-trimmed; a
     rewrite confined to the trimmed head is not seen (appends are).
-  - Reviewer view read model (summary windows, detail expansion, history
-    paging, capability negotiation) is not adopted; the 4 s conditional raw
-    poll from 8c262ba0/0ba8628e remains.
+  - Superseded: the reviewer view uses summary windows with detail
+    expansion (below) and history pages (gap closure). The 4 s conditional
+    poll from 8c262ba0/0ba8628e remains its refresh cadence.
   - A snapshot answered from a bridge cache (`freshness: cached`) is digested
     like a current one.
 ```
@@ -228,7 +228,67 @@ Tests: multi-review-reviewer-transcript.test.ts (summaries requested and
   forged reference refused; raw providers unchanged);
   MultiReviewReviewerTab.test.tsx (expanding a deferred row calls the reviewer
   loader with workflow, reviewer and reference).
-Remaining limitations: the reviewer view still has no "load earlier" control;
-  it shows the newest window (≤ 100 messages from a bridge, ≤ 500 / 2 MiB
-  backend cap), now measured in lightweight rows.
+Remaining limitations: superseded by the gap closure below ("load
+  earlier" added).
+```
+
+### Gap closure: late progress and reviewer history (e79798e3, c150f423)
+
+```text
+Progress over recent messages (plan item 6, e79798e3):
+  - The probe digested only the newest message, so a tool result or
+    reasoning part landing on an earlier message looked like a stall. It now
+    requests the newest 8 messages (one conditional 64 KiB read) and digests
+    all of them plus the window end. Unchanged transcripts keep their digest;
+    usage/title/access churn is still not progress.
+  - An oversized newest message (the bridge trims whole older rows first) is
+    completed from the exact read of the last 8 messages, only when the
+    source moved.
+  - Digest marker 70330d16 (was 70320d16). An older tail-only or unmarked
+    digest rebases once without progress; digests stay 64-hex.
+  - Providers without snapshots keep the one-message legacy digest.
+  - Tests: transcript-progress.test.ts (late update to message N-2 is
+    progress for a tool result and a reasoning part; churn unchanged;
+    oversized newest still exposes the earlier update; old-version digest
+    replaced once without progress, including on the durable clock);
+    transcript-progress-http.test.ts (v2 and v1 late earlier tool result is
+    progress without a whole-transcript read; v1 byte-dropped head stays
+    comparable; v1 oversized newest message).
+  - Limitation: an update to a message older than the 8-message window, or
+    one dropped from it by the byte cap, is not seen.
+Reviewer "load earlier" (plan item 3, c150f423):
+  - get_multi_review_reviewer_history_page(workflowId, reviewerId, before,
+    limit?, targetBytes?); request cursor <= 1,024 characters, limit 1-200,
+    target <= 1 MiB; responses validated on the client.
+  - Cursors reuse the native formats: direct (v2) cursors served by one
+    provider transcriptPage summary read; joined (v1) cursors name a message
+    by digest for providers that cannot page. A direct cursor is minted only
+    when the tail's byte bound dropped no leading rows. Every cursor carries
+    digests of the reviewer, its provider session and the history epoch: a
+    foreign cursor is refused, a replaced session or rewritten history
+    answers expired (never an empty or complete page), and a restart during
+    the read is re-checked.
+  - The joined fallback reads at most 2,000 messages and never more than the
+    provider accepts (new optional messageReadLimit; OpenCode 64). A cursor
+    minted because the provider reported older history it can no longer
+    return pages to "unavailable", not "complete".
+  - Tab: "Load earlier messages" control with the native chat tab's
+    loading state; dedupe by id; scroll anchoring via the shared helper;
+    aged-out rows kept while the live tail still overlaps, pages dropped
+    with a notice when it does not or the epoch changed; expired drops pages
+    and re-reads a full snapshot for a fresh cursor; at most 2,000 earlier
+    messages held.
+  - Tests: multi-review-reviewer-transcript.test.ts (direct pages to the
+    start with details; rotated epoch and replaced session expire; foreign,
+    native and junk cursors refused; joined fallback bounded and expiring on
+    rewrite or epoch change; OpenCode ids; bounded-tail provider read limit;
+    provider-reported-but-unreturnable history is unavailable);
+    multi-review-service.test.ts; commands-state-sync.test.ts (bounds);
+    MultiReviewReviewerTab.test.tsx (prepend, dedupe, detail expansion,
+    expiry reset, inactive-to-active continuation, unreachable notice);
+    backend.test.ts (wrapper validation).
+  - Limitations: messages without ids cannot be deduplicated or anchor a
+    joined cursor (the tab says so); scroll anchoring centres the anchor
+    rather than keeping the pixel offset and is untested in a real browser;
+    no live multi-review run, and live paging needs > 100 messages.
 ```

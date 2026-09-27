@@ -3,8 +3,10 @@
 Reviewed 2026-09-20–21 at commit `88c2f9cc`.
 
 Status: Implemented on branch `implement-efficiency-improvements-7f0993836777-r1`
-(2026-09-27). Every finding has shipped changes; remaining limitations and
-unrun real-stack checks are listed per step in the [plan](plan/00-index.md) and
+(2026-09-27). Every finding has shipped changes; plan steps 01 (measurement
+coverage) and 13 (frontend page structure) remain partial. Remaining
+limitations and unrun real-stack checks are listed per step in the
+[plan](plan/00-index.md) and
 consolidated in [step 19](plan/19-integration-and-rollout.md). Measured
 before/after results: [baseline/](baseline/README.md). The findings below are
 kept as the dated review evidence.

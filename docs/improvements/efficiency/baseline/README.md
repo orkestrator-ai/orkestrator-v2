@@ -118,8 +118,8 @@ Counts are exact. "p50" is warm wall-clock on the machine above.
 | E10 | `g` tail update with 0 / 1 / 8 MiB retained history | 100 / 612 / 4,196 message visits (8 MiB p50 21.2 ms) | 1 / 1 / 1 (8 MiB p50 0.09 ms); accounted bytes exact | Met at function level |
 | E11 | — | Not measured | Not measured | Needs browser visibility and hidden-tab runs |
 | E12 | — | Not measured | Not measured | Step 18 has its own cache tests; no workload here |
-| E13 | — | Not measured | Not measured | Step 15 not implemented |
-| E14 | — | Not measured | Not measured | Step 16 not implemented |
+| E13 | — | Not measured | Not measured | No harness workload; step 15 evidence is its deterministic tests |
+| E14 | — | Not measured | Not measured | No harness workload; step 16 records its own storage measurements |
 
 ### Not measured here
 

@@ -1,6 +1,6 @@
 # 09 — Implement lightweight transcript and detail reads for every provider
 
-Status: Complete — all five HTTP bridges serve v2; OpenCode is in-process (projection defers artifacts before windowing). Validated on real Codex and Claude sessions (step 19).
+Status: Complete — all five HTTP bridges serve v2 and pass one shared contract (f83a6206); OpenCode is in-process (projection defers artifacts before windowing, no detail/page routes). Validated on real Claude, Codex and OpenCode sessions; Cursor, Pi and Grok not run live.
 
 ## Outcome
 
@@ -169,8 +169,8 @@ Remaining limitations: see below
 
 ### Remaining limitations (bridge half)
 
-- The backend does not request `version=2` or call detail/page yet (the
-  orchestrator's half); OpenCode (in-process) is not covered here.
+- Superseded: the backend half below now requests `version=2` and calls
+  detail/page. OpenCode (in-process) is not covered by the bridge half.
 - Summaries are built per read from the retained messages (the protocol
   memoizes per-part digests); no provider freezes detail revisions, so a
   streaming tool card's locator expires as soon as its output changes.
@@ -211,3 +211,43 @@ Remaining limitations: see below
   `/messages` or interactive snapshot on the summary path).
 - Measured structurally: a 300 × 20 KiB-output transcript sends 36 KB with
   100 messages over v2 versus 518 KB with 25 messages over v1 (bridge half).
+
+### Shared contract and gap closure (commit f83a6206)
+
+```text
+- packages/protocol/src/bridge-transcript-contract.ts
+  (@orkestrator/protocol/bridge-transcript-contract): framework-free
+  scenarios run by every bridge's v2 suite — large tool output leaves a
+  detail reference whose detail returns the exact body; a detail read returns
+  its own revision or expired/missing/invalid; pages join with no gaps at
+  sizes 100 and 37; unchanged only while nothing changed; a rewrite rotates
+  the epoch and refuses the old token, cursor and positions; after a restart
+  nothing issued earlier answers unchanged or pages. The protocol test runs
+  it against a reference bridge and shows it fails a bridge that keeps its
+  generation across a restart or its epoch across a rewrite.
+- Rewrite/restart per bridge: Cursor rewind (rewindTranscriptTo) and real
+  persisted-state reload; Pi resetRenderedHistory and real persist/load;
+  ACP front trim (no rewind) and real state writer/loader; Codex
+  ThreadRegistry counters and restoreSession; Claude message replacement plus
+  resetTranscriptEpoch and a freshly loaded router.
+- Bug found and fixed: the Codex transcript generation was the app-server
+  counter, which restarts at 1 in each process while restored sessions
+  restart revision and epoch at 0, so a pre-restart token could answer
+  unchanged for different content. The generation is now
+  "<per-process uuid>:<engineGeneration>" (the backend accepts string
+  generations up to 63 characters).
+- Limitations: restart is simulated in-process by loading a fresh route
+  module, not a new OS process; Claude's process-wide revision counter
+  cannot be reset in-process; Pi re-renders without a real session file;
+  Codex runs through the runtime seam, not a real app-server.
+Gap-closure real-stack run (2026-09-27; isolated profile eff-gap-7f09,
+  fixture project, bridges rebuilt from source): Claude (haiku), Codex
+  (gpt-5.5, low) and OpenCode sessions each ran a 14 KB `seq 1 3000` tool
+  call. Gateway reads: snapshot 3.1-4.4 KB; unchanged re-read with the known
+  token 489-504 B; the large output deferred behind a detail reference and
+  returned exactly on expansion (17.0 KB Claude/Codex, 12.2 KB OpenCode).
+  Cursor (HTTP 401, not signed in), Pi (no authenticated model provider) and
+  Grok (ACP authenticate timed out) could not start in the profile. Live
+  history paging was not exercised: no session exceeded the 100-message
+  live window.
+```

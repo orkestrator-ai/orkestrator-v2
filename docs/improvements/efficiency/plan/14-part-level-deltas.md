@@ -85,7 +85,8 @@ defer decision in this step's execution record before declaring it finished.
 ## Execution record
 
 ```text
-Status: Not started (no part-delta code). Gate evaluated: Prototype warranted.
+Status (gate record, superseded below): not started at the time; gate
+  evaluated: Prototype warranted.
 Implementation commit / PR: none for this step. Measurement from step 01's
   harness, workload j (scripts/efficiency/workloads-projection.ts), on branch
   implement-efficiency-improvements-7f0993836777-r1; results in

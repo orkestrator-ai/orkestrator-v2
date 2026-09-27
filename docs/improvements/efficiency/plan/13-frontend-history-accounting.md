@@ -1,6 +1,6 @@
 # 13 — Keep immutable history out of frontend live-update accounting
 
-Status: Complete — retained history is not yet a separate page structure through the whole display pipeline, and browser long-task profiling was not run (see record). Prerequisite: 12. Finding: E10.
+Status: Partial — live updates no longer re-encode retained history, but retained history is not yet a separate page structure through the display pipeline (items 1, 4 and 7 partly done) and browser long-task profiling was not run (see record). Prerequisite: 12. Finding: E10.
 
 ## Outcome
 
@@ -75,7 +75,8 @@ No persistent local browser transcript migration should be necessary.
 ## Execution record
 
 ```text
-Status: Implemented, validation pending
+Status: Partial — accounting implemented; implementation items 1, 4 and 7
+  only partly addressed; no browser long-task profiling
 Implementation commit / PR: branch implement-efficiency-improvements-7f0993836777-r1,
   commit "perf(web): keep retained history out of live-update byte accounting".
   Frontend only; step 12 was not a code dependency because the wire format

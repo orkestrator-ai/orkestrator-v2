@@ -80,7 +80,7 @@ need to land before E04 is marked resolved.
 ## Execution record
 
 ```text
-Status: Implemented, validation pending
+Status: Complete (limitations below; no real-stack restart check)
 Implementation commit / PR: branch worktree-agent-a56e0fae6b3366331 (commit
   "perf(backend): keyed record storage and independent display-tail records")
 Protocol or storage decisions: see below

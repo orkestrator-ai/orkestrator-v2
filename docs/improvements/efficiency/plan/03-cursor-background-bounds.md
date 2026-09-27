@@ -1,6 +1,6 @@
 # 03 — Bound Cursor transcripts while no UI is reading
 
-Status: Complete — a live Cursor inactive-tab run with a real account was not performed. Prerequisite: 02. Finding: E01. Priority: urgent.
+Status: Complete — nested sub-agent parts, todo lists and SDK-built arguments bounded and bound counters exposed (f833ebea); a live Cursor inactive-tab run was not performed (the gap-closure profile had no signed-in Cursor account). Prerequisite: 02. Finding: E01. Priority: urgent.
 
 ## Outcome and scope
 
@@ -114,4 +114,35 @@ Compatibility/migration result: no wire/schema change; contentEpoch becomes
 Remaining limitations: the isolated dev:test inactive-environment run with a
   real Cursor account was not performed in this change; coverage is the
   producer-level regression suite above.
+
+Gap closure (commit f833ebea):
+  - Nested-array audit. The bridge has no childTools array (grouping happens
+    in the web adapter): a sub-agent's output is flat parts tagged
+    parentTaskUseId inside the parent message, previously limited only by
+    the 512-part message cap and the global byte cap, so one busy child
+    could push out its own launch card, its siblings and the parent's prose.
+    Todo lists were unbounded and stored twice; the shell command and the
+    paths/ignore/targetDirectories arrays bypassed the argument bound;
+    openTextParts could keep entries for trimmed parts. Already bounded:
+    active sub-agents (512), observed MCP tools (512), health notices,
+    structured results, directory-tree output.
+  - boundNestedParts (transcript.ts): at most 128 parts per sub-agent
+    (hysteresis to 96), checked when an update adds a nested part; a byte
+    budget of min(4 MiB, MAX_TRANSCRIPT_BYTES / 4) per sub-agent, checked on
+    each full byte check. Oldest first, settled steps before live ones,
+    never the child's newest step; one notice part per child (ACP wording).
+    Trimming never settles a call; a trimmed running grandchild's real
+    completion rebuilds its card.
+  - Todos capped at 128 items of 2 KiB with a truncated count; SDK-built
+    arguments go through the argument bound; openTextParts forgets trimmed
+    parts after any trim.
+  - GET /session/:id/runtime-health includes transcriptBounds: checks, full
+    byte checks, per-child checks, trims, child parts dropped, slowest check
+    (ms) and the limits. Counts only; the backend does not surface it yet.
+  - Tests: translate-bounds.test.ts (1,000 child tools stay bounded and keep
+    the launch card; per-child byte ceiling; running grandchild trimmed then
+    completes; open child block survives; trimmed open block forgotten;
+    counters; todo and argument caps); http.test.ts (health read).
+  Still unrun: the live inactive-tab run (no signed-in Cursor account in the
+  gap-closure profile: HTTP 401).
 ```

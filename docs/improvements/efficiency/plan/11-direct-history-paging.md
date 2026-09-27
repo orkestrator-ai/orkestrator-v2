@@ -111,9 +111,29 @@ Protocol or storage decisions:
     is stepped past, bounded, only when the cursor advances.
   - Epoch correctness for positional pages: Codex local ring and Pi branch
     navigation now rotate their content epoch (bridge half, step 09).
+  - DirectHistoryPageCache (native-agent-direct-history.ts, commit a81a4a66,
+    items 2 and 6): projected direct pages keyed by session key,
+    provider session, epoch, provider cursor, limit and target bytes. A page
+    is served only while its epoch is the one the provider last reported for
+    the session (live summary read or a served page); a different epoch, an
+    invalidateProjection (rewind, resume, replacement) or shutdown drops the
+    session's pages. Concurrent requests share one provider read that no
+    caller owns; its rejection is observed once and reaches every waiter; a
+    read in flight across an invalidation or epoch change answers its callers
+    but is not admitted, including when no epoch was remembered for the
+    session (after a restart or eviction) and a newer one is observed first. A hit replays the page's detail registrations (an
+    evicted inline body forces a fresh read). Bounds: 64 pages / 16 MiB
+    global, 16 pages / 8 MiB per session, 5-minute TTL backstop.
 Tests and isolated profiles: native-agent-service-summary-transcripts.test.ts
   (250-message history paged to the start in contiguous order with no legacy
-  or interactive read; cross-session and post-rotation cursors refused);
+  or interactive read; cross-session and post-rotation cursors refused;
+  repeated page served from memory with its detail references resolvable;
+  observed epoch change and invalidation drop pages; two concurrent readers
+  share one provider read; byte-limited pages advance and a second walk
+  makes no provider read; eviction under the byte bound);
+  native-agent-direct-history.test.ts (scope, TTL, shared rejection, stale
+  in-flight admission with and without a remembered epoch, LRU
+  byte/count/per-session bounds);
   useNativeAgentSession.progressive.test.tsx (direct cursor paging without
   the joined snapshot; stepping past a duplicate page).
 Before/after measurements: see baseline/ (provider calls per page: joined
@@ -125,5 +145,9 @@ Remaining limitations: providers without page routes (older bridges, OpenCode
   each bridge retains (Cursor/Pi/ACP front trim; Codex detached preview
   before hydration; Claude preview before hydration, whose cursor then
   expires). Claude has no provider-native range read, so its cold first
-  access still performs a full chronological hydration.
+  access still performs a full chronological hydration. The page cache trusts
+  the last observed epoch: between a provider rotation and the next live read
+  it may serve a page of the old epoch (matching the live view the renderer
+  still holds); a provider that edits history without rotating is bounded by
+  the TTL only. Joined (v1) pages are not cached.
 ```

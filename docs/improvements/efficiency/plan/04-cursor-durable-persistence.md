@@ -80,7 +80,7 @@ as a compatibility fallback.
 ## Execution record
 
 ```text
-Status: Implemented, validation pending
+Status: Complete (encoding cache across writes declined; see limitations)
 Implementation commit / PR: PR #853 (typed budget refusal, real barrier promise,
   admission-before-drain, barrier caller audit) plus this change on branch
   implement-efficiency-improvements-7f0993836777-r1 (residuals below).

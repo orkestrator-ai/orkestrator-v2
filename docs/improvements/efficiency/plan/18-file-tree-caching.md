@@ -77,7 +77,7 @@ working tree or file tree is unchanged.
 ## Execution record
 
 ```text
-Status: Implemented, validation pending
+Status: Complete (no container watcher; limitations below)
 Implementation commit / PR: 0ba8628e (#852) shipped the base; the residuals
   below are the "perf(backend): cache container and ad hoc file trees" commit
   (PR pending).

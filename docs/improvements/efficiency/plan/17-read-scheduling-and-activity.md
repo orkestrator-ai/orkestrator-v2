@@ -1,6 +1,6 @@
 # 17 — Coordinate visible reads and batch backend activity observations
 
-Status: Complete — frontend half shipped in 0ba8628e; batched no-touch activity added here. Prerequisites: 08, 09; coordinate reviewer integration with 15. Finding: E11.
+Status: Complete — frontend half shipped in 0ba8628e; batched no-touch activity in the reconciliation sweep and, since 308b1865, for multi-review interactive Fix reads. Sweep latency not measured. Prerequisites: 08, 09; coordinate reviewer integration with 15. Finding: E11.
 
 ## Outcome
 
@@ -83,8 +83,8 @@ settings UI is required just to stop hidden-document presentation polling.
 ## Execution record
 
 ```text
-Status: Implemented, validation pending (deterministic tests pass; sweep
-  latency on a named machine/profile not yet measured).
+Status: Complete (deterministic tests pass; sweep latency on a named
+  machine/profile not measured).
 Implementation commit / PR: frontend half — 0ba8628e (#852); backend half —
   branch implement-efficiency-improvements-7f0993836777-r1.
 Protocol or storage decisions:
@@ -168,8 +168,8 @@ Compatibility/migration result: additive. New backend + old bridge: 404 =>
   cached per-session fallback. Old backend + new bridge: route unused. No
   storage change.
 Remaining limitations:
-  - multi-review-service.ts still calls observeActivity per session (outside
-    this package's file ownership); it can adopt readActivityGroup later.
+  - Superseded by 308b1865: multi-review interactive Fix reads go through
+    ActivityReadCoalescer (below).
   - The ACP bridge's single route never reports `waiting`; the batch route
     mirrors it exactly rather than changing semantics.
   - A per-id `unavailable` fails the whole group, as a single-route 500 did;
@@ -177,4 +177,33 @@ Remaining limitations:
     errors to idle).
   - Sweep latency (p50/p95) for 1/10/100 sessions against real bridges is
     left for step 19's consolidated evidence.
+```
+
+### Gap closure: multi-review activity reads (commit 308b1865)
+
+```text
+- apps/backend/src/core/activity-read-coalescer.ts, one per
+  MultiReviewService: the first read for a provider connection opens a 25 ms
+  window; everything collected goes through readActivityGroup (<= 64 ids per
+  POST /sessions/activity; OpenCode uses its group read). Older bridges
+  (404/405, remembered per connection), rejected batches and deferred
+  answers fall back to single no-touch reads.
+- readActivityGroup gains an optional onReadFailure so each session fails
+  alone: missing still settles the Fix; unavailable or a failed read rejects
+  only that workflow's read (logged, retried next pass). Without the callback
+  the group behaviour is unchanged.
+- Reviewer sessions do not use the activity route (they are read through
+  review-fanout's status path), so batching applies to interactive Fix
+  sessions across workflows.
+- Tests: activity-read-coalescer.test.ts (N reads -> 1 batch per provider,
+  64-id split, missing/unavailable/deferred per caller, old-bridge fallback,
+  rejected batch proves nothing, real HttpBridgeProvider: 3 sessions -> 1
+  request); native-agent-activity-reads.test.ts (onReadFailure isolation);
+  multi-review-service.test.ts (3 workflows -> 1 batch; working/missing/
+  unavailable outcomes; old bridge -> single reads).
+- Limitations: merging depends on reads arriving in the same window. The
+  legacy tick advances every workflow together, so it merges; with keyed
+  per-workflow scheduling, passes merge only when due times coincide. Each
+  interactive Fix read may wait up to 25 ms. Request savings against a real
+  bridge were not measured.
 ```

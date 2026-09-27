@@ -1,6 +1,6 @@
 # 19 — Validate the full pipeline and roll out in measured waves
 
-Status: Complete for the function-level, repository-suite and isolated real-stack evidence below; remote-proxy, Docker, Electron-window and live Cursor/Pi/Grok runs were not performed. Findings: all.
+Status: Complete for the function-level, repository-suite and isolated real-stack evidence below, including the 2026-09-27 gap-closure pass; steps 01 and 13 remain partial, and remote-proxy, live Cursor/Pi/Grok, iOS and profiling runs were not performed. Findings: all.
 
 ## Outcome
 
@@ -217,4 +217,69 @@ Remaining limitations (not validated here): remote proxy and compression
   profiling, and p95 latency on real providers. Per-pipeline control-record
   partitioning (E14) and a container file watcher (E12) remain deferred with
   their measured costs; part patches cover the backend-to-client hop only.
+```
+
+### Gap-closure pass (2026-09-27)
+
+```text
+Why: an independent code check of the first execution found steps 03, 09,
+  11, 12 and 15 short of their acceptance criteria, step 17's multi-review
+  path unbatched, several record/header status mismatches, and this record's
+  claim that the full suite passed no longer true at the branch head (two command
+  names in this file tripped the docs task-surface guard; fixed in
+  20ede8b8).
+Commits: a81a4a66 (steps 12/11: projected-row reuse, direct page cache),
+  e79798e3 (step 15: progress over the newest 8 messages), 308b1865
+  (step 17: batched multi-review activity reads), c150f423 (step 15:
+  reviewer "load earlier"), f833ebea (step 03: per-sub-agent bounds and
+  counters), f83a6206 (step 09: shared bridge contract; Codex restart
+  generation fix), 20ede8b8 (docs guard).
+Review: an independent review of the combined diff found three defects,
+  fixed before commit: the reviewer fallback exceeded OpenCode's 64-message
+  read limit; a direct-page read could restore an older epoch when none was
+  remembered; a provider-reported but unreturnable history paged to
+  "complete". Each has a regression test.
+Updated finding map:
+  E01 step 03 — plus per-sub-agent part/byte bounds, todo and argument
+      caps, runtime-health bound counters.
+  E05 step 12 — a tail change over 1,000 rows re-normalizes 2 parts instead
+      of 2,000; one comparison walk per changed read remains.
+  E06 step 09 — one shared v2 contract passes on all five bridges.
+  E07 step 11 — bounded direct-page cache with shared in-flight reads.
+  E11 step 17 — multi-review interactive Fix reads batched per connection.
+  E13 step 15 — late updates within the newest 8 messages are progress;
+      reviewer history pages with expiry semantics.
+Tests (branch head, same machine as above):
+  - mise run check — pass.
+  - mise run test — pass (workspace 459 s, root 99 s, bridges 145 s, codex
+    protocol lockfile).
+  - mise run test:agent:browser:isolated — 12 passed, 7 skipped.
+  - mise run test:agent:electron — 2 passed, 1 skipped, 1 failed, 5 not run:
+    web-annotations-electron "capture ... survives renderer reload and
+    backend restart" (password mask uniformity 0.923 < 0.98). The same test
+    fails identically on main (d4df09d5) on this host, so it is
+    pre-existing and host-specific; the suite stops after it, so the five
+    later annotation tests did not run. One earlier branch run also failed
+    the multi-window count check; it passed on main and on two other
+    branch runs (flaky).
+  - Docker: container fixture profile eff-docker-7f09, then
+    mise run test:agent:docker — pass (container ownership and the seeded
+    container; the step 18 tree cache is covered by its unit tests only).
+    Profile stopped and reset (1 owned container removed).
+Live providers (isolated profile eff-gap-7f09, bridges rebuilt): Claude
+  (haiku), Codex (gpt-5.5, low) and OpenCode each ran a 14 KB tool output.
+  Snapshot 3.1-4.4 KB; unchanged re-read 489-504 B; the output was deferred
+  behind a detail reference and expanded exactly (17.0 KB / 12.2 KB).
+  Cursor (not signed in, HTTP 401), Pi (no authenticated provider) and Grok
+  (ACP authenticate timed out) could not start. No session exceeded the
+  100-message live window, so live history paging and the reviewer "load
+  earlier" control were not exercised. Environments deleted; profile stopped
+  and reset.
+Remaining limitations after this pass: step 01 (E11-E14 workloads, heap/RSS,
+  browser long tasks, remote path) and step 13 (items 1, 4, 7; browser
+  profiling) remain partial; live Cursor/Pi/Grok sessions, live history
+  paging, a live multi-review run, the Claude inactive-tab QA, remote
+  proxy/compression bytes, native iOS and p95 latency on real providers are
+  unrun; per-pipeline control partitioning (E14) and a container watcher
+  (E12) stay deferred.
 ```

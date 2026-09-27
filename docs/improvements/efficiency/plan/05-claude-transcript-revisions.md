@@ -1,6 +1,6 @@
 # 05 — Give Claude a content revision for conditional transcript reads
 
-Status: Complete — validated on a real Claude session through an isolated profile (step 19). Prerequisite: 01. Finding: E03. Priority: urgent.
+Status: Complete — an unchanged re-read was validated on real Claude sessions through isolated profiles (step 19); the inactive-tab/background-task QA was not run. Prerequisite: 01. Finding: E03. Priority: urgent.
 
 ## Outcome
 
@@ -69,7 +69,8 @@ then isolated native chat QA including an inactive tab and a background task.
 ## Execution record
 
 ```text
-Status: Implemented, validation pending
+Status: Complete; unchanged re-read validated on real Claude sessions
+  (step 19); inactive-tab/background QA not run
 Implementation commit / PR: see branch implement-efficiency-improvements-7f0993836777-r1 (commit "perf(claude-bridge): answer unchanged transcript reads from a content revision"); no PR yet
 Protocol or storage decisions: see below
 Tests and isolated profiles: focused Bun suites below; no isolated Electron/browser profile was started

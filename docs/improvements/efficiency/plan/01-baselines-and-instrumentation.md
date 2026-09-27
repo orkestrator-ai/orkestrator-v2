@@ -1,6 +1,6 @@
 # 01 — Establish baselines, counters, and synthetic fixtures
 
-Status: Complete — function-level harness, counters and phase metrics; final run in `../baseline/`. Remote-proxy, browser long-task and heap/RSS baselines not measured. Prerequisites: none. Findings: all.
+Status: Partial — function-level harness, counters and phase metrics are complete (final run in `../baseline/`); the E11–E14 workload rows, remote-proxy, browser long-task and heap/RSS baselines were not measured. Prerequisites: none. Findings: all.
 
 ## Outcome
 
@@ -84,7 +84,8 @@ steps append their before/after results using the same fixture definitions.
 ## Execution record
 
 ```text
-Status: Implemented, validation pending
+Status: Partial — function-level baselines complete; E11-E14 rows,
+  heap/RSS, browser long tasks and remote-path measurements not taken
 Implementation commit / PR: branch implement-efficiency-improvements-7f0993836777-r1,
   commit "perf(efficiency): baseline harness, phase metrics and step-14 gate".
   Harness: scripts/efficiency/ (run.ts CLI; harness.ts runner/compare/summary;

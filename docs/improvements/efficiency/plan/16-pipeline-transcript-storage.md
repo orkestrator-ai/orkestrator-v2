@@ -111,7 +111,7 @@ and migration path has been exercised.
 ## Execution record
 
 ```text
-Status: Implemented, validation pending
+Status: Complete (per-pipeline control-record partitioning deferred)
 Implementation commit / PR: the step-16 commit on this branch (the first small
   change shipped earlier as a1bafecb: fixed-size `tf2:` transcript fingerprint)
 Protocol or storage decisions: below

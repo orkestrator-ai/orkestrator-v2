@@ -80,7 +80,7 @@ or generated app-server protocol are required.
 ## Execution record
 
 ```text
-Status: Implemented, validation pending
+Status: Complete (limitations below)
 Implementation commit / PR: branch implement-efficiency-improvements-7f0993836777-r1
   (worktree agent-a85be368877d3b2b6), commit "perf(codex-bridge): bound rollout
   parsing, retention and repeated reads"

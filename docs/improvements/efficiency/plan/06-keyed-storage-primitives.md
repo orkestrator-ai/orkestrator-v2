@@ -96,7 +96,7 @@ callers; its existence alone changes no production format.
 ## Execution record
 
 ```text
-Status: Implemented, validation pending
+Status: Complete (limitations below)
 Implementation commit / PR: branch worktree-agent-a56e0fae6b3366331 (see commit
   "perf(backend): keyed record storage and independent display-tail records")
 Protocol or storage decisions: see below
